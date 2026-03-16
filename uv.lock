@@ -127,9 +127,11 @@ dependencies = [
     { name = "anthropic" },
     { name = "asm-differ" },
     { name = "m2c" },
+    { name = "pycparser" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "splat64", extra = ["mips"] },
+    { name = "toml" },
 ]
 
 [package.dev-dependencies]
@@ -142,9 +144,11 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.52" },
     { name = "asm-differ", git = "https://github.com/simonlindholm/asm-differ.git" },
     { name = "m2c", git = "https://github.com/matt-kempster/m2c.git" },
+    { name = "pycparser", specifier = ">=3.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "splat64", extras = ["mips"], specifier = ">=0.39.0,<1.0.0" },
+    { name = "toml", specifier = ">=0.10.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -384,6 +388,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/da/48/c733985b64b9c4512b3fb35679eceae662461596c3cd1576851eb8bc6223/n64img-0.3.3.tar.gz", hash = "sha256:488b37916eb4a943231eaf49ce9052f7d6f96f7c90712ef3aeaaaef49e3bbf12", size = 4849, upload-time = "2023-06-27T06:29:33.727Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/87/6d/9480bcb7a31d6e96a0a8923c9b64812db0e480921bc988fcbfbce3ddf7a4/n64img-0.3.3-py3-none-any.whl", hash = "sha256:5db569e3300f3404b875a319822221704ffaf7c1d8f1db874b85702a16947921", size = 5836, upload-time = "2023-06-27T06:29:32.442Z" },
+]
+
+[[package]]
+name = "pycparser"
+version = "3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/7d/92392ff7815c21062bea51aa7b87d45576f649f16458d78b7cf94b9ab2e6/pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29", size = 103492, upload-time = "2026-01-21T14:26:51.89Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992", size = 48172, upload-time = "2026-01-21T14:26:50.693Z" },
 ]
 
 [[package]]
@@ -736,6 +749,15 @@ mips = [
     { name = "pygfxd" },
     { name = "rabbitizer" },
     { name = "spimdisasm" },
+]
+
+[[package]]
+name = "toml"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
 ]
 
 [[package]]

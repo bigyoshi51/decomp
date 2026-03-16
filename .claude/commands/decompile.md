@@ -78,3 +78,26 @@ If no function is specified, pick a good candidate:
 - Don't give up after 2 attempts — try at least 5-6 variations of variable ordering, types, and expression structure before moving on
 - Some functions have stack frame size differences (e.g., -0x28 vs -0x30). This can indicate a different optimization level for that file, or a `-g` flag difference. Try `-O0`, `-O1`, `-O3`, or removing `-g2`.
 - **Arg passthrough**: m2c often misses when `$a0` passes through to a callee unchanged. If the callee loads into `$a1` instead of `$a0`, the function likely has an extra first parameter that passes through. Check: does the asm save `$a1`/`$a2` but not `$a0`?
+
+## Using decomp-permuter
+
+When manual iteration fails (especially for register allocation), use decomp-permuter to brute-force search for matching C:
+
+```bash
+# From the project directory:
+# 1. Make sure the function is written as C (not INCLUDE_ASM) in the source
+# 2. Import the function for permutation:
+python3 /home/dan/Documents/code/decomp/tools/decomp-permuter/import.py src/<file>.c asm/nonmatchings/<segment>/<func>.s RUN_CC_CHECK=0
+
+# 3. Run the permuter (uses multiple threads):
+python3 /home/dan/Documents/code/decomp/tools/decomp-permuter/permuter.py nonmatchings/<func> -j4
+
+# 4. If it finds a match, the output is in nonmatchings/<func>/output/
+# 5. Clean up: rm -rf nonmatchings/<func>
+```
+
+The Makefile skips CC_CHECK and strip when `PERMUTER=1` is set.
+
+You can also use PERM macros in the C code to guide the search:
+- `PERM_GENERAL(a, b)` — try both `a` and `b`
+- `PERM_RANDOMIZE(code)` — allow random permutations within a region
