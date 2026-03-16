@@ -62,6 +62,34 @@ Extract from linker errors. Named symbols like `main` need manual address assign
 - mips-linux-gnu-as always sets section alignment to 2**4 (16 bytes) internally — this cannot be overridden. Work around it by keeping misaligned data in `.text` sections.
 - The `section_order` for N64 ROMs should be `[".text", ".rodata", ".data", ".bss"]`
 
+## Function boundary discovery
+
+After getting a matching build, improve function splitting in large code segments:
+
+1. **Scan ROM for function prologues**: `addiu $sp, $sp, -N` (opcode `0x27BDXXXX` with bit 15 set)
+2. **Validate each prologue**: Only count it as a real function start if the previous instruction is `jr $ra` (a return) or a nop (inter-function padding). Prologues in `jal` delay slots are false positives.
+3. **Add validated functions to `symbol_addrs.txt`**:
+   ```
+   func_XXXXXXXX = 0xXXXXXXXX; // type:func
+   ```
+4. **Re-split**: Delete `src/`, `asm/`, `assets/`, `build/` and run `splat split`. Splat uses symbol_addrs to find function boundaries.
+5. **Restore decompiled code**: Re-splitting regenerates source files. Restore decompiled functions from git: `git show HEAD:src/file.c > src/file.c`
+6. **Fix post-split issues**:
+   - Entry BSS refs (`main_BSS_START` -> `game_BSS_START`)
+   - dlabel -> glabel in nonmatchings
+   - Undefined symbols from linker errors
+   - Data at code/data boundary may get misinterpreted as instructions — replace with `.word` directives
+
+**Quality check after re-split**:
+```python
+# Count clean vs merged vs fragment functions
+for f in nonmatchings.iterdir():
+    prologues = count addiu $sp, $sp, -N
+    if prologues > 1: merged
+    elif prologues == 1 and has jr $ra: clean
+    else: fragment/leaf
+```
+
 ## Goal state
 
 `md5sum build/<target>.z64` equals `md5sum baserom.z64`.
