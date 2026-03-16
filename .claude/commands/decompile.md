@@ -60,9 +60,12 @@ If no function is specified, pick a good candidate:
 
 ## Compiler details
 
-- **Compiler**: KMC GCC 2.7.2 (`tools/gcc_2.7.2/linux/gcc`)
+- **Compiler**: KMC GCC 2.7.2 (`tools/gcc_2.7.2/linux/gcc`) with KMC assembler (GAS 2.6)
 - **Default flags**: `-G0 -mips3 -mgp32 -mfp32 -Wa,--vr4300mul-off -O2 -g2`
 - **Per-file overrides**: Some files use `-O0` or `-O3`. If a function won't match at `-O2`, try other levels.
+- **The `-g2` flag matters**: It's passed to both the compiler (cc1) and assembler (as). The KMC assembler disables delay slot reordering when `-g` >= 1 is present. This means `-g2` produces UNFILLED delay slots (`addiu $sp; jr $ra; nop`), while no `-g` produces FILLED delay slots (`jr $ra; addiu $sp` in delay slot).
+- **Most Glover functions use unfilled delay slots** (compiled with `-g2`). ~160 game segment functions have filled delay slots (compiled without `-g`). Check the original ROM's epilogue pattern to determine which flag to use.
+- **`-g2` does NOT change instruction selection** — only assembler reordering and debug metadata. The `.s` output is identical between `-g0` and `-g2`.
 
 ## Important notes
 
@@ -78,6 +81,12 @@ If no function is specified, pick a good candidate:
 - Don't give up after 2 attempts — try at least 5-6 variations of variable ordering, types, and expression structure before moving on
 - Some functions have stack frame size differences (e.g., -0x28 vs -0x30). This can indicate a different optimization level for that file, or a `-g` flag difference. Try `-O0`, `-O1`, `-O3`, or removing `-g2`.
 - **Arg passthrough**: m2c often misses when `$a0` passes through to a callee unchanged. If the callee loads into `$a1` instead of `$a0`, the function likely has an extra first parameter that passes through. Check: does the asm save `$a1`/`$a2` but not `$a0`?
+- **Epilogue pattern determines -g flag**: Check the original ROM's epilogue:
+  - `addiu $sp; jr $ra; nop` = compiled with `-g2` (default, most functions)
+  - `jr $ra; addiu $sp` (delay slot filled) = compiled WITHOUT `-g` (add per-file Makefile override)
+  - `-O0` functions use frame pointer (`$fp`/`$s8`) and have different epilogues entirely
+- **D910.c is a debug/RAMROM module**: The `0xB1FFFFxx` addresses are development hardware registers for host debugger communication. `0xA4600010` is PI_STATUS_REG (DMA readiness). These can be used as literal addresses or defined as macros for readability.
+- **Forward declarations with `()` (empty parens)**: In C89, `void func()` means unspecified args (accepts any). Use this when the same function is called with different arg counts from different callers (passthrough pattern).
 
 ## Using decomp-permuter
 
@@ -104,7 +113,7 @@ You can also use PERM macros in the C code to guide the search:
 
 **Permuter setup gotcha**: The import.py generates a compile.sh with `export COMPILER_PATH=... '&&' gcc ...` which breaks. Fix compile.sh to split the export and gcc command onto separate lines.
 
-**Permuter limitations**: Random permutations can't fix fundamental GCC 2.7.2 register allocation choices. If the base score doesn't improve after ~500 iterations, the mismatch is likely a compiler limitation, not a C source issue. Known unfixable patterns:
-- `$s1`/`$s2` register swap (GCC assigns by variable weight, not controllable from C)
-- Stack frame padding differences (e.g., -0x28 vs -0x30) — likely ABI/debug flag difference
-- Epilogue ordering (`addiu $sp` vs `jr $ra` first) — GCC 2.7.2 doesn't fill jr delay slots with stack restore
+**Permuter limitations**: Random permutations can't fix fundamental GCC 2.7.2 register allocation choices. If the base score doesn't improve after ~500 iterations, the mismatch is likely a compiler limitation, not a C source issue. Known hard patterns:
+- `$s1`/`$s2` register swap (GCC assigns by variable weight — try dummy volatile vars, scope blocks, declaration reordering)
+- Stack frame padding differences (e.g., -0x28 vs -0x30) — may indicate different `-g` or `-O` flag for that file
+- Epilogue ordering is NOT a GCC issue — it's controlled by the `-g2` assembler flag (see Compiler details above). If the original has filled delay slots, remove `-g2` for that file.

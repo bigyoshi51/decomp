@@ -90,6 +90,38 @@ for f in nonmatchings.iterdir():
     else: fragment/leaf
 ```
 
+## N64 hardware register reference
+
+Common memory-mapped addresses found in N64 game code:
+
+| Address | Name | Purpose |
+|---------|------|---------|
+| `0xA4600000` | PI_DRAM_ADDR | RDRAM address for PI DMA |
+| `0xA4600004` | PI_CART_ADDR | Cartridge address for PI DMA |
+| `0xA4600008` | PI_RD_LEN | Cart->RDRAM DMA length (write triggers) |
+| `0xA460000C` | PI_WR_LEN | RDRAM->Cart DMA length (write triggers) |
+| `0xA4600010` | PI_STATUS | PI status (bit 0: DMA busy, bit 1: I/O busy) |
+| `0xB0000000-0xBFBFFFFF` | Cartridge ROM | KSEG1 uncached access to cart |
+| `0xB1FFFFxx` | RAMROM debug | Development hardware debug registers |
+
+The standard PI DMA wait pattern is: `while (*(volatile u32*)0xA4600010 & 3) {}` — wait for DMA not busy.
+
+Cache operations (`cache` instruction) flush/invalidate I-cache (16KB, 32B lines) and D-cache (8KB, 16B lines) for DMA coherency.
+
+Headers defining these: `PR/rcp.h` (RCP registers), `PR/R4300.h` (cache/CPU), from [n64decomp/libreultra](https://github.com/n64decomp/libreultra).
+
+## Per-file compiler flag detection
+
+Different source files in the same ROM may have been compiled with different flags. To detect:
+
+1. **Check epilogue pattern** to determine `-g` flag:
+   - `addiu $sp; jr $ra; nop` = compiled with `-g2` (assembler doesn't reorder)
+   - `jr $ra; addiu $sp` (filled delay slot) = compiled without `-g`
+2. **Check for frame pointer** (`$fp`/`$s8`) usage in prologue = `-O0`
+3. **Scan the segment** to count epilogue patterns and determine the dominant flag
+
+For Glover: D910 is ~100% `-g2`, 18020 is ~80% `-g2` with ~160 exceptions needing no `-g`.
+
 ## Goal state
 
 `md5sum build/<target>.z64` equals `md5sum baserom.z64`.
