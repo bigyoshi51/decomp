@@ -44,7 +44,19 @@ If no function is specified, pick a good candidate:
    - **Wrong instruction for constant**: `-2` vs `~1` vs `0xFFFFFFFE` can produce different instructions
    - **Optimization level**: Check if this file needs `-O0`, `-O1`, or `-O3` instead of `-O2` (add per-file override in Makefile)
 
-7. **When matched**: Verify the full ROM still matches (only the known 1-byte alabel diff should remain), then report success.
+7. **When matched**: Verify the full ROM still matches (only the known 1-byte alabel diff should remain), then log the episode and report success.
+
+8. **Log the episode**: After every successful match, log it for the training dataset:
+   ```python
+   import sys
+   sys.path.insert(0, "/home/dan/Documents/code/decomp")
+   from pathlib import Path
+   from decomp.episode import log_success
+
+   log_success("func_XXXXXXXX", Path("asm/nonmatchings/<segment>/func_XXXXXXXX.s"),
+               '<the matching C code>', output_dir=Path("episodes"))
+   ```
+   This captures (asm, m2c_output, final_c) triples for future RL/fine-tuning. Always do this — every matched function is training data.
 
 ## Compiler details
 
@@ -65,3 +77,4 @@ If no function is specified, pick a good candidate:
 - **Test standalone first**: compile the function in an isolated .c file with GCC to verify codegen matches before inserting into the main source. This isolates boundary issues from codegen issues.
 - Don't give up after 2 attempts — try at least 5-6 variations of variable ordering, types, and expression structure before moving on
 - Some functions have stack frame size differences (e.g., -0x28 vs -0x30). This can indicate a different optimization level for that file, or a `-g` flag difference. Try `-O0`, `-O1`, `-O3`, or removing `-g2`.
+- **Arg passthrough**: m2c often misses when `$a0` passes through to a callee unchanged. If the callee loads into `$a1` instead of `$a0`, the function likely has an extra first parameter that passes through. Check: does the asm save `$a1`/`$a2` but not `$a0`?
