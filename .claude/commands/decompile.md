@@ -101,3 +101,10 @@ The Makefile skips CC_CHECK and strip when `PERMUTER=1` is set.
 You can also use PERM macros in the C code to guide the search:
 - `PERM_GENERAL(a, b)` — try both `a` and `b`
 - `PERM_RANDOMIZE(code)` — allow random permutations within a region
+
+**Permuter setup gotcha**: The import.py generates a compile.sh with `export COMPILER_PATH=... '&&' gcc ...` which breaks. Fix compile.sh to split the export and gcc command onto separate lines.
+
+**Permuter limitations**: Random permutations can't fix fundamental GCC 2.7.2 register allocation choices. If the base score doesn't improve after ~500 iterations, the mismatch is likely a compiler limitation, not a C source issue. Known unfixable patterns:
+- `$s1`/`$s2` register swap (GCC assigns by variable weight, not controllable from C)
+- Stack frame padding differences (e.g., -0x28 vs -0x30) — likely ABI/debug flag difference
+- Epilogue ordering (`addiu $sp` vs `jr $ra` first) — GCC 2.7.2 doesn't fill jr delay slots with stack restore
