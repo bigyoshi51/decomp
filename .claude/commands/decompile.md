@@ -59,5 +59,9 @@ If no function is specified, pick a good candidate:
 - Forward declarations for called functions go right before the decompiled function
 - The existing 1-byte diff at ROM 0x0C4B2C is a known forward-reference issue, not a regression
 - When assigning `0xFF` to a `s8` variable, GCC sign-extends to `-1` (`0xFFFFFFFF`). Use `u8` type instead.
-- GCC may optimize away delay slot nops when C functions are adjacent to INCLUDE_ASM blocks — if a function has only nop delay slots and causes a shift, it may need to stay as INCLUDE_ASM
-- Don't give up after 2 attempts — try at least 5-6 variations of variable ordering, types, and expression structure before marking as non-matching
+- The INCLUDE_ASM macro must use `.set noreorder` / `.set reorder` boundaries to prevent cross-function delay slot optimization. This is already done in common.h.
+- Many functions in 18020.c are actually function fragments (epilogues, mid-function entries) due to imprecise splat splitting. Signs: no proper prologue, `lw $ra` as first instruction, unset register errors from m2c. Don't try to decompile these.
+- **Always test one function at a time with clean builds (`rm -rf build/`)**. Batching multiple decompiled functions can cause cascading failures where one mismatch shifts everything after it.
+- **Test standalone first**: compile the function in an isolated .c file with GCC to verify codegen matches before inserting into the main source. This isolates boundary issues from codegen issues.
+- Don't give up after 2 attempts — try at least 5-6 variations of variable ordering, types, and expression structure before moving on
+- Some functions have stack frame size differences (e.g., -0x28 vs -0x30). This can indicate a different optimization level for that file, or a `-g` flag difference. Try `-O0`, `-O1`, `-O3`, or removing `-g2`.
