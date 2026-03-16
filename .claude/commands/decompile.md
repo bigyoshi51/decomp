@@ -40,7 +40,7 @@ If no function is specified, pick a good candidate:
 6. **Iterate if not matching**: Common issues and fixes:
    - **Wrong stack frame size**: Try different variable declarations, reorder locals
    - **Missing delay slot fill**: GCC fills delay slots aggressively — make sure the C logic order matches
-   - **Register allocation differs**: Try `register` keyword, reorder statements, use temp variables
+   - **Register allocation differs**: GCC 2.7.2 assigns $s registers based on variable "weight" (usage frequency), not declaration order. Try: reorder variable declarations, modify arg in-place (`arg0 &= -4`) instead of new variable, change types (s32 vs u32), use `-O1` or `-O3`. The `register` keyword with `asm()` constraint does NOT work in GCC 2.7.2.
    - **Wrong instruction for constant**: `-2` vs `~1` vs `0xFFFFFFFE` can produce different instructions
    - **Optimization level**: Check if this file needs `-O0`, `-O1`, or `-O3` instead of `-O2` (add per-file override in Makefile)
 
@@ -58,3 +58,6 @@ If no function is specified, pick a good candidate:
 - Empty functions (`void f(void) {}`) should stay as `INCLUDE_ASM` — GCC omits the delay slot nop
 - Forward declarations for called functions go right before the decompiled function
 - The existing 1-byte diff at ROM 0x0C4B2C is a known forward-reference issue, not a regression
+- When assigning `0xFF` to a `s8` variable, GCC sign-extends to `-1` (`0xFFFFFFFF`). Use `u8` type instead.
+- GCC may optimize away delay slot nops when C functions are adjacent to INCLUDE_ASM blocks — if a function has only nop delay slots and causes a shift, it may need to stay as INCLUDE_ASM
+- Don't give up after 2 attempts — try at least 5-6 variations of variable ordering, types, and expression structure before marking as non-matching
