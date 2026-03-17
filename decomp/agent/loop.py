@@ -2,12 +2,19 @@
 
 The agent reads assembly, generates C via m2c, compiles with KMC GCC 2.7.2,
 diffs against the ROM, and iterates until byte-match or max attempts.
-Each episode is logged as structured JSON for future RL training.
+Each successful episode is logged as structured JSON for training.
+
+Each agent run uses a git worktree for isolation, enabling parallel runs.
+On success, the worktree branch is merged back to main.
+On failure, the worktree is discarded with no changes to main.
 """
 
 from __future__ import annotations
 
+import subprocess
 import sys
+import tempfile
+import uuid
 from pathlib import Path
 
 import anthropic
@@ -17,6 +24,55 @@ from decomp.core.project import DecompProject
 from decomp.logging.episode import EpisodeLogger, ToolCall
 
 from .tools import TOOLS, ToolExecutor
+
+
+def _create_worktree(project_root: Path, func_name: str) -> tuple[Path, str]:
+    """Create an isolated git worktree for the agent to work in."""
+    branch = f"agent/{func_name}-{uuid.uuid4().hex[:8]}"
+    wt_path = Path(tempfile.mkdtemp(prefix="decomp-agent-"))
+
+    subprocess.run(
+        ["git", "worktree", "add", str(wt_path), "-b", branch],
+        cwd=project_root,
+        capture_output=True,
+        check=True,
+    )
+
+    # Symlink gitignored files that the agent needs
+    # (NOT build/ — each worktree needs its own)
+    for name in ["baserom.z64", "tools"]:
+        src = project_root / name
+        dst = wt_path / name
+        if src.exists() and not dst.exists():
+            dst.symlink_to(src)
+
+    return wt_path, branch
+
+
+def _merge_worktree(project_root: Path, wt_path: Path, branch: str) -> None:
+    """Merge a successful worktree branch back to main."""
+    subprocess.run(
+        ["git", "merge", branch, "--no-edit"],
+        cwd=project_root,
+        capture_output=True,
+        check=True,
+    )
+    _cleanup_worktree(project_root, wt_path, branch)
+
+
+def _cleanup_worktree(project_root: Path, wt_path: Path, branch: str) -> None:
+    """Remove a worktree and its branch."""
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(wt_path)],
+        cwd=project_root,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "branch", "-D", branch],
+        cwd=project_root,
+        capture_output=True,
+    )
+
 
 SYSTEM_PROMPT = """\
 You are an expert N64 decompilation agent. Your goal is to produce byte-matching \
@@ -115,10 +171,20 @@ def run_agent(
     """
     model = model or config.model
     max_attempts = max_attempts or config.max_attempts
+
+    # Create isolated worktree
+    if verbose:
+        _log("Creating worktree...")
+    wt_path, branch = _create_worktree(config.project_root, func_name or "auto")
+    if verbose:
+        _log(f"Worktree: {wt_path} (branch: {branch})")
+
+    # Create a config pointing to the worktree
+    wt_config = config.model_copy(update={"project_root": wt_path})
     log_dir = log_dir or (config.project_root / "episodes")
 
-    project = DecompProject(config)
-    executor = ToolExecutor(config, project)
+    project = DecompProject(wt_config)
+    executor = ToolExecutor(wt_config, project)
     client = anthropic.Anthropic()
 
     # Build initial user message
@@ -291,14 +357,51 @@ def run_agent(
             except OSError:
                 pass
 
-    # Save episode only on success
+    # Handle worktree: merge on success, discard on failure
     n_steps = len(logger.episode.steps)
+    log_path = None
+
     if outcome == "match":
-        log_path = logger.finish(outcome, log_dir)
+        # Commit the change in the worktree
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=wt_path,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "commit",
+                "-m",
+                f"Decompile {logger.episode.function_name} (agent)",
+            ],
+            cwd=wt_path,
+            capture_output=True,
+        )
+
+        # Merge back to main
         if verbose:
-            _log(f"Episode saved: {log_path}")
+            _log("Merging worktree to main...")
+        try:
+            _merge_worktree(config.project_root, wt_path, branch)
+            if verbose:
+                _log("Merged successfully.")
+        except subprocess.CalledProcessError as e:
+            if verbose:
+                _log(f"Merge failed: {e}. Cleaning up.")
+            _cleanup_worktree(config.project_root, wt_path, branch)
+            outcome = "merge_failed"
+
+        # Save episode to main project's episodes/
+        if outcome == "match":
+            log_path = logger.finish(outcome, log_dir)
+            if verbose:
+                _log(f"Episode saved: {log_path}")
     else:
-        log_path = None
+        # Discard worktree — no changes to main
+        if verbose:
+            _log("Discarding worktree (no match).")
+        _cleanup_worktree(config.project_root, wt_path, branch)
 
     if verbose:
         _log(f"Outcome: {outcome}, Best: {best_match:.1f}%, Steps: {n_steps}")
