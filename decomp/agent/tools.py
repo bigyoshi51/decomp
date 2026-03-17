@@ -418,25 +418,67 @@ class ToolExecutor:
         return f"Compilation {status}\n{output}"
 
     def _verify_rom(self, func_name: str) -> str:
-        """Compare built ROM against base ROM byte-for-byte for a function."""
+        """Rebuild from scratch and compare entire ROM byte-for-byte.
+
+        This is the definitive matching check. It:
+        1. Does a clean rebuild (rm -rf build/ && make)
+        2. Checks ROM size matches exactly
+        3. Counts total byte diffs across the entire ROM
+        4. Reports per-function diffs if not matching
+        """
+        # Force clean rebuild to prevent stale objects
+        build_dir = self.config.project_root / "build"
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+
+        result = subprocess.run(
+            ["make", "RUN_CC_CHECK=0", "-j4"],
+            cwd=self.config.project_root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr[-500:] if result.stderr else ""
+            return f"Error: build failed.\n{stderr}"
+
         rom_path = self.config.project_root / "baserom.z64"
         built_path = self.config.project_root / "build" / "glover.z64"
 
         if not rom_path.exists():
             return "Error: baserom.z64 not found"
         if not built_path.exists():
-            return "Error: build/glover.z64 not found. Run compile first."
+            return "Error: build/glover.z64 not found"
 
         rom = rom_path.read_bytes()
         built = built_path.read_bytes()
 
+        # Check TOTAL ROM first — this catches size and shift issues
         if len(rom) != len(built):
-            return f"Error: ROM size mismatch (base={len(rom)}, built={len(built)})"
+            return (
+                f"MISMATCH: ROM size differs"
+                f" (base={len(rom)}, built={len(built)},"
+                f" delta={len(built) - len(rom)})"
+            )
 
-        # Find function ROM offset
+        total_diffs = sum(1 for j in range(len(rom)) if rom[j] != built[j])
+
+        # Allow the known 1-byte alabel diff
+        if total_diffs <= 1:
+            return (
+                f"FULL MATCH! Function {func_name} matches"
+                f" byte-for-byte.\n"
+                f"Total ROM diffs: {total_diffs}"
+            )
+
+        # Not matching — show per-function diffs
         func = self._functions.get(func_name)
         if not func:
-            return f"Function '{func_name}' not found"
+            return (
+                f"MISMATCH: {total_diffs} total ROM byte"
+                f" diffs. Function '{func_name}' not found"
+                " for detailed diff."
+            )
 
         vram = int(func_name.split("_")[1], 16)
         asm_text = func.read_assembly()
@@ -445,40 +487,36 @@ class ToolExecutor:
         ]
         func_size = len(instrs) * 4
 
-        # Determine ROM offset based on segment
         segment = func.asm_path.parent.name
         if segment == "D910":
             rom_off = 0xD910 + (vram - 0x8010C910)
         elif segment == "18020":
             rom_off = 0x18020 + (vram - 0x80118020)
         else:
-            return f"Unknown segment: {segment}"
+            return (
+                f"MISMATCH: {total_diffs} total byte diffs. Unknown segment: {segment}"
+            )
 
-        if rom_off < 0 or rom_off + func_size > len(rom):
-            return f"Error: function at ROM 0x{rom_off:X} out of range"
-
-        # Compare
         diffs = []
         for i in range(0, func_size, 4):
             off = rom_off + i
+            if off + 4 > len(rom):
+                break
             b = struct.unpack(">I", rom[off : off + 4])[0]
             c = struct.unpack(">I", built[off : off + 4])[0]
             if b != c:
                 diffs.append(f"  0x{off:06X}: base=0x{b:08X} built=0x{c:08X}")
 
-        if not diffs:
-            # Also check total ROM diffs
-            total = sum(1 for j in range(len(rom)) if rom[j] != built[j])
-            return (
-                f"FULL MATCH! Function {func_name} matches"
-                f" byte-for-byte.\nTotal ROM diffs: {total}"
-            )
-
-        match_pct = (1 - len(diffs) / (func_size // 4)) * 100
-        diff_text = "\n".join(diffs[:30])
-        if len(diffs) > 30:
-            diff_text += f"\n... ({len(diffs)} total diffs)"
-        return f"Match: {match_pct:.1f}% ({len(diffs)} instruction diffs)\n{diff_text}"
+        func_pct = (1 - len(diffs) / (func_size // 4)) * 100 if func_size > 0 else 0
+        diff_text = "\n".join(diffs[:20])
+        if len(diffs) > 20:
+            diff_text += f"\n... ({len(diffs)} diffs in function)"
+        return (
+            f"MISMATCH: {total_diffs} total ROM byte diffs.\n"
+            f"Function {func_name}: {func_pct:.1f}%"
+            f" ({len(diffs)} instruction diffs)\n"
+            f"{diff_text}"
+        )
 
     def _diff(self, func_name: str) -> str:
         from decomp.tools.differ import diff_function
