@@ -135,6 +135,9 @@ Pattern: `while (*(volatile u32*)0xA4600010 & 3) {}`
 
 ## Important Rules
 
+- STRICT C89: ALL variable declarations MUST be at the top of a scope \
+(before any statements). `s32 x = 1; x++; s32 y = 2;` is ILLEGAL. \
+Declare all variables first, then use them.
 - Do NOT use unicode/emoji in C -- assembler uses EUC-JP encoding.
 - Empty functions (`void f(void) {}`) should stay as INCLUDE_ASM -- \
 GCC omits the delay slot nop.
