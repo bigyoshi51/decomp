@@ -218,6 +218,27 @@ TOOLS = [
             "required": ["function_name"],
         },
     },
+    {
+        "name": "gfxdis",
+        "description": (
+            "Disassemble F3DEX2 display list hex data into GBI macro "
+            "calls. Use when decompiling functions that construct "
+            "display lists (look for 0xDA, 0x06, 0xE7 opcodes). "
+            "Input is hex bytes (8 bytes per command)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hex_data": {
+                    "type": "string",
+                    "description": (
+                        "Hex string of F3DEX2 commands (e.g., 'DA38000300000000')."
+                    ),
+                }
+            },
+            "required": ["hex_data"],
+        },
+    },
 ]
 
 
@@ -262,6 +283,7 @@ class ToolExecutor:
             "read_nearby_functions": lambda: self._read_nearby(
                 inp["function_name"], inp.get("limit", 5)
             ),
+            "gfxdis": lambda: self._gfxdis(inp["hex_data"]),
         }
         handler = handlers.get(name)
         if handler is None:
@@ -454,6 +476,11 @@ class ToolExecutor:
         if not resolved.exists():
             return f"Header not found: {path}"
         return resolved.read_text()
+
+    def _gfxdis(self, hex_data: str) -> str:
+        from decomp.tools.gfxdis import disassemble_hex
+
+        return disassemble_hex(hex_data)
 
     def _read_nearby(self, func_name: str, limit: int) -> str:
         """Read already-decompiled functions from the same source file."""
