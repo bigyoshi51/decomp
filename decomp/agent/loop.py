@@ -50,29 +50,29 @@ def _create_worktree(project_root: Path, func_name: str) -> tuple[Path, str]:
 
 
 def _merge_worktree(project_root: Path, wt_path: Path, branch: str) -> None:
-    """Merge a successful worktree branch back to main."""
-    # Stash any uncommitted changes on main
+    """Copy changed source files from worktree back to main and commit."""
+    import shutil
+
+    # Copy changed .c files from worktree to main
+    wt_src = wt_path / "src"
+    main_src = project_root / "src"
+    if wt_src.exists():
+        for f in wt_src.rglob("*.c"):
+            rel = f.relative_to(wt_src)
+            dst = main_src / rel
+            shutil.copy2(f, dst)
+
+    # Commit on main
     subprocess.run(
-        ["git", "stash", "--include-untracked"],
+        ["git", "add", "src/"],
         cwd=project_root,
         capture_output=True,
     )
-
-    try:
-        # Merge the agent's branch
-        subprocess.run(
-            ["git", "merge", branch, "--no-edit"],
-            cwd=project_root,
-            capture_output=True,
-            check=True,
-        )
-    finally:
-        # Restore stashed changes
-        subprocess.run(
-            ["git", "stash", "pop"],
-            cwd=project_root,
-            capture_output=True,
-        )
+    subprocess.run(
+        ["git", "commit", "-m", f"Agent: decompile from branch {branch}"],
+        cwd=project_root,
+        capture_output=True,
+    )
 
     _cleanup_worktree(project_root, wt_path, branch)
 
