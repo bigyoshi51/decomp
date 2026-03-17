@@ -79,7 +79,7 @@ If no function is specified, pick a good candidate:
 - **Always test one function at a time with clean builds (`rm -rf build/`)**. Batching multiple decompiled functions can cause cascading failures where one mismatch shifts everything after it.
 - **Test standalone first**: compile the function in an isolated .c file with GCC to verify codegen matches before inserting into the main source. This isolates boundary issues from codegen issues.
 - Don't give up after 2 attempts — try at least 5-6 variations of variable ordering, types, and expression structure before moving on
-- Some functions have stack frame size differences (e.g., -0x28 vs -0x30). This can indicate a different optimization level for that file, or a `-g` flag difference. Try `-O0`, `-O1`, `-O3`, or removing `-g2`.
+- Some functions have stack frame size differences (e.g., -0x28 vs -0x30). This is NOT from STACK_BOUNDARY (which is 64 bits / 8 bytes in both builds). The original compiler sometimes allocates extra stack space for local variables that our GCC optimizes away. Workarounds: add a `volatile` local to force extra allocation (but this changes register allocation), or accept the mismatch. This blocks ~30 D910 / ~450 game functions.
 - **Arg passthrough**: m2c often misses when `$a0` passes through to a callee unchanged. If the callee loads into `$a1` instead of `$a0`, the function likely has an extra first parameter that passes through. Check: does the asm save `$a1`/`$a2` but not `$a0`?
 - **Epilogue pattern determines -g flag**: Check the original ROM's epilogue:
   - `addiu $sp; jr $ra; nop` = compiled with `-g2` (default, most functions)
@@ -87,6 +87,8 @@ If no function is specified, pick a good candidate:
   - `-O0` functions use frame pointer (`$fp`/`$s8`) and have different epilogues entirely
 - **D910.c is a debug/RAMROM module**: The `0xB1FFFFxx` addresses are development hardware registers for host debugger communication. `0xA4600010` is PI_STATUS_REG (DMA readiness). These can be used as literal addresses or defined as macros for readability.
 - **Forward declarations with `()` (empty parens)**: In C89, `void func()` means unspecified args (accepts any). Use this when the same function is called with different arg counts from different callers (passthrough pattern).
+- **INCLUDE_ASM boundary effects**: Functions that match byte-perfectly when compiled standalone may have prologue scheduling differences when embedded between INCLUDE_ASM blocks. The `-g2` assembler's `.set reorder`/`.set noreorder` transitions across boundaries affect instruction ordering. **Strategy**: decompile adjacent functions together to eliminate boundaries. As more functions are decompiled, boundary effects decrease.
+- **Compiler validated**: Our decompals/mips-gcc-2.7.2 reconstruction produces byte-identical output to the original KMC CC1.OUT. All matching issues are source code or assembler boundary problems, never compiler differences. Original KMC tools saved at `tools/kmc-gcc-original/` for verification via Wine.
 
 ## Using decomp-permuter
 
