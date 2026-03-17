@@ -49,32 +49,65 @@ def _create_worktree(project_root: Path, func_name: str) -> tuple[Path, str]:
     return wt_path, branch
 
 
-def _merge_worktree(project_root: Path, wt_path: Path, branch: str) -> None:
-    """Copy changed source files from worktree back to main and commit."""
-    import shutil
+def _merge_worktree(
+    project_root: Path,
+    wt_path: Path,
+    branch: str,
+    func_name: str,
+) -> str | None:
+    """Push the worktree branch and open a PR.
 
-    # Copy changed .c files from worktree to main
-    wt_src = wt_path / "src"
-    main_src = project_root / "src"
-    if wt_src.exists():
-        for f in wt_src.rglob("*.c"):
-            rel = f.relative_to(wt_src)
-            dst = main_src / rel
-            shutil.copy2(f, dst)
-
-    # Commit on main
+    Returns the PR URL on success, None on failure.
+    """
+    # Commit in the worktree
     subprocess.run(
-        ["git", "add", "src/"],
-        cwd=project_root,
+        ["git", "add", "-A"],
+        cwd=wt_path,
         capture_output=True,
     )
     subprocess.run(
-        ["git", "commit", "-m", f"Agent: decompile from branch {branch}"],
+        ["git", "commit", "-m", f"Decompile {func_name} (agent)"],
+        cwd=wt_path,
+        capture_output=True,
+    )
+
+    # Push the branch
+    result = subprocess.run(
+        ["git", "push", "-u", "origin", branch],
+        cwd=wt_path,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+
+    # Open a PR
+    result = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            f"Decompile {func_name}",
+            "--body",
+            f"Agent-decompiled {func_name}. Verified byte-matching in worktree.",
+            "--head",
+            branch,
+        ],
+        cwd=wt_path,
+        capture_output=True,
+        text=True,
+    )
+    pr_url = result.stdout.strip() if result.returncode == 0 else None
+
+    # Clean up worktree (but keep the remote branch for the PR)
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(wt_path)],
         cwd=project_root,
         capture_output=True,
     )
 
-    _cleanup_worktree(project_root, wt_path, branch)
+    return pr_url
 
 
 def _cleanup_worktree(project_root: Path, wt_path: Path, branch: str) -> None:
@@ -382,41 +415,23 @@ def run_agent(
     log_path = None
 
     if outcome == "match":
-        # Commit the change in the worktree
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=wt_path,
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "commit",
-                "-m",
-                f"Decompile {logger.episode.function_name} (agent)",
-            ],
-            cwd=wt_path,
-            capture_output=True,
-        )
+        fn = logger.episode.function_name
 
-        # Merge back to main
+        # Push branch and open PR
         if verbose:
-            _log("Merging worktree to main...")
-        try:
-            _merge_worktree(config.project_root, wt_path, branch)
+            _log("Pushing branch and opening PR...")
+        pr_url = _merge_worktree(config.project_root, wt_path, branch, fn)
+        if pr_url:
             if verbose:
-                _log("Merged successfully.")
-        except subprocess.CalledProcessError as e:
+                _log(f"PR opened: {pr_url}")
+        else:
             if verbose:
-                _log(f"Merge failed: {e}. Cleaning up.")
-            _cleanup_worktree(config.project_root, wt_path, branch)
-            outcome = "merge_failed"
+                _log("Warning: failed to open PR. Branch may still exist.")
 
-        # Save episode to main project's episodes/
-        if outcome == "match":
-            log_path = logger.finish(outcome, log_dir)
-            if verbose:
-                _log(f"Episode saved: {log_path}")
+        # Save episode
+        log_path = logger.finish(outcome, log_dir)
+        if verbose:
+            _log(f"Episode saved: {log_path}")
     else:
         # Discard worktree — no changes to main
         if verbose:
