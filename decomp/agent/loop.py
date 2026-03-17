@@ -51,12 +51,29 @@ def _create_worktree(project_root: Path, func_name: str) -> tuple[Path, str]:
 
 def _merge_worktree(project_root: Path, wt_path: Path, branch: str) -> None:
     """Merge a successful worktree branch back to main."""
+    # Stash any uncommitted changes on main
     subprocess.run(
-        ["git", "merge", branch, "--no-edit"],
+        ["git", "stash", "--include-untracked"],
         cwd=project_root,
         capture_output=True,
-        check=True,
     )
+
+    try:
+        # Merge the agent's branch
+        subprocess.run(
+            ["git", "merge", branch, "--no-edit"],
+            cwd=project_root,
+            capture_output=True,
+            check=True,
+        )
+    finally:
+        # Restore stashed changes
+        subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=project_root,
+            capture_output=True,
+        )
+
     _cleanup_worktree(project_root, wt_path, branch)
 
 
