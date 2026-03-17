@@ -72,11 +72,29 @@ def _merge_worktree(
         text=True,
     )
     if commit_result.returncode != 0:
-        # Debug: why did commit fail?
         import sys
 
         print(
-            f"[merge] git commit failed: {commit_result.stderr}",
+            f"[merge] git commit rc={commit_result.returncode}",
+            file=sys.stderr,
+        )
+        print(
+            f"[merge] stdout: {commit_result.stdout}",
+            file=sys.stderr,
+        )
+        print(
+            f"[merge] stderr: {commit_result.stderr}",
+            file=sys.stderr,
+        )
+        # List what git sees
+        st = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=wt_path,
+            capture_output=True,
+            text=True,
+        )
+        print(
+            f"[merge] git status: {st.stdout}",
             file=sys.stderr,
         )
         return None
