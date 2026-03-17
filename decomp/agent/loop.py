@@ -115,7 +115,7 @@ def run_agent(
     """
     model = model or config.model
     max_attempts = max_attempts or config.max_attempts
-    log_dir = log_dir or (config.project_root / "logs" / "agent")
+    log_dir = log_dir or (config.project_root / "episodes")
 
     project = DecompProject(config)
     executor = ToolExecutor(config, project)
@@ -291,66 +291,24 @@ def run_agent(
             except OSError:
                 pass
 
-    # Save episode log (detailed trajectory)
-    log_path = logger.finish(outcome, log_dir)
+    # Save episode only on success
+    n_steps = len(logger.episode.steps)
+    if outcome == "match":
+        log_path = logger.finish(outcome, log_dir)
+        if verbose:
+            _log(f"Episode saved: {log_path}")
+    else:
+        log_path = None
+
     if verbose:
-        _log(f"Episode saved: {log_path}")
-        n_steps = len(logger.episode.steps)
         _log(f"Outcome: {outcome}, Best: {best_match:.1f}%, Steps: {n_steps}")
-
-    # On success, also save clean training example to episodes/
-    if outcome == "match" and logger.episode.function_name != "auto":
-        try:
-            from decomp.episode import log_success
-
-            fn = logger.episode.function_name
-            # Find asm path
-            for f in project.discover_functions():
-                if f.name == fn:
-                    # Extract C code from current source
-                    if f.src_path and f.src_path.exists():
-                        import re
-
-                        src = f.src_path.read_text()
-                        m = re.search(
-                            rf"((?:s32|void|u32|f32)\s+{fn}"
-                            rf"\s*\([^)]*\)\s*\{{)",
-                            src,
-                        )
-                        if m:
-                            start = m.start()
-                            brace = 0
-                            for idx in range(start, len(src)):
-                                if src[idx] == "{":
-                                    brace += 1
-                                elif src[idx] == "}":
-                                    brace -= 1
-                                    if brace == 0:
-                                        c_code = src[start : idx + 1]
-                                        break
-                            else:
-                                c_code = ""
-                            if c_code:
-                                ep_dir = config.project_root / "episodes"
-                                log_success(
-                                    fn,
-                                    f.asm_path,
-                                    c_code,
-                                    output_dir=ep_dir,
-                                )
-                                if verbose:
-                                    _log(f"Training episode: {ep_dir / fn}.json")
-                    break
-        except Exception as e:
-            if verbose:
-                _log(f"Warning: failed to save training episode: {e}")
 
     return {
         "outcome": outcome,
         "function_name": logger.episode.function_name,
         "match_percent": best_match,
         "steps": len(logger.episode.steps),
-        "log_path": str(log_path),
+        "log_path": str(log_path) if log_path else None,
         "total_tokens": logger.episode.total_tokens,
     }
 

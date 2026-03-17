@@ -317,40 +317,82 @@ class ToolExecutor:
         return resolved.read_text()
 
     def _write_function(self, func_name: str, c_code: str) -> str:
-        """Replace INCLUDE_ASM for a function with C code, preserving the rest."""
+        """Replace INCLUDE_ASM or existing C function with new code."""
         # Find which source file contains this function
         func = self._functions.get(func_name)
-        if not func or not func.src_path:
-            # Search all source files
+        src_path = None
+        if func and func.src_path:
+            src_path = func.src_path
+        else:
             for src in self.config.src_dir.rglob("*.c"):
                 text = src.read_text()
-                if "INCLUDE_ASM(" in text and func_name in text:
+                if func_name in text:
                     src_path = src
                     break
-            else:
-                return f"Cannot find source file containing {func_name}"
-        else:
-            src_path = func.src_path
+        if not src_path:
+            return f"Cannot find source file containing {func_name}"
 
         text = src_path.read_text()
-
-        # Find the segment name from the INCLUDE_ASM
-        pattern = rf'INCLUDE_ASM\("asm/nonmatchings/[^"]+",\s*{func_name}\);'
-        match = re.search(pattern, text)
-        if not match:
-            return f"INCLUDE_ASM for {func_name} not found in {src_path.name}"
 
         # Back up the file
         backup = src_path.with_suffix(".c.bak")
         shutil.copy2(src_path, backup)
 
-        # Replace
-        new_text = text[: match.start()] + c_code + text[match.end() :]
-        src_path.write_text(new_text)
+        # Try 1: replace INCLUDE_ASM
+        inc_pat = rf'INCLUDE_ASM\("asm/nonmatchings/[^"]+",\s*{func_name}\);'
+        inc_match = re.search(inc_pat, text)
+        if inc_match:
+            new_text = text[: inc_match.start()] + c_code + text[inc_match.end() :]
+            src_path.write_text(new_text)
+            return (
+                f"Replaced INCLUDE_ASM for {func_name} in"
+                f" {src_path.name} (backup: {backup.name})"
+            )
+
+        # Try 2: replace existing C function body
+        # Match: return_type func_name(args) { ... }
+        func_pat = (
+            rf"((?:s32|void|u32|f32)\s+{func_name}"
+            rf"\s*\([^)]*\)\s*\{{)"
+        )
+        func_match = re.search(func_pat, text)
+        if func_match:
+            # Find the matching closing brace
+            start = func_match.start()
+            brace = 0
+            end = start
+            for i in range(start, len(text)):
+                if text[i] == "{":
+                    brace += 1
+                elif text[i] == "}":
+                    brace -= 1
+                    if brace == 0:
+                        end = i + 1
+                        break
+            # Also remove any forward declarations
+            # immediately before the function
+            pre_start = start
+            pre_lines = text[:start].rstrip().splitlines()
+            while pre_lines and (
+                pre_lines[-1].strip().startswith("extern ")
+                or pre_lines[-1].strip().startswith("void func_")
+                or pre_lines[-1].strip().startswith("s32 func_")
+                or pre_lines[-1].strip().startswith("u32 func_")
+            ):
+                pre_lines.pop()
+            if pre_lines:
+                pre_start = len("\n".join(pre_lines)) + 1
+
+            new_text = text[:pre_start] + "\n" + c_code + text[end:]
+            src_path.write_text(new_text)
+            return (
+                f"Replaced existing {func_name} in"
+                f" {src_path.name} (backup: {backup.name})"
+            )
 
         return (
-            f"Replaced INCLUDE_ASM for {func_name} in"
-            f" {src_path.name} (backup: {backup.name})"
+            f"Cannot find INCLUDE_ASM or function body"
+            f" for {func_name} in {src_path.name}"
         )
 
     def _compile(self, clean: bool) -> str:
