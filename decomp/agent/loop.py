@@ -219,22 +219,15 @@ def run_agent(
         step_match = None
         step_compiled = None
         for tc in tool_calls:
-            if tc.name == "verify_rom" and "Match:" in tc.output:
-                import re
-
-                m = re.search(r"(\d+(?:\.\d+)?)%", tc.output)
-                if m:
-                    step_match = float(m.group(1))
+            if tc.name in ("verify_rom", "diff"):
                 if "FULL MATCH" in tc.output:
                     step_match = 100.0
-            if tc.name == "diff" and "Match:" in tc.output:
-                import re
+                elif "Match:" in tc.output:
+                    import re
 
-                m = re.search(r"(\d+(?:\.\d+)?)%", tc.output)
-                if m:
-                    step_match = float(m.group(1))
-                if "FULL MATCH" in tc.output:
-                    step_match = 100.0
+                    m = re.search(r"(\d+(?:\.\d+)?)%", tc.output)
+                    if m:
+                        step_match = float(m.group(1))
             if tc.name == "compile":
                 step_compiled = "SUCCESS" in tc.output
 
@@ -298,12 +291,59 @@ def run_agent(
             except OSError:
                 pass
 
-    # Save episode
+    # Save episode log (detailed trajectory)
     log_path = logger.finish(outcome, log_dir)
     if verbose:
         _log(f"Episode saved: {log_path}")
         n_steps = len(logger.episode.steps)
         _log(f"Outcome: {outcome}, Best: {best_match:.1f}%, Steps: {n_steps}")
+
+    # On success, also save clean training example to episodes/
+    if outcome == "match" and logger.episode.function_name != "auto":
+        try:
+            from decomp.episode import log_success
+
+            fn = logger.episode.function_name
+            # Find asm path
+            for f in project.discover_functions():
+                if f.name == fn:
+                    # Extract C code from current source
+                    if f.src_path and f.src_path.exists():
+                        import re
+
+                        src = f.src_path.read_text()
+                        m = re.search(
+                            rf"((?:s32|void|u32|f32)\s+{fn}"
+                            rf"\s*\([^)]*\)\s*\{{)",
+                            src,
+                        )
+                        if m:
+                            start = m.start()
+                            brace = 0
+                            for idx in range(start, len(src)):
+                                if src[idx] == "{":
+                                    brace += 1
+                                elif src[idx] == "}":
+                                    brace -= 1
+                                    if brace == 0:
+                                        c_code = src[start : idx + 1]
+                                        break
+                            else:
+                                c_code = ""
+                            if c_code:
+                                ep_dir = config.project_root / "episodes"
+                                log_success(
+                                    fn,
+                                    f.asm_path,
+                                    c_code,
+                                    output_dir=ep_dir,
+                                )
+                                if verbose:
+                                    _log(f"Training episode: {ep_dir / fn}.json")
+                    break
+        except Exception as e:
+            if verbose:
+                _log(f"Warning: failed to save training episode: {e}")
 
     return {
         "outcome": outcome,
