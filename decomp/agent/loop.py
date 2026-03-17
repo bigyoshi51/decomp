@@ -65,11 +65,21 @@ def _merge_worktree(
         cwd=wt_path,
         capture_output=True,
     )
-    subprocess.run(
+    commit_result = subprocess.run(
         ["git", "commit", "-m", f"Decompile {func_name} (agent)"],
         cwd=wt_path,
         capture_output=True,
+        text=True,
     )
+    if commit_result.returncode != 0:
+        # Debug: why did commit fail?
+        import sys
+
+        print(
+            f"[merge] git commit failed: {commit_result.stderr}",
+            file=sys.stderr,
+        )
+        return None
 
     # Push the branch
     result = subprocess.run(
@@ -79,6 +89,12 @@ def _merge_worktree(
         text=True,
     )
     if result.returncode != 0:
+        import sys
+
+        print(
+            f"[merge] git push failed: {result.stderr}",
+            file=sys.stderr,
+        )
         return None
 
     # Open a PR
