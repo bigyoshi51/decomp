@@ -53,6 +53,39 @@ def main() -> None:
     diff_parser = subparsers.add_parser("diff", help="Diff a function")
     diff_parser.add_argument("function", help="Function name")
 
+    # agent — run the Claude decompilation agent
+    agent_parser = subparsers.add_parser(
+        "agent", help="Run the Claude API decompilation agent"
+    )
+    agent_parser.add_argument(
+        "function",
+        nargs="?",
+        default=None,
+        help="Function name (auto-picks if omitted)",
+    )
+    agent_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=None,
+        help="Max agent iterations (default: from config)",
+    )
+    agent_parser.add_argument(
+        "--model",
+        default=None,
+        help="Claude model to use (default: from config)",
+    )
+    agent_parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=None,
+        help="Directory for episode logs",
+    )
+    agent_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress output",
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -84,6 +117,15 @@ def main() -> None:
         _cmd_m2c(config, project, args.function)
     elif args.command == "diff":
         _cmd_diff(config, args.function)
+    elif args.command == "agent":
+        _cmd_agent(
+            config,
+            args.function,
+            max_attempts=args.max_attempts,
+            model=args.model,
+            log_dir=args.log_dir,
+            verbose=not args.quiet,
+        )
 
 
 def _cmd_bootstrap(rom: Path, output: Path | None) -> None:
@@ -149,6 +191,38 @@ def _cmd_diff(config: DecompConfig, func_name: str) -> None:
         print("\nFULL MATCH!")
     else:
         print(f"\nMatch: {result.match_percent:.1f}%")
+
+
+def _cmd_agent(
+    config: DecompConfig,
+    func_name: str | None,
+    *,
+    max_attempts: int | None,
+    model: str | None,
+    log_dir: Path | None,
+    verbose: bool,
+) -> None:
+    from decomp.agent.loop import run_agent
+
+    result = run_agent(
+        config,
+        func_name,
+        max_attempts=max_attempts,
+        model=model,
+        log_dir=log_dir,
+        verbose=verbose,
+    )
+
+    # Print summary to stdout
+    print(f"\nOutcome:      {result['outcome']}")
+    print(f"Function:     {result['function_name']}")
+    print(f"Match:        {result['match_percent']:.1f}%")
+    print(f"Steps:        {result['steps']}")
+    print(f"Tokens used:  {result['total_tokens']}")
+    print(f"Episode log:  {result['log_path']}")
+
+    if result["outcome"] != "match":
+        sys.exit(1)
 
 
 if __name__ == "__main__":
