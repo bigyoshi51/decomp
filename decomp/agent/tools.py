@@ -426,49 +426,73 @@ class ToolExecutor:
         3. Counts total byte diffs across the entire ROM
         4. Reports per-function diffs if not matching
         """
+        project = self.config.project_root
+        build_dir = project / "build"
+        rom_path = project / "baserom.z64"
+        built_path = build_dir / "glover.z64"
+
+        # Log environment for debugging
+        debug_lines = [
+            "[verify_rom debug]",
+            f"  project_root: {project}",
+            f"  project_root.resolve(): {project.resolve()}",
+            f"  baserom exists: {rom_path.exists()}",
+            f"  baserom is_symlink: {rom_path.is_symlink()}",
+        ]
+        if rom_path.is_symlink():
+            debug_lines.append(f"  baserom target: {rom_path.resolve()}")
+
         # Force clean rebuild to prevent stale objects
-        build_dir = self.config.project_root / "build"
         if build_dir.exists():
             shutil.rmtree(build_dir)
+        debug_lines.append(f"  build dir removed: {not build_dir.exists()}")
 
         result = subprocess.run(
             ["make", "RUN_CC_CHECK=0", "-j4"],
-            cwd=self.config.project_root,
+            cwd=project,
             capture_output=True,
             text=True,
             timeout=120,
         )
+        debug_lines.append(f"  make rc: {result.returncode}")
+
         if result.returncode != 0:
             stderr = result.stderr[-500:] if result.stderr else ""
-            return f"Error: build failed.\n{stderr}"
-
-        rom_path = self.config.project_root / "baserom.z64"
-        built_path = self.config.project_root / "build" / "glover.z64"
+            debug_info = "\n".join(debug_lines)
+            return f"Error: build failed.\n{debug_info}\n{stderr}"
 
         if not rom_path.exists():
             return "Error: baserom.z64 not found"
         if not built_path.exists():
-            return "Error: build/glover.z64 not found"
+            return "Error: build/glover.z64 not found after make"
 
         rom = rom_path.read_bytes()
         built = built_path.read_bytes()
+        debug_lines.append(f"  baserom size: {len(rom)}")
+        debug_lines.append(f"  built size: {len(built)}")
+        debug_lines.append(f"  built path: {built_path.resolve()}")
 
         # Check TOTAL ROM first — this catches size and shift issues
         if len(rom) != len(built):
+            debug_info = "\n".join(debug_lines)
             return (
                 f"MISMATCH: ROM size differs"
                 f" (base={len(rom)}, built={len(built)},"
-                f" delta={len(built) - len(rom)})"
+                f" delta={len(built) - len(rom)})\n"
+                f"{debug_info}"
             )
 
         total_diffs = sum(1 for j in range(len(rom)) if rom[j] != built[j])
+        debug_lines.append(f"  total_diffs: {total_diffs}")
+        debug_info = "\n".join(debug_lines)
 
         # Allow the known 1-byte alabel diff
         if total_diffs <= 1:
             return (
                 f"FULL MATCH! Function {func_name} matches"
                 f" byte-for-byte.\n"
-                f"Total ROM diffs: {total_diffs}"
+                f"Total ROM diffs: {total_diffs}\n"
+                f"{debug_info}"
             )
 
         # Not matching — show per-function diffs
