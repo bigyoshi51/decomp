@@ -77,9 +77,29 @@ If no function is specified, pick a good candidate:
    - **Instruction scheduling barrier**: GCC's scheduler may hoist loads before stores when there's no data dependency. Use `__asm__("")` as a scheduling barrier between statements to prevent reordering. Example: `D_801F6450 = val; __asm__(""); dir = D_801E64C0;` prevents the load from being hoisted before the store.
    - **Float comparison register assignment**: `a < b` and `b > a` are semantically identical but produce different register assignments for `c.lt.s`. If the float comparison has swapped registers, try writing it the other way (`D_801F644C > D_80100120` instead of `D_80100120 < D_801F644C`).
    - **Pointer-based access for address computation**: If the original uses `la $v0, SYMBOL` + `lwc1 $f6, 0($v0)` (pointer pattern) instead of direct `lui+lwc1`, use `f32 *ptr = &SYMBOL; *ptr += val;` in C to match.
-   - **Wrong stack frame size**: Try different variable declarations, reorder locals
+   - **Wrong stack frame size**: Try `char pad[4]` to add 8 bytes of stack frame padding without generating extra instructions. GCC optimizes away unused locals but still allocates stack space for them. Also try reordering variable declarations.
+   - **Register swap ($s0/$s1/$s2 wrong assignment)**: Use `register s32 var asm("$16")` to force specific $s register. GCC 2.7.2 honors this. Combine with `__asm__ volatile("addu %0, %1, $0" : "=r"(dst) : "r"(src))` to force register copies that GCC would optimize away.
+   - **Loop head address cached in $s instead of reloaded**: If the original reloads `&HEAD` from scratch at the loop end but GCC caches it in $s, use `__asm__ volatile("addu %0, %1, $0" : "=r"(head) : "r"(&HEAD))` inside the if-block to force the copy. For simpler loops, `__asm__ volatile("la %0, SYMBOL" : "=r"(var))` at the loop end.
+   - **Load-delay scheduling (i++ placement in CRC/loop)**: Split the expression: `tbl_val = table[...]; __asm__(""); i++; result = (result << 8) ^ tbl_val;` — this places `i++` between the `lw` (table load) and the `sll/xor` (shift/combine), matching the original's load-delay-slot scheduling.
+   - **Trailing nop alignment**: If the function is 4 bytes shorter than the original (missing a trailing nop), add `__asm__(".align 3");` after the function closing brace to pad to 8-byte alignment.
+   - **Post-increment in function args for delay slot scheduling**: `func(dst++, ...)` generates "setup arg, increment, call" which places the increment before the jal — matching original delay slot patterns. Use when the original has `addu $a0, $s1; addiu $s1, $s1, 1; jal func`.
+   - **Unsigned vs signed shift**: `u32 >> 16` produces `srl` (logical), `s32 >> 16` produces `sra` (arithmetic). If the original uses `srl`, make the variable `u32`.
+   - **`char pad[4]` for stack frame padding**: Adds 8 bytes to the stack frame without generating any extra instructions. GCC allocates space for unused locals but optimizes away their access. Use when the original frame is 8 bytes larger than what GCC produces.
    - **Wrong instruction for constant**: `-2` vs `~1` vs `0xFFFFFFFE` can produce different instructions
    - **Optimization level**: Check if this file needs `-O0`, `-O1`, or `-O3` instead of `-O2` (add per-file override in Makefile)
+
+6b. **Use objdiff-cli for instruction-level diffing** (much better than raw hex comparison):
+   ```bash
+   # Side-by-side mnemonic diff of a specific function:
+   objdiff-cli diff -u src/D910 func_8010CD28
+
+   # Full progress report (JSON):
+   objdiff-cli report generate
+
+   # Re-generate expected baseline after matching changes:
+   make expected RUN_CC_CHECK=0
+   ```
+   objdiff shows exactly which instructions differ with mnemonics, registers, and immediates — far more readable than comparing hex words. Use it instead of the Python ROM-comparison script when grinding on diffs.
 
 7. **When matched**: Verify the full ROM still matches, then log the episode, commit, and report success.
 
@@ -102,10 +122,13 @@ If no function is specified, pick a good candidate:
    ```
    Commit after EACH matched function — don't batch. This keeps the history clean and makes it easy to bisect regressions.
 
+10. **NON_MATCHING functions**: If a function is decompiled but has a few cosmetic diffs (scheduler interleaving, temp register choice) that don't affect function size or logic, wrap it in `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`. This preserves the decompiled C for reference while keeping the ROM at 0 diffs. Exact byte-matching is the standard — "close" is not matching.
+
 ## Compiler details
 
-- **Compiler**: KMC GCC 2.7.2 (`tools/gcc_2.7.2/linux/gcc`) with KMC assembler (GAS 2.6)
-- **Default flags**: `-G0 -mips3 -mgp32 -mfp32 -Wa,--vr4300mul-off -O2 -g2`
+- **Compiler**: KMC GCC 2.7.2 (`tools/gcc_2.7.2/linux/gcc`) with KMC assembler (GAS 2.6, patched)
+- **Default flags**: `-G0 -mips3 -mgp32 -mfp32 -Wa,--vr4300mul-off -Wa,--no-float-doubleword -O2 -g2`
+- **Assembler patch**: `--no-float-doubleword` expands `l.d`/`s.d` to `lwc1`/`swc1` pairs instead of `ldc1`/`sdc1`. Required for Glover — original ROM uses `lwc1` pairs for all double loads. Affects both symbol-addressed and register-offset forms.
 - **Per-file overrides**: Some files use `-O0` or `-O3`. If a function won't match at `-O2`, try other levels.
 - **The `-g2` flag matters**: It's passed to both the compiler (cc1) and assembler (as). The KMC assembler disables delay slot reordering when `-g` >= 1 is present. This means `-g2` produces UNFILLED delay slots (`addiu $sp; jr $ra; nop`), while no `-g` produces FILLED delay slots (`jr $ra; addiu $sp` in delay slot).
 - **Most Glover functions use unfilled delay slots** (compiled with `-g2`). ~160 game segment functions have filled delay slots (compiled without `-g`). Check the original ROM's epilogue pattern to determine which flag to use.
@@ -123,7 +146,9 @@ If no function is specified, pick a good candidate:
 - **Always test one function at a time with clean builds (`rm -rf build/`)**. Batching multiple decompiled functions can cause cascading failures where one mismatch shifts everything after it.
 - **Test standalone first**: compile the function in an isolated .c file with GCC to verify codegen matches before inserting into the main source. This isolates boundary issues from codegen issues. **Count instructions correctly**: `objdump -d` shows `...` for alignment nop padding — don't count that as an instruction. The actual code size is in the `nonmatching` header (e.g., `0xD4` = 0xD4/4 = 53 instructions).
 - **DO NOT GIVE UP EASILY.** Try at least 8-10 structurally different C variations before moving on. func_8010FC10 took 6 different C structures before matching — the winning approach used `goto` labels and split load+increment. Always test standalone first (compile to .s and compare) — this is much faster than full ROM builds. When stuck, try: goto-based control flow, split expressions, swap if/else arms, inline vs separate variables, different types (s32/u32), wrapping vs flat if chains.
-- Some functions have stack frame size differences (e.g., -0x28 vs -0x30). This is NOT from STACK_BOUNDARY (which is 64 bits / 8 bytes in both builds). The original compiler sometimes allocates extra stack space for local variables that our GCC optimizes away. Workarounds: add a `volatile` local to force extra allocation (but this changes register allocation), or accept the mismatch. This blocks ~30 D910 / ~450 game functions.
+- Some functions have stack frame size differences (e.g., -0x28 vs -0x30). Use `char pad[4]` to add 8 bytes of padding without generating instructions. Do NOT use `volatile` — it changes register allocation. The `char pad[4]` trick works because GCC allocates stack space for all declared locals even if unused.
+- **Cross-function .L labels**: When decompiling a function whose `.L` labels are referenced by other INCLUDE_ASM functions, add the labels to `undefined_syms_auto.txt` with absolute addresses (e.g., `.L80118088 = 0x80118088;`). This has already been done for 555 labels in the game segment — check `undefined_syms_auto.txt` before assuming a function is blocked by this.
+- **ObjectNode struct**: `include/structs.h` defines `ObjectNode` for the D_8026A148 / D_8028F350 linked list objects. Use `node->displayList`, `node->type`, `node->posX`, etc. for typed access. Declare list heads as `extern ObjectNode D_8026A148;`.
 - **Arg passthrough**: m2c often misses when `$a0` passes through to a callee unchanged. If the callee loads into `$a1` instead of `$a0`, the function likely has an extra first parameter that passes through. Check: does the asm save `$a1`/`$a2` but not `$a0`?
 - **Epilogue pattern determines -g flag**: Check the original ROM's epilogue:
   - `addiu $sp; jr $ra; nop` = compiled with `-g2` (default, most functions)
