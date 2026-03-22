@@ -15,5 +15,8 @@ tools/
 # ROMs
 roms/
 
+# Secrets
+.env
+
 # Decomp projects
 projects/
