@@ -4,6 +4,8 @@ A general-purpose, ROM-agnostic N64 decompilation agent. Uses Claude to iterativ
 
 Wraps the standard N64 decomp ecosystem: splat, asm-differ, decomp-permuter, m2c, and IDO (via ido-static-recomp).
 
+Heavily inspired by https://github.com/cdlewis/snowboardkids2-decomp.
+
 ## Setup
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
