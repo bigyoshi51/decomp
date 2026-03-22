@@ -1,11 +1,56 @@
 #!/bin/bash
-# Print decompilation progress by comparing built ROM against base ROM per-function.
+# Print decompilation progress.
+# Uses objdiff-cli if available (more accurate, works without matching ROM).
+# Falls back to ROM byte comparison if objdiff is not set up.
 # Project-agnostic — reads segment info from the splat YAML config.
 # Usage: ./scripts/progress.sh [project_dir]
 
 PROJECT_DIR="${1:-.}"
 cd "$PROJECT_DIR" || { echo "Error: cannot cd to $PROJECT_DIR"; exit 1; }
 
+# Try objdiff-cli first (preferred — works even without matching ROM)
+if command -v objdiff-cli &>/dev/null && [ -f objdiff.json ]; then
+    # Build if needed
+    make -j4 > /dev/null 2>&1 || true
+
+    objdiff-cli report generate 2>/dev/null | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except:
+    sys.exit(1)
+m = data['measures']
+name = data.get('units', [{}])[0].get('name', 'project') if data.get('units') else 'project'
+# Get project name from first unit's source path or use generic
+proj_name = 'Decompilation'
+for unit in data.get('units', []):
+    sp = unit.get('metadata', {}).get('source_path', '')
+    if sp:
+        proj_name = sp.split('/')[-1].replace('.c', '')
+        break
+
+print(f'Decompilation Progress')
+print('=' * 40)
+tc = int(m.get('total_code', 0))
+mc = int(m.get('matched_code', 0))
+pct = m.get('matched_code_percent', 0)
+print(f'Code:      {mc:>8} / {tc:>8} bytes ({pct:.2f}%)')
+tf = m.get('total_functions', 0)
+mf = m.get('matched_functions', 0)
+fpct = m.get('matched_functions_percent', 0)
+print(f'Functions: {mf:>8} / {tf:>8}       ({fpct:.2f}%)')
+print()
+for unit in data.get('units', []):
+    um = unit.get('measures', {})
+    uname = unit.get('name', '?')
+    umf = um.get('matched_functions', 0)
+    utf = um.get('total_functions', 0)
+    upct = um.get('matched_code_percent', 0)
+    print(f'  {uname:<24} {umf:>4}/{utf:<5} functions  ({upct:.2f}% code)')
+" && exit 0
+fi
+
+# Fallback: ROM byte comparison
 # Find the splat YAML (the one with a 'segments:' key, not decomp.yaml)
 YAML=$(grep -l '^segments:' *.yaml 2>/dev/null | head -1)
 if [ -z "$YAML" ]; then
