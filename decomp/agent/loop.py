@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 import anthropic
+from dotenv import load_dotenv
 
 from decomp.core.config import DecompConfig
 from decomp.core.project import DecompProject
@@ -59,6 +60,10 @@ def _merge_worktree(
 
     Returns the PR URL on success, None on failure.
     """
+    # Clean up backup files before committing
+    for bak in wt_path.rglob("*.bak"):
+        bak.unlink()
+
     # Commit in the worktree
     subprocess.run(
         ["git", "add", "-A"],
@@ -191,9 +196,30 @@ Most Glover functions have unfilled delay slots (`addiu $sp; jr $ra; nop`).
 
 ## Matching Tips
 
-- Register allocation is based on variable "weight" (usage frequency), not \
-declaration order. Reorder declarations, change types, use in-place modification \
-(`arg0 &= -4` instead of new variable).
+### Register Allocation
+- GCC 2.7.2 assigns $s0-$s7 by priority: \
+`floor_log2(n_refs) * n_refs / live_length`. Higher priority → lower register.
+- Tiebreaker: first-encountered pseudo-register wins (gets lower $s number).
+- To change allocation: modify args in-place (`arg0 &= -4`) to increase refs; \
+use separate temp variables for values that don't survive calls (keeps them in $a/$v); \
+combine expressions inline to reduce ref counts of intermediates.
+- Splitting `val = *ptr + 1` into `val = *ptr; val++;` can change which $a register \
+is used in leaf functions.
+
+### Branch-Likely (beql/bnel)
+- GCC emits `beql`/`bnel` when the delay slot can be filled with a store from \
+the taken path AND the branch target is the function epilogue.
+- Use `goto label` to a shared store+return point — this produces `beql` where \
+separate `if/return` blocks produce plain `beq`.
+- Wrapping code in `if (cond) { ... } label: *arg0 = val; return val;` with \
+gotos inside produces the right beql pattern.
+- `return val` inside a loop skips cleanup calls (produces beql to epilogue). \
+`break` goes to after the loop where cleanup still runs.
+
+### Unsigned Comparison
+- `(u32)arg > 0x8000U` produces `sltu`. Signed `arg > 0x8000` produces `slt`.
+
+### Other Tips
 - `-2` vs `~1` vs `0xFFFFFFFE` produce different instructions.
 - When assigning 0xFF to s8, GCC sign-extends to -1. Use u8 type instead.
 - `register` keyword with `asm()` does NOT work in GCC 2.7.2.
@@ -207,6 +233,12 @@ when surrounded by INCLUDE_ASM blocks. Decompiling adjacent functions helps.
 - Stack frame padding: some functions have 8 extra bytes in the original \
 (vars=8 vs vars=0). This comes from the original source having local variables \
 that our GCC optimizes away. Try adding used locals to match the frame size.
+
+### DO NOT GIVE UP
+Try at least 8-10 structurally different C variations before giving up. \
+Techniques to try: goto-based control flow, split expressions (`val = *ptr; val++`), \
+swap if/else arms, inline vs separate variables, different types (s32/u32), \
+wrapping vs flat if chains, modifying args in-place vs separate locals.
 
 ## D910.c Context
 
@@ -256,6 +288,15 @@ def run_agent(
     Returns:
         dict with keys: outcome, function_name, match_percent, steps, log_path
     """
+    # Load API key from .env (searches up from project root, then CWD)
+    for candidate in [config.project_root, Path.cwd()]:
+        env_file = candidate / ".env"
+        while not env_file.exists() and env_file.parent != env_file.parent.parent:
+            env_file = env_file.parent.parent / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+            break
+
     model = model or config.model
     max_attempts = max_attempts or config.max_attempts
 
@@ -266,8 +307,8 @@ def run_agent(
     if verbose:
         _log(f"Worktree: {wt_path} (branch: {branch})")
 
-    # Create a config pointing to the worktree
-    wt_config = config.model_copy(update={"project_root": wt_path})
+    # Create a config pointing to the worktree (re-rooting all paths)
+    wt_config = config.for_worktree(wt_path)
     log_dir = log_dir or (config.project_root / "episodes")
 
     project = DecompProject(wt_config)
@@ -304,6 +345,8 @@ def run_agent(
     messages: list[dict] = [{"role": "user", "content": user_msg}]
     outcome = "failed"
     best_match = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     if verbose:
         _log(f"Starting agent: model={model}, max_attempts={max_attempts}")
@@ -336,6 +379,8 @@ def run_agent(
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
         }
+        total_input_tokens += response.usage.input_tokens
+        total_output_tokens += response.usage.output_tokens
 
         # Process response content
         assistant_text = ""
@@ -375,9 +420,11 @@ def run_agent(
             if tc.name in ("verify_rom", "diff"):
                 if "FULL MATCH" in tc.output:
                     step_match = 100.0
-                elif "Match:" in tc.output:
+                elif "MISMATCH" in tc.output or "Match:" in tc.output:
                     import re
 
+                    # verify_rom: "Function NAME: 72.0% (N instruction diffs)"
+                    # diff:       "Match: 72.0%"
                     m = re.search(r"(\d+(?:\.\d+)?)%", tc.output)
                     if m:
                         step_match = float(m.group(1))
@@ -475,6 +522,9 @@ def run_agent(
     if verbose:
         _log(f"Outcome: {outcome}, Best: {best_match:.1f}%, Steps: {n_steps}")
 
+    # Estimate cost based on model pricing
+    cost = _estimate_cost(model, total_input_tokens, total_output_tokens)
+
     return {
         "outcome": outcome,
         "function_name": logger.episode.function_name,
@@ -482,7 +532,27 @@ def run_agent(
         "steps": len(logger.episode.steps),
         "log_path": str(log_path) if log_path else None,
         "total_tokens": logger.episode.total_tokens,
+        "input_tokens": total_input_tokens,
+        "output_tokens": total_output_tokens,
+        "cost_usd": cost,
     }
+
+
+_MODEL_PRICING = {
+    # (input $/M tokens, output $/M tokens)
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-opus-4-6": (15.0, 75.0),
+    "claude-haiku-4-5": (0.80, 4.0),
+}
+
+
+def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate USD cost from token counts and model name."""
+    for prefix, (inp_rate, out_rate) in _MODEL_PRICING.items():
+        if prefix in model:
+            return (input_tokens * inp_rate + output_tokens * out_rate) / 1_000_000
+    # Unknown model — use Sonnet pricing as default
+    return (input_tokens * 3.0 + output_tokens * 15.0) / 1_000_000
 
 
 def _log(msg: str) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,17 +28,71 @@ class DecompProject:
             raise FileNotFoundError(f"Project root does not exist: {self.root}")
 
     def discover_functions(self) -> list[DecompFunction]:
-        """Find unmatched functions by scanning asm/non_matchings/."""
+        """Find unmatched functions by scanning asm/non_matchings/.
+
+        Only returns functions that still use INCLUDE_ASM in their source file
+        (i.e., have not yet been decompiled). Functions without a source file
+        or whose source file still contains the INCLUDE_ASM macro are included.
+        """
         functions: list[DecompFunction] = []
         asm_dir = self.config.asm_dir
 
         if not asm_dir.exists():
             return functions
 
+        # Cache source file contents to avoid re-reading per function
+        src_cache: dict[Path, str] = {}
+
         for asm_file in sorted(asm_dir.rglob("*.s")):
             func_name = asm_file.stem
-            # Try to find a corresponding source file
+
+            asm_text = asm_file.read_text()
+
+            # Skip handwritten assembly (cache/COP0 instructions — can't be decompiled)
+            if "Handwritten" in asm_text:
+                continue
+
+            # Skip empty/stub functions (≤8 bytes) — GCC can't reproduce the
+            # trailing nop, so these must stay as INCLUDE_ASM
+            size_match = re.search(
+                r"nonmatching\s+\S+,\s+(0x[0-9A-Fa-f]+|\d+)", asm_text
+            )
+            if size_match:
+                size = int(size_match.group(1), 0)
+                if size <= 8:
+                    continue
+
+            # Skip function fragments (no prologue and no jr $ra)
+            # These are mid-function code that splat split at internal labels
+            instrs = []
+            for line in asm_text.splitlines():
+                s = line.strip()
+                if "/*" in s and "*/" in s and "glabel" not in s:
+                    after = s.split("*/")[-1].strip()
+                    if after and not after.startswith(
+                        (".", "endlabel", "nonmatching", "enddlabel")
+                    ):
+                        instrs.append(after)
+            if instrs:
+                first = instrs[0]
+                has_prologue = "addiu" in first and "$sp" in first and "-0x" in first
+                has_jr_ra = any("jr" in i and "$ra" in i for i in instrs)
+                if not has_prologue and not has_jr_ra:
+                    continue
+
             src_path = self._find_source_for_asm(asm_file)
+
+            # Skip functions already decompiled (no INCLUDE_ASM in source)
+            if src_path and src_path.exists():
+                if src_path not in src_cache:
+                    src_cache[src_path] = src_path.read_text()
+                if 'INCLUDE_ASM("' not in src_cache[src_path]:
+                    # Entire file is decompiled, skip all its functions
+                    continue
+                if f", {func_name})" not in src_cache[src_path]:
+                    # This specific function has been decompiled
+                    continue
+
             functions.append(
                 DecompFunction(
                     name=func_name,

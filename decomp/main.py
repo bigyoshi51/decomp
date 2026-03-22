@@ -218,7 +218,10 @@ def _cmd_agent(
     print(f"Function:     {result['function_name']}")
     print(f"Match:        {result['match_percent']:.1f}%")
     print(f"Steps:        {result['steps']}")
-    print(f"Tokens used:  {result['total_tokens']}")
+    print(
+        f"Tokens:       {result['input_tokens']:,} in / {result['output_tokens']:,} out"
+    )
+    print(f"Cost:         ${result['cost_usd']:.2f}")
     print(f"Episode log:  {result['log_path']}")
 
     if result["outcome"] != "match":

@@ -22,7 +22,7 @@ class DecompConfig(BaseModel):
 
     # Agent settings
     max_attempts: int = 30
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-opus-4-6"
 
     # Project structure paths (relative to project_root)
     asm_dir: Path = Path("asm/non_matchings")
@@ -54,6 +54,24 @@ class DecompConfig(BaseModel):
         else:
             raise ValueError(f"Unsupported config format: {path.suffix}")
         return cls(**data)
+
+    def for_worktree(self, wt_path: Path) -> DecompConfig:
+        """Return a copy of this config with all paths re-rooted at wt_path."""
+        orig = self.project_root
+        updates: dict = {"project_root": wt_path}
+        for field in ("asm_dir", "src_dir", "include_dir"):
+            path = getattr(self, field)
+            if path.is_absolute():
+                try:
+                    updates[field] = wt_path / path.relative_to(orig)
+                except ValueError:
+                    pass  # not under project_root, leave unchanged
+        if self.base_rom.is_absolute():
+            try:
+                updates["base_rom"] = wt_path / self.base_rom.relative_to(orig)
+            except ValueError:
+                pass
+        return self.model_copy(update=updates)
 
     @classmethod
     def find_and_load(cls, start: Path | None = None) -> DecompConfig:
