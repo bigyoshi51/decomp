@@ -148,6 +148,7 @@ If no function is specified, pick a good candidate:
   3. **Statement order controls instruction scheduling**: the order you write struct field assignments affects IDO's instruction interleaving. Match the asm's store order exactly (e.g., `hdr.type = ...` before `hdr.flags = 0` if that's the asm order)
   4. For functions with **multiple msg field accesses** (type, domain, id), use a local pointer copy (`RmonMsg* p = msg`) — IDO keeps `p` in `$t6` for all accesses. For functions with **only one** msg access, skip the local copy
   5. The `sb` in the `jal` delay slot is IDO's scheduler moving the last struct store after argument setup — this happens automatically when statement order is right
+  6. For struct fields inside **if/else branches**: if the asm uses `addiu $tN, $sp, base; sw $val, offset($tN)` (register-based addressing) instead of `sw $val, combined_offset($sp)` (direct), use `*(s32*)((char*)&hdr + 0x14) = val` instead of `hdr.field = val`. The `char*` cast forces IDO to compute the struct base address with `addiu` inside each branch
 - **`unsigned short` for thread state**: Thread state fields loaded with `lhu` need `unsigned short` type. `short` produces `lh` (signed load).
 - **asm-processor**: Use three-phase pattern with `skip_instr_count=1` patch for IDO. `build.py` wrapper or manual Phase 1 (preprocess) → Phase 2a (compile) → Phase 2b (post-process).
 
