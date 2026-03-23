@@ -142,6 +142,12 @@ If no function is specified, pick a good candidate:
      - Remove the function's INCLUDE_ASM from its old file
   3. Some very small functions (return constant, no-ops) produce identical code at both O1 and O2 — these can be decompiled in-place without a file split
 - **`volatile` struct for rmon**: rmon debug functions store to stack structs that only callees read. IDO -O2 eliminates these as dead stores. Use `volatile` on the struct to preserve them.
+- **rmon packet builder pattern (IDO -O1)**: Many rmon functions build a header struct on the stack and call `func_800073F8` (__rmonSendHeader). To match at -O1:
+  1. Use **typed structs** for both the message input and the packet output — this keeps the message pointer in one `$t` register across all field accesses (without typed structs, IDO reloads from stack for each access)
+  2. **Declaration order controls stack layout**: declare `ptr` before `struct` to put the pointer at a higher stack offset (e.g., `RmonMsg* p = msg; RmonHdr hdr;` puts `p` at sp+0x2C, `hdr` at sp+0x18)
+  3. **Statement order controls instruction scheduling**: the order you write struct field assignments affects IDO's instruction interleaving. Match the asm's store order exactly (e.g., `hdr.type = ...` before `hdr.flags = 0` if that's the asm order)
+  4. For functions with **multiple msg field accesses** (type, domain, id), use a local pointer copy (`RmonMsg* p = msg`) — IDO keeps `p` in `$t6` for all accesses. For functions with **only one** msg access, skip the local copy
+  5. The `sb` in the `jal` delay slot is IDO's scheduler moving the last struct store after argument setup — this happens automatically when statement order is right
 - **`unsigned short` for thread state**: Thread state fields loaded with `lhu` need `unsigned short` type. `short` produces `lh` (signed load).
 - **asm-processor**: Use three-phase pattern with `skip_instr_count=1` patch for IDO. `build.py` wrapper or manual Phase 1 (preprocess) → Phase 2a (compile) → Phase 2b (post-process).
 
