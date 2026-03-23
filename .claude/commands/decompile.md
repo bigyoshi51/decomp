@@ -124,7 +124,28 @@ If no function is specified, pick a good candidate:
 
 10. **NON_MATCHING functions**: If a function is decompiled but has a few cosmetic diffs (scheduler interleaving, temp register choice) that don't affect function size or logic, wrap it in `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`. This preserves the decompiled C for reference while keeping the ROM at 0 diffs. Exact byte-matching is the standard — "close" is not matching.
 
-## Compiler details
+## IDO-specific notes (for 1080 Snowboarding and other IDO projects)
+
+- **Compiler**: IDO 7.1 (`tools/ido-static-recomp/build/7.1/out/cc`)
+- **Flags**: `-O2 -G 0 -mips2 -32 -non_shared -Xcpluscomm -Wab,-r4300_mul` (game code) or `-O1` (libultra)
+- **`register` keyword**: IDO respects `register` as a STRONG hint. Use `register s32 sr = __osDisableInt();` to get `$s0` allocation instead of stack spill. This is REQUIRED for all interrupt-bracket functions (osSetEventMesg, osSetThreadPri, etc.)
+- **`or` vs `addu` for `move`**: IDO uses `or rd, rs, $zero` (opcode 0x25). GCC uses `addu rd, rs, $zero` (opcode 0x21). This is the key differentiator between IDO and GCC compiled code.
+- **`beq` operand order**: IDO always puts `$s` registers first in `beq rs, rt`. If the original has `$t` first, this is a cosmetic diff — use NON_MATCHING wrapper.
+- **Mixed -O1/-O2**: libultra functions use `-O1`. Game code uses `-O2`. 1080's kernel has 103 O1/O2 transitions — functions are split into 26 files in `src/kernel/` with per-file Makefile overrides.
+- **Decompiling a function that needs a different opt level than its file**:
+  1. Check the function's asm for O1 indicators: leaf function with stack frame (`addiu $sp, -8`), stores all args to stack at entry, reloads from stack with `$t` regs
+  2. If the function is O1 but its file is O2 (or vice versa), create a NEW file:
+     - Add `src/kernel/kernel_NNN.c` with the function (plus the next INCLUDE_ASM function to absorb alignment padding)
+     - Remove the function from its current file
+     - Add `build/src/kernel/kernel_NNN.c.o: OPT_FLAGS := -O1` to Makefile
+     - Add `build/src/kernel/kernel_NNN.c.o(.text);` to the linker script in the correct position
+     - Remove the function's INCLUDE_ASM from its old file
+  3. Some very small functions (return constant, no-ops) produce identical code at both O1 and O2 — these can be decompiled in-place without a file split
+- **`volatile` struct for rmon**: rmon debug functions store to stack structs that only callees read. IDO -O2 eliminates these as dead stores. Use `volatile` on the struct to preserve them.
+- **`unsigned short` for thread state**: Thread state fields loaded with `lhu` need `unsigned short` type. `short` produces `lh` (signed load).
+- **asm-processor**: Use three-phase pattern with `skip_instr_count=1` patch for IDO. `build.py` wrapper or manual Phase 1 (preprocess) → Phase 2a (compile) → Phase 2b (post-process).
+
+## Compiler details (Glover / GCC projects)
 
 - **Compiler**: KMC GCC 2.7.2 (`tools/gcc_2.7.2/linux/gcc`) with KMC assembler (GAS 2.6, patched)
 - **Default flags**: `-G0 -mips3 -mgp32 -mfp32 -Wa,--vr4300mul-off -Wa,--no-float-doubleword -O2 -g2`
