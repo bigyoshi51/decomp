@@ -9,9 +9,10 @@ from pydantic import BaseModel, model_validator
 class DecompConfig(BaseModel):
     """Configuration for connecting to an existing N64 decomp project."""
 
-    # Project paths
-    project_root: Path  # Root of the decomp project (e.g., /path/to/sm64)
-    base_rom: Path  # Path to base ROM
+    # Project paths. project_root defaults to the config file's directory
+    # when loaded via load(); base_rom is resolved relative to project_root.
+    project_root: Path = Path(".")
+    base_rom: Path = Path("baserom.z64")
 
     # Optional targeting
     target_function: str | None = None  # Specific function to decompile
@@ -43,16 +44,23 @@ class DecompConfig(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> DecompConfig:
-        """Load config from a decomp.yaml or decomp.toml file."""
+        """Load config from a decomp.yaml or decomp.toml file.
+
+        If `project_root` is not set (or is a relative path), resolve it
+        relative to the config file's directory so the project is portable.
+        """
         text = path.read_text()
         if path.suffix in (".yaml", ".yml"):
-            data = yaml.safe_load(text)
+            data = yaml.safe_load(text) or {}
         elif path.suffix == ".toml":
             import tomllib
 
             data = tomllib.loads(text)
         else:
             raise ValueError(f"Unsupported config format: {path.suffix}")
+        config_dir = path.resolve().parent
+        root = Path(data.get("project_root", "."))
+        data["project_root"] = root if root.is_absolute() else config_dir / root
         return cls(**data)
 
     def for_worktree(self, wt_path: Path) -> DecompConfig:

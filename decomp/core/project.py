@@ -80,18 +80,13 @@ class DecompProject:
                 if not has_prologue and not has_jr_ra:
                     continue
 
-            src_path = self._find_source_for_asm(asm_file)
+            src_path, include_asm_present = self._find_source_with_include_asm(
+                asm_file, func_name, src_cache
+            )
 
-            # Skip functions already decompiled (no INCLUDE_ASM in source)
-            if src_path and src_path.exists():
-                if src_path not in src_cache:
-                    src_cache[src_path] = src_path.read_text()
-                if 'INCLUDE_ASM("' not in src_cache[src_path]:
-                    # Entire file is decompiled, skip all its functions
-                    continue
-                if f", {func_name})" not in src_cache[src_path]:
-                    # This specific function has been decompiled
-                    continue
+            # Skip functions already decompiled (no INCLUDE_ASM anywhere for them)
+            if src_path is not None and not include_asm_present:
+                continue
 
             functions.append(
                 DecompFunction(
@@ -144,28 +139,64 @@ class DecompProject:
             returncode=result.returncode,
         )
 
-    def _find_source_for_asm(self, asm_path: Path) -> Path | None:
-        """Given an asm file, try to find the corresponding .c source file.
+    def _find_source_with_include_asm(
+        self,
+        asm_path: Path,
+        func_name: str,
+        src_cache: dict[Path, str],
+    ) -> tuple[Path | None, bool]:
+        """Locate the .c file that contains INCLUDE_ASM for this function.
 
-        Convention: asm/non_matchings/<path>/<func>.s -> src/<path>.c
+        Searches src/<segment>/**/*.c for an INCLUDE_ASM line naming the
+        function. Returns (file, True) if found. Falls back to the old
+        asm_dir → src_dir convention when no INCLUDE_ASM exists anywhere
+        (returning (candidate_file, False) so discover can skip it as
+        decompiled), or (None, True) if we can't determine the layout.
         """
-        # Get relative path from asm_dir: e.g., "audio/synthesis/func.s"
         try:
             rel = asm_path.relative_to(self.config.asm_dir)
         except ValueError:
-            return None
+            return None, True
 
-        # The parent directory name usually maps to the source file
-        # e.g., asm/non_matchings/audio/synthesis/func.s -> src/audio/synthesis.c
+        # Candidate single-file source (legacy convention).
+        single_file: Path | None = None
         if rel.parent != Path("."):
-            candidate = self.config.src_dir / rel.parent.with_suffix(".c")
-            if candidate.exists():
-                return candidate
+            c = self.config.src_dir / rel.parent.with_suffix(".c")
+            if c.exists():
+                single_file = c
 
-            # Also try: src/<full_parent_path>.c flattened
-            # e.g., audio/synthesis -> src/audio/synthesis.c
-            candidate = self.config.src_dir / rel.parent / (rel.parent.name + ".c")
-            if candidate.exists():
-                return candidate
+        # Determine the segment dir under src/ (e.g. src/kernel/).
+        segment_dir = (
+            self.config.src_dir / rel.parent
+            if rel.parent != Path(".")
+            else self.config.src_dir
+        )
 
-        return None
+        # Collect all .c files that could contain this function:
+        # the single-file candidate plus any .c under the segment dir.
+        candidates: list[Path] = []
+        if single_file is not None:
+            candidates.append(single_file)
+        if segment_dir.exists() and segment_dir.is_dir():
+            candidates.extend(sorted(segment_dir.rglob("*.c")))
+
+        include_token = f", {func_name})"
+        for path in candidates:
+            if path not in src_cache:
+                try:
+                    src_cache[path] = path.read_text()
+                except OSError:
+                    src_cache[path] = ""
+            text = src_cache[path]
+            if include_token in text and "INCLUDE_ASM(" in text:
+                # Confirm the token appears on an INCLUDE_ASM line (avoid
+                # false positives from e.g. comments).
+                for line in text.splitlines():
+                    if "INCLUDE_ASM(" in line and include_token in line:
+                        return path, True
+
+        # No INCLUDE_ASM found anywhere. If we have any candidate, treat
+        # this function as already decompiled.
+        if candidates:
+            return candidates[0], False
+        return None, True
