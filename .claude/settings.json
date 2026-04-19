@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -e '.tool_input.command // \"\" | test(\"git commit.*Decompile\")' >/dev/null 2>&1 && for p in /home/dan/Documents/code/decomp/projects/*/; do if [ -x \"$p/.claude/hooks/post-decompile-check.sh\" ] && (cd \"$p\" && git log -1 --format=%s 2>/dev/null | grep -q Decompile); then (cd \"$p\" && bash .claude/hooks/post-decompile-check.sh); fi; done || true"
+          }
+        ]
+      }
+    ]
+  }
+}

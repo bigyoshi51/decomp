@@ -21,7 +21,7 @@ projects/<Game Name>/
 ├── asm/                 # Splat-generated assembly
 │   └── nonmatchings/   # Per-function asm files
 ├── assets/              # Extracted assets
-├── episodes/            # Decompilation episode logs
+├── episodes/            # Exact-match episode logs (canonical Episode/Step schema)
 ├── symbol_addrs.txt     # Function/data symbol addresses
 └── Makefile             # Build system (generated later)
 ```
@@ -91,6 +91,7 @@ If the ROM is present, perform initial analysis:
    n64sym baserom.z64 -s -f splat
    ```
    This identifies libultra/SDK functions.
+   **WARNING:** n64sym has a high false positive rate. On 1080 Snowboarding, only 2/231 function names were correct. Always validate n64sym names against real function prologues before adding to symbol_addrs.txt. Wrong labels break splat's function boundary detection.
 
 5. **Scan for function prologues** to estimate code size and function count:
    - Count `addiu $sp, $sp, -N` instructions (opcode 0x27BDXXXX with bit 15 set)
@@ -147,6 +148,9 @@ Print a summary:
 
 - The `projects/` directory is gitignored from the parent decomp repo — each project has its own git repo
 - ROMs must NOT be committed (they're copyrighted)
+- New exact-match episode files should be written with `uv run python -m decomp.main log-exact-episode ...`
+  so they use the canonical structured `Episode` / `Step` schema. Do not use the legacy
+  `decomp.episode.log_success` helper for new projects.
 - Use the `/refine-splat` skill after initial setup to iterate on the splat config
 - Use the `/setup-objdiff` skill to configure objdiff for function-level diffing
 - Reference projects: [HM64](https://github.com/harvestwhisperer/hm64-decomp), [SSSV](https://github.com/mkst/sssv)

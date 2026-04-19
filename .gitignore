@@ -21,3 +21,12 @@ roms/
 # Decomp projects
 projects/
 .gitconfig
+
+# Local clones of reference decomps (libreultra/oot/papermario)
+references/
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
+
+# Ad-hoc test artifacts
+test_*.s
