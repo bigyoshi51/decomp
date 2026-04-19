@@ -1,0 +1,53 @@
+#!/bin/bash
+# decomp-search: look up a function or hardware address across local reference
+# decomp projects (libreultra, oot, papermario). Use BEFORE grinding a match.
+#
+# Usage:
+#   decomp-search osSetEventMesg        # search for a symbol name
+#   decomp-search 0xA4600010            # search for a hardware address
+#   decomp-search --asm "ddivu"         # search .s files for a specific instruction
+#   decomp-search --reg "FPCSR_FS"      # search include/ headers for register defines
+#
+# Refs live under /home/dan/Documents/code/decomp/references/
+
+REFS="/home/dan/Documents/code/decomp/references"
+MODE="symbol"
+QUERY=""
+
+case "$1" in
+    --asm)
+        MODE=asm; QUERY="$2" ;;
+    --reg)
+        MODE=reg; QUERY="$2" ;;
+    --help|-h|"")
+        head -15 "$0" | grep -E "^#" | sed 's/^# ?//'
+        exit 0 ;;
+    *)
+        MODE=symbol; QUERY="$1" ;;
+esac
+
+[ -d "$REFS" ] || { echo "References dir missing: $REFS" >&2; exit 1; }
+
+case "$MODE" in
+    symbol)
+        echo "=== libreultra ==="
+        grep -rn --include='*.c' --include='*.h' --include='*.s' "$QUERY" "$REFS/libreultra/" 2>/dev/null | grep -v '\.o:' | head -20
+        echo ""
+        echo "=== oot ==="
+        grep -rn --include='*.c' --include='*.h' --include='*.s' "$QUERY" "$REFS/oot/src" "$REFS/oot/include" 2>/dev/null | head -20
+        echo ""
+        echo "=== papermario ==="
+        grep -rn --include='*.c' --include='*.h' --include='*.s' "$QUERY" "$REFS/papermario/src" "$REFS/papermario/include" 2>/dev/null | head -20
+        ;;
+    asm)
+        echo "=== libreultra .s ==="
+        grep -rn --include='*.s' "$QUERY" "$REFS/libreultra/" 2>/dev/null | head -10
+        echo ""
+        echo "=== oot .s ==="
+        grep -rn --include='*.s' "$QUERY" "$REFS/oot/" 2>/dev/null | head -10
+        ;;
+    reg)
+        echo "=== register defines ==="
+        grep -rn --include='*.h' -E "#define +$QUERY" "$REFS/" 2>/dev/null | head -20
+        ;;
+esac
