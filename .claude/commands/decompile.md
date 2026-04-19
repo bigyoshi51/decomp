@@ -122,6 +122,15 @@ If no function is specified, pick a good candidate:
    ```
    Commit after EACH matched function — don't batch. This keeps the history clean and makes it easy to bisect regressions.
 
+9b. **Update the project README on milestones**: Each 1080 / Glover / etc. project has a per-segment progress table in its README. It does NOT need updating after every decompile — only when something in the "Status" section is meaningfully stale. Trigger a README refresh when:
+
+   - **A new segment is set up** (e.g. first time adding `bootup_uso` or `game_libs` to the build). Add its row to the table; note any new decomp pattern.
+   - **A segment crosses a round-number milestone** (25 %, 50 %, 75 %, 100 % of that segment's functions or code). 11.4 % → 11.5 % is noise; 24 % → 25 % is worth updating.
+   - **A tracked number drifts by ≥2 percentage points** from what's in the README (for any segment or the overall total). Projects with a `scripts/refresh-report.sh` print a staleness warning when this happens.
+   - **The "not tracked" list changes** — e.g., we start tracking a USO overlay that was previously opaque.
+
+   How: compare `report.json` against the table in the project's `README.md`. If an update is warranted, edit the README inline and land it with the triggering commit or as a standalone `Update README progress stats` commit. Keep the table concise — it's a project README, not a changelog.
+
 10. **NON_MATCHING functions**: If a function is decompiled but has a few cosmetic diffs (scheduler interleaving, temp register choice) that don't affect function size or logic, wrap it in `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`. This preserves the decompiled C for reference while keeping the ROM at 0 diffs. Exact byte-matching is the standard — "close" is not matching.
 
 ## IDO-specific notes (for 1080 Snowboarding and other IDO projects)
