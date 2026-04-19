@@ -1,4 +1,8 @@
-"""Log decompilation episodes as structured data for training."""
+"""Legacy exact-match episode logging retained for historical datasets.
+
+New episode logs should use ``decomp.logging.episode.log_exact_match`` so all
+new data follows the canonical Episode/Step schema used by the agent loop.
+"""
 
 from __future__ import annotations
 
@@ -121,7 +125,10 @@ def log_success(
     compiler_flags: str = "-O2 -g2",
     output_dir: Path | None = None,
 ) -> Path:
-    """Log a successful decompilation with full context."""
+    """Log a successful decompilation with the legacy exact-match schema.
+
+    New callers should use ``decomp.logging.episode.log_exact_match`` instead.
+    """
     if output_dir is None:
         output_dir = Path("episodes")
 

@@ -86,6 +86,131 @@ def main() -> None:
         help="Suppress progress output",
     )
 
+    export_parser = subparsers.add_parser(
+        "export-episodes",
+        help="Export exact-match episodes into normalized SFT/eval JSONL",
+    )
+    export_parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path.cwd(),
+        help="Repo root used to discover project episode directories (default: cwd)",
+    )
+    export_parser.add_argument(
+        "--episodes-dir",
+        action="append",
+        type=Path,
+        default=None,
+        help="Specific episode directory to include. May be passed multiple times.",
+    )
+    export_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("exports"),
+        help="Output directory for JSONL files (default: exports)",
+    )
+    export_parser.add_argument(
+        "--eval-ratio",
+        type=float,
+        default=0.1,
+        help="Deterministic eval split ratio in [0, 1] (default: 0.1)",
+    )
+    export_parser.add_argument(
+        "--split-seed",
+        default="decomp-export-v1",
+        help="Seed string for deterministic train/eval split",
+    )
+
+    log_episode_parser = subparsers.add_parser(
+        "log-exact-episode",
+        help="Log a canonical exact-match episode JSON for one function",
+    )
+    log_episode_parser.add_argument("function_name", help="Function name")
+    log_episode_parser.add_argument(
+        "--source-file",
+        required=True,
+        type=Path,
+        help="Source file containing the final exact-match implementation",
+    )
+    log_episode_parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=Path("episodes"),
+        help="Episode directory (default: episodes)",
+    )
+    log_episode_parser.add_argument(
+        "--project",
+        default=None,
+        help="Project name stored in the episode (default: cwd name)",
+    )
+    log_episode_parser.add_argument(
+        "--asm-file",
+        type=Path,
+        default=None,
+        help="Assembly file used to derive instruction count if needed",
+    )
+    log_episode_parser.add_argument(
+        "--instruction-count",
+        type=int,
+        default=None,
+        help="Instruction count override (default: derive from --asm-file if given)",
+    )
+    log_episode_parser.add_argument(
+        "--m2c-file",
+        type=Path,
+        default=None,
+        help="Path to saved m2c output to store in initial_m2c_source",
+    )
+    log_episode_parser.add_argument(
+        "--m2c-text",
+        default=None,
+        help="Direct m2c output text to store in initial_m2c_source",
+    )
+    log_episode_parser.add_argument(
+        "--assistant-text",
+        default=None,
+        help="Short verification/matching note stored on the terminal step",
+    )
+    log_episode_parser.add_argument(
+        "--model",
+        default="claude-manual",
+        help="Model label stored in the episode (default: claude-manual)",
+    )
+    log_episode_parser.add_argument(
+        "--source-path",
+        default=None,
+        help=(
+            "Relative source path stored in metadata "
+            "(default: derived from --source-file)"
+        ),
+    )
+    log_episode_parser.add_argument(
+        "--segment",
+        default=None,
+        help="Segment stored in metadata",
+    )
+    log_episode_parser.add_argument(
+        "--compiler",
+        default=None,
+        help="Compiler label stored in metadata",
+    )
+    log_episode_parser.add_argument(
+        "--compiler-flags",
+        default=None,
+        help="Compiler flags stored in metadata",
+    )
+    log_episode_parser.add_argument(
+        "--verification",
+        default=None,
+        help="Verification summary stored in metadata",
+    )
+    log_episode_parser.add_argument(
+        "--metadata",
+        action="append",
+        default=[],
+        help="Extra metadata as KEY=VALUE. May be passed multiple times.",
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -95,6 +220,12 @@ def main() -> None:
     # Bootstrap doesn't need an existing config
     if args.command == "bootstrap":
         _cmd_bootstrap(args.rom, args.output)
+        return
+    if args.command == "export-episodes":
+        _cmd_export_episodes(args)
+        return
+    if args.command == "log-exact-episode":
+        _cmd_log_exact_episode(args)
         return
 
     # Load config
@@ -226,6 +357,54 @@ def _cmd_agent(
 
     if result["outcome"] != "match":
         sys.exit(1)
+
+
+def _cmd_export_episodes(args: argparse.Namespace) -> None:
+    from decomp.training.exporter import main as export_main
+
+    argv: list[str] = []
+    argv.extend(["--repo-root", str(args.repo_root)])
+    if args.episodes_dir:
+        for episode_dir in args.episodes_dir:
+            argv.extend(["--episodes-dir", str(episode_dir)])
+    argv.extend(["--output-dir", str(args.output_dir)])
+    argv.extend(["--eval-ratio", str(args.eval_ratio)])
+    argv.extend(["--split-seed", args.split_seed])
+    raise SystemExit(export_main(argv))
+
+
+def _cmd_log_exact_episode(args: argparse.Namespace) -> None:
+    from decomp.logging.cli import main as log_main
+
+    argv: list[str] = [args.function_name, "--source-file", str(args.source_file)]
+    argv.extend(["--log-dir", str(args.log_dir)])
+    if args.project is not None:
+        argv.extend(["--project", args.project])
+    if args.asm_file is not None:
+        argv.extend(["--asm-file", str(args.asm_file)])
+    if args.instruction_count is not None:
+        argv.extend(["--instruction-count", str(args.instruction_count)])
+    if args.m2c_file is not None:
+        argv.extend(["--m2c-file", str(args.m2c_file)])
+    if args.m2c_text is not None:
+        argv.extend(["--m2c-text", args.m2c_text])
+    if args.assistant_text is not None:
+        argv.extend(["--assistant-text", args.assistant_text])
+    if args.model is not None:
+        argv.extend(["--model", args.model])
+    if args.source_path is not None:
+        argv.extend(["--source-path", args.source_path])
+    if args.segment is not None:
+        argv.extend(["--segment", args.segment])
+    if args.compiler is not None:
+        argv.extend(["--compiler", args.compiler])
+    if args.compiler_flags is not None:
+        argv.append(f"--compiler-flags={args.compiler_flags}")
+    if args.verification is not None:
+        argv.extend(["--verification", args.verification])
+    for item in args.metadata:
+        argv.extend(["--metadata", item])
+    raise SystemExit(log_main(argv))
 
 
 if __name__ == "__main__":

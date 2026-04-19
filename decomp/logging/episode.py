@@ -54,6 +54,7 @@ class Episode:
     instruction_count: int = 0
     initial_m2c_source: str | None = None
     final_source: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def add_step(self, step: Step) -> None:
         self.steps.append(step)
@@ -126,3 +127,50 @@ class EpisodeLogger:
     def finish(self, outcome: str, log_dir: Path) -> Path:
         self.episode.finish(outcome)
         return self.episode.save(log_dir)
+
+
+def log_exact_match(
+    *,
+    function_name: str,
+    project: str,
+    log_dir: Path,
+    final_source: str,
+    initial_m2c_source: str | None = None,
+    assistant_text: str | None = None,
+    instruction_count: int = 0,
+    model: str = "manual",
+    metadata: dict[str, object] | None = None,
+    tool_calls: list[ToolCall] | None = None,
+    token_usage: dict | None = None,
+) -> Path:
+    """Write a canonical exact-match episode in the structured RL schema.
+
+    This is the helper to use for manually logged successful decompiles.
+    It produces the same top-level Episode/Step schema as the agent loop,
+    with a single successful terminal step.
+    """
+
+    logger = EpisodeLogger(
+        function_name=function_name,
+        project=project,
+        model=model,
+        instruction_count=instruction_count,
+    )
+    logger.episode.initial_m2c_source = initial_m2c_source
+    logger.episode.final_source = final_source
+    logger.episode.metadata = metadata or {}
+
+    step_number = logger.begin_step()
+    logger.record_step(
+        step_number,
+        assistant_text=assistant_text,
+        tool_calls=tool_calls or [],
+        match_percent=100.0,
+        compiled=True,
+        token_usage=token_usage,
+    )
+    logger.episode.finish("match")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / f"{function_name}.json"
+    path.write_text(json.dumps(asdict(logger.episode), indent=2))
+    return path
