@@ -131,7 +131,24 @@ If no function is specified, pick a good candidate:
 
    How: compare `report.json` against the table in the project's `README.md`. If an update is warranted, edit the README inline and land it with the triggering commit or as a standalone `Update README progress stats` commit. Keep the table concise — it's a project README, not a changelog.
 
-10. **NON_MATCHING functions**: If a function is decompiled but has a few cosmetic diffs (scheduler interleaving, temp register choice) that don't affect function size or logic, wrap it in `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`. This preserves the decompiled C for reference while keeping the ROM at 0 diffs. Exact byte-matching is the standard — "close" is not matching.
+10. **NON_MATCHING functions — preserve partial C, don't delete it**: if a function is decompiled but has cosmetic diffs (scheduler interleaving, temp register choice, ≥80 % match) that don't affect function size or logic, **do NOT revert to a bare `INCLUDE_ASM` line**. Instead, wrap the decompiled C in `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`. This preserves the C for reference, keeps the default build at 0 ROM diffs (INCLUDE_ASM path), and lets future agents or `decomp-permuter` pick up from the partial.
+
+   **Template:**
+   ```c
+   #ifdef NON_MATCHING
+   /* <one-line diff summary, e.g. "sw ra scheduling differs">
+    * Bytes match except for [describe the diff]. */
+   void gl_func_XXXXXXXX(...) {
+       /* decompiled body */
+   }
+   #else
+   INCLUDE_ASM("asm/nonmatchings/game_libs/game_libs", gl_func_XXXXXXXX);
+   #endif
+   ```
+
+   **Do NOT log an episode** for a NON_MATCHING function. Episodes are the training dataset for exact matches only (asm → C triples where the C compiles to the exact bytes). A NON_MATCHING function's C would train on incorrect output. Commit the NON_MATCHING wrap as `Wrap gl_func_XXXXXXXX as NON_MATCHING (<reason>)` without a corresponding `.json` in `episodes/`.
+
+   **Threshold:** wrap at ≥80 % match. Below that the body is likely structurally wrong and not useful reference — prefer to keep INCLUDE_ASM until you understand the function better. Exact byte-matching is the final standard — "close" is not matching, but "close" is still useful context vs "gone".
 
 ## IDO-specific notes (for 1080 Snowboarding and other IDO projects)
 
