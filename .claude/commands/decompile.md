@@ -59,10 +59,14 @@ Sources (indexed 1-5):
 
 1. **Read the assembly**: Read the function's `.s` file from `asm/nonmatchings/`
 
-1a. **Boundary sanity check** — before grinding, verify the `.s` file contains ONE function. Splat/generate-uso-asm can mis-split boundaries in two directions:
-   - **Too big** (this file is merged with the NEXT function's leaf body): look for `jr $ra` + delay slot followed by non-nop instructions still inside the declared `nonmatching SIZE`. If the tail reads caller-save registers (`$a0`-`$a3`) without initializing them, it's a second function whose caller sets those args. Run `scripts/split-fragments.py <func_name>` to split before decompiling. See `feedback_splat_fragment_split_no_prologue_leaf.md`.
+1a. **Boundary sanity check** — before grinding, verify the `.s` file contains ONE function. Splat/generate-uso-asm can mis-split boundaries in THREE directions:
+
+   **Quick pre-check:** `grep -c "03E00008" <asm_file>.s`. If the count is >1, the file contains multiple function bodies (each `jr $ra` ends one). For big strategy-memo picks, ALWAYS run this — the memo's "1.7 KB self-contained algorithm" label is unreliable on relocatable USO code because splat can't see function boundaries without symbol info.
+
+   - **Too big, bundled leaf** (this file is merged with the NEXT function's leaf body): look for `jr $ra` + delay slot followed by non-nop instructions still inside the declared `nonmatching SIZE`. If the tail reads caller-save registers (`$a0`-`$a3`) without initializing them, it's a second function whose caller sets those args. Run `scripts/split-fragments.py <func_name>` to split before decompiling. See `feedback_splat_fragment_split_no_prologue_leaf.md`.
+   - **Too big, N-function bundle** (this file is 3+ distinct functions splat couldn't separate — common in USO segments): multiple `jr $ra` sequences in the middle of the declared size, each followed by a new prologue (`addiu $sp, $sp, -N`). Run `split-fragments.py` recursively on each newly-split-off function until no more splits happen. See `feedback_strategy_memo_size_misleading.md`.
    - **Too small** (this file is a tail of the PREVIOUS function): the file has no `addiu $sp` prologue and starts with loads/stores using uninitialized `$t` registers. Use the `merge-fragments` skill to merge back. See `feedback_splat_fragment_via_register_flow.md`.
-   - If either boundary bug is present, fix THAT first — the function can never match while boundaries are wrong. Skipping just defers the problem.
+   - If any boundary bug is present, fix THAT first — the function can never match while boundaries are wrong. Skipping just defers the problem.
 
 1b. **Reference search — ALWAYS do this before grinding**: many libultra, rmon, and libc helpers are already decompiled in sibling N64 projects. For any function whose asm suggests it's part of libultra (`__os*`, `os*`, `__rmon*`, `__ll_*`) or a libgcc helper (`ddiv`, `dmultu`, `dsllv`, etc), run:
 
