@@ -40,13 +40,20 @@ Sources (indexed 1-5):
 4. **A small unstarted function in an untouched USO** — scan for the standard accessor templates (int reader / float reader / Vec3 reader / Quad4 reader). One C body matches the same template in every USO at different offsets. See `feedback_uso_accessor_template_reuse.md`.
 5. **A strategy-memo pick** — if `project_<name>_strategy.md` or `project_<name>_*_map.md` names a priority (e.g. call-graph DFS from an entry point), follow it.
 
-**Always skip (regardless of source):**
+**Commit to the first candidate the source yields — don't re-roll or silently pivot.** The source's natural first candidate (first NM wrap grep'd, first unmatched sibling, first size-sort entry, first spine function in the memo) IS the candidate. You may skip only for the reasons in the short list below; anything else is you avoiding work. If the candidate looks hard, that's the job — grind, or wrap it NM with whatever partial C you get. **Empty ticks are not an option — every tick commits a diff** (a match + episode, an NM wrap, or a fragment merge/split).
+
+**Always skip (short list — anything else, you grind):**
 - Functions that are all `.word` directives (data misidentified as code)
 - Handwritten — `.s` file has `/* Handwritten function */` comment, or it's a libreultra `.s` file (per `reference_libreultra.md`)
 - Recently-reverted — `git log --all --grep=<func>` shows a `Revert "..."` commit (unless you have a new technique to try; document what's different in your commit message)
-- Constructors / setup orchestrators (large size + many cross-USO calls) until the structs they touch are typed
+
+**Constructors are NOT a skip reason.** They need to be done eventually, and the partial C you produce while grinding (named struct offsets, inferred field types, documented callee signatures) IS the struct-typing work. A 60 % NM wrap for a constructor with offsets like `a0->field_28 = &D_00000000` is the source-of-truth for what field 0x28 means — future passes tighten it. Don't let "struct not typed yet" be an excuse; typing happens BY doing the decomp.
 
 **Fragments are NOT a skip reason** — if the candidate is a splat mis-split (no prologue, undefined regs at entry, or trails into the next function), step 1a's boundary check runs `split-fragments.py` or the `merge-fragments` skill to fix the boundary, then decompilation proceeds normally.
+
+**Multi-tick decomps are normal.** For a 1+ KB function, one tick reads the asm and writes initial C — probably 40-60 % match. Commit as NM with a real C body (no `INCLUDE_ASM`-only fallback). Next tick tightens structure, next tightens register allocation, etc. Each tick's commit is a monotonic NM-% improvement until it hits 100 %. A single tick isn't expected to produce a 1.5 KB exact match from scratch; a single tick IS expected to produce forward progress on whatever you started.
+
+**Anti-pattern to catch yourself in:** "I scanned 5 candidates and all were {constructors | FPU-heavy | documented-NM-ceilings} so I ended the tick without a commit." That IS the bail pattern — it means the easy work is done for this project, and the remaining work is intrinsically hard. Pick the first non-skip candidate from your rolled source and commit to it, even if it's a 2 KB orchestrator. The resulting NM wrap is the commit.
 
 ## Decompilation workflow
 
