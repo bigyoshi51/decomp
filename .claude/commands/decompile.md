@@ -245,12 +245,12 @@ Sources (indexed 1-5):
 
    How to check: compare `report.json` against the table in `README.md`. If an update is warranted, edit the README inline (don't spawn a separate branch) and land it with the current decomp commit or as a standalone "Update README progress stats" commit. Regenerate the report first: `objdiff-cli report generate -o report.json`. Keep the table concise — this is a project README, not a changelog.
 
-10. **NON_MATCHING functions — preserve partial C, don't delete it**: if a function is decompiled but has cosmetic diffs (scheduler interleaving, temp register choice, ≥80 % match) that don't affect function size or logic, **do NOT revert to a bare `INCLUDE_ASM` line**. Instead, wrap the decompiled C in `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`. This preserves the C for reference, keeps the default build at 0 ROM diffs (INCLUDE_ASM path), and lets future agents or `decomp-permuter` pick up from the partial.
+10. **NON_MATCHING functions — preserve partial C, don't delete it**: if a function is decompiled but the build % is below 100, **do NOT revert to a bare `INCLUDE_ASM` line**. Instead, wrap the decompiled C in `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`. This preserves the C for reference, keeps the default build at 0 ROM diffs (INCLUDE_ASM path), and lets future agents or `decomp-permuter` pick up from the partial.
 
    **Template:**
    ```c
    #ifdef NON_MATCHING
-   /* <one-line diff summary, e.g. "sw ra scheduling differs">
+   /* <diff summary: % match, what's left different, what you tried>
     * Bytes match except for [describe the diff]. */
    void gl_func_XXXXXXXX(...) {
        /* decompiled body */
@@ -262,7 +262,7 @@ Sources (indexed 1-5):
 
    **Do NOT log an episode** for a NON_MATCHING function. Episodes are the training dataset for exact matches only (asm → C triples where the C compiles to the exact bytes). A NON_MATCHING function's C would train on incorrect output. Commit the NON_MATCHING wrap as `Wrap gl_func_XXXXXXXX as NON_MATCHING (<reason>)` without a corresponding `.json` in `episodes/`.
 
-   **Threshold:** wrap at ≥80 % match. Below that the body is likely structurally wrong and not useful reference — prefer to keep INCLUDE_ASM until you understand the function better. Exact byte-matching is the final standard — "close" is not matching, but "close" is still useful context vs "gone".
+   **No threshold.** Any decoded C body goes in an `#ifdef NON_MATCHING` wrap — 40 %, 60 %, 80 %, 99 %. The previous "≥80 % only" rule turned out to be arbitrary (decoded control flow at 60-75 % is still useful reference) and forced awkward source-comment workarounds. The wrapped C is strictly more useful than nothing: compilable, permuter-testable, grep-discoverable. Include the match %, what's still different, and what you tried in the comment so the next pass has context. Exact byte-matching remains the final standard — a 60 % wrap IS progress but it's not a match; only log episodes for 100 %.
 
 ## IDO-specific notes (for 1080 Snowboarding and other IDO projects)
 
