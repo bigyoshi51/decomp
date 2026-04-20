@@ -24,13 +24,21 @@ For 1080 Snowboarding specifically (per `project_1080_strategy.md`):
 
 ## Picking a function
 
-If no function is specified, **pick one source at random per tick** — no strict priority. This spreads coverage, avoids agent collisions, and surfaces different techniques over time. Sources:
+If no function is specified, **roll for a source at random per tick** — no strict priority. This spreads coverage, avoids agent collisions, and surfaces different techniques over time.
 
-- **An existing NM wrap at 80-99%** — `grep -rn "#ifdef NON_MATCHING" src/`. Analysis is already done; a new technique may promote it to exact (e.g. the "pass unused a0 to callee" fix).
-- **A sibling of a recently-matched function** — same offset range, similar asm shape. See `feedback_mirror_function.md`.
-- **A small unstarted function (size-sort)** — `uv run decomp discover --sort-by size`. Fresh exploration. Caveat for 1080: discover misses prefixed USO names (`gl_func_*`, `game_uso_func_*`, etc.) — walk `asm/nonmatchings/<seg>/<seg>/` directly for those.
-- **A small unstarted function in an untouched USO** — scan for the standard accessor templates (int reader / float reader / Vec3 reader / Quad4 reader). One C body matches the same template in every USO at different offsets. See `feedback_uso_accessor_template_reuse.md`.
-- **A strategy-memo pick** — if `project_<name>_strategy.md` or `project_<name>_*_map.md` names a priority (e.g. call-graph DFS from an entry point), follow it.
+**Actually roll.** Run this at the start of the tick and use the number you get — don't pick in your head, because "random" by hand clumps on whatever you did last time:
+
+```bash
+echo "source=$((RANDOM % 5 + 1))"
+```
+
+Sources (indexed 1-5):
+
+1. **An existing NM wrap at 80-99%** — `grep -rn "#ifdef NON_MATCHING" src/`. Analysis is already done; a new technique may promote it to exact (e.g. the "pass unused a0 to callee" fix).
+2. **A sibling of a recently-matched function** — same offset range, similar asm shape. See `feedback_mirror_function.md`.
+3. **A small unstarted function (size-sort)** — `uv run decomp discover --sort-by size`. Fresh exploration. Caveat for 1080: discover misses prefixed USO names (`gl_func_*`, `game_uso_func_*`, etc.) — walk `asm/nonmatchings/<seg>/<seg>/` directly for those.
+4. **A small unstarted function in an untouched USO** — scan for the standard accessor templates (int reader / float reader / Vec3 reader / Quad4 reader). One C body matches the same template in every USO at different offsets. See `feedback_uso_accessor_template_reuse.md`.
+5. **A strategy-memo pick** — if `project_<name>_strategy.md` or `project_<name>_*_map.md` names a priority (e.g. call-graph DFS from an entry point), follow it.
 
 **Always skip (regardless of source):**
 - Functions that are all `.word` directives (data misidentified as code)
