@@ -63,7 +63,7 @@ permuter: /path/to/decomp-permuter       # optional
 
 # Agent settings
 max_attempts: 30
-model: claude-sonnet-4-20250514
+model: claude-opus-4-7  # bumped to Opus 4.7 when it shipped; we upgrade as new Claude models release
 
 # Project structure (defaults shown, relative to project_root)
 asm_dir: asm/non_matchings
@@ -95,6 +95,6 @@ uv run python -m decomp.main diff <function_name>
 - [x] Project structure + config
 - [x] Tool wrappers (compiler, differ, m2c, permuter)
 - [x] CLI for discovery and manual tool use
-- [ ] Claude agent loop for automated decompilation
+- [x] Claude agent loop for automated decompilation (via `/decompile` skill + `/loop`)
 - [ ] Function scoring and batch processing
-- [ ] Episode logging for future RL
+- [x] Episode logging for future RL (canonical `Episode`/`Step` schema via `log-exact-episode`)
