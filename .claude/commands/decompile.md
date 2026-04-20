@@ -24,9 +24,9 @@ For 1080 Snowboarding specifically (per `project_1080_strategy.md`):
 
 ## Picking a function
 
-If no function is specified, **roll for a source at random per tick** — no strict priority. This spreads coverage, avoids agent collisions, and surfaces different techniques over time.
+If no function is specified, **roll for a source at random per /decompile run** — no strict priority. This spreads coverage, avoids agent collisions, and surfaces different techniques over time.
 
-**Actually roll.** Run this at the start of the tick and use the number you get — don't pick in your head, because "random" by hand clumps on whatever you did last time:
+**Actually roll.** Run this at the start of the invocation and use the number you get — don't pick in your head, because "random" by hand clumps on whatever you did last time:
 
 ```bash
 echo "source=$((RANDOM % 5 + 1))"
@@ -40,7 +40,7 @@ Sources (indexed 1-5):
 4. **A small unstarted function in an untouched USO** — scan for the standard accessor templates (int reader / float reader / Vec3 reader / Quad4 reader). One C body matches the same template in every USO at different offsets. See `feedback_uso_accessor_template_reuse.md`.
 5. **A strategy-memo pick** — if `project_<name>_strategy.md` or `project_<name>_*_map.md` names a priority (e.g. call-graph DFS from an entry point), follow it.
 
-**Commit to the first candidate the source yields — don't re-roll or silently pivot.** The source's natural first candidate (first NM wrap grep'd, first unmatched sibling, first size-sort entry, first spine function in the memo) IS the candidate. You may skip only for the reasons in the short list below; anything else is you avoiding work. If the candidate looks hard, that's the job — grind, or wrap it NM with whatever partial C you get. **Empty ticks are not an option — every tick commits a diff** (a match + episode, an NM wrap, or a fragment merge/split).
+**Commit to the first candidate the source yields — don't re-roll or silently pivot.** The source's natural first candidate (first NM wrap grep'd, first unmatched sibling, first size-sort entry, first spine function in the memo) IS the candidate. You may skip only for the reasons in the short list below; anything else is you avoiding work. If the candidate looks hard, that's the job — grind, or wrap it NM with whatever partial C you get. **An empty /decompile run is not an option — every invocation commits a diff** (a match + episode, an NM wrap, or a fragment merge/split).
 
 **Always skip (short list — anything else, you grind):**
 - Functions that are all `.word` directives (data misidentified as code)
@@ -51,9 +51,9 @@ Sources (indexed 1-5):
 
 **Fragments are NOT a skip reason** — if the candidate is a splat mis-split (no prologue, undefined regs at entry, or trails into the next function), step 1a's boundary check runs `split-fragments.py` or the `merge-fragments` skill to fix the boundary, then decompilation proceeds normally.
 
-**Multi-tick decomps are normal.** For a 1+ KB function, one tick reads the asm and writes initial C — probably 40-60 % match. Commit as NM with a real C body (no `INCLUDE_ASM`-only fallback). Next tick tightens structure, next tightens register allocation, etc. Each tick's commit is a monotonic NM-% improvement until it hits 100 %. A single tick isn't expected to produce a 1.5 KB exact match from scratch; a single tick IS expected to produce forward progress on whatever you started.
+**Multi-run decomps are normal.** For a 1+ KB function, one /decompile run reads the asm and writes initial C — probably 40-60 % match. Commit as NM with a real C body (no `INCLUDE_ASM`-only fallback). The next run tightens structure, the next tightens register allocation, etc. Each run's commit is a monotonic NM-% improvement until it hits 100 %. A single /decompile run isn't expected to produce a 1.5 KB exact match from scratch; it IS expected to produce forward progress on whatever you started.
 
-**Anti-pattern to catch yourself in:** "I scanned 5 candidates and all were {constructors | FPU-heavy | documented-NM-ceilings} so I ended the tick without a commit." That IS the bail pattern — it means the easy work is done for this project, and the remaining work is intrinsically hard. Pick the first non-skip candidate from your rolled source and commit to it, even if it's a 2 KB orchestrator. The resulting NM wrap is the commit.
+**Anti-pattern to catch yourself in:** "I scanned 5 candidates and all were {constructors | FPU-heavy | documented-NM-ceilings} so I ended the /decompile run without a commit." That IS the bail pattern — it means the easy work is done for this project, and the remaining work is intrinsically hard. Pick the first non-skip candidate from your rolled source and commit to it, even if it's a 2 KB orchestrator. The resulting NM wrap is the commit.
 
 ## Decompilation workflow
 
