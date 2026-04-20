@@ -24,23 +24,32 @@ For 1080 Snowboarding specifically (per `project_1080_strategy.md`):
 
 ## Picking a function
 
-If no function is specified, in priority order:
+If no function is specified, **pick one source at random per tick** — no strict priority. This spreads coverage, avoids agent collisions, and surfaces different techniques over time. Sources:
 
-1. **Strategy memo says so** — if there's a project-level priority memo (above), follow it.
-2. **Cross-USO template reuse** — for any new USO, FIRST scan its smallest functions for the standard accessor templates (int reader / float reader / Vec3 reader / Quad4 reader). See `feedback_uso_accessor_template_reuse.md`. One C body matches the same template in EVERY USO at different offsets. High leverage, low effort.
-3. **Sibling-function mirroring** — see `feedback_mirror_function.md`. If you've matched function X, look for X's read/write/get/set siblings nearby.
-4. **Size-sort fallback** — `uv run decomp discover --sort-by size`. Prefer small (8–20 inst) self-contained functions with `jr $ra` and no external `.L` jumps. **Caveat for 1080:** the discover tool currently only lists `func_*` (kernel/bootup_uso style) names — it misses `gl_func_*`, `gui_func_*`, `game_uso_func_*` and other prefixed USO functions. For the new USOs, walk the `asm/nonmatchings/<segment>/<segment>/` directories directly.
+- **An existing NM wrap at 80-99%** — `grep -rn "#ifdef NON_MATCHING" src/`. Analysis is already done; a new technique may promote it to exact (e.g. the "pass unused a0 to callee" fix).
+- **A sibling of a recently-matched function** — same offset range, similar asm shape. See `feedback_mirror_function.md`.
+- **A small unstarted function (size-sort)** — `uv run decomp discover --sort-by size`. Fresh exploration. Caveat for 1080: discover misses prefixed USO names (`gl_func_*`, `game_uso_func_*`, etc.) — walk `asm/nonmatchings/<seg>/<seg>/` directly for those.
+- **A small unstarted function in an untouched USO** — scan for the standard accessor templates (int reader / float reader / Vec3 reader / Quad4 reader). One C body matches the same template in every USO at different offsets. See `feedback_uso_accessor_template_reuse.md`.
+- **A strategy-memo pick** — if `project_<name>_strategy.md` or `project_<name>_*_map.md` names a priority (e.g. call-graph DFS from an entry point), follow it.
 
-Avoid:
+**Always skip (regardless of source):**
 - Functions that are all `.word` directives (data misidentified as code)
-- Functions that branch/jump outside their own boundaries
-- Constructors / setup orchestrators (large size + many cross-USO calls) until you've typed the structs
+- Handwritten — `.s` file has `/* Handwritten function */` comment, or it's a libreultra `.s` file (per `reference_libreultra.md`)
+- Recently-reverted — `git log --all --grep=<func>` shows a `Revert "..."` commit (unless you have a new technique to try; document what's different in your commit message)
+- Constructors / setup orchestrators (large size + many cross-USO calls) until the structs they touch are typed
+
+**Fragments are NOT a skip reason** — if the candidate is a splat mis-split (no prologue, undefined regs at entry, or trails into the next function), step 1a's boundary check runs `split-fragments.py` or the `merge-fragments` skill to fix the boundary, then decompilation proceeds normally.
 
 ## Decompilation workflow
 
 1. **Read the assembly**: Read the function's `.s` file from `asm/nonmatchings/`
 
-1a. **Reference search — ALWAYS do this before grinding**: many libultra, rmon, and libc helpers are already decompiled in sibling N64 projects. For any function whose asm suggests it's part of libultra (`__os*`, `os*`, `__rmon*`, `__ll_*`) or a libgcc helper (`ddiv`, `dmultu`, `dsllv`, etc), run:
+1a. **Boundary sanity check** — before grinding, verify the `.s` file contains ONE function. Splat/generate-uso-asm can mis-split boundaries in two directions:
+   - **Too big** (this file is merged with the NEXT function's leaf body): look for `jr $ra` + delay slot followed by non-nop instructions still inside the declared `nonmatching SIZE`. If the tail reads caller-save registers (`$a0`-`$a3`) without initializing them, it's a second function whose caller sets those args. Run `scripts/split-fragments.py <func_name>` to split before decompiling. See `feedback_splat_fragment_split_no_prologue_leaf.md`.
+   - **Too small** (this file is a tail of the PREVIOUS function): the file has no `addiu $sp` prologue and starts with loads/stores using uninitialized `$t` registers. Use the `merge-fragments` skill to merge back. See `feedback_splat_fragment_via_register_flow.md`.
+   - If either boundary bug is present, fix THAT first — the function can never match while boundaries are wrong. Skipping just defers the problem.
+
+1b. **Reference search — ALWAYS do this before grinding**: many libultra, rmon, and libc helpers are already decompiled in sibling N64 projects. For any function whose asm suggests it's part of libultra (`__os*`, `os*`, `__rmon*`, `__ll_*`) or a libgcc helper (`ddiv`, `dmultu`, `dsllv`, etc), run:
 
     ```bash
     /home/dan/Documents/code/decomp/scripts/decomp-search osSetEventMesg
