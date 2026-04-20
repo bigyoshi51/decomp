@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c 'if (.tool_input.command // \"\" | test(\"\\\\bgit\\\\s+commit\\\\b\")) then {hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:\"Before committing: did this work surface a non-obvious technique, gotcha, or convention that future-you should know? If yes, save a concise memory under your auto-memory directory before committing. If not (e.g. mechanical changes, doc tweaks, dependency bumps), just commit.\"}} else empty end'"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Bash",
