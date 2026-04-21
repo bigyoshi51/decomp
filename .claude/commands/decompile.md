@@ -236,11 +236,11 @@ Sources (indexed 1-5):
 
    Do not stop at a branch-local commit for a successful exact match. Do not merge or push a successful decompile while leaving its episode behind. If you have unrelated WIP in the worktree, stash it first, land the successful decompile, then restore the WIP.
 
-9b. **Update the README on milestones**: The project README has a per-segment progress table. It does NOT need updating after every single decompile — only when something in the "Status" section is meaningfully stale. Trigger a README refresh when:
+9b. **Update the README on milestones**: The project README has a per-segment progress table. Keep it fresh — the user explicitly rejected the old 2pp threshold as "extremely silly" and switched to 0.1pp. Trigger a README refresh when:
 
    - **A new segment is set up** (e.g., first time adding `bootup_uso` or `game_libs` to the build). Add its row to the table, mention any new decomp pattern.
-   - **A segment crosses a round-number milestone** (25 %, 50 %, 75 %, 100 % of that segment's functions or code). Landing one more wrapper at 11.4 % → 11.5 % is noise; 24 % → 25 % is worth updating.
-   - **A tracked number drifts by ≥2 percentage points** from what's in the README (for any segment or the overall total).
+   - **A tracked number drifts by ≥0.1 percentage points** from what's in the README (for any segment or the overall total). `scripts/refresh-report.sh` prints a staleness warning when this happens.
+   - **A segment crosses a round-number milestone** (25 %, 50 %, 75 %, 100 % of that segment's functions or code).
    - **The "not tracked" list changes** — e.g., we start tracking a USO overlay that was previously opaque.
 
    How to check: compare `report.json` against the table in `README.md`. If an update is warranted, edit the README inline (don't spawn a separate branch) and land it with the current decomp commit or as a standalone "Update README progress stats" commit. Regenerate the report first: `objdiff-cli report generate -o report.json`. Keep the table concise — this is a project README, not a changelog.
