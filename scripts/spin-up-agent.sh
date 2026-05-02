@@ -64,7 +64,7 @@ else
     git -C "$PROJECT_DIR" worktree add "$WORKTREE_PATH" -b "$BRANCH" main
 fi
 
-SETUP="$PROJECT_DIR/.agent-setup"
+SETUP="$REPO_ROOT/scripts/agent-setups/${PREFIX}.sh"
 if [[ -f "$SETUP" ]]; then
     echo ">>> Running $SETUP"
     (cd "$WORKTREE_PATH" && bash "$SETUP")
