@@ -10,6 +10,8 @@ This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-d
 - `tools/` — downloaded third-party binaries (IDO, asm-processor, permuter, KMC GCC).
 - `references/` — local clones of `libreultra`, `oot`, `papermario`. Grepped by `scripts/decomp-search` when matching libultra helpers.
 - `scripts/decomp-search` — grep the reference clones. First thing to run when you recognize a `__os*` / `__rmon*` / libgcc helper.
+- `scripts/spin-up-agent.sh` — `scripts/spin-up-agent.sh <project> [letter]` creates a parallel agent worktree at `projects/<prefix>-agent-<letter>/`, picking the next free letter and running the project's `.agent-setup` recipe (symlink toolchain, copy assets, etc.). Use this whenever a new agent worktree is needed; don't repeat the recipe by hand.
+- `scripts/decomp-preflight.sh` — start-of-run hygiene + source roll. The `/decompile` skill calls this as its first action; restores tracked `report.json`, warns on parallel-agent merge artifacts, checks branch staleness, and prints `source=N`.
 - `scripts/land-successful-decomp.sh` — per-project landing script. Rebases the agent branch onto `origin/main`, refuses to land unless `report.json` shows the function as exact + `episodes/<func>.json` exists, then fast-forwards main and pushes.
 - `.claude/commands/` — skills. The main one is `/decompile` (daily driver). Siblings: `/merge-fragments`, `/split-fragments` (via script), `/setup-objdiff`, `/refine-splat`, `/new-project`, `/decompile-f3dex2`.
 - `TRAINING_PLAN.md` — active design doc on how exact-match episodes feed into SFT / verifier-RL. Not a completed spec.
@@ -17,6 +19,7 @@ This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-d
 ## Workflow entry points
 
 - **Decompile one function:** invoke the `/decompile` skill (or run `/loop /decompile` to iterate). The skill handles project discovery, worktree selection, asm reading, matching, episode logging, and landing.
+- **Spin up a parallel agent worktree:** `scripts/spin-up-agent.sh <project>` (auto-picks the next free `agent-<letter>`).
 - **Add a new game:** `/new-project` skill.
 - **Debug a stuck diff:** `objdiff-cli diff -u <unit> <func>` for mnemonic-level comparison; falls back to `objdump -M no-aliases` for exact-byte verification.
 - **Research a technique:** the user's auto-memory at `~/.claude/projects/-home-dan-Documents-code-decomp/memory/` has ~100 feedback memos on IDO/GCC matching gotchas. `MEMORY.md` is the always-loaded index.

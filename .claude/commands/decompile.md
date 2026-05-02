@@ -6,7 +6,7 @@ The decomp project lives under `projects/`. Find the splat YAML config and the `
 
 If multiple agents are working simultaneously, each agent should work in its own git worktree. Worktrees for 1080 Snowboarding live at `projects/1080-agent-<letter>/` on branch `agent-<letter>`, with shared toolchain links and a local `assets/` copy. Before starting, check `git worktree list` and:
 - If you already have a worktree, work there.
-- If not, create the next free `agent-<letter>` worktree yourself.
+- If not, create one with `scripts/spin-up-agent.sh <project>` from the repo root — it picks the next free letter and runs the project's `.agent-setup` recipe (symlinks, asset copy, local gitignore). Don't repeat the recipe by hand.
 - Never commit on `main` while another agent is also active — coordinate via worktrees or stop.
 
 ## Strategy: check project memory before picking a function
@@ -26,11 +26,13 @@ For 1080 Snowboarding specifically (per `project_1080_strategy.md`):
 
 If no function is specified, **roll for a source at random per /decompile run** — no strict priority. This spreads coverage, avoids agent collisions, and surfaces different techniques over time.
 
-**Actually roll.** Run this at the start of the invocation and use the number you get — don't pick in your head, because "random" by hand clumps on whatever you did last time:
+**Actually roll.** Run preflight first — it restores tracked files (e.g. `report.json`), warns on parallel-agent merge artifacts, checks branch staleness, AND prints your rolled source on its last line:
 
 ```bash
-echo "source=$((RANDOM % 5 + 1))"
+scripts/decomp-preflight.sh
 ```
+
+Use the `source=N` line from its output and commit to that number. Don't pick in your head — "random" by hand clumps on whatever you did last time. Don't skip preflight; the gotchas it catches are repeat offenders (see `feedback_report_json_tracked.md`, `feedback_parallel_agent_wrap_nesting.md`).
 
 Sources (indexed 1-5):
 
@@ -59,13 +61,14 @@ Sources (indexed 1-5):
 
 1. **Read the assembly**: Read the function's `.s` file from `asm/nonmatchings/`
 
-1a. **Boundary sanity check** — before grinding, verify the `.s` file contains ONE function. Splat/generate-uso-asm can mis-split boundaries in THREE directions:
+1a. **Boundary sanity check** — before grinding, verify the `.s` file contains ONE function. Splat/generate-uso-asm can mis-split boundaries in FOUR directions:
 
    **Quick pre-check:** `grep -c "03E00008" <asm_file>.s`. If the count is >1, the file contains multiple function bodies (each `jr $ra` ends one). For big strategy-memo picks, ALWAYS run this — the memo's "1.7 KB self-contained algorithm" label is unreliable on relocatable USO code because splat can't see function boundaries without symbol info.
 
    - **Too big, bundled leaf** (this file is merged with the NEXT function's leaf body): look for `jr $ra` + delay slot followed by non-nop instructions still inside the declared `nonmatching SIZE`. If the tail reads caller-save registers (`$a0`-`$a3`) without initializing them, it's a second function whose caller sets those args. Run `scripts/split-fragments.py <func_name>` to split before decompiling. See `feedback_splat_fragment_split_no_prologue_leaf.md`.
    - **Too big, N-function bundle** (this file is 3+ distinct functions splat couldn't separate — common in USO segments): multiple `jr $ra` sequences in the middle of the declared size, each followed by a new prologue (`addiu $sp, $sp, -N`). Run `split-fragments.py` recursively on each newly-split-off function until no more splits happen. See `feedback_strategy_memo_size_misleading.md`.
    - **Too small** (this file is a tail of the PREVIOUS function): the file has no `addiu $sp` prologue and starts with loads/stores using uninitialized `$t` registers. Use the `merge-fragments` skill to merge back. See `feedback_splat_fragment_via_register_flow.md`.
+   - **Prologue-stolen successor** (this `.s` starts with `addiu $sp` but immediately uses `$v0`/`$tN` as a base register without setting it): check the predecessor's `.s` tail — if it ends with `lui rX, 0; addiu rX, rX, N` (or `lui rX, 0; lw rX, N(rX)`) where `rX` matches the unset register the successor reads, those 2 insns belong logically to the successor's prologue but are inside the predecessor's symbol. C-only emit always duplicates them at the successor's start (+8 bytes vs expected). Fix: write the C body normally with `*(int*)((char*)&D_00000000 + N)` accesses, then add `build/src/<seg>/<file>.c.o: PROLOGUE_STEALS := <func_name>=8` to the Makefile (after the existing per-`.o` overrides). The build pipeline runs `scripts/splice-function-prefix.py` post-cc to remove the redundant 8-byte prefix. See `feedback_prologue_stolen_successor_no_recipe.md`.
    - If any boundary bug is present, fix THAT first — the function can never match while boundaries are wrong. Skipping just defers the problem.
 
 1b. **Reference search — ALWAYS do this before grinding**: many libultra, rmon, and libc helpers are already decompiled in sibling N64 projects. For any function whose asm suggests it's part of libultra (`__os*`, `os*`, `__rmon*`, `__ll_*`) or a libgcc helper (`ddiv`, `dmultu`, `dsllv`, etc), run:
@@ -161,6 +164,7 @@ Sources (indexed 1-5):
    - **`char pad[4]` for stack frame padding**: Adds 8 bytes to the stack frame without generating any extra instructions. GCC allocates space for unused locals but optimizes away their access. Use when the original frame is 8 bytes larger than what GCC produces.
    - **Wrong instruction for constant**: `-2` vs `~1` vs `0xFFFFFFFE` can produce different instructions
    - **Optimization level**: Check if this file needs `-O0`, `-O1`, or `-O3` instead of `-O2` (add per-file override in Makefile)
+   - **Function emit is +8 bytes vs expected, with leading lui+addiu that doesn't appear in expected**: prologue-stolen successor — the implicit base-register setup lives in the predecessor's symbol. DON'T grind register-allocation knobs. Add `build/src/<seg>/<file>.c.o: PROLOGUE_STEALS := <func_name>=8` to the Makefile (the build pipeline runs `scripts/splice-function-prefix.py` post-cc to remove the redundant prefix). See step 1a's "Prologue-stolen successor" boundary case and `feedback_prologue_stolen_successor_no_recipe.md`.
 
 6b. **Use objdiff-cli for instruction-level diffing** (much better than raw hex comparison):
    ```bash
