@@ -1,6 +1,8 @@
-# decomp — orientation for Claude
+# decomp — agent orientation
 
-This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-differ / m2c / IDO / GCC-KMC and layers a Claude-driven workflow on top. Per-project work happens under `projects/<name>/`; the top-level code is cross-project infrastructure.
+> Read by Claude (`CLAUDE.md`) and by Codex / other agents (`AGENTS.md` is a symlink to this file). A handful of references below are Claude-specific (the `/decompile` skill, `~/.claude/projects/.../memory/` auto-memory) — Codex/other agents can ignore those and follow the script-level workflow (`scripts/decomp-preflight.sh`, `scripts/spin-up-agent.sh`, the project's `scripts/land-successful-decomp.sh`). Everything else applies regardless of which agent is driving.
+
+This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-differ / m2c / IDO / GCC-KMC and layers an agent-driven workflow on top. Per-project work happens under `projects/<name>/`; the top-level code is cross-project infrastructure.
 
 ## Layout
 
