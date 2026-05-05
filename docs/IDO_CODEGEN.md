@@ -71,6 +71,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — _When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half (lui+addiu) into a single saved register ($s3 typical) and reuses it across…
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
 - [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
+- [Type-different unique externs (`int X` + `char Y`, both at addr 0) break IDO CSE between sibling lui+addiu in the same call](#feedback-ido-type-split-unique-extern-breaks-cse) — _When `func(p, *(int*)&D_X, &D_Y)` should emit TWO separate `lui+addiu` (target shape) but built emits ONE shared lui via CSE, declaring the externs with DIFFERENT types (one `int`, one `char`) prevents IDO from CSE-folding even when both link-resolve to address 0._
 - [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
 - [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
 - [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C.
@@ -2030,6 +2031,41 @@ sibling-memo trick finds a way to break the CSE.
 - `feedback_uso_entry0_trampoline_95pct_cap_class.md` — different
   cap class (post-cc recipes), but conceptually similar "by-design
   fuzzy ceiling"
+
+---
+
+---
+
+<a id="feedback-ido-type-split-unique-extern-breaks-cse"></a>
+## Type-different unique externs (`int X` + `char Y`, both at addr 0) break IDO CSE between sibling lui+addiu in the same call
+
+_When a single call passes two values derived from different externs at the same link-resolved address (0 in USO segments), IDO -O2 by default CSE-folds the `lui+addiu` pair so both values reuse one register. Target's asm often shows TWO separate `lui+addiu` pairs — that's because the original C declared the externs as DIFFERENT types. Same-type unique-name externs do NOT break the CSE; type difference does._
+
+**Verified 2026-05-05 on `func_0000553C` in bootup_uso (84.20% → 88.40%, +4.2pp):**
+
+```c
+/* Wrong (84.20%): same type — IDO CSE-folds into one lui+addiu */
+extern char D_X;
+extern char D_Y;
+func_00000000(p, arg0, *(int*)&D_X, &D_Y);
+/* emit: lui a3, 0; addiu a3, a3, 0; lw a2, 0(a3); ... — single lui shared */
+
+/* Right (88.40%): int + char split — IDO emits 2 distinct lui+addiu */
+extern int D_X;          /* int-typed: dereferenced as the value */
+extern char D_Y;          /* char-typed: address-of as the pointer */
+func_00000000(p, arg0, D_X, &D_Y);
+/* emit: lui a2, 0; lui a3, 0; addiu a3, a3, 0; lw a2, 0(a2); ... — 2 luis */
+```
+
+**Why:** IDO CSE works on type-erased load expressions. Two `extern char` accesses (even at different symbols) get `lui+addiu` for ONE base address; the loaded values then come from `lw $rN, %lo(SYM)($rN)`. With `extern int` for one and `extern char` for the other, the load expressions have different IR types — CSE doesn't fold them, so each gets its own lui+addiu pair.
+
+**Doesn't help when:**
+- The CSE you're trying to break is across MANY sites (loop, multi-iter), not 2 in one call. That's the `feedback-ido-global-cse-extern-base-caps-unrolled-loops` cap class — frame-saved register caching, not load-expression CSE.
+- The target's 2 luis come from different OFFSETS off the same base (`*(int*)((char*)&D + 0x10)` vs `*(int*)((char*)&D + 0x20)`). For that, use unique-extern-with-offset (declare `extern int D_X_AT_10` at the offset address).
+
+**Companion entries:**
+- `feedback-ido-global-cse-extern-base-caps-unrolled-loops` — different cap class, applies to MANY sites
+- `feedback_unique_extern_with_offset_cast_breaks_cse.md` — unique externs at OFFSET addresses (different mechanism — addresses differ, not types)
 
 ---
 
