@@ -16,6 +16,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
 - [IDO -O2 sparse-case switch (case 0 + case 1) compiles to 3-arm beql dispatch with delay-slot pre-loads — unreachable from C if-else; switch is also rejected (.rodata jumptable)](#feedback-ido-sparse-switch-beql-preload-unreachable) — _When target asm shows `addiu $at,zero,1; beql v0,zero,caseA; <lw delay>; beql v0,$at,caseB; <lw delay>; b end; <lw ra delay>` (3-arm beql dispatch with each delay slot pre-loading the case body's first lw), this is a…
+- [bc1fl with target=epilogue and `lw ra,X(sp)` in delay slot is a CONDITIONAL-CALL marker, not a clamp — the if-block guards a `jal` between here and the epilogue](#feedback-ido-bc1fl-skips-jal-to-epilogue) — _Diagnostic for misreading IDO -O2 trailing FP conditionals: when target's last bc1fl jumps to the epilogue with `lw ra,X(sp)` in the delay slot, it's NOT a clamp/store guard; it's `if (!cond) jal()` where the jal sits between the bc1fl and the epilogue. Decode the C as `if (cond_complement) func();`._
 
 ### FPU / float specifics
 
@@ -5122,6 +5123,45 @@ When target asm dispatch starts with `addiu $at,zero,N; beql v0,zero,...; <lw de
 **Related:**
 - `feedback_ido_switch_rodata_jumptable.md` — switch → .rodata jumptable, discarded by 1080 linker
 - `feedback_ido_branch_likely_arm_choice.md` — beql arm-choice rules for SIMPLE if/return patterns
+
+---
+
+---
+
+<a id="feedback-ido-bc1fl-skips-jal-to-epilogue"></a>
+## bc1fl with target=epilogue and `lw ra,X(sp)` in delay slot is a CONDITIONAL-CALL marker, not a clamp
+
+_Diagnostic for misreading IDO -O2 trailing FP conditionals: when the LAST `bc1fl` in a function jumps to the epilogue with `lw ra,X(sp)` in its delay slot, that's NOT a clamp/store guard — it's `if (!cond) jal()` where the jal sits between the bc1fl and the epilogue. Decode the C as `if (cond_complement) func();`, not "another clamp branch"._
+
+**Verified 2026-05-05 on `mgrproc_uso_func_00002AFC` (82.34% → 100%):** the function's last bc1fl was misread as a third FP-clamp; the correct decode is `if (v <= 0.0f) gl_func_00000000();` (notify-on-expiry).
+
+**Recognition signal:**
+
+```
+2b50: lwc1   $f0, 0x168(a0)        ; reload v
+2b54: c.le.s $f0, $f2                ; cond: v <= 0
+2b58: nop
+2b5c: bc1fl  <epilogue>             ; if cond FALSE (v > 0) → branch
+2b60: lw     ra, 0x14(sp)            ; DELAY-LIKELY: ra reload (taken path)
+2b64: jal    func                    ; conditionally-called when cond TRUE
+2b68: nop
+2b6c: lw     ra, 0x14(sp)            ; ra reload (fall-through path, after jal)
+2b70: addiu  sp, sp, 0x18            ; epilogue
+2b74: jr     ra
+```
+
+The two `lw ra` reloads (one in delay-likely, one after the jal) are the fingerprint. Both paths arrive at the same `addiu sp` epilogue; the difference is whether the jal ran. The bc1fl-taken path skips the jal but uses the delay-likely `lw ra` to set up the return.
+
+**Why "cond_complement" in the C:** `bc1fl` branches when the FP cond is FALSE. Branch-taken means SKIP the jal. So:
+- Cond TRUE → fall through, run the jal → `if (cond) jal()`
+- Cond FALSE → branch to epilogue, skip the jal
+
+If target's c.le.s tested `v <= 0`, the C is `if (v <= 0) jal()`.
+If target's c.lt.s tested `0 < v`, the C is `if (0 < v) jal()`.
+
+**Anti-pattern that gets you here:** seeing three c.lt.s/c.le.s + bc1fl sequences in a row and assuming they're three clamps. The third one is conditional-call structurally distinct (delay slot is `lw ra`, not `c.le.s` or another insn). Inspect the delay slot first — it tells you the role.
+
+**Companion to** `feedback-ido-fabs-dead-mov` (above), which is about a different bc1fl idiom (fabs's unreachable mov.s at merge). Both involve bc1fl + branch-likely; this one is purely about correctly identifying the conditional-call structure when reading raw asm.
 
 ---
 
