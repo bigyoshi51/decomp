@@ -5314,6 +5314,7 @@ _`feedback_ido_local_ordering.md` covers STACK OFFSETS (first-declared → highe
 **Confirmed-not-a-lever variants (don't waste time on these):**
 - Reordering decls (the original observation).
 - Splitting decl-init from later inline-init (`register int one;` ... `one = 1;` vs `register int one = 1;`) — verified 2026-05-02 on n64proc_uso_func_00000014: same 33.69%, identical $s2/$s3 swap. The init form doesn't enter the allocator's weight calculation.
+- **Block-scoping a single local to its sole use site** — verified 2026-05-05 on n64proc_uso_func_00000014 (variant 23): wrapping `register char *base10 = ...; gl_func_00000000(base10, cur);` in a `{ }` block at body1 produced IDENTICAL $s5=base10 allocation. IDO computes live_length from RTL pseudo extent (the underlying SSA range), not from C lexical scope. Lexical narrowing is invisible to the allocator. Distinct from the multi-allocno block-scope trick above (where two `out` locals in two blocks become two pseudos with separate live ranges) — that's a different shape.
 
 **What does NOT help:**
 - Reordering declarations (first vs last). Weights don't depend on source position.
