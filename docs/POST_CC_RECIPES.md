@@ -1431,3 +1431,21 @@ Drop the prior NM wrap, emit C body unconditionally; SUFFIX_BYTES appends the no
 ---
 
 ---
+
+<a id="feedback-prefix-bytes-idempotent-under-nm-wrap"></a>
+## PREFIX_BYTES injection is idempotent under an active NM wrap — safe to add the Makefile entry alongside `#ifdef NON_MATCHING / #else INCLUDE_ASM`
+
+**Pattern:** When working a USO entry-0 trampoline function (e.g. `gui_func_00000000` with leading `0x1000736F`), you can add the Makefile PREFIX_BYTES entry BEFORE the C body fully matches, even while the function is still wrapped `#ifdef NON_MATCHING / #else INCLUDE_ASM`. The `inject-prefix-bytes.py` script auto-detects "already has prefix word" (because INCLUDE_ASM emits the trampoline already) and emits:
+
+```
+inject-skip: <func> already starts with prefix word 0xXXXXXXXX (likely an INCLUDE_ASM build); no-op
+```
+
+The build .o is unchanged in this case. Once the C body actually compiles to the post-trampoline shape AND the wrap is dropped (so the C-only path is the canonical emit), the same Makefile line activates the injection automatically.
+
+**Verified 2026-05-05** on `gui_func_00000000`: added `PREFIX_BYTES := gui_func_00000000=0x1000736F` to the Makefile while the NM wrap was still in place. Default build remained byte-identical to expected (idempotent skip), C-only build path got the prefix when re-attempted. No risk of corrupting the working build.
+
+**Why this matters:** the prior advice was "wait until C body matches before adding the Makefile recipe." That's overly cautious — you can wire the recipe in advance, then it kicks in seamlessly when the C-side is ready. Useful when the structural decode is partially done and you want to commit the infrastructure incrementally.
+
+**Note on opcode allowlist:** `inject-prefix-bytes.py`'s `VALID_ENTRY_OPCODES` set includes `0x0C` (`andi`), `0x09` (`addiu`), `0x0F` (`lui`), `0x23` (`lw`), and SPECIAL/0 (register-only ops). If your function's first body insn (post-trampoline) uses an opcode NOT in the list, the script refuses with "first insn is 0xNNNNNNNN; not on the recognized entry-insn list. Refusing to patch." Add the opcode to `VALID_ENTRY_OPCODES` if it's a legitimate leaf-function entry shape (not data-as-code).
+
