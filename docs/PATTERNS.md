@@ -8348,3 +8348,33 @@ The plain `*dst++ = *src++; count--;` form WON'T produce these per-iter moves. I
 ---
 
 ---
+
+## "Always-set + conditional-side-effect" → IDO emits beql with duplicate `sw` (delay slot + fallthrough)
+
+_When C source has `if (X != 0) Y = const; X = newval;` — "do extra side-effect when X was previously non-null, then unconditionally overwrite X" — IDO emits `beql X, zero, post_check; sw newval, X(reg) [delay-likely]; sw const, Y(reg); sw newval, X(reg)`. The duplicate `sw newval` (one in beql delay slot, one in fallthrough) is INTENTIONAL: each path of the branch needs the unconditional write._
+
+**C source:**
+
+```c
+if (sub->X != 0) {
+    sub->Y = 1;
+}
+sub->X = (int)ptr;
+```
+
+**IDO -O2 asm:**
+
+```
+lw   t8, X(a1)
+beql t8, zero, post_check    ; if X==0, take branch (and execute delay-likely)
+ sw  v1, X(a1)                ; (delay-likely): set X = ptr
+sw   t9, Y(a1)                ; X!=0 path: set Y = 1
+sw   v1, X(a1)                ; X!=0 path: set X = ptr (DUPLICATE)
+post_check:
+```
+
+**Diagnostic:** target asm has two `sw <reg>, OFFSET($same_base)` separated by ONE other store, with the first immediately following a `beql` that branches to past both. Both stores write the same source register. NOT a duplicate-emit bug — it's the natural beql-with-fallthrough shape.
+
+**Don't:** try to "deduplicate" the second `sw` from C. Writing as `if (X != 0) { Y = 1; X = ptr; } else { X = ptr; }` produces a different shape (separate stores in arms with explicit branch); the natural unconditional-after-if is what hits the beql idiom.
+
+Verified 2026-05-05 on game_uso_func_00003A28 (89%+ on first try; the duplicate-`sw` shape matched naturally).
