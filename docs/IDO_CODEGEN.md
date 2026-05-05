@@ -69,6 +69,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 constant-folds the load-address even when the base is a register-declared local](#feedback-ido-constant-address-load-fold-inevitable) — _For `arg = *(int*)((char*)base + N)` where base = `&D_constant`, IDO emits a fresh `lui+lw` rather than `lw arg, N($base_reg)` even with `register` keyword.
 - [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — _When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half (lui+addiu) into a single saved register ($s3 typical) and reuses it across…
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
+- [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
 - [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
 - [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
 - [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C.
@@ -2657,6 +2658,46 @@ Search NM docs for "v0/v1 swap" or "first-loaded" — likely applies to
 other instances. Doesn't apply when the two values use different load
 expressions (e.g., `p1 = a0->X; p2 = a0->Y;` — no shared subexpression
 to CSE).
+
+---
+
+---
+
+<a id="feedback-ido-inline-deref-vs-cache-flips-vN-tN"></a>
+## Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load
+
+_When target keeps a `int**` arg in `$v1` across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via `$v1`. Same C semantics, different IDO output._
+
+**Verified 2026-05-05 on `titproc_uso_func_00000B6C` (97.50% → 100%):**
+
+```c
+/* Wrong (97.50%, $t0): explicit cache + reuse */
+int *p = *a0;
+p[5] = 0;
+if (a1 != -1) {
+    int *q = (int*)((*a0)[2]);
+    *(int*)((char*)&D_00000000 + 0x168) = q[2];
+    q = (int*)((*a0)[2]);
+    *(int*)((char*)&D_00000000 + 0x170) = q[1];
+}
+
+/* Right (100%, $v1): inline (*a0) at every site */
+(*a0)[5] = 0;
+if (a1 != -1) {
+    *(int*)((char*)&D_00000000 + 0x168) = ((int*)((*a0)[2]))[2];
+    *(int*)((char*)&D_00000000 + 0x170) = ((int*)((*a0)[2]))[1];
+}
+```
+
+**Why:** the cached form gives IDO a single `lw $tN, 0(spill)` that emits ONE load and propagates `$tN` to all uses. The inline form forces three independent `*a0` derefs that IDO CSE-folds into "load `&a0` once into a reg, then `lw 0(reg)` per use." IDO picks `$v1` for the cached `&a0` because it's the cheapest caller-save register that survives the dead phase between the 3rd jal and the post-call code (no other register competes for that slot in the function's lifetime graph).
+
+**Diagnostic:** target's post-call asm has `lw $v1, SPILL_OFFSET($sp)` (loading the spilled arg) followed by 2-3 `lw $tN, 0($v1)` reloads of `*$v1`. Built has `lw $tN, SPILL_OFFSET($sp)` and 1 reload. The +2 extra reloads in target are the signal that IDO sees the value as "live across multiple sites" — which is what the inlined-deref form mimics.
+
+**When to apply:** post-call code reads `*a0` at 2+ sites within the same basic block. The cached-pointer form is the natural decode but produces the wrong register class.
+
+**Doesn't apply when:** the function only reads `*a0` once post-call (then there's nothing to CSE), or when target itself has the cache (one `lw t6, 0(spill)` followed by `lw tN, 0(t6)` reuses).
+
+**Companion to** `feedback-ido-load-cse-swap-v0-v1` (above) — both are about controlling which register IDO assigns to a deref intermediate. That entry is for `$v0` vs `$v1` swap on chained derefs (different values); this entry is for `$v1` vs `$tN` choice on repeated derefs (same value, multiple sites).
 
 ---
 
