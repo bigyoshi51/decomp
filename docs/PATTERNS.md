@@ -54,6 +54,8 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### dispatch / goto / pad / loop
 
+- [Per-iter intermediate locals reproduce IDO's `or aN, vM, $zero` move-from-preserved-arg-reg loop shape](#feedback-per-iter-ptr-copies-match-or-an-vm-loop-shape) — _When target's loop body has `move aN, vM, $zero` re-fetching from a preserved-arg-reg each iteration, the C source needs explicit per-iter intermediate locals (`p = sp; q = dp; rem = cp;`) — not the plain `*dst++ = *src++` form. Verified func_80000598: None -> 76.25% (30-insn build -> 14-insn / target 16-insn). Opposite direction from consolidate-load-in-loop-drops-sreg._
+- [Paired sister-batches in the same function may have MIRROR-INVERTED if/else arms](#feedback-paired-batches-may-have-mirror-inverted-arms) — _Two structurally-identical batches with same call sequence and same condition variable can have arm orders flipped between them (one batch uses `bne`, the other `beq`). Apply arm-swap ASYMMETRICALLY — flip in only the batches where branch direction requires it. Verified timproc_uso_b1_func_00002D48 (96.47% → 99.88%)._
 - [m2c's split increment-then-conditional-reload pattern keeps a loop-iter local in $s; consolidate the load to drop the $s allocation](#feedback-consolidate-load-in-loop-drops-sreg) — _When m2c outputs a loop with `x = *p; do { ... p++; if (p != end) x = *p; } while (p != end);`, the local `x` is alive ACROSS iterations (live across the loop-back branch), so IDO promotes it to $s.
 - [game_libs asm files with trailing nop padding block objdiff 100% match after C-decomp](#feedback-function-trailing-nop-padding) — _If an asm file's `nonmatching SIZE` header is bigger than the real function (trailing `0x00000000` padding words inside the asm), decomp'd C produces a shorter symbol and objdiff shows ~75 % — the instructions match…
 - [Combo `char pad[N]` + `goto`-style dispatch to match multi-arm if/else + frame-size mismatches](#feedback-goto-dispatch-plus-pad-combo) — When an NM wrap has BOTH a frame-size mismatch (e.g., mine 0x38, target 0x48) AND a branch-structure mismatch (target uses `beq tag0; beq tag1; b epi; tag0: ... b epi; tag1: ... b epi; epi:` — 2-tag dispatch with…
@@ -8233,6 +8235,115 @@ Only ONE .o file feeds into the Yay0 compressor. Splitting the source .c into tw
 2. **Multi-block split:** Compile the accessor into its own tiny Yay0 block (requires ROM layout changes — out of scope for one tick).
 
 **Origin:** 2026-04-20, timproc_uso_b1_func_00000000 (-O0 int reader, 19 insns, 0x4C). Started applying the file-split recipe, created the o0_0.c file + Makefile + linker entry, then discovered the Yay0 rule consumes only timproc_uso_b1.c.o. Reverted; left NM wrap with blocker note.
+
+---
+
+<a id="feedback-paired-batches-may-have-mirror-inverted-arms"></a>
+## Paired sister-batches in the same function may have MIRROR-INVERTED if/else arms — check both branches' arg loads, don't assume same shape
+
+**Pattern:** A function with two structurally-identical "batches" (same call sequence, only the `&D + N` offset differs between them) can have the conditional arms inverted between batches. Don't assume "same shape, same arg pattern" — read each batch's branch direction (`bne` vs `beq`) and the args loaded in each arm separately.
+
+**Verified 2026-05-05** on `timproc_uso_b1_func_00002D48` (66 insns, two batches with offsets D+0x190 and D+0x1A8). Decoded asm shows:
+
+```
+batch1 @0x2D80: bne t6, $zero, +8       ; branch if cond != 0
+  ; if t6 == 0 (fall-through):     gl_func(D+0x190, a0->0x5C, &quad4, 0xFF)
+  ; if t6 != 0 (taken):            gl_func(D+0x190, 0x40,     &quad4, 0xFF)
+
+batch2 @0x2DEC: beq t8, $zero, +8       ; branch if cond == 0  (INVERTED!)
+  ; if t8 != 0 (fall-through):     gl_func(D+0x1A8, a0->0x5C, &quad4, 0xFF)
+  ; if t8 == 0 (taken):            gl_func(D+0x1A8, 0x40,     &quad4, 0xFF)
+```
+
+Both batches read the SAME field (`a0->0x58`) and dispatch on the SAME condition value (`!= 0`). But the branch direction differs — batch1 uses `bne`, batch2 uses `beq`. In C-source terms, the source has:
+
+```c
+// batch1: arm written as if(!=0)
+if (a0[0x58/4] != 0) gl_func(D+0x190, 0x40,     ...);
+else                 gl_func(D+0x190, a0[0x5C/4], ...);
+
+// batch2: arm written as if(!=0) but with arms in OPPOSITE order
+if (a0[0x58/4] != 0) gl_func(D+0x1A8, a0[0x5C/4], ...);
+else                 gl_func(D+0x1A8, 0x40,     ...);
+```
+
+This is a deliberate source-level idiom — possibly "mirror sub-systems" (e.g. left/right channels, foreground/background renders), or a legacy bug, or just two functions that happen to be inlined adjacent. The compiler emits each batch independently per its source.
+
+**Why this is non-obvious:** the standard "if/else arm swap" technique (`feedback_unique_extern_with_if_arm_swap`) tells you to flip arms *globally* to match a single branch's direction. When the function has TWO branches in different directions, you have to flip arms ASYMMETRICALLY — flip in one batch, leave in the other.
+
+**Diagnostic:** when wrap shows ~95-99% with diffs concentrated in the function-pointer arg slots (`addiu $a1, $zero, 0x40` vs `lw $a1, 0xN($v0)`) AND a branch direction diff (`beq` vs `bne`), check whether the function has a paired sister-batch that uses the OPPOSITE branch direction. If yes, the source's two batches have mirror-inverted arm orders.
+
+**How to apply:** decode each batch's branch direction independently. Map each batch's `cond_taken` and `cond_fall_through` arms to actual C arm bodies. Build the C with **arm orders matching the source's order** (i.e. flip in only the batches where `bne` requires it; leave alone where `beq` requires it).
+
+`timproc_uso_b1_func_00002D48` was promoted 0% (bare INCLUDE_ASM) → 96.47% (correct logic, both batches as `if(!=0) T else F`) → 99.88% (batch1 swapped to `if(==0) F else T`, batch2 left alone, plus `char pad[32]` for frame size).
+
+**Companion patterns:**
+- [unique-extern with if-arm-swap](#feedback-unique-extern-with-if-arm-swap) — the standard global arm-swap recipe.
+- [bnel arm swap](https://docs/IDO_CODEGEN.md#feedback-ido-bnel-arm-swap) — sister recipe for branch-likely.
+
+---
+
+<a id="feedback-per-iter-ptr-copies-match-or-an-vm-loop-shape"></a>
+## Per-iter intermediate locals reproduce IDO's `or aN, vM, $zero` move-from-preserved-arg-reg loop shape
+
+**Pattern:** Simple memcpy-style functions in IDO -O2 sometimes emit a loop body containing inline `move` (= `or rd, rs, $zero`) insns that re-fetch values from preserved-arg-registers each iteration. E.g. target asm:
+
+```asm
+entry:
+  move a3, a2          ; a3 = count (preserved)
+  move v0, a0          ; v0 = src (preserved)
+  move v1, a1          ; v1 = dst (preserved)
+  beqz a2, .end
+  addiu a2, a2, -1     ; (delay)
+
+.loop:
+  move a0, v0          ; a0 = sp  <- per-iter re-fetch from v0
+  lbu  t6, 0(a0)
+  move a3, v1          ; a3 = dp  <- per-iter re-fetch from v1
+  move a1, a2          ; a1 = rem <- per-iter re-fetch from a2
+  addiu v1, v1, 1
+  addiu v0, v0, 1
+  sb   t6, 0(a3)
+  bnez a2, .loop
+  addiu a2, a2, -1
+```
+
+**The fix — match it with explicit per-iter intermediate locals:**
+
+```c
+void func(u8 *src, u8 *dst, s32 count) {
+    u8  *sp, *dp;     /* preserved-args (entry-saved) */
+    s32  cp;
+    u8  *p, *q;       /* per-iter intermediate copies */
+    s32  rem;
+    sp = src; dp = dst; cp = count;
+    if (count == 0) return;
+    cp--;
+    do {
+        p = sp;       /* these per-iter copies become `or aN, vM, $zero` */
+        rem = cp;
+        q = dp;
+        dp++;
+        sp++;
+        *q = *p;
+        cp--;
+    } while (rem != 0);
+    (void)rem;
+}
+```
+
+The plain `*dst++ = *src++; count--;` form WON'T produce these per-iter moves. IDO -O2 only emits them when there are explicit named intermediate locals copying from longer-lived ones.
+
+**Verified 2026-05-05** on `func_80000598` (16-insn byte memcpy): `None` fuzzy (30-insn build vs 16-insn target) -> **76.25%** fuzzy / 14-insn build by adding `sp/dp/cp` entry locals + `p/q/rem` per-iter copies.
+
+**This is the OPPOSITE direction from the consolidate-load-in-loop-drops-sreg recipe** which collapses cross-iter locals to per-iter to DROP an $s allocation. Here, the goal is to ADD per-iter intermediate locals to MATCH a target that has them.
+
+**Diagnostic — when to apply:**
+- Target asm has `move aN, vM, $zero` (or `or aN, vM, $zero`) inside the loop body, where vM holds a value preserved from function entry.
+- Your build is structurally smaller than target (fewer insns in the loop body).
+- Function is a simple data-copy / data-fan-out shape.
+
+**Cap:** the prologue layout (target's 3 entry moves vs build's 2) wasn't reproducible from C alone — IDO elides any explicit `s32 dead_save = count;` at entry that's never read. Likely needs a 4-arg K&R signature or proxy-zero-extern; deferred for permuter random-mode.
 
 ---
 
