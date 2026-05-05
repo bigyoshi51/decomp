@@ -6464,3 +6464,28 @@ AF0F0000 sw t7,0(t8)             # *dst = buf[0]
 ---
 
 ---
+
+## IDO -O2 constant-folder ignores `(char*)` cast — `*(T*)((char*)(P+N) + M)` folds to `*(T*)(P+N+M)`
+
+_When trying to force IDO to emit `addiu vN, P, N; lwc1 fX, M(vN)` (split addressing) instead of single `lwc1 fX, N+M(P)`, the natural-looking C dodge `*(float*)((char*)(P + N) + M)` fails — IDO -O2's constant-fold pass discards type info from intermediate `(char*)` casts and treats the whole expression as `*(float*)(P + N + M)`. Same .o bytes as the simpler form._
+
+**Rule:** if `N + M` fits in a 16-bit signed offset (typical for struct field accesses up to ~0x7FFF), IDO will fold ANY combination of:
+
+```c
+*(T*)((char*)(P + N) + M)        // explicit cast + N + M
+*(T*)((char*)P + N + M)          // single cast, all-additive
+*(T*)(P + N + M)                 // no cast, P is char*
+T *t = (T*)(P + N); val = t[M/sizeof(T)];   // typed temp
+char *t = P + N; val = *(T*)(t + M);         // untyped temp, single use
+```
+
+→ all produce identical `lwc1 fX, (N+M)(reg(P))`.
+
+**What forces non-folding (untested but candidate paths):**
+
+- `volatile char *t = P + N;` then `*(T*)(t + M)` — volatile guarantees materialization.
+- `register char *t = P + N;` (untested) — register class may force the addiu.
+- A `struct {char pad[N]; T val;} *s = (struct ...*)P; access via s->val` — gives IDO type-shape evidence the pad+field structure is intentional. Untested.
+- Multiple uses of the same intermediate — if `t = P + N` is dereferenced 2+ times, IDO may keep it materialized rather than folding.
+
+**Detection signal:** target asm has `addiu vX, base, N` then `lwc1/lw fY/tZ, M(vX)` (split), but your C produces `lwc1/lw fY/tZ, N+M(base)` (folded). The mathematical addresses are identical; only the addressing mode differs. Found while grinding `game_uso_func_00007448` (capped at 70.97% from this exact gap, 2026-05-05).
