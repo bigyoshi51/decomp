@@ -8,6 +8,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 - [Prologue-stolen successor + IDO &D-CSE: combine PROLOGUE_STEALS with a unique extern to break the CSE and reach 100 %](#feedback-combine-prologue-steals-with-unique-extern) — _When a prologue-stolen successor uses v0=&D for in-body field stores AND the target ALSO emits a fresh `lui aN; lw aN, 0(aN)` for a *D dereference at a call site (instead of reusing v0), straight C with PROLOGUE_STEALS…
 - [INSN_PATCH can rewrite a function's trailing region when IDO emits dead BB markers PLUS TRUNCATE_TEXT clips the actual epilogue — collapse the dead bytes INTO the missing epilogue](#feedback-insn-patch-collapses-dead-bb-into-truncated-tail) — _A function whose IDO-emitted body has dead 'b epilogue; nop' BB markers BEFORE the real epilogue, AND whose `.o` is TRUNCATE_TEXT'd to a size that drops the trailing jr ra + nop, looks like it has fewer insns than…
+- [Prologue-stolen-successor diagnostic: read the .s first instruction to tell whether stolen-prologue is INSIDE the symbol (no recipe) or OUTSIDE in predecessor's SUFFIX_BYTES (PROLOGUE_STEALS=8 needed)](#feedback-prologue-stolen-inside-vs-outside-symbol) — _Same chain (e.g. gl_func 0x2D838 family) can have BOTH variants: some siblings include the lui+lw stolen-prologue at offset 0 of their symbol (matches IDO's natural emit, no recipe), others have it in the predecessor's symbol's tail (PROLOGUE_STEALS+SUFFIX_BYTES needed). Diagnostic: if the .s file starts with `lui tN, 0; lw tN, 0(tN)` it's inside; if it starts with `addiu sp` it's outside._
 - [INSN_PATCH Makefile var + scripts/patch-insn-bytes.py promotes 99% IDO-cap wraps to 100%](#feedback-insn-patch-for-ido-codegen-caps) — _For functions where the C body is correct but 1-2 instructions cap below 100% due to IDO scheduler/allocator choices that aren't reachable from C source (FPU pipeline-driven add.s operand order, reg-allocator t6 vs t9…
 - [INSN_PATCH is a NO-OP when the function is wrapped `#ifdef NON_MATCHING / #else INCLUDE_ASM` — drop the wrap to make it effective](#feedback-insn-patch-noop-under-include-asm-wrap) — _When a function uses the `#ifdef NON_MATCHING { body } #else INCLUDE_ASM(...); #endif` template AND has INSN_PATCH defined for it in the Makefile, the byte-correct build (`build/src/.../*.c.o`) takes the `#else` branch…
 - [INSN_PATCH offsets are body-dependent — drop C-only crutches before applying a ported patch](#feedback-insn-patch-offsets-body-dependent) — _When porting an INSN_PATCH from a sibling worktree, the patch's word offsets reference positions WITHIN the function as it's emitted.
@@ -108,6 +109,46 @@ For the simpler `lui+addiu` (address-only) case, declare the extern at `0x000000
 - `feedback_ido_cse_d_loads_unflippable.md` -- the original "unflippable" claim (now refuted by the unique-extern trick)
 - `feedback_usoplaceholder_unique_extern.md` -- precedent for using unique externs to break IDO behavior
 - `feedback_prologue_stolen_successor_no_recipe.md` -- background on PROLOGUE_STEALS
+
+---
+
+---
+
+<a id="feedback-prologue-stolen-inside-vs-outside-symbol"></a>
+## Prologue-stolen-successor diagnostic: read the .s first instruction to tell INSIDE vs OUTSIDE recipes
+
+_Same prologue-stolen-successor chain can have BOTH variants. The diagnostic is the .s file's first insn: `lui tN, 0; lw tN, 0(tN)` means INSIDE-symbol (no recipe needed — IDO's natural extern-deref emit matches); `addiu sp, ...` means OUTSIDE-symbol (PROLOGUE_STEALS=8 needed to splice IDO's duplicate emit, plus SUFFIX_BYTES on predecessor)._
+
+**Verified 2026-05-05 on the gl_func_0x2D838 chain (game_libs_post.c):**
+
+```
+gl_func_0002D838: 14 insns (size 0x38)
+  asm starts: addiu sp, sp, -0x18    ← OUTSIDE — predecessor 0x30564 has SUFFIX_BYTES
+  trailing 8 bytes ARE stolen-prologue for successor 0x2D870
+  Recipe: PROLOGUE_STEALS=8 + SUFFIX_BYTES=0x3C0E0000,0x8DCE0000
+
+gl_func_0002D870: 14 insns (size 0x38)
+  asm starts: addiu sp, sp, -0x18    ← OUTSIDE — predecessor 0x2D838 has SUFFIX_BYTES (its trailing 8)
+  trailing 8 bytes ARE stolen-prologue for successor 0x2D8A8
+  Recipe: PROLOGUE_STEALS=8 + SUFFIX_BYTES
+
+gl_func_0002D8A8: 12 insns (size 0x30)
+  asm starts: addiu sp, sp, -0x18    ← OUTSIDE — predecessor 0x2D870 has SUFFIX_BYTES
+  NO trailing stolen-prologue (next function provides its own)
+  Recipe: PROLOGUE_STEALS=8 only
+
+gl_func_0002D8D8: 14 insns (size 0x38)
+  asm starts: lui t6, 0; lw t6, 0(t6)  ← INSIDE — these 2 insns ARE part of this symbol
+  Recipe: NONE — IDO's natural emit of `D_X[(int)D_Y]` produces these 2 insns at offset 0
+```
+
+**Why the variation:** when the linker assembles the chain, it places functions adjacent in ROM. The "stolen prologue" bytes have to live SOMEWHERE in the .text section. Whether they end up inside symbol N or in the trailing bytes of symbol N-1 depends on splat's symbol boundary detection (which can be off by 8 bytes either way).
+
+**Verification step before applying recipe:** read `asm/nonmatchings/<seg>/<seg>/<func>.s` and check the first non-glabel instruction:
+- If `addiu $sp, $sp, -N` → OUTSIDE-symbol stolen-prologue → apply PROLOGUE_STEALS=8 + add predecessor's SUFFIX_BYTES if not already there.
+- If `lui $tN, 0; lw $tN, 0($tN)` → INSIDE-symbol → write the C body normally and skip the recipe; IDO emits the 2-insn deref naturally for `D_X[(int)D_Y]` patterns.
+
+**Anti-pattern:** blindly applying PROLOGUE_STEALS=8 to every function in a chain. Functions with INSIDE-symbol stolen-prologue end up missing their first 8 bytes after the splice — symbol size goes from 0x38 to 0x30, byte_verify fails. The diagnostic step takes 5 seconds and prevents a wasted iteration.
 
 ---
 
