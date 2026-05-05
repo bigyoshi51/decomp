@@ -266,6 +266,20 @@ mtc1/cvt/etc. opcodes — same byte-rewrite mechanism, no GP/FPU
 distinction needed. Verified 2026-05-04 on timproc_uso_b5_func_0000CE6C
 (8 float regs renumbered across 4 lwc1 + 4 swc1).
 
+**Frame-size + stack-offset + reg-rename combos are also INSN_PATCH-able**:
+when target's frame is e.g. `-0x40` and IDO C-emits `-0x28` (because target
+allocates extra stack for K&R arg-saves or padding that no C form reaches),
+patch BOTH the `addiu $sp` words at entry/exit AND every `sw/lw <reg>,
+N($sp)` whose offset references the larger frame. The patches must be
+COHERENT — every load/store to a stack slot must be rewritten to use the
+target's frame layout. As long as the patched insns form a self-consistent
+runtime view (entry adjusts sp by -0x40, all stack accesses use 0x40-frame
+offsets, exit restores sp +0x40), the function executes correctly. The C
+body is technically describing a different stack layout, but the post-cc
+patches install target's layout in the `.o`. Verified 2026-05-05 on
+gl_func_0003CB2C (9-word INSN_PATCH: 2 frame-size words, 3 stack-offset
+words, 4 register-rename words, all coherent).
+
 **Anatomy of the patched offset**: when you remove an `#ifdef NON_MATCHING`
 wrap, the function's POSITION in the `.o` shifts because the `.NON_MATCHING`
 twin OBJECT symbol that was sitting in front of it is gone. Net: instructions
