@@ -4672,6 +4672,14 @@ The `(unsigned int)` cast on `ret_lo` is **required** — without it, signed `in
 - Use bit-field tricks (`union { s64 r; struct { int hi, lo; } parts; }`) — IDO emits stack-roundtrip code instead of direct or-pair.
 - Reverse the shift (`((s64)ret_lo << 32) | ret_hi`) — gets the LE/BE wrong on big-endian o32.
 
+**Caveat for TRUE LEAF functions (no jal anywhere in the asm):** the `((s64)hi << 32) | (u32)lo` pattern emits `jal __ll_lshift` (libgcc helper for 64-bit shifts) on IDO -O2. Tested 2026-05-05 with `(s64)x<<32`, `(u64)x<<32`, and `s64 r=x; r=r*0x100000000LL` — all produce the helper call. The call forces a stack frame (`addiu sp,-32` + `sw ra,20(sp)`), which makes the function NOT match a leaf-shaped expected/.o.
+
+If `grep -E "0x0C[0-9A-F]{6}" <asm>.s` shows the original is a TRUE leaf (no jal opcodes), the recommended s64-pack idiom isn't usable. Diagnostic: `grep "jal" <built.o-disasm>` shows `R_MIPS_26 __ll_lshift`. Options:
+
+1. **Re-examine whether the function actually returns s64.** Sometimes a function's asm sets v1 internally as a control flag (e.g., `addiu v1,zero,1` inside a branch arm, then later `beq v1,zero,...`) but v1 gets overwritten before the final `jr` (e.g., `lw v1, OFF(rX)` for delay-slot-store addressing). In that case the function returns INT (just v0); the apparent v1-as-return is mis-analysis. Look for `lw v1, ...` near the epilogue — if v1 is reloaded right before jr, it's not a return.
+2. **Restructure the C to compute v0 only**, drop ret_hi tracking entirely.
+3. **Last resort: post-cc patch.** INSN_PATCH the `__ll_lshift` jal + frame insns out via Makefile recipe (see `docs/POST_CC_RECIPES.md`). High-risk because the helper's input/output regs need manual unwinding.
+
 **Detection signal:**
 
 Look at the function's tail in objdump:
