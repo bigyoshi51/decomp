@@ -6465,6 +6465,34 @@ AF0F0000 sw t7,0(t8)             # *dst = buf[0]
 
 ---
 
+## IDO -O2 -g3 doesn't disable MID-BODY branch-likely — only fills `jr ra` delay slots
+
+_The `-O2 -g3` recipe (above) unfills the terminal `jr ra` delay slot, but it does NOT disable IDO's mid-body branch-likely emission. For functions whose target asm has UNFILLED nop-delays on conditional branches (`bne t6, zero, L; nop` instead of `beql t6, zero, L; <body-insn>`), `-O2 -g3` is NOT a fix._
+
+**Test matrix for `if(cond)return0; ...body... return val;` shape (run on func_00011D78, 15-insn target with frameless `bne+nop` shape):**
+
+| Flag combo | Insns | Frame | Branch shape | Notes |
+|------------|------:|-------|--------------|-------|
+| -O0        | 23 | yes | `beq+nop` to shared epilogue | Way too verbose, classic -O0 spills |
+| -O1        | 17 | yes | `beq+nop` + sw/lw spills | Frame from spill-restore |
+| -O2        | 12 | no  | `beql+lw(slot)` | Standard fast emit, FILLED slot |
+| -O2 -g     | 18 | yes | `bne+nop` + multi-beq epilogue | uopt warning ("use -g3"), dead epilogue chain |
+| **-O2 -g3** | **12** | **no** | **`bnel+mtc1(slot)`** | **Same as -O2 (scheduler still fills)** |
+
+None match the target's 15-insn frameless `bne+nop` shape with a dead `jr ra; nop` pair acting as alignment/fall-through fill.
+
+**Conclusion:** Target was probably compiled with a non-standard IDO flag combo (perhaps `-Wab,-noreorder` or hand-edited asm pre-link), OR the source has a structural quirk (a third unreachable code path) the standard flag matrix can't reproduce.
+
+**Diagnostic signal:** target asm has `bne/beq <reg>, zero, L; nop` (unfilled mid-body) AND a dead `jr ra; nop` pair between body's natural return and a branch-target label. Build at any standard -O level emits `beql/bnel` with a filled delay slot. The structural delta is +3 insns, blocking INSN_PATCH (insertions not supported).
+
+**Workaround if needed:** accept partial NM wrap, or split the function to its own `.c` file with custom POST_COMPILE script (see `kernel_056` precedent in 1080's Makefile, where a Python e_flags rewrite is bolted on after cc).
+
+Documented 2026-05-05 while grinding func_00011D78 (capped at 40% fuzzy from this exact issue). Same shape blocker for cluster siblings func_00011C70/CA4/DBC.
+
+---
+
+---
+
 ## IDO -O2 constant-folder ignores `(char*)` cast — `*(T*)((char*)(P+N) + M)` folds to `*(T*)(P+N+M)`
 
 _When trying to force IDO to emit `addiu vN, P, N; lwc1 fX, M(vN)` (split addressing) instead of single `lwc1 fX, N+M(P)`, the natural-looking C dodge `*(float*)((char*)(P + N) + M)` fails — IDO -O2's constant-fold pass discards type info from intermediate `(char*)` casts and treats the whole expression as `*(float*)(P + N + M)`. Same .o bytes as the simpler form._
