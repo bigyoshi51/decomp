@@ -6693,6 +6693,33 @@ Documented 2026-05-05 while grinding func_00011D78 (capped at 40% fuzzy from thi
 
 ---
 
+<a id="feedback-ido-branch-likely-consolidates-explicit-ifelse"></a>
+## IDO -O2 collapses explicit `if (early-return) else (compute)` 12-insn shape into 11-insn shared-tail via `beql`
+
+_When target has an explicit if/else with two distinct `jr ra` blocks (one for `return 0` early-out, one for the compute-and-return path) at 12 instructions total, IDO -O2 consolidates them into 11 instructions via a `beql + lw $v0, ... [delay-likely]` shared-tail: branch-likely cancels the lw on the early-return arm. The C body is structurally correct but emits 1 fewer insn than target._
+
+**Diagnostic signal:**
+- Target: 12 insns / 0x30, two `jr ra` blocks, an `or v0, zero, zero` between them.
+- Built (any natural C `if (cond) return 0; return *p;`): 11 insns / 0x2C, single `beql` with `lw $v0, ...` in the delay-likely slot, only one `jr ra`.
+- The 50200004 opcode (`beql $at, $zero, +1`) with an `lw` in the next slot is the smoking gun — IDO scheduler's branch-likely path-merge.
+
+**Why it caps:**
+- INSN_PATCH can rewrite bytes but not change function size — and the 1-insn delta blocks it.
+- SUFFIX_BYTES=0x4 (add trailing nop) brings size to 0x30 but the byte ORDER is still wrong; you'd need to INSN_PATCH most of the function to reorder, which defeats the purpose.
+- 8 source variants × 4 -O levels (verified on `func_00011D40`, 2026-05-04 + 2026-05-05): no natural C suppresses this consolidation.
+
+**Possible escapes (untested):**
+- File-split to `-O1` to disable scheduler — but `-O1` produces a filled `jr ra` delay that target doesn't have.
+- Force an artificial side-effect between the two return paths (volatile read?) so IDO can't merge them.
+- POST_COMPILE script to rewrite the consolidated bytes back into target's shape (kernel_056 precedent).
+
+**Companion / sibling caps:**
+- `feedback-ido-branch-likely-arm-choice` (which path becomes the branch-likely)
+- `feedback-ido-empty-body-do-while-emits-branch-likely` (related scheduler optimization)
+- `feedback-ido-bnel-tail-merge-register-restore` (similar tail-merge pattern but on register restore)
+
+Verified 2026-05-05 on `func_00011D40` in bootup_uso_tail3a (capped at structural-cap class). Class signature: short function with `if (early-return-0) return *ptr;` shape and target has 12-insn explicit if/else.
+
 ---
 
 ## IDO -O2 constant-folder ignores `(char*)` cast — `*(T*)((char*)(P+N) + M)` folds to `*(T*)(P+N+M)`
