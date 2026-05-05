@@ -1264,6 +1264,29 @@ The DIFFERENCE here is the predecessor's tail does `lui+lw` (loads a VALUE, not 
 - `feedback_prologue_steals_belongs_on_non_matching_too.md` (must target both build paths)
 - `feedback_unique_extern_with_offset_cast_breaks_cse.md` (extern type / cast tricks)
 
+**HI/LO register inheritance (chained-SUFFIX-div pattern, 2026-05-05)**:
+Some function chains use SUFFIX_BYTES to set up not just a GP register but
+also $hi/$lo via an embedded `div`. Example seen on gl_func_0000B560 →
+gl_func_0000B5AC: B560's SUFFIX_BYTES are `sll v0,a1,2; subu v0,v0,a1;
+addiu at,$0,5; div $0,v0,at` (4 insns computing (a1*3)/5). Those insns
+fall through into B5AC, leaving the quotient in $lo and remainder in $hi.
+B5AC's first interesting insn is then `mfhi a1`, reading the inherited
+remainder. Because B5AC ALSO uses an INHERITED $v0 (caller-set, varies
+per call site) for `bgez v0` + `andi a2,v0,7` dispatch, no PREFIX_BYTES
+recipe captures it (the inherited $v0 isn't fixed across callers).
+
+**Recognition pattern:** function early in body has `mfhi rN` or `mflo rN`
+without a prior mult/div in the same .s — the multiply lives in the
+predecessor's tail (SUFFIX_BYTES). Combined with predecessor having a
+trailing `div $0, ...` 4-insn block. If the function ALSO uses uninitialized
+$v0 / $a0-$a3 / $t-regs as inputs, it's caller-tied — stays INCLUDE_ASM.
+
+**Promotion blocker:** PREFIX_BYTES recipe handles the GP/HI-LO setup
+ONLY if it's uniform across all call sites. When the function inherits
+caller-flag registers (typically $v0), no PREFIX is uniform — it varies
+per caller. Document the inheritance in the comment block and keep
+INCLUDE_ASM. Verified on gl_func_0000B5AC.
+
 ---
 
 ---
