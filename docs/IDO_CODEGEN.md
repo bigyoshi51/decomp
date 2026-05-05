@@ -57,6 +57,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -g does NOT suppress delay-slot fill (unlike KMC GCC -g2) — don't borrow the Glover technique](#feedback-ido-g-flag-does-not-suppress-delay-slot-fill) — _KMC GCC -g2 disables delay-slot reordering (per project_compiler_findings.md).
 - [IDO -O1 target `lw $sN, spill(sp)` in jal delay slot — can't force via explicit C assignment](#feedback-ido-o1-delay-slot-s-reload) — rmon-style -O1 funcs spill arg `a0` to caller slot, then fill the first jal's delay slot with `lw $s0, SPILL(sp)` to promote msg into a callee-saved reg for later use.
 - [Swap source order of two stores to let IDO's scheduler fill a jal delay slot with the SECOND-listed store](#feedback-ido-swap-stores-for-jal-delay-fill) — _When target asm has `sw $tA, OFFSET_X(a0); jal func; sw $tB, OFFSET_Y(a0)` (two consecutive stores with the second in the delay slot), write the C with the OTHER order: put the X-offset store SECOND in source.
+- [IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces andi-pre-jal pattern](#feedback-ido-o1-andi-pre-jal-via-register-u32-mask) — _When target has `andi tN,X,MASK; jal; or argReg,tN,zero` (3-insn mask-pre-jal vs natural delay-slot fold), use `register u32 v = expr & MASK; func(..., v);` block-local. The `& MASK` on the initializer (not the use) commits IDO to emitting the and pre-jal._
 
 ### $s register allocation
 
@@ -5450,6 +5451,39 @@ gl_func(other_arg, v * formula);    // jal — IDO folds the store into delay sl
 ```
 
 Result: `jal gl_func; sw v0, 0x6B4(a2)` (delay-slot store), no spill, exact match. The dramatic %-jump (67 → 100) is the spill-elimination cascading: removing the spill drops 2 insns AND shrinks the frame by 8, which avoids further mismatches downstream.
+
+---
+
+---
+
+<a id="feedback-ido-o1-andi-pre-jal-via-register-u32-mask"></a>
+## IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces `andi tN,X,MASK; jal; or argReg,tN,zero` (mask-pre-jal pattern)
+
+_When target asm has `andi <reg>, <src>, <MASK>; jal func; or <argReg>, <reg>, zero` (3-insn mask-pre-jal-then-move-to-arg pattern, instead of the natural `jal; andi <argReg>, <argReg>, MASK` 2-insn delay-slot fill), the C shape `register u32 v = expr & MASK; func(..., v);` is the lever. Block-local + `register` keyword + assigning the masked value to v THEN passing v as the call arg makes IDO -O1 emit the 5-insn shape: lw, lui-arg-prep, andi-into-saved-reg, jal, or-from-saved-reg-to-arg-reg in delay. Costs one saved-register slot in the prologue/epilogue; doesn't bridge the s-vs-t-reg choice for the masked value but DOES bridge the structural insn-count gap._
+
+**Verified 2026-05-05 on `func_80009474` in kernel_054.c:** 94.97% → 96.12%. Target's andi-pre-jal pattern reproduced exactly with `register u32 v = ((u32*)p)[0x27] & 0xFFF; func_80006A50(0x04080000, v);` block-local. The `register` keyword promotes v into $s2 (saved); without it v spills to stack (frame +8, +2 insns, regression).
+
+**Three forms compared (IDO -O1, kernel_054.c):**
+
+| Form | Insn count | andi placement | Cost |
+|------|------------|---------------|------|
+| `func(0x408, expr & MASK)` (inline) | 67 | DELAY: `andi a1,a1,MASK` | baseline |
+| `register u32 v = expr & MASK; func(0x408, v);` | **70** | **PRE-JAL: `andi s2,s2,MASK; jal; or a1,s2,zero`** ✓ | +2 (s2 save+restore) |
+| `register u32 v = expr; func(0x408, v & MASK);` | 69 | DELAY: `andi a1,s2,MASK` | +1 (s2 save+restore, but and folds into delay) |
+| `u32 v = expr & MASK; func(0x408, v);` (no register) | 70 | spill+reload | +3 (frame +8, sw+lw) |
+
+The KEY difference between forms 2 and 3: in form 2, the `& MASK` is on the *initializer* of `register u32 v`, so IDO computes the mask EARLY (at the assignment site) and v is just a copy when consumed at the call. In form 3, the `& MASK` is on the *use* of v, so IDO has the option to fold the and into the call arg's delay slot. Source-order placement of `& MASK` controls whether IDO emits the and pre-jal or in-delay.
+
+**When to reach for this:**
+- Target asm shows a 3-insn mask-pre-jal-then-move-to-arg pattern (5 insns total: lw, lui-arg-prep, andi, jal, or-delay) for what would naturally compile as the 4-insn fold-into-delay form.
+- IDO -O1 file. (At -O2, the lifetime analysis lands the local in a $t reg directly — no `register` keyword needed.)
+- The masked value is consumed exactly once by a call.
+
+**Doesn't help with:**
+- The s-vs-t-reg choice for v itself. IDO -O1 always promotes `register` locals to the next free $s reg ($s2 here, given $s0 and $s1 are already in use). Target may use $t8/$t9 — that's a separate cap requiring file-split to -O2 or permuter discovery.
+- Cases where the local needs to live across MULTIPLE calls. The cost calculation changes when the saved-reg slot is reused — usually a net win at multi-call.
+
+**Companion to** `feedback-ido-swap-stores-for-jal-delay-fill` (above): same domain (controlling what lands in the delay slot vs pre-jal) but applies to mask/arithmetic-into-arg-reg patterns specifically, not store-into-struct patterns.
 
 ---
 
