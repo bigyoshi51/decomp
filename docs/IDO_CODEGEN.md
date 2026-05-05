@@ -4447,6 +4447,20 @@ Tested 2026-05-02 — none of these flip it:
 - 4-arg call with explicit `(int, int, int, int)` prototype — no spill
 - volatile address-of args — emits `sw $a1, 28(sp)` to a LOCAL slot, not sp+4
 
+Tested 2026-05-05 — none of these flip it either:
+- `volatile int x = p[0]; volatile int y = p[1]; func(a0, x, y);` — frame grew
+  by 16 bytes (volatile locals), emits `lw t7,0(p); lw t8,4(p); sw t7,SPILL_LOC;
+  sw t8,SPILL_LOC; lw a1,SPILL_LOC; jal; lw a2,SPILL_LOC` 6-insn round-trip,
+  significantly worse shape (18 insns vs target's 17, 14 vs target's 17 was
+  baseline). Volatile forces the loads to live in stack slots independent of
+  arg-save area; doesn't reach the sp+4/sp+8 outgoing-arg slots target uses.
+- `int *p = (int*)&D_E70;` declared BEFORE the `if` (instead of inside) —
+  IDO assigns lui directly to $a1 / $a2 (one each, two separate luis, no
+  shared addiu+base register), emits `lw a1, 0(a1); lw a2, 4(a2)` self-base
+  loads. 14 insns total but the lui+addiu+lw+lw shape is GONE — replaced by
+  2× `lui aN; lw aN, 0/4(aN)`. The hoisted-lui pattern is even further from
+  target than the in-block declaration.
+
 Conclusion: the spill is NOT reachable from IDO 7.1 / 5.3 with any tested input. Likely the original was built with a non-IDO toolchain (KMC GCC?) for these specific log-printf-like helpers, or with an IDO patch we don't have.
 
 **Practical:** for the ~15-30 functions in game_uso following this 3-call log-printf pattern, partial fix #1 (base-adjust via extern array) shaves the diff from 4 insns to 2 insns, but #2 (the spills) keeps them from byte-exact. NM-wrap is the only option until the missing toolchain artifact is identified.
