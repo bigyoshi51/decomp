@@ -1916,6 +1916,15 @@ mismatch" — implying -O1 produces unfilled slots. Verified empirically that
 neither -O0 nor -O1 (with or without -g) produces the target's exact shape.
 The wrap was updated to remove the speculative -g claim.
 
+**TRAP — IDO `-g2` silently disables optimization** (verified 2026-05-05 on
+n64proc_uso_func_00000014 variant 26): adding `-g2` to an `-O2` invocation
+makes IDO's `uopt` pass emit `Warning: file not optimized; use -g3 if both
+optimization and debug wanted` and produces -O0-style stack-spilled code.
+The .o grows 25-30% (e.g. 1788 → 2228 bytes for func_00000014). If you
+need debug info AT optimization, use `-g3` — that preserves -O2 codegen
+and only inflates the .mdebug section. Don't use `-g2` thinking it adds
+debug-info "harmlessly"; it's a silent regression to unoptimized.
+
 ---
 
 ---
