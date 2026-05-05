@@ -4,153 +4,180 @@
 
 _145 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
-## Index
+## Quick reference by sub-topic
 
-- [An "89-99% cap" on an NM wrap might actually be 100% post-link — check raw .text bytes before giving up](#feedback-89pct-objdiff-cap-may-be-100) — If `objdiff-cli diff` reports 80-99% on a function whose ONLY DIFF kinds are `DIFF_ARG_MISMATCH` on jal/data-reloc reg/symbol names (not opc
-- [When alloc-fail-zero matches the natural fall-through value, drop the explicit `return 0;` and wrap body in `if (!alloc_failed)` — saves 2-3 insns](#feedback-alloc-fail-skip-explicit-return-zero) — A common alloc-and-init pattern uses `if (s == 0) return 0;` after `s = alloc()`. IDO compiles this as 4 insns (`bne s,zero,+N; or s0,v0,zer
-- [Alloc-or-init constructors — `goto init` unblocks `beq v0,zero; or a0,v0,zero(delay)` delay-slot move](#feedback-alloc-or-init-goto-pattern) — For "if(a0==0) a0=alloc(); init_with_a0; return a0" constructor pattern, the natural C form (merged init via `if(a0)` wrap) caps ~92.5% — ID
-- [alloc-or-passthrough cascades emit ALL dead-test arms — match the source's `x = prev; if (!x) alloc()` chain literally](#feedback-alloc-or-passthrough-cascade-includes-dead-arms) — When target asm shows multiple bnez+jal patterns after a successful first alloc (where bnez tests a register that just got the alloc result 
-- [When matching IDO output, where you load `arg0->fieldN` (early vs late) determines frame-spill shape — early load → $s spill, late load → caller-slot reload](#feedback-arg-load-early-vs-late-swaps-frame-shape) — For a function that reads `arg0->fieldN` AFTER one or more cross-USO calls, the C-source position of that read controls IDO's frame layout. 
-- [`li aN; move aM, zero` BEFORE a conditional may be args for a JAL AFTER the conditional — don't read it as conditional setup](#feedback-args-loaded-before-conditional-feed-jal-after) — When target asm has `li a1, K; move a2, zero` (or similar arg-prep) immediately before a `beqzl`/`bnel`-with-store sequence, those args are 
-- [When reading USO `.word`-style asm, decode the rs field — don't guess "(s2)" from context](#feedback-asm-base-reg-misread) — USO asm is raw `.word 0xHEXHEX` directives, not mnemonics. When decoding loads/stores (`lw`/`sw`), it's tempting to skim visually and assume
-- [`__asm__("")` scheduling barrier can regress UPSTREAM delay-slot fills, not just the targeted insn](#feedback-asm-empty-barrier-breaks-upstream-delay-slots) — The `__asm__("")` empty-body scheduling barrier is widely advised as a fix for one specific instruction-ordering issue. But IDO's reorg.c-eq
-- [Bulk alias-removal scan: some .s files have a LEADING blank line — use re.MULTILINE not lines[0].startswith](#feedback-bulk-alias-scan-handle-leading-blank-lines) — When bulk-editing .s files via `lines[0].startswith('nonmatching <fn>,')`, files that begin with a blank line are silently skipped — `lines[
-- [A "byte-correct .o matches expected" check on an `#ifdef NON_MATCHING` wrap is an INCLUDE_ASM tautology, not C-body validation](#feedback-byte-correct-match-via-include-asm-not-c-body) — When you wrap a function `#ifdef NON_MATCHING { body } #else INCLUDE_ASM(...); #endif`, the byte-correct build path (build/src/.../*.c.o) co
-- [For bulk C-source rewrites across many files, linear scan + brace matching beats regex](#feedback-c-source-rewriter-linear-not-regex) — Writing a C-source transformer (e.g. "replace every `void func_NAME(...) {...}` with INCLUDE_ASM") using one big regex with nested `+` quant
-- [Calling a NON_MATCHING-wrapped function from C still matches at the jal site](#feedback-call-non-matching-ok) — Composite/wrapper functions can call functions wrapped as NON_MATCHING — the INCLUDE_ASM fallback provides the symbol at its target address,
-- [m2c's split increment-then-conditional-reload pattern keeps a loop-iter local in $s; consolidate the load to drop the $s allocation](#feedback-consolidate-load-in-loop-drops-sreg) — When m2c outputs a loop with `x = *p; do { ... p++; if (p != end) x = *p; } while (p != end);`, the local `x` is alive ACROSS iterations (li
-- [Contiguous fragments can still be alt-entry patterns — grep `extern .*func_<INTERMEDIATE>` before running merge-fragments](#feedback-contiguous-fragment-can-be-alt-entry-check-extern-first) — The merge-fragments skill checks contiguity (parent_end == fragment_start) but NOT whether intermediate symbols in the chain are externally 
-- [Cross-branch alias-removal sync — verify per-file that you're REMOVING the macro, not RE-ADDING it](#feedback-cross-branch-alias-sync-check-direction) — When cherry-picking asm/ alias-removal deltas from a feature branch to main, parallel-agent commits on main may have already removed the mac
-- [ld undefined-reference to .LXXXXXXXX from INCLUDE_ASM = cross-INCLUDE_ASM local label; add to undefined_syms_auto.txt](#feedback-cross-include-asm-dotl-label-break) — When ld errors `_asmpp_large_funcN: undefined reference to .L800007A8` while building, the .L label is defined inside ANOTHER INCLUDE_ASM's 
-- [`decomp discover` lists already-matched functions if their episode wasn't logged](#feedback-discover-unmatched-includes-episode-missing) — A function can show as "unmatched" in `uv run python -m decomp.main discover` while report.json shows it at fuzzy_match_percent=100.0. Disco
-- [Building with `-DNON_MATCHING` while the `#ifdef NON_MATCHING / #else INCLUDE_ASM / #endif` wrap is still in place yields a false 100 % match](#feedback-dnonmatching-with-wrap-intact-false-match) — When the wrap is intact, asm-processor still emits the INCLUDE_ASM bytes regardless of the CPP define, while the C body also gets compiled. 
-- [Doc-only commits on big NM-wrapped functions are punting — write partial C instead](#feedback-doc-only-commits-are-punting) — When continuing a multi-run decomp on a 300+ insn NM-wrapped function, the temptation is to extend the /* DECODE */ comment with another sla
-- [When appending to an existing C comment block, do NOT add a closing `*/` — the original close is further down](#feedback-dont-close-comment-when-appending) — Editing a multi-paragraph C comment via Edit-tool to append a new sub-section is a silent footgun. If the new sub-section ends with `*/`, yo
-- [When verifying base/dest register of MIPS swc1/sw/lw instructions, ALWAYS use objdump — manual bit extraction is error-prone and led to a reverted commit](#feedback-dont-hand-decode-mips-use-objdump) — I tried hand-decoding `0xE4620008` bits 25-21 to verify a swc1 base register, mis-extracted (claimed base = $v0/r2), and committed a "correc
-- [Drop `if (c) { stmt; return; }` early-return when both arms should converge on a SHARED merge statement before the epilogue](#feedback-drop-early-return-to-fall-through-to-merge-stmt) — Sibling pattern to feedback_alloc_fail_skip_explicit_return_zero.md, but for an interior merge point (not the epilogue). When the target's e
-- [Function can be BOTH a cross-function tail AND a standalone jal target](#feedback-dual-role-tail-and-callable) — A single labeled address can serve two roles simultaneously — fall-through tail of the previous function (predecessor lacks jr ra; its exit 
-- [Empty `void f(void) {}` byte-matches under IDO -O2 — decomp, don't leave as INCLUDE_ASM](#feedback-empty-void-matches-ido) — The /decompile skill's "empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop" line is WRONG for IDO 
-- ["100% match" from refresh-expected-baseline on an NM-wrapped function can be tautological — verify against PURE-ASM expected, not C-built](#feedback-false-100-via-nm-wrap-baseline) — `refresh-expected-baseline.py` is supposed to swap decomp C bodies back to INCLUDE_ASM before running `make expected`, so expected.o reflect
-- [Don't try `float f(...) { ...; return 0.0f; }` to anchor $f0 = 0.0f for caller-convention swc1 patterns](#feedback-float-return-doesnt-anchor-f0) — When asm has `swc1 $f0, OFFSET(reg)` for what should be `0.0f` literals (no `mtc1 $zero, $f0` to set $f0 first), the natural temptation is t
-- [Recognizing FPU spline-basis-function evaluators by their constant-load fingerprint](#feedback-fpu-basis-function-signatures) — 1080's game_uso has at least one FPU leaf that evaluates the 4 cubic B-spline basis weights for parameter t. Distinguishing fingerprint: lui
-- [Frame size and $s-reg save count are independent dimensions of the prologue — `char pad[N]` grows the frame but doesn't add $s-reg saves](#feedback-frame-size-vs-sreg-saves-independent) — When target has prologue `addiu sp, -0xE8; sw ra, 0x24; sw s2, 0x20; sw s1, 0x1C; sw s0, 0x18` (4 saves at offsets 0x18-0x24) and mine has `
-- [game_libs asm files with trailing nop padding block objdiff 100% match after C-decomp](#feedback-function-trailing-nop-padding) — If an asm file's `nonmatching SIZE` header is bigger than the real function (trailing `0x00000000` padding words inside the asm), decomp'd C
-- [objdiff fuzzy_match_percent dramatically overestimates byte-exactness on structurally-locked wraps — count word-diffs before reaching for INSN_PATCH](#feedback-fuzzy-pct-overestimates-byte-exactness) — A wrap doc citing 74.49% fuzzy match can have 57 of 59 word diffs (~3% byte-exact) when the divergence is structural (basic-block layout, ja
-- [game_uso DNM build dedup is non-trivial — typedefs are inside `#ifdef NON_MATCHING` blocks, removing redecl breaks default build](#feedback-game-uso-dnm-typedef-inside-ifdef) — Unlike bootup_uso (where the DNM-blocking redecls are simple `extern` lines that can be removed with no side effect), game_uso has the EARLI
-- [game_uso per-frame compute spine functions share a Vec3-stage entry template](#feedback-game-uso-per-frame-vec3-stage-template) — Multiple game_uso spine functions (0x591C, 0x6A30, 0x7C1C — at minimum) start with the SAME Vec3-stage pattern: read 3 floats from `a0->0x30
-- [game_uso has a 6+ function precall-arg-spill cluster — recognize and don't grind](#feedback-game-uso-precall-spill-family) — At least 6 functions in game_uso share an identical structural cap: 28-insn 0x70 dispatchers (sometimes 26 with extra leading call) where ta
-- [Some kernel functions have external callers but use caller-save regs uninitialized — NOT a mergeable fragment](#feedback-ghost-jal-target-not-a-fragment) — `func_800073F8` (kernel) has 10+ sites that `jal func_800073F8`, yet its body starts with `bgtz $t6, ...` and uses `$s0`, `$t6`, `sp+0x28` w
-- [Combo `char pad[N]` + `goto`-style dispatch to match multi-arm if/else + frame-size mismatches](#feedback-goto-dispatch-plus-pad-combo) — When an NM wrap has BOTH a frame-size mismatch (e.g., mine 0x38, target 0x48) AND a branch-structure mismatch (target uses `beq tag0; beq ta
-- [For sweeping multi-segment changes, idempotent scripts beat rebase when other agents are landing NM wraps in parallel](#feedback-idempotent-scripts-beat-rebase) — When you've made a wide change (touching dozens of segments / hundreds of files) and other agents have meanwhile landed NM wraps to the same
-- [USO helpers that read $f4 implicitly via a delay-slot swc1 after jal — unmatchable from C](#feedback-implicit-f4-input-via-delay-slot-swc1) — Some game_libs/game_uso helpers store the caller's $f4 to a global via a swc1 in the jal delay slot (e.g. `lui at, &SYM; ...; jal target; sw
-- [Inner `return X` in single-epilogue function emits extra branch — use `goto out;` to a shared tail return](#feedback-inner-return-vs-goto-single-epilogue) — When a function's normal exit path runs `lw $ra; addiu $sp; or $v0,...; jr $ra` (single shared epilogue), an inner `return X` inside an `if`
-- [K&R-style function definition lets a NM wrap coexist with same-TU callers passing extra/fewer args](#feedback-knr-def-for-inconsistent-arg-callers) — When NM-wrapping a function whose existing INCLUDE_ASM siblings are called with varying arg counts in the same .c file, an ANSI prototype `i
-- [Renaming a libreultra hand-written .s function to canonical name](#feedback-libreultra-handwritten-rename-procedure) — 6-step procedure to rename func_NNNN → __osXxx for hand-written libreultra leaves that must stay INCLUDE_ASM
-- [`lw $aN, OFFSET($sp)` with NO preceding sw to same slot — diagnose before grinding](#feedback-lw-arg-from-stack-no-preceding-sw) — When the asm has an early `lw $a1, 0x18($sp)` (or similar) right after prologue with NO preceding sw to that slot in the same function, it's
-- [A C-decode that hits 100 % fuzzy can still fail the byte-correct build if its jal targets are mid-function aliases (not symbol-start addresses)](#feedback-mid-function-jal-targets-block-byte-correct-link) — When the asm contains `jal 0x...` to an address that's IN THE MIDDLE of another function (not at its prologue), the INCLUDE_ASM build resolv
-- [Compile 64-bit libgcc helpers at -O2 -mips3 + ELF flag rewrite](#feedback-mips3-helper) — The 9 ddiv/dmultu/dsllv/dsrlv helper functions in N64 IDO ROMs need -O2 -mips3 compilation; rewrite ELF e_flags after compile to merge with 
-- [MIPS alt-entry 2-insn fragment (no jr ra, falls through to next func) — not C-expressible](#feedback-mips-alt-entry-no-jr-ra) — A function that's just 2 insns (typically `lui $aN, 0; lw $aN, 0($aN)` or similar arg-override) with no jr ra, falling directly into the nex
-- [Look for mirror/sibling functions before grinding](#feedback-mirror-function) — When decompiling, search src/ for an already-matched function with similar shape (read/write pair, get/set pair, etc.) — the C structure is 
-- [Don't write `/* ... */` inside an NM-wrap `/* ... */` comment block — nested comments break the build](#feedback-nested-c-comment-in-nm-block) — C has no nested comments. Writing `/* TODO */` or any other `/* ... */` literal inside a multi-line NM-wrap comment closes the OUTER comment
-- [Splitting a .c file at a non-16-aligned boundary needs ELF .text truncation + addralign fix](#feedback-non-aligned-o-split) — IDO emits .text sections with 16-byte alignment (padded with zeros + sh_addralign=16). When splitting a .c to have per-function flag overrid
-- [1080 has a parallel build/non_matching/ tree for objdiff fuzzy scoring; NM wraps must compile clean with -DNON_MATCHING](#feedback-non-matching-build-for-fuzzy-scoring) — Set up 2026-05-04. The Makefile has a `non_matching_objects` target building build/non_matching/src/*.c.o with -DNON_MATCHING (no post-cc re
-- [NM-wrap commit can show .o byte-diff via .mdebug line-numbers even when .text is byte-identical](#feedback-o-diff-in-mdebug-from-nm-wrap-line-shift) — When you wrap a previously-bare `INCLUDE_ASM("...", func_X);` line in `#ifdef NON_MATCHING / #else INCLUDE_ASM(...); #endif` with a C body a
-- [Old NON_MATCHING wraps can contain fictitious symbols (_inner, _impl, etc.) — verify against asm before trusting the C body](#feedback-old-nm-wraps-can-lie) — When converting an old NM wrap to a plain decomp, don't blindly remove the #ifdef and add a pragma. Some wraps were authored when the C body
-- [`T buf[1]` 1-element stack array forces IDO to emit per-write store-then-load through stack — use when target has `sw $tN, OFF(sp); lw $tM, OFF(sp)` at the same offset, NOT a register-only pattern](#feedback-one-element-array-local-forces-stack-spill) — A plain `T x = ...; use(x);` keeps `x` in a register; IDO never spills it. Declaring `T x[1]; x[0] = ...; use(x[0])` forces stack allocation
-- [For 100+ agent-a commits behind by 200+ main commits, prefer one-shot `git merge --no-commit` over rebase](#feedback-one-shot-merge-for-big-drift) — When agent-a has accumulated dozens of commits and main has surged ahead with overlapping work in the same files (Makefile, source NM-wraps,
-- [malformed comment in NM wrap silently breaks NM-build; default build masks it](#feedback-orphan-comment-silent-nm-build-break) — An orphan `*/` close (or `*` lines outside `/* */` scope) inside an `#ifdef NON_MATCHING` block fails NM-build with "Unterminated string or 
-- [Splat-split function decomp produces matched C + orphan INCLUDE_ASM fragments in same .o](#feedback-orphan-include-asm-after-split-function-decomp) — When you decompile a splat-split function as one C body, the original fragments' INCLUDE_ASMs become orphans — the C matches but the asm byt
-- [4-byte (single-insn) trailing _pad sidecars don't work — asm-processor pads to 8-byte alignment, shifts the next function by +4](#feedback-pad-sidecar-4byte-alignment-break) — The trailing pad-sidecar recipe (trim trailing bytes from a function's .s + emit them via `#pragma GLOBAL_ASM(_pad.s)`) handles the common 8
-- [Pad-sidecar appends bytes to .text but does NOT grow the predecessor function's symbol st_size — won't work for "stolen prologue inside predecessor" case](#feedback-pad-sidecar-cant-grow-symbol-size) — The pad-sidecar pattern (`#pragma GLOBAL_ASM("..._pad.s")` after a decompiled function) appends bytes after the function in the .text sectio
-- [Pad sidecar can't fix trailing-nop mismatch when expected's symbol already absorbed the nops](#feedback-pad-sidecar-fails-when-expected-absorbed) — The labeled `_pad_<func>` sidecar from `feedback_pad_sidecar_symbol_size_mismatch.md` creates a SEPARATE symbol (build's func stays at `.s`-
-- [Pad sidecar works for non-nop trailing words (stray jr_ra, etc.), not just alignment nops](#feedback-pad-sidecar-non-nop-word) — The pad-sidecar technique from `feedback_pad_sidecar_unblocks_trailing_nops.md` generalizes beyond nops. If a splat-generated .s declares a 
-- [pad-sidecar technique only works for trailing NOPs, NOT arbitrary non-nop instruction bytes](#feedback-pad-sidecar-nops-only) — The `<func>_pad.s` + `#pragma GLOBAL_ASM` pattern used to unblock functions with trailing alignment nops (per feedback_pad_sidecar_unblocks_
-- [Pad sidecar also works when .s declared size is RIGHT but target symbol is larger](#feedback-pad-sidecar-symbol-size-mismatch) — The pad-sidecar workflow from `feedback_pad_sidecar_unblocks_trailing_nops.md` handles the case where `.s` declares MORE than the real funct
-- [pad-sidecar approach unblocks trailing-nop NON_MATCHING wraps; supersedes the "leave as INCLUDE_ASM" guidance](#feedback-pad-sidecar-unblocks-trailing-nops) — USO `.s` files bundle inter-function alignment nops into each function's `nonmatching SIZE`, capping IDO-decompiled C at ~80 % match. The fi
-- [When parallel agents pick the same strategy-memo candidate, the rebase conflict is usually resolved with `rebase --skip` (drop yours, keep theirs)](#feedback-parallel-agent-same-candidate-rebase-skip) — Strategy-memo source 5 picks the same candidate across agents — game.uso spine functions. When two agents land partial NM wraps for the same
-- [Parallel-agent NON_MATCHING wraps can nest during git merge](#feedback-parallel-agent-wrap-nesting) — When two agents independently wrap the same function as `#ifdef NON_MATCHING ... #else INCLUDE_ASM ... #endif` and then their branches merge
-- [Adding ONE more alloc-block to a partial-NM body cannot be done incrementally — must decode full block dataflow first](#feedback-partial-alloc-block-add-irreversible) — Extending a partial-NM-wrap by adding a single additional `out = alloc(N); if (out) { writes }` block REGRESSES match% even with distinct na
-- [For multi-KB spine functions, NM-wrap with extensive structural-decode comment + placeholder stub body so the wrap compiles](#feedback-partial-decode-with-stub-body) — When a 1-3 KB function is too big to decompile in one tick, write the decoded structure as a comment inside the #ifdef NON_MATCHING wrap, wi
-- [Mass-match repeated asm patterns via bytecode signature + callee extraction](#feedback-pattern-mass-match) — For libgdl-style repeated wrapper patterns (26 chain wrappers, 10+ thunks, 4 dispatch calls), grep the asm directory for an exact bytecode s
-- [Per-file expected/.o refresh recipe — workaround for Yay0-blocked refresh-expected-baseline.py](#feedback-per-file-expected-refresh-recipe) — When refresh-expected-baseline.py aborts (Yay0 mismatch — see sibling memo), refresh ONE specific .c.o manually. Recipe: (1) backup src/<seg
-- [Files belong with their consumer, not their topical owner](#feedback-per-project-files-belong-in-project-repo) — When deciding where a per-project file goes (parent decomp repo vs. projects/<game>/), ask which repo's tooling reads it. The consumer wins,
-- [trim-trailing-nops.py only handles IN-BODY trailing nops, NOT post-endlabel alignment padding](#feedback-post-endlabel-alignment-padding-blocks-trim-script) — scripts/trim-trailing-nops.py + GLOBAL_ASM pad-sidecar workflow ONLY trims `.word 0x00000000` lines that appear BEFORE the `endlabel` direct
-- [printf-with-doubles asm fingerprint decodes cleanly via `(double)floatVar` C cast](#feedback-printf-with-doubles-first-try-match) — When you see `lwc1 fX, off(rN); cvt.d.s fY, fX; mfc1 a3, fY; mfc1 a2, fY+1; sdc1 fZ, 0x10(sp); jal func_0` repeating per-call, it's `printf(
-- [PROLOGUE_STEALS successors must INLINE the stolen-prologue value's first use; a named local assigns it to $v0, not the predecessor's $tN](#feedback-prologue-stolen-avoid-named-local-for-first-use) — When a function uses PROLOGUE_STEALS=8 (the predecessor's tail emits `lui $tN, 0; lw $tN, OFF($tN)` for this function), the FIRST use of tha
-- [Scan for prologue-stolen reverse-merge candidates across all .s files in one pass](#feedback-prologue-stolen-chain-scanner) — Prologue-stolen boundary bugs (feedback_splat_prologue_stolen_by_predecessor.md) often appear in CHAINS — consecutive functions in a segment
-- [Prologue-stolen can be a float constant setup, not just a data pointer — `lui $at, 0x3F80; mtc1 $at, $f0`](#feedback-prologue-stolen-float-constant-variant) — Classic prologue-stolen is `lui $v0; addiu $v0, 0x0` (base pointer to D_XXX). But splat can also mis-attribute a float-constant setup `lui $
-- [PROLOGUE_STEALS=8 splices off the FIRST 8 bytes of the C-emitted prologue; any C refactor that changes IDO's prologue layout (extra local, captured rc, register pressure shift) makes the splice cut the WRONG 8 bytes → byte-level garbage](#feedback-prologue-stolen-function-shape-must-be-stable) — PROLOGUE_STEALS is a blind 8-byte byte-offset splice from the start of the function's emit. It assumes the FIRST 8 bytes of IDO's emit are e
-- [Before applying PROLOGUE_STEALS, verify the prefix is actually in the PREDECESSOR's symbol — not just at the start of THIS function's .s](#feedback-prologue-stolen-misdiagnosis) — A NM-wrap doc may claim "prologue-stolen successor — predecessor X ends with lui+lw setting tN=...". Don't trust it blindly. Check the .s fi
-- [Prologue-stolen boundary bug — pad sidecar is a cheaper fix than reverse-merge](#feedback-prologue-stolen-pad-sidecar-alternative) — `feedback_splat_prologue_stolen_by_predecessor.md` prescribes reverse-merge (rename successor 8 bytes earlier, prepend the 2 stolen insns). 
-- [Prologue-stolen PREDECESSOR class — SUFFIX_BYTES + PROLOGUE_STEALS combo (recipe BUILT 2026-05-03)](#feedback-prologue-stolen-predecessor-no-recipe) — Mirror of PROLOGUE_STEALS for the predecessor side. Combine PROLOGUE_STEALS (splice IDO's start prologue) + SUFFIX_BYTES (append the dead st
-- [Prologue-stolen SUCCESSOR — splice-function-prefix.py + Makefile PROLOGUE_STEALS unlocks these](#feedback-prologue-stolen-successor-no-recipe) — Originally documented as "no recipe" (2026-05-01). Same day, built a post-link splicer (scripts/splice-function-prefix.py) that removes the 
-- [Link-time-0 proxy extern defeats IDO constant-fold of `base[N]` but introduces $s-reg renumber via the proxy's addu](#feedback-proxy-extern-at-0-breaks-constant-fold-but-renumbers-sregs) — Adding `extern char D_proxy; ... base = &D + (int)&D_proxy;` (with D_proxy mapped to 0x0 in undefined_syms_auto.txt) prevents IDO -O2 from f
+### alloc / passthrough / nullable construction
+
+- [When alloc-fail-zero matches the natural fall-through value, drop the explicit `return 0;` and wrap body in `if (!alloc_failed)` — saves 2-3 insns](#feedback-alloc-fail-skip-explicit-return-zero) — _A common alloc-and-init pattern uses `if (s == 0) return 0;` after `s = alloc()`.
+- [Alloc-or-init constructors — `goto init` unblocks `beq v0,zero; or a0,v0,zero(delay)` delay-slot move](#feedback-alloc-or-init-goto-pattern) — _For "if(a0==0) a0=alloc(); init_with_a0; return a0" constructor pattern, the natural C form (merged init via `if(a0)` wrap) caps ~92.5% — IDO can't couple v0-test with v0→a0 move into beq delay slot post-merge.
+- [alloc-or-passthrough cascades emit ALL dead-test arms — match the source's `x = prev; if (!x) alloc()` chain literally](#feedback-alloc-or-passthrough-cascade-includes-dead-arms) — When target asm shows multiple bnez+jal patterns after a successful first alloc (where bnez tests a register that just got the alloc result and is ALWAYS non-zero), the source has a cascade of `x = prev; if (!x) { x =…
+- [Adding ONE more alloc-block to a partial-NM body cannot be done incrementally — must decode full block dataflow first](#feedback-partial-alloc-block-add-irreversible) — Extending a partial-NM-wrap by adding a single additional `out = alloc(N); if (out) { writes }` block REGRESSES match% even with distinct named locals + block-scoping.
+- [titproc_uso state-allocator sibling family — same shape, varying state-N constant](#feedback-titproc-state-allocator-sibling-family) — _titproc_uso has 6 sibling state-allocator wrappers (1E4/230/28C/2D8/32C/380).
+
+### argument passing & spilling
+
+- [When matching IDO output, where you load `arg0->fieldN` (early vs late) determines frame-spill shape — early load → $s spill, late load → caller-slot reload](#feedback-arg-load-early-vs-late-swaps-frame-shape) — _For a function that reads `arg0->fieldN` AFTER one or more cross-USO calls, the C-source position of that read controls IDO's frame layout.
+- [`li aN; move aM, zero` BEFORE a conditional may be args for a JAL AFTER the conditional — don't read it as conditional setup](#feedback-args-loaded-before-conditional-feed-jal-after) — _When target asm has `li a1, K; move a2, zero` (or similar arg-prep) immediately before a `beqzl`/`bnel`-with-store sequence, those args are NOT for the conditional path — they're hoisted by IDO's scheduler from the JAL…
+- [game_uso has a 6+ function precall-arg-spill cluster — recognize and don't grind](#feedback-game-uso-precall-spill-family) — _At least 6 functions in game_uso share an identical structural cap: 28-insn 0x70 dispatchers (sometimes 26 with extra leading call) where target emits `sw a1,4(sp); sw a2,8(sp)` defensive spills around a jal that IDO…
+- [K&R-style function definition lets a NM wrap coexist with same-TU callers passing extra/fewer args](#feedback-knr-def-for-inconsistent-arg-callers) — _When NM-wrapping a function whose existing INCLUDE_ASM siblings are called with varying arg counts in the same .c file, an ANSI prototype `int f(int c)` breaks the -DNON_MATCHING build with cfe "number of arguments…
+- [`lw $aN, OFFSET($sp)` with NO preceding sw to same slot — diagnose before grinding](#feedback-lw-arg-from-stack-no-preceding-sw) — When the asm has an early `lw $a1, 0x18($sp)` (or similar) right after prologue with NO preceding sw to that slot in the same function, it's not a normal C source pattern.
+- [`T buf[1]` 1-element stack array forces IDO to emit per-write store-then-load through stack — use when target has `sw $tN, OFF(sp); lw $tM, OFF(sp)` at the same offset, NOT a register-only pattern](#feedback-one-element-array-local-forces-stack-spill) — _A plain `T x = ...; use(x);` keeps `x` in a register; IDO never spills it.
+- [Save-arg sentinels (`sw aN; jr ra; sw aM`) DO match from IDO -O2 `void f(int, ...) {}` — old "won't produce this" NM claims are wrong](#feedback-save-arg-sentinel-ido-o2-confirmed) — _Multiple old NM-wrap comments in the codebase (e.g. eddproc_uso_func_00000144, prior timproc_uso_b5 siblings) claimed the save-arg sentinel pattern — 2-to-4 sw-aN around a lone jr-ra, no prologue, no frame — is "not…
+- [3-insn USO stub that saves args to caller's shadow space (no local frame) — unreproducible from C](#feedback-uso-no-frame-save-args-stub) — _USO functions whose entire body is `sw a0, 0(sp); jr ra; sw a1, 4(sp)` (or similar) with NO `addiu sp, sp, -N` prologue store to the caller's reserved O32 arg-shadow slots.
+- [`volatile int *p = &a1;` forces IDO no-frame caller-arg-slot spills](#feedback-volatile-ptr-to-arg-forces-caller-slot-spill) — _When asm shows `sw a1, 4(sp); sw a2, 8(sp); addiu tN, sp, 4; lw via tN` for a leaf function with NO `addiu sp, -N` prologue, IDO is using the caller-allocated arg slots (sp+4 for arg1, sp+8 for arg2 per O32 ABI)…
+
+### frame layout / stack discipline
+
+- [Frame size and $s-reg save count are independent dimensions of the prologue — `char pad[N]` grows the frame but doesn't add $s-reg saves](#feedback-frame-size-vs-sreg-saves-independent) — _When target has prologue `addiu sp, -0xE8; sw ra, 0x24; sw s2, 0x20; sw s1, 0x1C; sw s0, 0x18` (4 saves at offsets 0x18-0x24) and mine has `addiu sp, -0xE8; sw ra, 0x1C; sw s1, 0x18; sw s0, 0x14` (3 saves at…
+- [game_uso per-frame compute spine functions share a Vec3-stage entry template](#feedback-game-uso-per-frame-vec3-stage-template) — _Multiple game_uso spine functions (0x591C, 0x6A30, 0x7C1C — at minimum) start with the SAME Vec3-stage pattern: read 3 floats from `a0->0x30->{0xB4,0xB8,0xBC}` and copy them into a local Vec3 stack buffer.
+- [For stack-allocated packet builders, typed struct on stack beats `char[] + cast` for matching IDO's direct-sp-offset stores](#feedback-typed-stack-struct-for-direct-sp-stores) — When building a small struct on the stack to pass to a callee (e.g., `char pkt[12]; *(s16*)(pkt + 6) = X; pkt[4] = Y; func(pkt)`), IDO emits indirect stores via a t-reg that first computes `&pkt` (`addiu t6, sp, 0x18;…
+
+### FPU / float patterns
+
+- [Don't try `float f(...) { ...; return 0.0f; }` to anchor $f0 = 0.0f for caller-convention swc1 patterns](#feedback-float-return-doesnt-anchor-f0) — _When asm has `swc1 $f0, OFFSET(reg)` for what should be `0.0f` literals (no `mtc1 $zero, $f0` to set $f0 first), the natural temptation is to make the function return float and `return 0.0f;` so IDO keeps $f0 anchored.
+- [Recognizing FPU spline-basis-function evaluators by their constant-load fingerprint](#feedback-fpu-basis-function-signatures) — _1080's game_uso has at least one FPU leaf that evaluates the 4 cubic B-spline basis weights for parameter t.
+- [Prologue-stolen can be a float constant setup, not just a data pointer — `lui $at, 0x3F80; mtc1 $at, $f0`](#feedback-prologue-stolen-float-constant-variant) — _Classic prologue-stolen is `lui $v0; addiu $v0, 0x0` (base pointer to D_XXX).
+- [USO callee receives float directly in $f4 (no mtc1 at entry) — non-O32 intra-USO convention](#feedback-uso-float-in-f4-callee) — _A USO function whose first real insn is `swc1 $f4, offset($aN)` with no `mtc1 $aN, $f4` preceding is being called with a non-O32 float convention where the caller passed the float value already in FPU register $f4.
+
+### epilogue / tail / cross-function
+
+- [Cross-branch alias-removal sync — verify per-file that you're REMOVING the macro, not RE-ADDING it](#feedback-cross-branch-alias-sync-check-direction) — When cherry-picking asm/ alias-removal deltas from a feature branch to main, parallel-agent commits on main may have already removed the macro from some files.
+- [Drop `if (c) { stmt; return; }` early-return when both arms should converge on a SHARED merge statement before the epilogue](#feedback-drop-early-return-to-fall-through-to-merge-stmt) — _Sibling pattern to feedback_alloc_fail_skip_explicit_return_zero.md, but for an interior merge point (not the epilogue).
+- [Function can be BOTH a cross-function tail AND a standalone jal target](#feedback-dual-role-tail-and-callable) — A single labeled address can serve two roles simultaneously — fall-through tail of the previous function (predecessor lacks jr ra; its exit flows here) AND an independent jal target from an unrelated caller.
+- [Inner `return X` in single-epilogue function emits extra branch — use `goto out;` to a shared tail return](#feedback-inner-return-vs-goto-single-epilogue) — _When a function's normal exit path runs `lw $ra; addiu $sp; or $v0,...; jr $ra` (single shared epilogue), an inner `return X` inside an `if` body generates an EXTRA `b epilog; <delay-slot reload>` pair vs the `goto…
+- [split-fragments.py's last-split-off fragment may be dead/unreachable code with no jr ra](#feedback-split-fragments-unreachable-tail) — _When running `scripts/split-fragments.py` recursively on a multi-jr-ra bundle, the FINAL split-off fragment may have 0 `jr ra` instructions — it's not a real function but rather dead/unreachable code that splat's…
+
+### inline / register / locals
+
+- [PROLOGUE_STEALS successors must INLINE the stolen-prologue value's first use; a named local assigns it to $v0, not the predecessor's $tN](#feedback-prologue-stolen-avoid-named-local-for-first-use) — _When a function uses PROLOGUE_STEALS=8 (the predecessor's tail emits `lui $tN, 0; lw $tN, OFF($tN)` for this function), the FIRST use of that loaded value in C must be inlined — not assigned to a named local.
+- [USO 3-unique-extern + inline + store-before-jal combo lifts NM 0% -> 100% on small leaf with 3 distinct data refs](#feedback-uso-3unique-extern-inline-store-before-jal-combo) — _For 16-insn USO leaf functions reading/storing through 3 distinct `lui+lo` reloc placeholders AND calling gl_func_00000000 with a delay-slot store, the matching recipe is the COMBINATION of: (1) 3 unique externs all at…
+
+### dispatch / goto / pad / loop
+
+- [m2c's split increment-then-conditional-reload pattern keeps a loop-iter local in $s; consolidate the load to drop the $s allocation](#feedback-consolidate-load-in-loop-drops-sreg) — _When m2c outputs a loop with `x = *p; do { ... p++; if (p != end) x = *p; } while (p != end);`, the local `x` is alive ACROSS iterations (live across the loop-back branch), so IDO promotes it to $s.
+- [game_libs asm files with trailing nop padding block objdiff 100% match after C-decomp](#feedback-function-trailing-nop-padding) — _If an asm file's `nonmatching SIZE` header is bigger than the real function (trailing `0x00000000` padding words inside the asm), decomp'd C produces a shorter symbol and objdiff shows ~75 % — the instructions match…
+- [Combo `char pad[N]` + `goto`-style dispatch to match multi-arm if/else + frame-size mismatches](#feedback-goto-dispatch-plus-pad-combo) — When an NM wrap has BOTH a frame-size mismatch (e.g., mine 0x38, target 0x48) AND a branch-structure mismatch (target uses `beq tag0; beq tag1; b epi; tag0: ... b epi; tag1: ... b epi; epi:` — 2-tag dispatch with…
+- [4-byte (single-insn) trailing _pad sidecars don't work — asm-processor pads to 8-byte alignment, shifts the next function by +4](#feedback-pad-sidecar-4byte-alignment-break) — _The trailing pad-sidecar recipe (trim trailing bytes from a function's .s + emit them via `#pragma GLOBAL_ASM(_pad.s)`) handles the common 8-byte case (lui+addiu/lw — typical prologue-stolen prefix for a 1-D access)…
+- [Pad-sidecar appends bytes to .text but does NOT grow the predecessor function's symbol st_size — won't work for "stolen prologue inside predecessor" case](#feedback-pad-sidecar-cant-grow-symbol-size) — _The pad-sidecar pattern (`#pragma GLOBAL_ASM("..._pad.s")` after a decompiled function) appends bytes after the function in the .text section, but those bytes get a separate `_pad_<func>` local label and do NOT extend…
+- [Pad sidecar can't fix trailing-nop mismatch when expected's symbol already absorbed the nops](#feedback-pad-sidecar-fails-when-expected-absorbed) — _The labeled `_pad_<func>` sidecar from `feedback_pad_sidecar_symbol_size_mismatch.md` creates a SEPARATE symbol (build's func stays at `.s`-declared size).
+- [Pad sidecar works for non-nop trailing words (stray jr_ra, etc.), not just alignment nops](#feedback-pad-sidecar-non-nop-word) — _The pad-sidecar technique from `feedback_pad_sidecar_unblocks_trailing_nops.md` generalizes beyond nops.
+- [pad-sidecar technique only works for trailing NOPs, NOT arbitrary non-nop instruction bytes](#feedback-pad-sidecar-nops-only) — _The `<func>_pad.s` + `#pragma GLOBAL_ASM` pattern used to unblock functions with trailing alignment nops (per feedback_pad_sidecar_unblocks_trailing_nops.md) does NOT work for functions whose declared size includes…
+- [Pad sidecar also works when .s declared size is RIGHT but target symbol is larger](#feedback-pad-sidecar-symbol-size-mismatch) — _The pad-sidecar workflow from `feedback_pad_sidecar_unblocks_trailing_nops.md` handles the case where `.s` declares MORE than the real function body.
+- [pad-sidecar approach unblocks trailing-nop NON_MATCHING wraps; supersedes the "leave as INCLUDE_ASM" guidance](#feedback-pad-sidecar-unblocks-trailing-nops) — _USO `.s` files bundle inter-function alignment nops into each function's `nonmatching SIZE`, capping IDO-decompiled C at ~80 % match.
+- [trim-trailing-nops.py only handles IN-BODY trailing nops, NOT post-endlabel alignment padding](#feedback-post-endlabel-alignment-padding-blocks-trim-script) — _scripts/trim-trailing-nops.py + GLOBAL_ASM pad-sidecar workflow ONLY trims `.word 0x00000000` lines that appear BEFORE the `endlabel` directive (inside the function body).
+- [Prologue-stolen boundary bug — pad sidecar is a cheaper fix than reverse-merge](#feedback-prologue-stolen-pad-sidecar-alternative) — _`feedback_splat_prologue_stolen_by_predecessor.md` prescribes reverse-merge (rename successor 8 bytes earlier, prepend the 2 stolen insns).
+- [Apply unique-extern CSE-break across N unrolled-loop iters by passing the D_BASE as a macro parameter](#feedback-unique-extern-via-macro-param-for-unrolled-loops) — _When a function has N unrolled iterations encoded as a `#define INIT_ITER(...)` macro and each iter shares CSE'd `&D_00000000` references, scale the unique-extern recipe across iters by adding a D_BASE macro parameter.
+- [For long unrolled loops, write the iter body as a C `#define` macro and invoke it N times — IDO emits N independent copies cleanly](#feedback-unrolled-loop-via-c-macro-for-decomp) — _When a target function contains a long unrolled loop (no asm-level loop construct — the same per-iter template repeated N times with varying parameters), the cheap way to write matching C is `#define INIT_ITER(...) do…
+
+### delay slot / scheduler
+
+- [`__asm__("")` scheduling barrier can regress UPSTREAM delay-slot fills, not just the targeted insn](#feedback-asm-empty-barrier-breaks-upstream-delay-slots) — _The `__asm__("")` empty-body scheduling barrier is widely advised as a fix for one specific instruction-ordering issue.
+- [USO helpers that read $f4 implicitly via a delay-slot swc1 after jal — unmatchable from C](#feedback-implicit-f4-input-via-delay-slot-swc1) — _Some game_libs/game_uso helpers store the caller's $f4 to a global via a swc1 in the jal delay slot (e.g. `lui at, &SYM; ...; jal target; swc1 $f4, 0(at)`). $f4 is read as input from the caller without a corresponding…
+
+### other
+
+- [An "89-99% cap" on an NM wrap might actually be 100% post-link — check raw .text bytes before giving up](#feedback-89pct-objdiff-cap-may-be-100) — _If `objdiff-cli diff` reports 80-99% on a function whose ONLY DIFF kinds are `DIFF_ARG_MISMATCH` on jal/data-reloc reg/symbol names (not opcode or immediate mismatches), the function is likely byte-identical after…
+- [When reading USO `.word`-style asm, decode the rs field — don't guess "(s2)" from context](#feedback-asm-base-reg-misread) — USO asm is raw `.word 0xHEXHEX` directives, not mnemonics.
+- [Bulk alias-removal scan: some .s files have a LEADING blank line — use re.MULTILINE not lines[0].startswith](#feedback-bulk-alias-scan-handle-leading-blank-lines) — When bulk-editing .s files via `lines[0].startswith('nonmatching <fn>,')`, files that begin with a blank line are silently skipped — `lines[0]` is `\n`, not the macro. ~25-30 .s files in 1080's asm tree have this layout.
+- [A "byte-correct .o matches expected" check on an `#ifdef NON_MATCHING` wrap is an INCLUDE_ASM tautology, not C-body validation](#feedback-byte-correct-match-via-include-asm-not-c-body) — _When you wrap a function `#ifdef NON_MATCHING { body } #else INCLUDE_ASM(...); #endif`, the byte-correct build path (build/src/.../*.c.o) compiles the #else branch — i.e.
+- [For bulk C-source rewrites across many files, linear scan + brace matching beats regex](#feedback-c-source-rewriter-linear-not-regex) — _Writing a C-source transformer (e.g. "replace every `void func_NAME(...) {...}` with INCLUDE_ASM") using one big regex with nested `+` quantifiers (`(?:[\w*]+[\s*]+)+ name\s*\(...\)\s*\{`) will catastrophically…
+- [Calling a NON_MATCHING-wrapped function from C still matches at the jal site](#feedback-call-non-matching-ok) — _Composite/wrapper functions can call functions wrapped as NON_MATCHING — the INCLUDE_ASM fallback provides the symbol at its target address, so `jal <callee>` resolves correctly even though the callee itself isn't…
+- [Contiguous fragments can still be alt-entry patterns — grep `extern .*func_<INTERMEDIATE>` before running merge-fragments](#feedback-contiguous-fragment-can-be-alt-entry-check-extern-first) — _The merge-fragments skill checks contiguity (parent_end == fragment_start) but NOT whether intermediate symbols in the chain are externally referenced.
+- [ld undefined-reference to .LXXXXXXXX from INCLUDE_ASM = cross-INCLUDE_ASM local label; add to undefined_syms_auto.txt](#feedback-cross-include-asm-dotl-label-break) — _When ld errors `_asmpp_large_funcN: undefined reference to .L800007A8` while building, the .L label is defined inside ANOTHER INCLUDE_ASM's .s file (in the SAME .c), but asm-processor's per-INCLUDE_ASM pseudo-function…
+- [`decomp discover` lists already-matched functions if their episode wasn't logged](#feedback-discover-unmatched-includes-episode-missing) — _A function can show as "unmatched" in `uv run python -m decomp.main discover` while report.json shows it at fuzzy_match_percent=100.0.
+- [Building with `-DNON_MATCHING` while the `#ifdef NON_MATCHING / #else INCLUDE_ASM / #endif` wrap is still in place yields a false 100 % match](#feedback-dnonmatching-with-wrap-intact-false-match) — _When the wrap is intact, asm-processor still emits the INCLUDE_ASM bytes regardless of the CPP define, while the C body also gets compiled.
+- [Doc-only commits on big NM-wrapped functions are punting — write partial C instead](#feedback-doc-only-commits-are-punting) — When continuing a multi-run decomp on a 300+ insn NM-wrapped function, the temptation is to extend the /* DECODE */ comment with another slab of bit-level semantics.
+- [When appending to an existing C comment block, do NOT add a closing `*/` — the original close is further down](#feedback-dont-close-comment-when-appending) — Editing a multi-paragraph C comment via Edit-tool to append a new sub-section is a silent footgun.
+- [When verifying base/dest register of MIPS swc1/sw/lw instructions, ALWAYS use objdump — manual bit extraction is error-prone and led to a reverted commit](#feedback-dont-hand-decode-mips-use-objdump) — I tried hand-decoding `0xE4620008` bits 25-21 to verify a swc1 base register, mis-extracted (claimed base = $v0/r2), and committed a "correction" to a wrap doc that was actually correct. objdump unambiguously showed…
+- [Empty `void f(void) {}` byte-matches under IDO -O2 — decomp, don't leave as INCLUDE_ASM](#feedback-empty-void-matches-ido) — _The /decompile skill's "empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop" line is WRONG for IDO 7.1 -O2. `void f(void) {}` compiles to exactly `jr $ra; nop` (2 insns, 8…
+- ["100% match" from refresh-expected-baseline on an NM-wrapped function can be tautological — verify against PURE-ASM expected, not C-built](#feedback-false-100-via-nm-wrap-baseline) — _`refresh-expected-baseline.py` is supposed to swap decomp C bodies back to INCLUDE_ASM before running `make expected`, so expected.o reflects pure baserom bytes.
+- [objdiff fuzzy_match_percent dramatically overestimates byte-exactness on structurally-locked wraps — count word-diffs before reaching for INSN_PATCH](#feedback-fuzzy-pct-overestimates-byte-exactness) — _A wrap doc citing 74.49% fuzzy match can have 57 of 59 word diffs (~3% byte-exact) when the divergence is structural (basic-block layout, jal ordering, epilogue shape).
+- [game_uso DNM build dedup is non-trivial — typedefs are inside `#ifdef NON_MATCHING` blocks, removing redecl breaks default build](#feedback-game-uso-dnm-typedef-inside-ifdef) — _Unlike bootup_uso (where the DNM-blocking redecls are simple `extern` lines that can be removed with no side effect), game_uso has the EARLIER definition of Vec3/Tri3i/etc inside an `#ifdef NON_MATCHING` block.
+- [Some kernel functions have external callers but use caller-save regs uninitialized — NOT a mergeable fragment](#feedback-ghost-jal-target-not-a-fragment) — _`func_800073F8` (kernel) has 10+ sites that `jal func_800073F8`, yet its body starts with `bgtz $t6, ...` and uses `$s0`, `$t6`, `sp+0x28` without setup — none of those callers explicitly load $t6 before the jal.
+- [For sweeping multi-segment changes, idempotent scripts beat rebase when other agents are landing NM wraps in parallel](#feedback-idempotent-scripts-beat-rebase) — When you've made a wide change (touching dozens of segments / hundreds of files) and other agents have meanwhile landed NM wraps to the same files in main, `git rebase origin/main` produces an exhausting cascade of…
+- [Renaming a libreultra hand-written .s function to canonical name](#feedback-libreultra-handwritten-rename-procedure) — _6-step procedure to rename func_NNNN → __osXxx for hand-written libreultra leaves that must stay INCLUDE_ASM_
+- [A C-decode that hits 100 % fuzzy can still fail the byte-correct build if its jal targets are mid-function aliases (not symbol-start addresses)](#feedback-mid-function-jal-targets-block-byte-correct-link) — _When the asm contains `jal 0x...` to an address that's IN THE MIDDLE of another function (not at its prologue), the INCLUDE_ASM build resolves it via the asm-side .word relocation.
+- [Compile 64-bit libgcc helpers at -O2 -mips3 + ELF flag rewrite](#feedback-mips3-helper) — _The 9 ddiv/dmultu/dsllv/dsrlv helper functions in N64 IDO ROMs need -O2 -mips3 compilation; rewrite ELF e_flags after compile to merge with mips2 objects_
+- [MIPS alt-entry 2-insn fragment (no jr ra, falls through to next func) — not C-expressible](#feedback-mips-alt-entry-no-jr-ra) — _A function that's just 2 insns (typically `lui $aN, 0; lw $aN, 0($aN)` or similar arg-override) with no jr ra, falling directly into the next function's prologue.
+- [Look for mirror/sibling functions before grinding](#feedback-mirror-function) — When decompiling, search src/ for an already-matched function with similar shape (read/write pair, get/set pair, etc.) — the C structure is often a one-character edit
+- [Don't write `/* ... */` inside an NM-wrap `/* ... */` comment block — nested comments break the build](#feedback-nested-c-comment-in-nm-block) — _C has no nested comments.
+- [Splitting a .c file at a non-16-aligned boundary needs ELF .text truncation + addralign fix](#feedback-non-aligned-o-split) — _IDO emits .text sections with 16-byte alignment (padded with zeros + sh_addralign=16).
+- [1080 has a parallel build/non_matching/ tree for objdiff fuzzy scoring; NM wraps must compile clean with -DNON_MATCHING](#feedback-non-matching-build-for-fuzzy-scoring) — _Set up 2026-05-04.
+- [NM-wrap commit can show .o byte-diff via .mdebug line-numbers even when .text is byte-identical](#feedback-o-diff-in-mdebug-from-nm-wrap-line-shift) — _When you wrap a previously-bare `INCLUDE_ASM("...", func_X);` line in `#ifdef NON_MATCHING / #else INCLUDE_ASM(...); #endif` with a C body above, the resulting `build/.../<file>.c.o` differs from expected/.o (typically…
+- [Old NON_MATCHING wraps can contain fictitious symbols (_inner, _impl, etc.) — verify against asm before trusting the C body](#feedback-old-nm-wraps-can-lie) — _When converting an old NM wrap to a plain decomp, don't blindly remove the #ifdef and add a pragma.
+- [For 100+ agent-a commits behind by 200+ main commits, prefer one-shot `git merge --no-commit` over rebase](#feedback-one-shot-merge-for-big-drift) — When agent-a has accumulated dozens of commits and main has surged ahead with overlapping work in the same files (Makefile, source NM-wraps, episodes), `git rebase origin/main` walks each commit individually and stops…
+- [malformed comment in NM wrap silently breaks NM-build; default build masks it](#feedback-orphan-comment-silent-nm-build-break) — _An orphan `*/` close (or `*` lines outside `/* */` scope) inside an `#ifdef NON_MATCHING` block fails NM-build with "Unterminated string or character constant" — but the default INCLUDE_ASM build is unaffected, so the…
+- [Splat-split function decomp produces matched C + orphan INCLUDE_ASM fragments in same .o](#feedback-orphan-include-asm-after-split-function-decomp) — _When you decompile a splat-split function as one C body, the original fragments' INCLUDE_ASMs become orphans — the C matches but the asm bytes still emit at separate .o offsets.
+- [When parallel agents pick the same strategy-memo candidate, the rebase conflict is usually resolved with `rebase --skip` (drop yours, keep theirs)](#feedback-parallel-agent-same-candidate-rebase-skip) — Strategy-memo source 5 picks the same candidate across agents — game.uso spine functions.
+- [Parallel-agent NON_MATCHING wraps can nest during git merge](#feedback-parallel-agent-wrap-nesting) — _When two agents independently wrap the same function as `#ifdef NON_MATCHING ... #else INCLUDE_ASM ... #endif` and then their branches merge, git stacks the wraps rather than deduping — producing nested `#ifdef…
+- [For multi-KB spine functions, NM-wrap with extensive structural-decode comment + placeholder stub body so the wrap compiles](#feedback-partial-decode-with-stub-body) — _When a 1-3 KB function is too big to decompile in one tick, write the decoded structure as a comment inside the #ifdef NON_MATCHING wrap, with a minimal placeholder C body that calls a TODO extern.
+- [Mass-match repeated asm patterns via bytecode signature + callee extraction](#feedback-pattern-mass-match) — For libgdl-style repeated wrapper patterns (26 chain wrappers, 10+ thunks, 4 dispatch calls), grep the asm directory for an exact bytecode signature, extract per-function variables (callee names, offsets, consts), and…
+- [Per-file expected/.o refresh recipe — workaround for Yay0-blocked refresh-expected-baseline.py](#feedback-per-file-expected-refresh-recipe) — _When refresh-expected-baseline.py aborts (Yay0 mismatch — see sibling memo), refresh ONE specific .c.o manually.
+- [Files belong with their consumer, not their topical owner](#feedback-per-project-files-belong-in-project-repo) — When deciding where a per-project file goes (parent decomp repo vs. projects/<game>/), ask which repo's tooling reads it.
+- [printf-with-doubles asm fingerprint decodes cleanly via `(double)floatVar` C cast](#feedback-printf-with-doubles-first-try-match) — _When you see `lwc1 fX, off(rN); cvt.d.s fY, fX; mfc1 a3, fY; mfc1 a2, fY+1; sdc1 fZ, 0x10(sp); jal func_0` repeating per-call, it's `printf(fmt, ptr, (double)f1, (double)f2)`.
+- [Scan for prologue-stolen reverse-merge candidates across all .s files in one pass](#feedback-prologue-stolen-chain-scanner) — _Prologue-stolen boundary bugs (feedback_splat_prologue_stolen_by_predecessor.md) often appear in CHAINS — consecutive functions in a segment where each one's `lui $v0; addiu $v0` prologue is attributed to its…
+- [PROLOGUE_STEALS=8 splices off the FIRST 8 bytes of the C-emitted prologue; any C refactor that changes IDO's prologue layout (extra local, captured rc, register pressure shift) makes the splice cut the WRONG 8 bytes → byte-level garbage](#feedback-prologue-stolen-function-shape-must-be-stable) — _PROLOGUE_STEALS is a blind 8-byte byte-offset splice from the start of the function's emit.
+- [Before applying PROLOGUE_STEALS, verify the prefix is actually in the PREDECESSOR's symbol — not just at the start of THIS function's .s](#feedback-prologue-stolen-misdiagnosis) — _A NM-wrap doc may claim "prologue-stolen successor — predecessor X ends with lui+lw setting tN=...".
+- [Prologue-stolen PREDECESSOR class — SUFFIX_BYTES + PROLOGUE_STEALS combo (recipe BUILT 2026-05-03)](#feedback-prologue-stolen-predecessor-no-recipe) — _Mirror of PROLOGUE_STEALS for the predecessor side.
+- [Prologue-stolen SUCCESSOR — splice-function-prefix.py + Makefile PROLOGUE_STEALS unlocks these](#feedback-prologue-stolen-successor-no-recipe) — _Originally documented as "no recipe" (2026-05-01).
+- [Link-time-0 proxy extern defeats IDO constant-fold of `base[N]` but introduces $s-reg renumber via the proxy's addu](#feedback-proxy-extern-at-0-breaks-constant-fold-but-renumbers-sregs) — _Adding `extern char D_proxy; ... base = &D + (int)&D_proxy;` (with D_proxy mapped to 0x0 in undefined_syms_auto.txt) prevents IDO -O2 from folding `base[N]` back to a fresh lui+lw — forcing indexed-via-$s form.
 - [Always push to origin after merging to main](#feedback-push-after-merge) — When we merge an agent branch to main on an N64 decomp project, immediately push to origin — don't leave commits local
-- [Keep the project README progress table fresh on milestones, not every decomp](#feedback-readme-freshness) — The 1080 Snowboarding README has a per-segment progress table. Update it any time refresh-report prints a staleness warning (drift ≥0.1 %-po
-- [README progress table and report.json can drift apart on origin/main — both are pushed independently, the dashboard may read one or the other](#feedback-readme-vs-report-json-drift) — The README's `## Status` table is updated by hand per-land; report.json is regenerated by the land-script. These two artifacts can disagree 
-- [Use `git rebase -X theirs origin/main` to land past parallel-agent binary `expected/.o` conflicts](#feedback-rebase-theirs-binary-oo-conflicts) — When a parallel agent lands a commit touching the same `expected/*.c.o` file you touched, `git rebase origin/main` (in land-successful-decom
-- [refresh-expected-baseline.py — RESOLVED 2026-05-04 (full end-to-end fix)](#feedback-refresh-expected-baseline-blocks-on-yay0-rom-mismatch) — HISTORICAL — refresh-expected-baseline.py was broken on 1080 due to (a) Yay0 ROM-checksum exit-2, (b) inject-suffix-bytes.py rejecting baked
-- [For C-body conversions of jal-to-extern functions, REFRESH EXPECTED to flip .o-level reloc-vs-immediate comparison](#feedback-refresh-expected-for-extern-reloc-match) — When converting INCLUDE_ASM to a C body that calls an extern resolved by undefined_syms_auto.txt, the build's .o has `jal 0` + R_MIPS_26 rel
-- [refresh-expected misuse hides real instruction-byte diffs](#feedback-refresh-expected-misuse-hides-real-diffs) — Refresh-expected is ONLY valid for reloc/symbol-name diffs; using it on real register-allocation or frame-size diffs lands an "exact" agains
-- [scripts/refresh-expected-baseline.py dies because `make` returns non-zero on ROM MISMATCH; manual sequence is required when ROM isn't matching](#feedback-refresh-expected-script-dies-on-rom-mismatch) — 1080 Snowboarding's `make` runs a final `md5sum -c checksum.md5` step that exits non-zero whenever the ROM doesn't match baserom (which is t
-- [`report.json` is now tracked in 1080-decomp; revert it before running land script](#feedback-report-json-tracked) — As of 2026-04-19 (after the Yay0 Day-3 work) `report.json` is tracked in git. Every objdiff-cli regenerate leaves it dirty, which blocks `la
-- [Full-ROM mismatch is expected during decomp; don't stop work](#feedback-rom-mismatch-ok) — N64 decomp projects normally have a broken full-ROM match during active decomp; per-function objdiff is the real contract. Don't pause work 
-- [Save-arg sentinels (`sw aN; jr ra; sw aM`) DO match from IDO -O2 `void f(int, ...) {}` — old "won't produce this" NM claims are wrong](#feedback-save-arg-sentinel-ido-o2-confirmed) — Multiple old NM-wrap comments in the codebase (e.g. eddproc_uso_func_00000144, prior timproc_uso_b5 siblings) claimed the save-arg sentinel 
-- [A sister agent's local-only commits make their decomps look "unstarted" from your worktree — re-do them, don't try to cherry-pick across worktrees](#feedback-sister-agent-orphan-commits-resurface-as-unstarted) — When `git log --grep` finds a "Decompile X" commit but `src/` has INCLUDE_ASM, check `git branch --contains <hash>` — if it shows ONLY a sis
-- [Source-1 NM-wrap scan may surface previously-"landed" functions that were contaminated-100% matches](#feedback-source1-scan-may-be-decontaminated-matches) — Functions found at 80-99% from `source=1` (`#ifdef NON_MATCHING` grep + report.json scan) may include ones that were LANDED as 100% via expe
-- [After split-fragments creates a new symbol, refresh the expected baseline BEFORE running the land script](#feedback-split-fragment-land-needs-baseline-refresh) — `split-fragments.py` creates a new function symbol (e.g. `game_uso_func_00005728` split off from its predecessor). Running `land-successful-
-- [split-fragments.py includes leading inter-function nops in the split-off symbol — making it unmatchable from C](#feedback-split-fragments-includes-leading-nops) — When the original .s has trailing nops AFTER a `jr ra` + delay-slot nop (alignment between functions), `find_split_point()` returns `i+2` (i
-- [split-fragments.py auto-inserts new INCLUDE_ASM into the FIRST `.c` file in a multi-file segment, not the parent's actual .c — must hoist after split](#feedback-split-fragments-inserts-into-wrong-c-file) — When a segment is split across multiple .c files (e.g. `game_libs.c` + `game_libs_post.c`), `scripts/split-fragments.py` always appends new 
-- [split-fragments.py inserts new INCLUDE_ASM inside the parent's `#else` block when the parent is in a NON_MATCHING wrap](#feedback-split-fragments-nm-wrap-positioning) — When the parent function is currently wrapped as `#ifdef NON_MATCHING { C } #else INCLUDE_ASM(parent) #endif`, `scripts/split-fragments.py` 
-- [split-fragments.py over-splits when multiple jr ra are early-exits in ONE big function (not separate functions)](#feedback-split-fragments-overswallow-internal-jr-ra) — A high `grep -c 03E00008` count is a flag, but not always a true bundle. Some big functions have many internal jr ra early-exits + back-jump
-- [split-fragments.py emits `<segment>_func_*` prefix; game_libs convention is `gl_func_*` — rename required after split](#feedback-split-fragments-prefix-mismatch-game-libs) — When running `scripts/split-fragments.py` on a function in the `game_libs` segment, the script creates new .s files and src/ INCLUDE_ASM ent
-- [split-fragments.py's last-split-off fragment may be dead/unreachable code with no jr ra](#feedback-split-fragments-unreachable-tail) — When running `scripts/split-fragments.py` recursively on a multi-jr-ra bundle, the FINAL split-off fragment may have 0 `jr ra` instructions 
-- [scripts/split-fragments.py appends new INCLUDE_ASMs to whichever .c file it finds first by grep, NOT necessarily the original symbol's home file](#feedback-split-fragments-writes-to-wrong-c-file) — When the original INCLUDE_ASM is in src/<seg>/<seg>_tail1.c and the script can't find it (e.g. it's in a sub-file the script doesn't grep), 
-- [After `split-fragments.py` splits an NM-wrapped function into matched halves, the original NM wrap source block is stale and misleading](#feedback-stale-nm-wrap-after-split) — A split-fragments operation that turns an N %-NM function into two exact matches leaves the NM-wrap `#ifdef NON_MATCHING { body } #else INCL
-- [objdiff-cli report reads cached .o — a stale one can mask a broken source file](#feedback-stale-o-masks-build-error) — `objdiff-cli report generate` does NOT re-invoke the build; it reads whatever `.o` files are already in `build/`. If a prior successful buil
-- [Strategy-memo "per-frame compute" candidates may be splat-bundled function clusters, not single compute functions](#feedback-strategy-memo-size-misleading) — game_uso_map.md's per-frame compute heuristic (1-2 KB size, few cross-calls) flagged game_uso_func_00007424 as a self-contained algorithm (1
-- [Wrap adjacent USO data refs in a struct + map to undefined_syms OFFSET to force IDO base-pointer split](#feedback-struct-wrapper-forces-base-pointer-split) — For targets that compute a base pointer via `lui tN; addiu tN, tN, OFFSET; lw rX, 0(tN); lw rY, 4(tN)` (the split "addr + small offset" idio
-- ["Structurally locked" NM-wraps may already have correct bytes via INCLUDE_ASM — check built vs expected before giving up](#feedback-structurally-locked-wrap-may-be-bytes-already-correct) — When you encounter an NM-wrap documented as "structurally locked" / "13+ C variants tried, no path" / etc., AND the default build uses INCLU
-- [3-entry recipe combo for prologue-stolen-PREDECESSOR + bundled-TRAILER (each function in a chain has ITS OWN stolen-prologue role)](#feedback-three-recipe-combo-prologue-stolen-predecessor-plus-bundled-trailer) — Some USO functions need THREE Makefile recipe entries to byte-match — SUFFIX_BYTES on the predecessor (injects stolen prologue for current f
-- [titproc_uso state-allocator sibling family — same shape, varying state-N constant](#feedback-titproc-state-allocator-sibling-family) — titproc_uso has 6 sibling state-allocator wrappers (1E4/230/28C/2D8/32C/380). Same 19-insn body — just the state-N constant + unique D_NNN_A
-- [For stack-allocated packet builders, typed struct on stack beats `char[] + cast` for matching IDO's direct-sp-offset stores](#feedback-typed-stack-struct-for-direct-sp-stores) — When building a small struct on the stack to pass to a callee (e.g., `char pkt[12]; *(s16*)(pkt + 6) = X; pkt[4] = Y; func(pkt)`), IDO emits
-- [`bne $tN, $zero, epilogue` in function prologue where $tN is uninitialized = non-standard calling convention or splat cross-function sharing](#feedback-uninit-tn-branch-at-entry) — When a function's prologue reads a caller-save $tN register before writing it (e.g. `bne $t6, $zero, epilogue`), this is NOT a compiler bug 
-- [Unique extern declared AT offset address (not at 0) bakes constant into lui+addiu reloc](#feedback-unique-extern-at-offset-address-bakes-into-lui-addiu) — When target asm has `lui rN, %hi(D); addiu rN, rN, K` (constant K baked into the reloc) and your C emits separate `lui rN, %hi(D); addiu rN,
-- [Unique-extern alias trick BACKFIRES when target reuses a single &D base for multiple offsets](#feedback-unique-extern-breaks-shared-base) — feedback_combine_prologue_steals_with_unique_extern.md and feedback_usoplaceholder_unique_extern.md both push aliased-extern-at-same-address
-- [When applying unique-extern CSE-defeat, count target's distinct lui/addiu base loads and use EXACTLY that many externs — sharing must match exactly which sites reuse a base](#feedback-unique-extern-must-match-target-base-sharing) — feedback_usoplaceholder_unique_extern.md says use unique externs to defeat IDO's CSE folding of multiple &D_00000000 accesses through one ca
-- [Apply unique-extern CSE-break across N unrolled-loop iters by passing the D_BASE as a macro parameter](#feedback-unique-extern-via-macro-param-for-unrolled-loops) — When a function has N unrolled iterations encoded as a `#define INIT_ITER(...)` macro and each iter shares CSE'd `&D_00000000` references, s
-- [2-arm USO-placeholder dispatcher needs BOTH unique-extern (3 calls) AND if-arm-swap to match target's bne direction](#feedback-unique-extern-with-if-arm-swap) — For functions like h2hproc_uso_func_000008EC where target has `pre-call; bne; F-arm-jal; b; T-arm-jal`, applying unique-extern alone (per fe
-- [Combine unique-extern (mapped to 0x0) with `((char*)&sym + OFFSET)` cast to match D_00000000+addend reloc form WITHOUT triggering IDO &D-CSE](#feedback-unique-extern-with-offset-cast-breaks-cse) — When target uses N separate `lui rN, 0; lw/sw rN, OFFSET(rN)` accesses with relocs to D_00000000 + different addends, declaring N unique ext
-- [For long unrolled loops, write the iter body as a C `#define` macro and invoke it N times — IDO emits N independent copies cleanly](#feedback-unrolled-loop-via-c-macro-for-decomp) — When a target function contains a long unrolled loop (no asm-level loop construct — the same per-iter template repeated N times with varying
-- [Upstream segment-wide revert-to-INCLUDE_ASM can be intentional — respect it](#feedback-upstream-segment-revert-intentional) — If a rebase pulls in a commit that reverts a whole segment's C bodies back to INCLUDE_ASM, and a system-reminder marks the change intentiona
-- [USO 3-unique-extern + inline + store-before-jal combo lifts NM 0% -> 100% on small leaf with 3 distinct data refs](#feedback-uso-3unique-extern-inline-store-before-jal-combo) — For 16-insn USO leaf functions reading/storing through 3 distinct `lui+lo` reloc placeholders AND calling gl_func_00000000 with a delay-slot
-- [Recipe for promoting a USO accessor template NM-wrap to 100% via per-file -O0 split (applies to any USO, not just bootup_uso)](#feedback-uso-accessor-o0-file-split-recipe) — The standard USO accessor templates (int/float/Vec3/Quad4 reader) often compile at -O0 in the ROM (see feedback_uso_accessor_o0_variant.md f
-- [USO accessor template has -O0 variant (19 insns) alongside -O2 (15 insns) — three-signal fingerprint](#feedback-uso-accessor-o0-variant) — The int-reader accessor (gl_func_00000000(&D_00000000, buf, 4); *dst = buf[0];) has both -O2 (15 insns, 0x3C) and -O0 (19 insns, 0x4C) varia
-- [USO accessor templates can be called with a discardable scratch arg to advance the underlying loader stream](#feedback-uso-accessor-skip-via-scratch) — 1080's per-USO accessor templates (int reader, float reader, Vec3 reader, Quad4 reader) call `gl_func_00000000(&D_00000000, buf, N)` and wri
-- [USOs reuse identical accessor-function templates — match one, match many](#feedback-uso-accessor-template-reuse) — 1080's game.uso, bootup_uso, gui_uso (and likely the proc-USOs) ship the SAME small accessor functions (`int reader`, `float reader`, `Vec3 
-- [USO assert/panic call signature — `jal 0` + `addiu $a2, $zero, 0xNNN` line number](#feedback-uso-assert-panic-signature) — When decoding an unknown USO function, a `jal 0` (cross-USO placeholder for gl_func_00000000) preceded by `lui+addiu` setups for $a0/$a1 poi
-- [USO inter-segment branch trampoline — beq+jr+nop is unmatchable from IDO C](#feedback-uso-branch-placeholder-trampoline) — A 3-insn USO function `beq $zero,$zero,+BIG_OFFSET; jr $ra; nop` where the beq target is past the end of its own USO is a loader-patched int
-- [USO byte-identical function clones extend BEYOND small accessor templates — even 36+ insn constructors are reused](#feedback-uso-byte-identical-clones-beyond-accessors) — `feedback_uso_accessor_template_reuse.md` documents that small (≤0x70-byte) accessor templates appear byte-identical across USOs. But the sa
-- [USO entry-0 trampoline functions all share a 95% structural fuzzy cap — don't regrind](#feedback-uso-entry0-trampoline-95pct-cap-class) — 5 USO entry-0 functions (arcproc/boarder5/eddproc/n64proc/h2hproc_uso_func_00000000) follow the standard int-reader template (19 insns) PLUS
-- [USO entry-point trampoline (`beq zero,zero,+N` / word 0x1000XXXX) at offset 0 — not reproducible from C](#feedback-uso-entry-trampoline-1000xxxx) — Process USOs (arcproc, h2hproc, eddproc, n64proc) and some boarder USOs (boarder5) have a first instruction of `0x1000XXXX` = `beq $zero, $z
-- [USO callee receives float directly in $f4 (no mtc1 at entry) — non-O32 intra-USO convention](#feedback-uso-float-in-f4-callee) — A USO function whose first real insn is `swc1 $f4, offset($aN)` with no `mtc1 $aN, $f4` preceding is being called with a non-O32 float conve
-- [USO wrappers with internal jal targets need contaminated expected baseline](#feedback-uso-internal-jal-expected-contamination) — For USO wrappers where both jals resolve to internal symbols (R_MIPS_26 relocs), objdiff reports `fuzzy=None` / 99.17% against a pure-asm ba
-- [USO `jal 0xN` placeholders to non-symbol addresses can't byte-match from IDO C; NON_MATCHING wrap](#feedback-uso-jal-placeholder-target) — Some USO functions contain `jal 0xN` (e.g. `0x0C000137` = jal 0x4DC) where 0xN points into a trailing-nop region before a real function — a 
-- [USO wrappers with N distinct placeholder calls — one unique extern per call, each mapped to 0x0](#feedback-uso-multi-placeholder-wrapper) — When a USO wrapper makes multiple cross-USO calls, each `jal 0x0` + `lui+addiu a0, 0x0` pair is its own relocation pair — you can't reuse on
-- [3-insn USO stub that saves args to caller's shadow space (no local frame) — unreproducible from C](#feedback-uso-no-frame-save-args-stub) — USO functions whose entire body is `sw a0, 0(sp); jr ra; sw a1, 4(sp)` (or similar) with NO `addiu sp, sp, -N` prologue store to the caller'
-- [USO multi-placeholder wrapper variant — `lui+lw+jal+lw,OFF` (load-pointer-then-deref-at-offset) needs pointer-typed extern + array index](#feedback-uso-pointer-typed-extern-field-deref) — When a USO multi-call wrapper's call sequence is `lui tN, 0; lw tN, 0(tN); jal 0; lw a0, OFFSET(tN)`, the C source needs `extern int *D_xxx;
-- [split-fragments.py on USO functions breaks matching unless expected/.o is regenerated](#feedback-uso-split-fragments-breaks-expected-match) — split-fragments.py generates new symbols in build/.o, but the matching expected/.o for splat-generated USO files keeps the OLD bundled symbo
-- [USO functions can have non-nop "stray" trailing instructions inside declared size](#feedback-uso-stray-trailing-insns) — Similar to feedback_function_trailing_nop_padding.md but with real opcodes instead of 0x00000000. Some USO functions declare size N but only
-- [USO wrapper signature `sw v0, slot(sp)` in jal-N delay + `lw aX, slot(sp)` after = preserves earlier call's result, DISCARDS this jal's return](#feedback-uso-wrapper-preserves-prior-call-v0) — When a multi-call wrapper has `sw v0, OFF(sp)` in the delay slot of jal-N (N>1), and `lw aN, OFF(sp)` after the call returns, the C source r
-- [1080's biggest USOs (game.uso, timproc, mgrproc, map4_data) are Yay0-compressed](#feedback-uso-yay0-compressed) — When prologue scan of a USO finds only 1–5 candidates across hundreds of KB, suspect Yay0 compression — the bytes look noisy because they AR
-- [For USO-placeholder wrappers with defensive arg spills, use a unique-named extern (mapped to 0x0 via undefined_syms_auto.txt) instead of the shared `gl_func_00000000`](#feedback-usoplaceholder-unique-extern) — The shared `gl_func_00000000` is usually forward-declared as `extern int gl_func_00000000();` — unspecified args = K&R = "might take anythin
+- [Keep the project README progress table fresh on milestones, not every decomp](#feedback-readme-freshness) — The 1080 Snowboarding README has a per-segment progress table.
+- [README progress table and report.json can drift apart on origin/main — both are pushed independently, the dashboard may read one or the other](#feedback-readme-vs-report-json-drift) — The README's `## Status` table is updated by hand per-land; report.json is regenerated by the land-script.
+- [Use `git rebase -X theirs origin/main` to land past parallel-agent binary `expected/.o` conflicts](#feedback-rebase-theirs-binary-oo-conflicts) — When a parallel agent lands a commit touching the same `expected/*.c.o` file you touched, `git rebase origin/main` (in land-successful-decomp.sh) hits a binary merge conflict that CAN'T be manually resolved.
+- [refresh-expected-baseline.py — RESOLVED 2026-05-04 (full end-to-end fix)](#feedback-refresh-expected-baseline-blocks-on-yay0-rom-mismatch) — _HISTORICAL — refresh-expected-baseline.py was broken on 1080 due to (a) Yay0 ROM-checksum exit-2, (b) inject-suffix-bytes.py rejecting baked-in suffix bytes in INCLUDE_ASM mode, (c) truncate-elf-text.py erroring when…
+- [For C-body conversions of jal-to-extern functions, REFRESH EXPECTED to flip .o-level reloc-vs-immediate comparison](#feedback-refresh-expected-for-extern-reloc-match) — _When converting INCLUDE_ASM to a C body that calls an extern resolved by undefined_syms_auto.txt, the build's .o has `jal 0` + R_MIPS_26 reloc to the extern.
+- [refresh-expected misuse hides real instruction-byte diffs](#feedback-refresh-expected-misuse-hides-real-diffs) — Refresh-expected is ONLY valid for reloc/symbol-name diffs; using it on real register-allocation or frame-size diffs lands an "exact" against an incorrect baseline.
+- [scripts/refresh-expected-baseline.py dies because `make` returns non-zero on ROM MISMATCH; manual sequence is required when ROM isn't matching](#feedback-refresh-expected-script-dies-on-rom-mismatch) — _1080 Snowboarding's `make` runs a final `md5sum -c checksum.md5` step that exits non-zero whenever the ROM doesn't match baserom (which is the steady state during decomp).
+- [`report.json` is now tracked in 1080-decomp; revert it before running land script](#feedback-report-json-tracked) — As of 2026-04-19 (after the Yay0 Day-3 work) `report.json` is tracked in git.
+- [Full-ROM mismatch is expected during decomp; don't stop work](#feedback-rom-mismatch-ok) — N64 decomp projects normally have a broken full-ROM match during active decomp; per-function objdiff is the real contract.
+- [A sister agent's local-only commits make their decomps look "unstarted" from your worktree — re-do them, don't try to cherry-pick across worktrees](#feedback-sister-agent-orphan-commits-resurface-as-unstarted) — _When `git log --grep` finds a "Decompile X" commit but `src/` has INCLUDE_ASM, check `git branch --contains <hash>` — if it shows ONLY a sister `agent-X` branch (not `main` or `origin/main`), the work was committed…
+- [Source-1 NM-wrap scan may surface previously-"landed" functions that were contaminated-100% matches](#feedback-source1-scan-may-be-decontaminated-matches) — _Functions found at 80-99% from `source=1` (`#ifdef NON_MATCHING` grep + report.json scan) may include ones that were LANDED as 100% via expected-baseline contamination and later revealed as sub-100% after…
+- [After split-fragments creates a new symbol, refresh the expected baseline BEFORE running the land script](#feedback-split-fragment-land-needs-baseline-refresh) — _`split-fragments.py` creates a new function symbol (e.g. `game_uso_func_00005728` split off from its predecessor).
+- [split-fragments.py includes leading inter-function nops in the split-off symbol — making it unmatchable from C](#feedback-split-fragments-includes-leading-nops) — _When the original .s has trailing nops AFTER a `jr ra` + delay-slot nop (alignment between functions), `find_split_point()` returns `i+2` (immediately after the delay slot) WITHOUT skipping the leading nop run.
+- [split-fragments.py auto-inserts new INCLUDE_ASM into the FIRST `.c` file in a multi-file segment, not the parent's actual .c — must hoist after split](#feedback-split-fragments-inserts-into-wrong-c-file) — _When a segment is split across multiple .c files (e.g. `game_libs.c` + `game_libs_post.c`), `scripts/split-fragments.py` always appends new INCLUDE_ASMs to `<segname>.c` (the canonical name), even when the parent…
+- [split-fragments.py inserts new INCLUDE_ASM inside the parent's `#else` block when the parent is in a NON_MATCHING wrap](#feedback-split-fragments-nm-wrap-positioning) — _When the parent function is currently wrapped as `#ifdef NON_MATCHING { C } #else INCLUDE_ASM(parent) #endif`, `scripts/split-fragments.py` appends the newly split-off function's `INCLUDE_ASM` RIGHT AFTER the parent's…
+- [split-fragments.py over-splits when multiple jr ra are early-exits in ONE big function (not separate functions)](#feedback-split-fragments-overswallow-internal-jr-ra) — A high `grep -c 03E00008` count is a flag, but not always a true bundle.
+- [split-fragments.py emits `<segment>_func_*` prefix; game_libs convention is `gl_func_*` — rename required after split](#feedback-split-fragments-prefix-mismatch-game-libs) — _When running `scripts/split-fragments.py` on a function in the `game_libs` segment, the script creates new .s files and src/ INCLUDE_ASM entries with the literal segment-name-based prefix `game_libs_func_*`.
+- [scripts/split-fragments.py appends new INCLUDE_ASMs to whichever .c file it finds first by grep, NOT necessarily the original symbol's home file](#feedback-split-fragments-writes-to-wrong-c-file) — _When the original INCLUDE_ASM is in src/<seg>/<seg>_tail1.c and the script can't find it (e.g. it's in a sub-file the script doesn't grep), it falls back to appending all new INCLUDE_ASMs into src/<seg>/<seg>.c.
+- [After `split-fragments.py` splits an NM-wrapped function into matched halves, the original NM wrap source block is stale and misleading](#feedback-stale-nm-wrap-after-split) — _A split-fragments operation that turns an N %-NM function into two exact matches leaves the NM-wrap `#ifdef NON_MATCHING { body } #else INCLUDE_ASM #endif` block in the source file.
+- [objdiff-cli report reads cached .o — a stale one can mask a broken source file](#feedback-stale-o-masks-build-error) — _`objdiff-cli report generate` does NOT re-invoke the build; it reads whatever `.o` files are already in `build/`.
+- [Strategy-memo "per-frame compute" candidates may be splat-bundled function clusters, not single compute functions](#feedback-strategy-memo-size-misleading) — _game_uso_map.md's per-frame compute heuristic (1-2 KB size, few cross-calls) flagged game_uso_func_00007424 as a self-contained algorithm (1.7 KB, 1 cross-call).
+- [Wrap adjacent USO data refs in a struct + map to undefined_syms OFFSET to force IDO base-pointer split](#feedback-struct-wrapper-forces-base-pointer-split) — _For targets that compute a base pointer via `lui tN; addiu tN, tN, OFFSET; lw rX, 0(tN); lw rY, 4(tN)` (the split "addr + small offset" idiom for adjacent accesses), C-level `*(int*)(&D_0 + OFFSET)` + `*(int*)(&D_0 +…
+- ["Structurally locked" NM-wraps may already have correct bytes via INCLUDE_ASM — check built vs expected before giving up](#feedback-structurally-locked-wrap-may-be-bytes-already-correct) — _When you encounter an NM-wrap documented as "structurally locked" / "13+ C variants tried, no path" / etc., AND the default build uses INCLUDE_ASM (`#ifdef NON_MATCHING { C } #else INCLUDE_ASM(...); #endif` form), the…
+- [3-entry recipe combo for prologue-stolen-PREDECESSOR + bundled-TRAILER (each function in a chain has ITS OWN stolen-prologue role)](#feedback-three-recipe-combo-prologue-stolen-predecessor-plus-bundled-trailer) — _Some USO functions need THREE Makefile recipe entries to byte-match — SUFFIX_BYTES on the predecessor (injects stolen prologue for current func), PROLOGUE_STEALS on the current func (strips C-body's emitted prefix),…
+- [`bne $tN, $zero, epilogue` in function prologue where $tN is uninitialized = non-standard calling convention or splat cross-function sharing](#feedback-uninit-tn-branch-at-entry) — When a function's prologue reads a caller-save $tN register before writing it (e.g. `bne $t6, $zero, epilogue`), this is NOT a compiler bug — it's evidence the original source used `register int x asm("$tN")` declared…
+- [Unique extern declared AT offset address (not at 0) bakes constant into lui+addiu reloc](#feedback-unique-extern-at-offset-address-bakes-into-lui-addiu) — _When target asm has `lui rN, %hi(D); addiu rN, rN, K` (constant K baked into the reloc) and your C emits separate `lui rN, %hi(D); addiu rN, rN, 0; addiu rM, rN, K`, declare a unique extern with `D_xxx_NAME =…
+- [Unique-extern alias trick BACKFIRES when target reuses a single &D base for multiple offsets](#feedback-unique-extern-breaks-shared-base) — _feedback_combine_prologue_steals_with_unique_extern.md and feedback_usoplaceholder_unique_extern.md both push aliased-extern-at-same-address as a CSE-breaker.
+- [When applying unique-extern CSE-defeat, count target's distinct lui/addiu base loads and use EXACTLY that many externs — sharing must match exactly which sites reuse a base](#feedback-unique-extern-must-match-target-base-sharing) — _feedback_usoplaceholder_unique_extern.md says use unique externs to defeat IDO's CSE folding of multiple &D_00000000 accesses through one cached base.
+- [2-arm USO-placeholder dispatcher needs BOTH unique-extern (3 calls) AND if-arm-swap to match target's bne direction](#feedback-unique-extern-with-if-arm-swap) — _For functions like h2hproc_uso_func_000008EC where target has `pre-call; bne; F-arm-jal; b; T-arm-jal`, applying unique-extern alone (per feedback_usoplaceholder_unique_extern.md) reaches ~70%; the second knob is…
+- [Combine unique-extern (mapped to 0x0) with `((char*)&sym + OFFSET)` cast to match D_00000000+addend reloc form WITHOUT triggering IDO &D-CSE](#feedback-unique-extern-with-offset-cast-breaks-cse) — _When target uses N separate `lui rN, 0; lw/sw rN, OFFSET(rN)` accesses with relocs to D_00000000 + different addends, declaring N unique externs all mapped to 0x0 AND writing each access as `((char*)&sym_i + OFFSET_i)`…
+- [Upstream segment-wide revert-to-INCLUDE_ASM can be intentional — respect it](#feedback-upstream-segment-revert-intentional) — _If a rebase pulls in a commit that reverts a whole segment's C bodies back to INCLUDE_ASM, and a system-reminder marks the change intentional, DON'T re-decompile the reverted functions.
+- [Recipe for promoting a USO accessor template NM-wrap to 100% via per-file -O0 split (applies to any USO, not just bootup_uso)](#feedback-uso-accessor-o0-file-split-recipe) — _The standard USO accessor templates (int/float/Vec3/Quad4 reader) often compile at -O0 in the ROM (see feedback_uso_accessor_o0_variant.md for the three signals).
+- [USO accessor template has -O0 variant (19 insns) alongside -O2 (15 insns) — three-signal fingerprint](#feedback-uso-accessor-o0-variant) — _The int-reader accessor (gl_func_00000000(&D_00000000, buf, 4); *dst = buf[0];) has both -O2 (15 insns, 0x3C) and -O0 (19 insns, 0x4C) variants.
+- [USO accessor templates can be called with a discardable scratch arg to advance the underlying loader stream](#feedback-uso-accessor-skip-via-scratch) — _1080's per-USO accessor templates (int reader, float reader, Vec3 reader, Quad4 reader) call `gl_func_00000000(&D_00000000, buf, N)` and write `*dst = buf[0]`.
+- [USOs reuse identical accessor-function templates — match one, match many](#feedback-uso-accessor-template-reuse) — _1080's game.uso, bootup_uso, gui_uso (and likely the proc-USOs) ship the SAME small accessor functions (`int reader`, `float reader`, `Vec3 reader`, `struct copy`) at different offsets in each USO.
+- [USO assert/panic call signature — `jal 0` + `addiu $a2, $zero, 0xNNN` line number](#feedback-uso-assert-panic-signature) — _When decoding an unknown USO function, a `jal 0` (cross-USO placeholder for gl_func_00000000) preceded by `lui+addiu` setups for $a0/$a1 pointing at string symbols and followed by `addiu $a2, $zero, 0xNNN` (NNN =…
+- [USO inter-segment branch trampoline — beq+jr+nop is unmatchable from IDO C](#feedback-uso-branch-placeholder-trampoline) — _A 3-insn USO function `beq $zero,$zero,+BIG_OFFSET; jr $ra; nop` where the beq target is past the end of its own USO is a loader-patched inter-segment branch trampoline.
+- [USO byte-identical function clones extend BEYOND small accessor templates — even 36+ insn constructors are reused](#feedback-uso-byte-identical-clones-beyond-accessors) — _`feedback_uso_accessor_template_reuse.md` documents that small (≤0x70-byte) accessor templates appear byte-identical across USOs.
+- [USO entry-0 trampoline functions all share a 95% structural fuzzy cap — don't regrind](#feedback-uso-entry0-trampoline-95pct-cap-class) — _5 USO entry-0 functions (arcproc/boarder5/eddproc/n64proc/h2hproc_uso_func_00000000) follow the standard int-reader template (19 insns) PLUS a leading runtime-patched trampoline word (`0x10006F00` or `0x1000736F` etc.)…
+- [USO entry-point trampoline (`beq zero,zero,+N` / word 0x1000XXXX) at offset 0 — not reproducible from C](#feedback-uso-entry-trampoline-1000xxxx) — _Process USOs (arcproc, h2hproc, eddproc, n64proc) and some boarder USOs (boarder5) have a first instruction of `0x1000XXXX` = `beq $zero, $zero, +0xXXXX` — an always-taken branch to a per-USO offset, followed by either…
+- [USO wrappers with internal jal targets need contaminated expected baseline](#feedback-uso-internal-jal-expected-contamination) — _For USO wrappers where both jals resolve to internal symbols (R_MIPS_26 relocs), objdiff reports `fuzzy=None` / 99.17% against a pure-asm baseline even when the post-link bytes are identical.
+- [USO `jal 0xN` placeholders to non-symbol addresses can't byte-match from IDO C; NON_MATCHING wrap](#feedback-uso-jal-placeholder-target) — _Some USO functions contain `jal 0xN` (e.g. `0x0C000137` = jal 0x4DC) where 0xN points into a trailing-nop region before a real function — a USO-loader placeholder.
+- [USO wrappers with N distinct placeholder calls — one unique extern per call, each mapped to 0x0](#feedback-uso-multi-placeholder-wrapper) — _When a USO wrapper makes multiple cross-USO calls, each `jal 0x0` + `lui+addiu a0, 0x0` pair is its own relocation pair — you can't reuse one extern.
+- [USO multi-placeholder wrapper variant — `lui+lw+jal+lw,OFF` (load-pointer-then-deref-at-offset) needs pointer-typed extern + array index](#feedback-uso-pointer-typed-extern-field-deref) — _When a USO multi-call wrapper's call sequence is `lui tN, 0; lw tN, 0(tN); jal 0; lw a0, OFFSET(tN)`, the C source needs `extern int *D_xxx;` (pointer-typed) with `D_xxx[OFFSET/4]` — NOT `extern int D_xxx` (scalar).
+- [split-fragments.py on USO functions breaks matching unless expected/.o is regenerated](#feedback-uso-split-fragments-breaks-expected-match) — split-fragments.py generates new symbols in build/.o, but the matching expected/.o for splat-generated USO files keeps the OLD bundled symbol.
+- [USO functions can have non-nop "stray" trailing instructions inside declared size](#feedback-uso-stray-trailing-insns) — _Similar to feedback_function_trailing_nop_padding.md but with real opcodes instead of 0x00000000.
+- [USO wrapper signature `sw v0, slot(sp)` in jal-N delay + `lw aX, slot(sp)` after = preserves earlier call's result, DISCARDS this jal's return](#feedback-uso-wrapper-preserves-prior-call-v0) — When a multi-call wrapper has `sw v0, OFF(sp)` in the delay slot of jal-N (N>1), and `lw aN, OFF(sp)` after the call returns, the C source returns or uses the EARLIER call's v0, not jal-N's.
+- [1080's biggest USOs (game.uso, timproc, mgrproc, map4_data) are Yay0-compressed](#feedback-uso-yay0-compressed) — When prologue scan of a USO finds only 1–5 candidates across hundreds of KB, suspect Yay0 compression — the bytes look noisy because they ARE noise (compressed).
+- [For USO-placeholder wrappers with defensive arg spills, use a unique-named extern (mapped to 0x0 via undefined_syms_auto.txt) instead of the shared `gl_func_00000000`](#feedback-usoplaceholder-unique-extern) — _The shared `gl_func_00000000` is usually forward-declared as `extern int gl_func_00000000();` — unspecified args = K&R = "might take anything", so IDO defensively spills all live arg registers at every call site.
 - [use_uv_sync](#feedback-uv) — Use uv sync for dependency management, not pip install or uv pip install
-- [For trampoline-blocked USO func_00000000s, measure body's -O0 match by OPT_FLAGS=-O0 + DNON_MATCHING build before declaring "fully unmatchable"](#feedback-verify-o0-body-under-leading-trampoline) — USO loader-patched `beq zero,zero,+N` trampolines at offset 0 of `<seg>_uso_func_00000000` are blocked by the leading-pad-sidecar tooling ga
-- [`volatile T saved_x = x;` for codegen-shaping must remain UNCONSUMED — using the local in a condition regresses](#feedback-volatile-for-codegen-shape-must-stay-unconsumed) — When using `volatile` locals as a spill-shaping trick (per feedback_ido_volatile_unused_local_forces_local_slot_spill.md) to lift a wrap's m
-- [`volatile int *p = &a1;` forces IDO no-frame caller-arg-slot spills](#feedback-volatile-ptr-to-arg-forces-caller-slot-spill) — When asm shows `sw a1, 4(sp); sw a2, 8(sp); addiu tN, sp, 4; lw via tN` for a leaf function with NO `addiu sp, -N` prologue, IDO is using th
-- [The "all .word directives" skip rule applies to fresh decomp, NOT to episode logging — `.word`-only USO functions are still episode-eligible if byte-correct via INCLUDE_ASM](#feedback-word-only-skip-rule-doesnt-block-episode-logging) — The /decompile skill's skip rule says to skip functions whose .s file is all `.word` directives ("data misidentified as code"). But this rul
-- [An NM-wrap doc claiming "logic verified correct, IDO codegen cap" may actually be hiding a wrong-dereference bug](#feedback-wrap-doc-codegen-cap-may-mask-logic-bug) — A wrap doc that names a specific IDO codegen pattern as the "cap" (e.g. "&D base-register form not C-flippable") and says "logic verified co
-- [-O0 file-split recipe doesn't apply to Yay0-compressed USOs (single .o → compressed blob)](#feedback-yay0-uso-blocks-file-split-recipe) — The feedback_uso_accessor_o0_file_split_recipe.md procedure requires the linker to place multiple .o .text sections in sequence. Yay0-compre
+- [For trampoline-blocked USO func_00000000s, measure body's -O0 match by OPT_FLAGS=-O0 + DNON_MATCHING build before declaring "fully unmatchable"](#feedback-verify-o0-body-under-leading-trampoline) — _USO loader-patched `beq zero,zero,+N` trampolines at offset 0 of `<seg>_uso_func_00000000` are blocked by the leading-pad-sidecar tooling gap.
+- [`volatile T saved_x = x;` for codegen-shaping must remain UNCONSUMED — using the local in a condition regresses](#feedback-volatile-for-codegen-shape-must-stay-unconsumed) — _When using `volatile` locals as a spill-shaping trick (per feedback_ido_volatile_unused_local_forces_local_slot_spill.md) to lift a wrap's match%, the volatile MUST be left dead (unused after assignment).
+- [The "all .word directives" skip rule applies to fresh decomp, NOT to episode logging — `.word`-only USO functions are still episode-eligible if byte-correct via INCLUDE_ASM](#feedback-word-only-skip-rule-doesnt-block-episode-logging) — _The /decompile skill's skip rule says to skip functions whose .s file is all `.word` directives ("data misidentified as code").
+- [An NM-wrap doc claiming "logic verified correct, IDO codegen cap" may actually be hiding a wrong-dereference bug](#feedback-wrap-doc-codegen-cap-may-mask-logic-bug) — _A wrap doc that names a specific IDO codegen pattern as the "cap" (e.g. "&D base-register form not C-flippable") and says "logic verified correct" can be wrong.
+- [-O0 file-split recipe doesn't apply to Yay0-compressed USOs (single .o → compressed blob)](#feedback-yay0-uso-blocks-file-split-recipe) — _The feedback_uso_accessor_o0_file_split_recipe.md procedure requires the linker to place multiple .o .text sections in sequence.
+
 
 ---
 
@@ -210,6 +237,8 @@ gl_func_00000000(tmp);                /* uses register directly */
 Named-local versions of call retvals give IDO more flexibility in scheduling stores as delay-slot filler. Generalizes to: when you see a `sw v0, ...` that's NOT in a jal delay slot in YOUR build but IS in the target, introduce a `tmp = jal_retval()` named local for that retval.
 
 **Origin:** 2026-04-20 agent-a, game_uso_func_00000724. First pass: 89% NM commit 772691f with doc. User pushback → grind further → promoted to 100% commit 764b62d (landed). Lesson: always raw-byte-compare before settling for an NM wrap that shows only ARG_MISMATCH diffs.
+
+---
 
 ---
 
@@ -316,6 +345,8 @@ or   v0, s0, zero        # return s (= 0 if alloc failed)
 
 ---
 
+---
+
 <a id="feedback-alloc-or-init-goto-pattern"></a>
 ## Alloc-or-init constructors — `goto init` unblocks `beq v0,zero; or a0,v0,zero(delay)` delay-slot move
 
@@ -358,6 +389,8 @@ The branched per-stage init blocks fight the scheduler trick. For multi-stage, p
 **Related:**
 - `feedback_ido_goto_epilogue.md` — different goto pattern for alloc-fail early-returns to common label.
 - `feedback_objdiff_reloc_tolerance.md` — the 100% has reloc-name diffs (R_MIPS_HI16 vs labeled), tolerated by objdiff.
+
+---
 
 ---
 
@@ -431,6 +464,8 @@ This is the source pattern `r = q; if (!r) { r = alloc(N); if (!r) goto end; }` 
 **Companion memos:**
 - `feedback_ido_bnel_shared_store_after_helper.md` — related branch-likely shared-tail pattern.
 - `feedback_alloc_fail_skip_explicit_return_zero.md` — for the alloc-fail end path's `return 0;` shape.
+
+---
 
 ---
 
@@ -518,6 +553,8 @@ load uses `lw via p` from that slot.
 
 ---
 
+---
+
 <a id="feedback-args-loaded-before-conditional-feed-jal-after"></a>
 ## `li aN; move aM, zero` BEFORE a conditional may be args for a JAL AFTER the conditional — don't read it as conditional setup
 
@@ -597,6 +634,8 @@ post-jal cascade.
 
 ---
 
+---
+
 <a id="feedback-asm-base-reg-misread"></a>
 ## When reading USO `.word`-style asm, decode the rs field — don't guess "(s2)" from context
 
@@ -626,6 +665,8 @@ This changed the semantic completely:
 **Heuristic:** if a function has a $s-register that's "incremented in a loop but never read," STOP. That's a sign you're misreading a load/store's base reg. Re-decode bits 25-21 of each memory insn in the loop body.
 
 **Origin:** 2026-04-20 agent-a, game_uso_func_00000724 decomp. First pass decoded with wrong base reg, producing 86% match (using `a0`-based stores). After fixing to $s0-based (iterator p), match improved to 89.1%, and the "dead $s0" puzzle resolved.
+
+---
 
 ---
 
@@ -681,6 +722,8 @@ Before reaching for `__asm__("")`:
 - `feedback_ido_no_asm_barrier.md` — earlier observation that some IDO contexts reject inline-asm.
 - `feedback_ido_asm_intrinsic_treated_as_function_call.md` — `__asm__("nop")` is treated as a function call (not a literal nop).
 - `feedback_insn_patch_size_diff_blocked.md` — the size-mismatch class that blocks INSN_PATCH (which is the alternative path for these caps).
+
+---
 
 ---
 
@@ -767,6 +810,8 @@ to catch any layout variants the previous pass missed.
 
 ---
 
+---
+
 <a id="feedback-byte-correct-match-via-include-asm-not-c-body"></a>
 ## A "byte-correct .o matches expected" check on an `#ifdef NON_MATCHING` wrap is an INCLUDE_ASM tautology, not C-body validation
 
@@ -827,6 +872,8 @@ If you're surprised that `build/src/.../*.c.o` matches expected exactly but `rep
 
 ---
 
+---
+
 <a id="feedback-c-source-rewriter-linear-not-regex"></a>
 ## For bulk C-source rewrites across many files, linear scan + brace matching beats regex
 
@@ -856,6 +903,8 @@ Runs in 0.3 s across 104 files, 467 replacements. Also more robust to edge cases
 
 ---
 
+---
+
 <a id="feedback-call-non-matching-ok"></a>
 ## Calling a NON_MATCHING-wrapped function from C still matches at the jal site
 
@@ -873,6 +922,8 @@ _Composite/wrapper functions can call functions wrapped as NON_MATCHING — the 
 **Caveat:** Only true for static-address-resolved calls (jal to a named function). If B is referenced by function pointer in data, you might hit issues — but for direct jal callsites, it's fine.
 
 **Origin:** 2026-04-19 while matching `timproc_uso_b5_func_0000AAF4`. Vec3 reader at 0x400 was wrapped NON_MATCHING (93.3 %); composite wrapper matched 100 % calling it.
+
+---
 
 ---
 
@@ -933,6 +984,8 @@ When you see m2c output with a "pre-read + post-condition-reload" loop pattern A
 Verify the loop body doesn't mutate `*ptr` (else consolidation changes semantics).
 
 **Companion to `feedback_ido_local_ordering.md`** (decl order affects $s priority) — this memo's about live-range structure rather than decl order.
+
+---
 
 ---
 
@@ -998,6 +1051,8 @@ If blocked, options are:
 
 ---
 
+---
+
 <a id="feedback-cross-branch-alias-sync-check-direction"></a>
 ## Cross-branch alias-removal sync — verify per-file that you're REMOVING the macro, not RE-ADDING it
 
@@ -1059,6 +1114,8 @@ that would have regressed main. Final commit was 31 files (clean wins).
 
 ---
 
+---
+
 <a id="feedback-cross-include-asm-dotl-label-break"></a>
 ## ld undefined-reference to .LXXXXXXXX from INCLUDE_ASM = cross-INCLUDE_ASM local label; add to undefined_syms_auto.txt
 
@@ -1096,6 +1153,8 @@ The address is encoded in the label name (`.L<HEX_ADDR>`).
 **Related:**
 - The skill mentions this in passing under "Cross-function `.L` labels", but doesn't flag it as a likely silent breaker of origin/main builds.
 - `feedback_splat_rerun_gotchas.md` — file is auto-generated but tolerates manual edits.
+
+---
 
 ---
 
@@ -1163,6 +1222,8 @@ project, the META training corpus misses it.
 
 ---
 
+---
+
 <a id="feedback-dnonmatching-with-wrap-intact-false-match"></a>
 ## Building with `-DNON_MATCHING` while the `#ifdef NON_MATCHING / #else INCLUDE_ASM / #endif` wrap is still in place yields a false 100 % match
 
@@ -1220,6 +1281,8 @@ then build, and confirm the build didn't fail (`echo $?` after the make).
 
 ---
 
+---
+
 <a id="feedback-doc-only-commits-are-punting"></a>
 ## Doc-only commits on big NM-wrapped functions are punting — write partial C instead
 
@@ -1244,6 +1307,8 @@ _When continuing a multi-run decomp on a 300+ insn NM-wrapped function, the temp
 - Accept that the comment summarizing what's different may shrink as the C grows — the C IS the documentation.
 
 **Concrete trigger for this memo:** pattern recognition on any /decompile tick where my plan is "extend the /* DECODE */ comment" rather than "replace some INCLUDE_ASM with C". If the plan sentence names a comment-block extension, it's the wrong plan.
+
+---
 
 ---
 
@@ -1288,6 +1353,8 @@ If you accidentally orphan a block, the fix is mechanical: remove the spurious `
 - `a4992ff game_uso_func_00007538: fix orphaned comment block (build error)` (2026-05-05, this commit)
 
 **Defensive workflow:** after editing a comment block, run `grep -c '/\*' <file>` and `grep -c '\*/' <file>` — counts should match. If `/* */` count is mismatched, you orphaned something.
+
+---
 
 ---
 
@@ -1341,6 +1408,8 @@ I miscounted because I treated the 2nd byte's top 5 bits as "bits 25-21", when i
 **Related**:
 - `feedback_wrap_doc_codegen_cap_may_mask_logic_bug.md` — wrap docs CAN be wrong (so verification is worth doing) — but only via objdump, not by-hand decode
 - `feedback_non_matching_build_for_fuzzy_scoring.md` — once dual-build infra exists, fuzzy_match_percent is the truth-source for whether your C-body changes are improvement or regression. Test BEFORE committing claims about "this is the correct semantic".
+
+---
 
 ---
 
@@ -1430,6 +1499,8 @@ side-effect), not just codegen-different.
 
 ---
 
+---
+
 <a id="feedback-dual-role-tail-and-callable"></a>
 ## Function can be BOTH a cross-function tail AND a standalone jal target
 
@@ -1468,6 +1539,8 @@ If 1+2+3 all hit: this is dual-role. DO NOT merge-fragments — that would elimi
 
 ---
 
+---
+
 <a id="feedback-empty-void-matches-ido"></a>
 ## Empty `void f(void) {}` byte-matches under IDO -O2 — decomp, don't leave as INCLUDE_ASM
 
@@ -1489,6 +1562,8 @@ _The /decompile skill's "empty functions should stay as INCLUDE_ASM — the comp
 - `feedback_splat_auto_empty_episodes.md` already documents the same pattern for splat-auto-generated empties; this memo extends it to post-split empties.
 
 **Origin:** 2026-04-20, committed as `96e9206 Decompile 3 empty stubs in timproc_uso_b5` following the 611abc7 split. All 3 matched 100% with the empty-body form.
+
+---
 
 ---
 
@@ -1547,6 +1622,8 @@ If a function was documented as a long-standing NM-cap (multiple variants tried,
 The existing refresh-expected-baseline.py probably needs to be patched to handle `#ifdef NON_MATCHING` wrappers explicitly:
 - Parse `#ifdef NON_MATCHING / #else INCLUDE_ASM / #endif` blocks and treat them as already-INCLUDE_ASM for baseline purposes.
 - OR: always build expected with `-DNON_MATCHING=0` (force all wrappers to use INCLUDE_ASM path) to avoid contamination.
+
+---
 
 ---
 
@@ -1619,6 +1696,8 @@ update the wrap doc with what was tried.
 
 ---
 
+---
+
 <a id="feedback-fpu-basis-function-signatures"></a>
 ## Recognizing FPU spline-basis-function evaluators by their constant-load fingerprint
 
@@ -1666,6 +1745,8 @@ Caller pattern (when you find one): allocate weights[4] on stack, call basis(wei
 **Related:**
 - `feedback_ido_fpu_reduction_operand_order.md` — FPU exact-match cap on reduction operations
 - 1080 likely uses these for skater limb interpolation / camera path smoothing — call-graph hints would tell us which.
+
+---
 
 ---
 
@@ -1733,6 +1814,8 @@ save; remaining prologue diff stayed unchanged.
 
 ---
 
+---
+
 <a id="feedback-function-trailing-nop-padding"></a>
 ## game_libs asm files with trailing nop padding block objdiff 100% match after C-decomp
 
@@ -1767,6 +1850,8 @@ mips-linux-gnu-objdump -t expected/src/<file>.o | grep -E "F .text" | grep func_
 If the symbol size is LARGER than `4 * (real-instruction-count including jr+delay)`, it has the padding issue. My build will show the smaller (instruction-only) size → objdiff caps at ≤ 80 %.
 
 **Workaround still doesn't exist at C level.** `__asm__(".align 4")` after the function doesn't extend its symbol size through asm-processor. Leave as NON_MATCHING.
+
+---
 
 ---
 
@@ -1824,6 +1909,8 @@ words could swap. Cap is structural; recipe inapplicable.
 **Companion:** `feedback_insn_patch_size_diff_blocked.md` (insn-count
 mismatch blocks INSN_PATCH outright). This one is the "insn count
 matches but bytes are completely different" twin — also blocking.
+
+---
 
 ---
 
@@ -1887,6 +1974,8 @@ IDO 7.1 supports K&R style. The existing `extern void game_uso_func_00000000();`
 
 ---
 
+---
+
 <a id="feedback-game-uso-per-frame-vec3-stage-template"></a>
 ## game_uso per-frame compute spine functions share a Vec3-stage entry template
 
@@ -1917,6 +2006,8 @@ Confirmed in:
 **Origin:** 2026-05-03 game_uso_func_0000591C structural decode (insns 30-50), cross-referenced against game_uso_func_00006A30 and game_uso_func_00007C1C wrap docs from prior ticks.
 
 **Addendum 2026-05-03 (game_uso_func_00000B3C):** the PARENT struct (a0 directly, not a0->0x30) has a *separate* Vec3 field at offsets `0x134/0x138/0x13C`. game_uso_func_00000B3C @ 0xBE4-0xC28 zero-initializes it via `Vec3 tmp = {0,0,0}; a0->vec_134 = tmp;` — a sp+0xD8 → sp+0xB4 → a0+0x134 scratch chain. So when typing the GameState parent struct, add `Vec3 vec_134` alongside whatever lives at the existing `0x30 / 0x150 / 0x158 / 0x1D4 / 0x250 / 0x258 / 0x260 / 0x268` fields documented in 0xB3C's wrap. Distinct from the sub-struct Vec3 at `0x30->0xB4`.
+
+---
 
 ---
 
@@ -1983,6 +2074,8 @@ shifts code + relocs to insert the 2 sw insns at the right offset
 
 ---
 
+---
+
 <a id="feedback-ghost-jal-target-not-a-fragment"></a>
 ## Some kernel functions have external callers but use caller-save regs uninitialized — NOT a mergeable fragment
 
@@ -2019,6 +2112,8 @@ But 10+ asm files in `asm/nonmatchings/kernel/` contain `jal func_800073F8` (enc
 If the last bullet holds, escalate rather than merging. The mystery here warrants its own investigation — skipped for now since decoding 10+ caller contexts is beyond one /decompile tick.
 
 **Origin (2026-04-20):** tried to merge `func_800073F8` into `func_800073DC` during a size-sort-source tick. Reverted after discovering the callers. No decomp progress; memo captures the lesson so next tick doesn't repeat the trap.
+
+---
 
 ---
 
@@ -2088,6 +2183,8 @@ The `;` after `end:` is required because a label needs a statement.
 
 ---
 
+---
+
 <a id="feedback-idempotent-scripts-beat-rebase"></a>
 ## For sweeping multi-segment changes, idempotent scripts beat rebase when other agents are landing NM wraps in parallel
 
@@ -2110,6 +2207,8 @@ _When you've made a wide change (touching dozens of segments / hundreds of files
 **When NOT to use this:** If your change wasn't produced by a deterministic script — e.g., you made surgical hand edits to specific functions — you can't re-derive them, so you have to do the hand-merge.
 
 **Origin (2026-04-20):** rolling out the pad-sidecar trim across 94 functions / 17 segments. While work was in flight, other agents wrapped 8 boarder1/2/3/4/5/game_libs functions as NM. Rebase produced cascading comment conflicts. Reset + re-script + commit took ~3 minutes; rebase resolution would have taken ~30 minutes minimum.
+
+---
 
 ---
 
@@ -2172,6 +2271,8 @@ the convention is intrinsically non-expressible.
 **Origin:** 2026-05-04 agent-a, gl_func_0002DDF4. Likely siblings:
 gl_func_0002DED0 / 0002DF38 / 00039960 (similar 12-insn 0x30 shape) —
 verify each for the same delay-slot-swc1-$f4 fingerprint before grinding.
+
+---
 
 ---
 
@@ -2267,6 +2368,8 @@ points branch to it, the C must use `goto out;` (NOT inner `return`).
 
 ---
 
+---
+
 <a id="feedback-knr-def-for-inconsistent-arg-callers"></a>
 ## K&R-style function definition lets a NM wrap coexist with same-TU callers passing extra/fewer args
 
@@ -2320,6 +2423,8 @@ Verified 2026-05-03 on `gui_func_00000000`: ANSI prototype broke DNM with 3 cfe 
 
 ---
 
+---
+
 <a id="feedback-libreultra-handwritten-rename-procedure"></a>
 ## Renaming a libreultra hand-written .s function to canonical name
 
@@ -2339,6 +2444,8 @@ When `decomp-search` confirms a `func_NNNN` is a hand-written libreultra leaf (e
 **How to apply:** When source 3 (size-sort) yields a tiny (<10 insn) function whose asm matches a libreultra `.s` exactly, the rename IS the commit. No episode (no C body change), no land-script invocation needed (rename isn't a "decompile completion" — INCLUDE_ASM still present, land script's exact-match check would fail). Direct commit on agent branch.
 
 **Gotcha re-confirmed:** report.json generation does NOT require successful final ELF link — even with pre-existing `.L` symbol link errors elsewhere, `objdiff-cli report generate` works on per-.o basis. Don't be deterred by full-make link failures when only verifying a single-file rename.
+
+---
 
 ---
 
@@ -2377,6 +2484,8 @@ The `lw a1, 0x18(sp)` reads sp+0x18 (one slot above ra), but no `sw $aN, 0x18(sp
 - DO investigate the predecessor's exit sequence next pass (look for `j func_NNNN` pattern and `sw $aN, +0x18(sp)` before it).
 
 **Origin:** 2026-05-04, titproc_uso_func_00000418 partial decode. The `lw a1, 0x18(sp)` early in the function with no preceding sw is non-standard. Doc'd for next pass; preserved as INCLUDE_ASM (default build is exact via the .s).
+
+---
 
 ---
 
@@ -2446,6 +2555,8 @@ Quick check: `mips-linux-gnu-objdump -d expected/.../*.c.o | awk '/<gl_func_X>/{
 
 ---
 
+---
+
 <a id="feedback-mips3-helper"></a>
 ## Compile 64-bit libgcc helpers at -O2 -mips3 + ELF flag rewrite
 
@@ -2502,6 +2613,8 @@ This exact pattern is what's in the baserom at 0x80002A10.
 
 ---
 
+---
+
 <a id="feedback-mips-alt-entry-no-jr-ra"></a>
 ## MIPS alt-entry 2-insn fragment (no jr ra, falls through to next func) — not C-expressible
 
@@ -2540,6 +2653,8 @@ func_XXX+8:                  ; real entry
 
 ---
 
+---
+
 <a id="feedback-mirror-function"></a>
 ## Look for mirror/sibling functions before grinding
 
@@ -2570,6 +2685,8 @@ Byte-perfect on first try at -O1.
 - If you find a structural sibling, copy its C and substitute the differing operation.
 - Still need the right opt level — file-split if the host file is wrong (-O1 vs -O2).
 - This works because libultra and N64 OS code is dense with mirrored primitives; ROM authors rarely wrote two unrelated functions with the same shape.
+
+---
 
 ---
 
@@ -2615,6 +2732,8 @@ decode comment. Broke the `-DNON_MATCHING` build entirely until replaced.
 
 ---
 
+---
+
 <a id="feedback-non-aligned-o-split"></a>
 ## Splitting a .c file at a non-16-aligned boundary needs ELF .text truncation + addralign fix
 
@@ -2646,6 +2765,8 @@ See `scripts/truncate-elf-text.py` in 1080 Snowboarding. The Makefile wires it i
 **Caveat:** `expected/src/…/name.o` files are regenerated by `make expected` after the split (they're snapshots of the current build). The truncation + addralign changes propagate into `expected/`. `report.json` will then show 100 % match — but that's against a tautological baseline; the REAL test is that the BUILT bytes at the bootup_uso-internal offset match the .s file's byte pattern. Compare directly: `python3 -c 'print(open("build/src/<seg>/<file>.c.o","rb").read()[0xe0:0xe0+0x28].hex())'` versus the expected bytes from the .s disassembly.
 
 **Origin:** 2026-04-19 while setting up the `bootup_uso_o0_F7F4.c` split in 1080 Snowboarding — POC for matching `func_0000F7F4` + `func_0000F808` (adjacent `-O0` 5-insn stubs). See `feedback_ido_o0_empty_stub.md` for why the stub pattern needs `-O0`.
+
+---
 
 ---
 
@@ -2695,6 +2816,8 @@ If this fails, the wrap won't pass refresh-report.sh and will block fuzzy scorin
 **Why post-cc recipes don't apply to non_matching build:**
 
 TRUNCATE_TEXT, PREFIX_BYTES, SUFFIX_BYTES, INSN_PATCH, PROLOGUE_STEALS exist to make C-emit byte-match expected/. In non_matching build, the diff IS the metric — applying recipes would hide the very fuzzy scores we want to expose.
+
+---
 
 ---
 
@@ -2765,6 +2888,8 @@ Or use the land script's `byte_verify()` (in scripts/land-successful-decomp.sh) 
 
 ---
 
+---
+
 <a id="feedback-old-nm-wraps-can-lie"></a>
 ## Old NON_MATCHING wraps can contain fictitious symbols (_inner, _impl, etc.) — verify against asm before trusting the C body
 
@@ -2790,6 +2915,8 @@ undefined reference to `h2hproc_uso_func_00000274_inner'
 **Origin (2026-04-20):** `h2hproc_uso_func_00000274` was wrapped NM at 91.7 % with a `void h2hproc_uso_func_00000274_inner(int*);` forward declaration. Conversion to plain decomp failed at link time — the symbol didn't exist. Inspecting the asm: the actual jal was `0x0C000000` (= `gl_func_00000000`). Replacing the fictitious `_inner` name with `gl_func_00000000` → 100 % match.
 
 **Skip-list addendum:** Future runs of `scripts/convert-trailing-nop-wraps.py` should treat fictitious-symbol wraps as a separate failure mode worth surfacing rather than silently leaving them NM. Could add a `--strict-link` mode that tries the conversion and reports link errors with a helpful pointer.
+
+---
 
 ---
 
@@ -2872,6 +2999,8 @@ to `$sp` (+0.35pp on top of the _t_buf[1] gain).
 
 ---
 
+---
+
 <a id="feedback-one-shot-merge-for-big-drift"></a>
 ## For 100+ agent-a commits behind by 200+ main commits, prefer one-shot `git merge --no-commit` over rebase
 
@@ -2905,6 +3034,8 @@ A merge produces ONE 3-way diff (current ↔ merge-base ↔ origin/main). Resolv
 **When NOT to use this:** If your branch can be regenerated from idempotent scripts (per `feedback_idempotent_scripts_beat_rebase.md`), reset+re-script is even faster. Use merge only when the agent-a commits are hand-crafted matches that can't be re-derived.
 
 **Verified 2026-05-04 on agent-a:** 145 commits ahead, 212 commits behind. Aborted rebase after 1/143 (would have taken hours). Switched to merge: 28 conflicts resolved in ~30 min, single commit `062caeb`, all matches preserved (titproc_uso_func_00001BB8 still 0/44 byte-exact).
+
+---
 
 ---
 
@@ -2945,6 +3076,8 @@ was from a stale .o that survived since the variant 11 commit.
 - Pre-empt the issue: when adding a new variant note to a wrap doc, edit
   the EXISTING `/* ... */` block (insert before its `*/`) rather than
   creating a separate one after.
+
+---
 
 ---
 
@@ -3025,6 +3158,8 @@ grep -rn "INCLUDE_ASM.*<sibling_func_name>" src/  # find bare INCLUDE_ASMs
 
 ---
 
+---
+
 <a id="feedback-pad-sidecar-4byte-alignment-break"></a>
 ## 4-byte (single-insn) trailing _pad sidecars don't work — asm-processor pads to 8-byte alignment, shifts the next function by +4
 
@@ -3100,6 +3235,8 @@ This is the right path for 4-byte stolen-prologue cases: don't pad-sidecar the p
 
 ---
 
+---
+
 <a id="feedback-pad-sidecar-cant-grow-symbol-size"></a>
 ## Pad-sidecar appends bytes to .text but does NOT grow the predecessor function's symbol st_size — won't work for "stolen prologue inside predecessor" case
 
@@ -3148,6 +3285,8 @@ When decompiling a function whose asm has trailing `lui rX, 0; lw rX, OFF(rX)` (
 - `feedback_prologue_stolen_pad_sidecar_alternative.md` (pad-sidecar described as cheaper alternative — but only works for trailing-NOPs, not stolen-prologue trailing)
 - `feedback_pad_sidecar_unblocks_trailing_nops.md` (pad-sidecar's actual scope: trailing-NOPs)
 - `feedback_truncate_elf_text_must_shrink_symbols.md` (the dual scenario for shrinking)
+
+---
 
 ---
 
@@ -3212,6 +3351,8 @@ Any function listed by the above script is a Case-B candidate — pad sidecar wo
 
 ---
 
+---
+
 <a id="feedback-pad-sidecar-non-nop-word"></a>
 ## Pad sidecar works for non-nop trailing words (stray jr_ra, etc.), not just alignment nops
 
@@ -3242,6 +3383,8 @@ _The pad-sidecar technique from `feedback_pad_sidecar_unblocks_trailing_nops.md`
 **Caution:** only do this for UNREACHABLE stray words. If the instruction is reachable (e.g. a real branch target lands on it), trimming breaks semantics. Verify by reading the preceding instructions — if they end with `jr ra; nop`, the trailing word is dead. If the preceding branch could land past the normal epilogue, leave it alone.
 
 **Supersedes scope:** `feedback_pad_sidecar_unblocks_trailing_nops.md` focused on 0x00000000 alignment nops and an automated `scripts/trim-trailing-nops.py`. This memo notes that for the one-off "stray real insn" case, the same workflow applies with a manual trim + hand-written pad content.
+
+---
 
 ---
 
@@ -3282,6 +3425,8 @@ The pad-sidecar mechanism is only useful when the tail is pure alignment — `fe
 
 ---
 
+---
+
 <a id="feedback-pad-sidecar-symbol-size-mismatch"></a>
 ## Pad sidecar also works when .s declared size is RIGHT but target symbol is larger
 
@@ -3309,6 +3454,8 @@ In this case `trim-trailing-nops.py` does nothing (nothing to trim from a correc
 **Caveat:** objdiff reports match on the PRIMARY function symbol's size. The pad symbol is separate (`_pad_<func>` local). That means the per-function match percent only measures the real-code bytes, not the padding — but that's fine because the real-code bytes ARE the interesting match.
 
 **Related:** `feedback_pad_sidecar_unblocks_trailing_nops.md` covers the automated workflow for functions where `.s` declares TOO MUCH (trim needed). This memo covers the mirror case.
+
+---
 
 ---
 
@@ -3358,6 +3505,8 @@ _USO `.s` files bundle inter-function alignment nops into each function's `nonma
 
 ---
 
+---
+
 <a id="feedback-parallel-agent-same-candidate-rebase-skip"></a>
 ## When parallel agents pick the same strategy-memo candidate, the rebase conflict is usually resolved with `rebase --skip` (drop yours, keep theirs)
 
@@ -3384,6 +3533,8 @@ If you DO need to merge, edit the conflicted file by hand: take their structure 
 - `feedback_parallel_agent_wrap_nesting.md` — when merge succeeds (no conflict), nested NM blocks can stack.
 - `feedback_idempotent_scripts_beat_rebase.md` — for sweeping multi-segment work, prefer reset+re-run over rebase.
 - `feedback_upstream_segment_revert_intentional.md` — accept upstream when system-reminder flags intentional reverts.
+
+---
 
 ---
 
@@ -3442,6 +3593,8 @@ This compiles cleanly because every nest path has either the C body or `INCLUDE_
 
 ---
 
+---
+
 <a id="feedback-partial-alloc-block-add-irreversible"></a>
 ## Adding ONE more alloc-block to a partial-NM body cannot be done incrementally — must decode full block dataflow first
 
@@ -3466,6 +3619,8 @@ Both passes confirm: the regression is NOT about local-name reuse (per `feedback
 **How to identify the failure mode:** if your build% drops by >5pp after adding a single new ~5-line block, revert. Check if the regression-amount is similar across SUB-VARIANT attempts (it will be, because the cascade is the same). The docs's existing decoded-sub-block comments are the right home for the analysis.
 
 **Origin:** 2026-05-03, game_uso_func_00009B88 third pass. The doc explicitly tried the "use distinct named locals for each alloc" hypothesis from the prior pass — confirmed it doesn't help; the issue is structural to IDO's whole-body register allocation.
+
+---
 
 ---
 
@@ -3517,6 +3672,8 @@ The placeholder + comment is honest about where the decode currently is.
 **Related:**
 - `feedback_doc_only_commits_are_punting.md` — the OPPOSITE risk: writing only a comment without ANY C body is "punting." This pattern provides BOTH the comment AND a (placeholder) body, satisfying the wrap-needs-C requirement while honestly noting incomplete decode.
 - `project_1080_game_uso_map.md` — lists which game.uso spine functions are constructors expected to need this treatment.
+
+---
 
 ---
 
@@ -3576,6 +3733,8 @@ body = f'''void {name}(char *a0) {{
 **When not to use:** one-off functions with unique structure. This technique only pays off when you expect ≥4–5 instances of the same pattern.
 
 **Origin:** 2026-04-18 bootup_uso. 26 chain wrappers matched in one batch, 22 extern decls auto-added, one build + one verification pass. Would've been an hour-plus one-at-a-time; was ~5 minutes mass-matched.
+
+---
 
 ---
 
@@ -3678,6 +3837,8 @@ build/ against the freshly-refreshed expected/.
 
 ---
 
+---
+
 <a id="feedback-per-project-files-belong-in-project-repo"></a>
 ## Files belong with their consumer, not their topical owner
 
@@ -3692,6 +3853,8 @@ For files that look project-specific but are consumed by parent-repo tooling (e.
 - Examples that DO belong project-side: `Makefile`, splat YAML, `tenshoe.ld`, project-specific scripts under `projects/<game>/scripts/`, `episodes/`, `report.json`, CI workflows.
 - Examples that DO belong parent-side despite being "about" a project: agent-setup recipes (`scripts/agent-setups/<prefix>.sh`), parent-script per-project config, references to project files in cross-project skills.
 - When unsure, check `git rev-parse --show-toplevel` from the consuming script's directory and put the file in THAT repo.
+
+---
 
 ---
 
@@ -3743,6 +3906,8 @@ glabel func_0000F1F0                <- 16-byte aligned next function
 
 ---
 
+---
+
 <a id="feedback-printf-with-doubles-first-try-match"></a>
 ## printf-with-doubles asm fingerprint decodes cleanly via `(double)floatVar` C cast
 
@@ -3782,6 +3947,8 @@ Where `&D_00000000 + N` is the USO format-string offset (or just `0x21B6C` in no
 **Origin:** 2026-05-03, gl_func_0005FD20 (3-printf logger, 43 insns). 0% → 92.53% NM on first try with the natural C form. Sibling of just-landed gl_func_0005FDCC.
 
 **Gotcha:** SUFFIX_BYTES to close the trailing 12-byte stolen-prologue gap BREAKS the default INCLUDE_ASM build per `feedback_suffix_bytes_breaks_include_asm_build.md`. To reach 100%, the function must be a clean exact-match (no NM wrap) where SUFFIX_BYTES safely extends the C-emit only.
+
+---
 
 ---
 
@@ -3878,6 +4045,8 @@ After splice: `srl t7, t6, 0x1F; beqz t7` — $t6 is exactly what the predecesso
 
 ---
 
+---
+
 <a id="feedback-prologue-stolen-chain-scanner"></a>
 ## Scan for prologue-stolen reverse-merge candidates across all .s files in one pass
 
@@ -3929,6 +4098,8 @@ Tune: `0x3C02` is `lui $v0`; `0x2442` is `addiu $v0, $v0, N`. For `$v1`-based ch
 
 ---
 
+---
+
 <a id="feedback-prologue-stolen-float-constant-variant"></a>
 ## Prologue-stolen can be a float constant setup, not just a data pointer — `lui $at, 0x3F80; mtc1 $at, $f0`
 
@@ -3969,6 +4140,8 @@ swc1 $f0, 0x40($sp)
 **Reachability:** The `lui $at; mtc1 $at, $fN` pre-prologue pattern is typically NOT reachable from standard C at -O2 — IDO emits the float-constant setup AFTER the sp-adjust, not before. Wrap NM with the correct semantic body (e.g., `buf[0..3] = 1.0f`) but expect INCLUDE_ASM to remain the matching path.
 
 **Origin:** n64proc_uso_func_00000364 had been NM-wrapped since early work with a MYSTERY comment. Fixing the boundary revealed the "missing mtc1" was stolen into the predecessor.
+
+---
 
 ---
 
@@ -4025,6 +4198,8 @@ When grinding a PROLOGUE_STEALS-using NM wrap to push the cap higher:
 
 ---
 
+---
+
 <a id="feedback-prologue-stolen-misdiagnosis"></a>
 ## Before applying PROLOGUE_STEALS, verify the prefix is actually in the PREDECESSOR's symbol — not just at the start of THIS function's .s
 
@@ -4077,6 +4252,8 @@ If the tail IS lui+something with the same `tN` register that this function's bo
 
 ---
 
+---
+
 <a id="feedback-prologue-stolen-pad-sidecar-alternative"></a>
 ## Prologue-stolen boundary bug — pad sidecar is a cheaper fix than reverse-merge
 
@@ -4110,6 +4287,8 @@ Use **pad-sidecar** when:
 **Origin (2026-04-20, gl_func_0001FC50):** .s declared 0x28 but body was 8 insns (0x20) + 2 stolen insns (`lui $t6, 0; lw $t6, 0x2178($t6)`) that are gl_func_0001FC78's real prologue. Decompiled as `void f(void) { gl_func_00000000(); }` with pad sidecar. 100 % match. Left gl_func_0001FC78 / 0x1FCD0 untouched (they chain this pattern — all still INCLUDE_ASM; the `beq $t6, $0` at their 5th insn is "invalid" register-use from the disassembly POV but matches byte-for-byte).
 
 **Generalizes:** `feedback_pad_sidecar_non_nop_word.md` — same underlying technique, different triggering pattern (stray unreachable insn vs stolen next-function prologue). Both reduce to "trim .s + pad sidecar with real instruction bytes."
+
+---
 
 ---
 
@@ -4192,6 +4371,8 @@ Wired via Makefile: `SUFFIX_BYTES := <pred_func>=0x3C020000,0x24420000`
 - `feedback_prefix_byte_inject_unblocks_uso_trampoline.md` — the existing `inject-prefix-bytes.py` is the prefix-side mirror to design the suffix script after.
 
 **Estimated unlock value:** at least 3 functions in titproc_uso (0x194/0x230/0x28C-style state-setters), probably more across other USOs that share the &D-via-predecessor-pad pattern. Unblocks anywhere predecessor pad-sidecars exist.
+
+---
 
 ---
 
@@ -4289,6 +4470,8 @@ Hit on 2026-05-02 with `gl_func_00042440`. PRED tail loads `*(&D + 0x240)` into 
 
 ---
 
+---
+
 <a id="feedback-proxy-extern-at-0-breaks-constant-fold-but-renumbers-sregs"></a>
 ## Link-time-0 proxy extern defeats IDO constant-fold of `base[N]` but introduces $s-reg renumber via the proxy's addu
 
@@ -4335,6 +4518,8 @@ void f(...) {
 
 ---
 
+---
+
 <a id="feedback-push-after-merge"></a>
 ## Always push to origin after merging to main
 
@@ -4351,6 +4536,8 @@ _When we merge an agent branch to main on an N64 decomp project, immediately pus
 - The usual "destructive action needs user confirmation" rule STILL applies to force-push, branch-delete, and anything that rewrites history. Plain `git push origin main` after a fast-forward merge does NOT need confirmation — it's the default expected next step after merging.
 
 **Exception:** if the user's last instruction was explicitly "don't push yet" or "I'll push manually", wait.
+
+---
 
 ---
 
@@ -4379,6 +4566,8 @@ Even a 0.1 %-point bump is worth an inline README edit — user explicitly said 
 The `/decompile` skill step 9b codifies this. The `scripts/refresh-report.sh` staleness check is the enforcement mechanism.
 
 **Origin:** 2026-04-18 — after game_libs setup landed with 1371 untracked stub functions, user noticed README was still claiming "Kernel only" and asked to fix README + add guidance so future-me does this proactively at milestones.
+
+---
 
 ---
 
@@ -4441,6 +4630,8 @@ clobbered.
 
 ---
 
+---
+
 <a id="feedback-rebase-theirs-binary-oo-conflicts"></a>
 ## Use `git rebase -X theirs origin/main` to land past parallel-agent binary `expected/.o` conflicts
 
@@ -4461,6 +4652,8 @@ The `-X theirs` flag tells git to prefer the "theirs" side (origin/main) for any
 **When NOT to use:** If the conflict is on a real text file (`.c`, `.h`, `.s`), use manual resolution — don't blindly overwrite. `-X theirs` is only for binary baselines (`.o`) that your own commit regenerates anyway.
 
 **Origin:** 2026-04-20 agent-a. Land script kept stripping my commits on vanilla rebase because expected/src/game_uso/game_uso.c.o was touched by both my tick and parallel agent-f's a877b09 commit. `-X theirs` resolved in one shot.
+
+---
 
 ---
 
@@ -4495,6 +4688,8 @@ The ones still missing this are red flags — they'll break refresh-expected-bas
 - Use `python3 scripts/refresh-expected-baseline.py` directly when you need a truthful expected/ baseline (e.g. after split-fragments). It works now.
 - The land script handles it automatically per landing.
 - If you add a new post-cc recipe script, write its INCLUDE_ASM-aware skip path FIRST. Pattern: detect when the asm-emit bytes already equal what the recipe produces, no-op.
+
+---
 
 ---
 
@@ -4590,6 +4785,8 @@ as the actual remediation.
 
 ---
 
+---
+
 <a id="feedback-refresh-expected-misuse-hides-real-diffs"></a>
 ## refresh-expected misuse hides real instruction-byte diffs
 
@@ -4625,6 +4822,8 @@ DDE0's "100 %" is really 90 % against a poisoned baseline.
   document the cap, even if a sibling shows it as "exact." Fixing the
   poisoned sibling is a separate cleanup pass (re-extract expected
   from ROM via splat/spimdisasm, or rebuild expected from `.s` bytes).
+
+---
 
 ---
 
@@ -4705,6 +4904,8 @@ For now, the manual sequence is the fastest path when you only changed one file.
 
 ---
 
+---
+
 <a id="feedback-report-json-tracked"></a>
 ## `report.json` is now tracked in 1080-decomp; revert it before running land script
 
@@ -4734,6 +4935,8 @@ git -C "$main_wt" checkout HEAD -- report.json 2>/dev/null
 
 ---
 
+---
+
 <a id="feedback-rom-mismatch-ok"></a>
 ## Full-ROM mismatch is expected during decomp; don't stop work
 
@@ -4755,6 +4958,8 @@ The user has been doing this for months; they know the ROM is broken and don't c
 - Don't tell the user "the kernel is broken" every session. It's been broken; they know.
 
 **Exception:** at the very end of a project (near 100% matching) the full ROM match matters — but we're nowhere near that for 1080.
+
+---
 
 ---
 
@@ -4810,6 +5015,8 @@ Found-and-matched today:
 - `timproc_uso_b5_func_0000ABC8`, `_ABD4`, `_ABE0`, `_ABF4` (split off from AB24 bundle)
 - `timproc_uso_b5_func_0000AAEC`, `_0000DDC4`, `_0000214C`, `_00008A38`, `_000031B8` (earlier in session)
 - `eddproc_uso_func_00000144` (this tick, after the "won't produce" claim was revealed to be stale)
+
+---
 
 ---
 
@@ -4894,6 +5101,8 @@ the line. Verified 2026-05-05 on `timproc_uso_b5_func_00003F18=0x8C98023C`
 
 ---
 
+---
+
 <a id="feedback-source1-scan-may-be-decontaminated-matches"></a>
 ## Source-1 NM-wrap scan may surface previously-"landed" functions that were contaminated-100% matches
 
@@ -4918,6 +5127,8 @@ If yes, the "match" was never real in baserom bytes — it was a `build.o == exp
 **Rule for corrections:** Downgrading a previously-landed "match" to NM + episode deletion IS a valid /decompile tick commit. The previous landing was a bug; the correction is forward progress. Don't let "we already said it matched" hold you back.
 
 **Origin:** 2026-04-20. game_uso_func_00000724 landed at commit 764b62d as "100% via contamination fix" — but post-link bytes didn't match baserom at all (register + scheduling diffs). Source=1 scan in a later tick surfaced it at 88.9%. Wrapped as NM, deleted episode, full diff documented.
+
+---
 
 ---
 
@@ -4970,6 +5181,8 @@ In BOTH cases the actual built bytes are exact — refresh first, verify second.
 - `refresh-expected-baseline.py` = swap decomp C → INCLUDE_ASM, clean, build, capture, restore. Gives the PURE-ASM baseline (what the original ROM bytes compile to with just the .s files).
 
 Both valid for verification, but `refresh-expected-baseline.py` is what CI/decomp.dev expects (pure-asm baseline = ROM truth). The land-script uses `make expected` (faster but pollutes expected/ with decomp-C output). Practical impact: if you do `make expected` with decomp C present, expected/*.o now equals your build — the next `refresh-expected-baseline.py` will revert those files. Commit `refresh-expected-baseline.py` output to avoid churn.
+
+---
 
 ---
 
@@ -5035,6 +5248,8 @@ Per `feedback_prefix_byte_inject_unblocks_uso_trampoline.md` — the script (ori
 
 ---
 
+---
+
 <a id="feedback-split-fragments-inserts-into-wrong-c-file"></a>
 ## split-fragments.py auto-inserts new INCLUDE_ASM into the FIRST `.c` file in a multi-file segment, not the parent's actual .c — must hoist after split
 
@@ -5077,6 +5292,8 @@ sed -i '/INCLUDE_ASM.*gl_func_000275B0/d; /INCLUDE_ASM.*gl_func_000275BC/d' src/
 
 ---
 
+---
+
 <a id="feedback-split-fragments-nm-wrap-positioning"></a>
 ## split-fragments.py inserts new INCLUDE_ASM inside the parent's `#else` block when the parent is in a NON_MATCHING wrap
 
@@ -5112,6 +5329,8 @@ INCLUDE_ASM(".../child");    // outside, always present
 6. Log episode + commit + land
 
 **Origin:** 2026-04-20, agent-a, timproc_uso_b5_func_00000400 (Vec3 reader wrapped at 93% because splat bundled 8 trailing bytes of an empty void func_00000470 into its size).
+
+---
 
 ---
 
@@ -5173,6 +5392,8 @@ done
 
 ---
 
+---
+
 <a id="feedback-split-fragments-prefix-mismatch-game-libs"></a>
 ## split-fragments.py emits `<segment>_func_*` prefix; game_libs convention is `gl_func_*` — rename required after split
 
@@ -5221,6 +5442,8 @@ with open("src/game_libs/game_libs.c","w") as f: f.writelines(out)
 
 ---
 
+---
+
 <a id="feedback-split-fragments-unreachable-tail"></a>
 ## split-fragments.py's last-split-off fragment may be dead/unreachable code with no jr ra
 
@@ -5258,6 +5481,8 @@ splat computes function boundaries from static analysis; it doesn't always recog
 **Recognition during decomp:** if you try to write C for a fragment and find yourself unable to produce any sensible entry point (no `addiu $sp, -N`, no standard arg use, just random loads and stores), it's probably a bad fragment — leave it.
 
 **Origin:** 2026-04-20, agent-a, gui_func_00000148 3-way split. Recursive split-fragments produced 4 functions; 3 were real, 1 (000008C0, 22 insns, no jr ra) was unreachable tail.
+
+---
 
 ---
 
@@ -5312,6 +5537,8 @@ When invoking `scripts/split-fragments.py` for a function:
 
 ---
 
+---
+
 <a id="feedback-stale-nm-wrap-after-split"></a>
 ## After `split-fragments.py` splits an NM-wrapped function into matched halves, the original NM wrap source block is stale and misleading
 
@@ -5335,6 +5562,8 @@ done
 **Don't re-attempt the decomp** just because the wrap comment names a technique ceiling ("87 % because X"). If the episode exists, the split produced an exact match; the ceiling was real for the pre-split function but no longer applies.
 
 **Origin:** 2026-04-20, agent-a, gui_func_0000267C — NM wrap at 87 % with "3 stray trailing insns" comment still in source after commit f5fb742 split it into 0x267C + 0x26CC (both exact). Source-1 roll would have sent me re-analyzing a matched function.
+
+---
 
 ---
 
@@ -5368,6 +5597,8 @@ _`objdiff-cli report generate` does NOT re-invoke the build; it reads whatever `
 
 ---
 
+---
+
 <a id="feedback-strategy-memo-size-misleading"></a>
 ## Strategy-memo "per-frame compute" candidates may be splat-bundled function clusters, not single compute functions
 
@@ -5392,6 +5623,8 @@ Before trusting the "1 cross-call, 1-2 KB self-contained" label:
 2. If >1, this is a bundle — the top-10-biggest analysis is wrong about this one. The real sizes are much smaller; the "self-contained compute" claim doesn't apply.
 
 **Origin:** 2026-04-20, agent-a, rolled source #5 (strategy-memo pick) on 1.7 KB candidate from game_uso_map.md's per-frame-compute filter.
+
+---
 
 ---
 
@@ -5448,6 +5681,8 @@ IDO treats `D_MYNAME_pair` as an opaque symbol at that address, so the loads bec
 **Confirmed:** 2026-04-20, game_uso_func_00011124. Went from 82.17 → 82.23% match (tiny, because the rest of the diff was pre-call arg spill class, a separate ceiling). The base-compute split worked cleanly; other diffs remained for other reasons.
 
 **Combined with other ceilings:** a target may have multiple mismatch classes (base split + arg spill + register pick). Fixing one class doesn't necessarily pass the 80 % threshold into exact territory — but documenting the fix for future composites (where ONLY this diff exists) is the value.
+
+---
 
 ---
 
@@ -5530,6 +5765,8 @@ not the right metric to track for this class of wrap.
 
 ---
 
+---
+
 <a id="feedback-three-recipe-combo-prologue-stolen-predecessor-plus-bundled-trailer"></a>
 ## 3-entry recipe combo for prologue-stolen-PREDECESSOR + bundled-TRAILER (each function in a chain has ITS OWN stolen-prologue role)
 
@@ -5594,6 +5831,8 @@ a codegen cap; it's a chain-of-stolen-prologues.
 
 ---
 
+---
+
 <a id="feedback-titproc-state-allocator-sibling-family"></a>
 ## titproc_uso state-allocator sibling family — same shape, varying state-N constant
 
@@ -5648,6 +5887,8 @@ offsets, look for the existing matched siblings to confirm the template
 applies, then use the recipe above. Read state-N from the asm at offset
 +0x8 (`addiu tN, zero, <state>`) and alloc-arg A from offset +0x1C
 (`addiu a1, zero, <A>` in delay slot of first jal).
+
+---
 
 ---
 
@@ -5719,6 +5960,8 @@ Initial attempt with `char buf[12]` + casts: 3/36 word diffs (sizes matched but 
 
 ---
 
+---
+
 <a id="feedback-uninit-tn-branch-at-entry"></a>
 ## `bne $tN, $zero, epilogue` in function prologue where $tN is uninitialized = non-standard calling convention or splat cross-function sharing
 
@@ -5759,6 +6002,8 @@ A function `void f(T a0) { ... }` has no access to $t6 at entry — IDO would al
 - If step 1 reveals splat mis-boundary (jal X+N), use split-fragments to separate the dead prefix.
 
 **Origin:** 2026-04-20, agent-a, game_uso_func_00005924 (strategy-memo pick #2, 4.3 KB spine function). `bne $t6, $zero, 0x6A1C` at 0x5930 reads $t6 uninitialized. Target 0x6A1C is the epilogue. No preceding prologue writes $t6. Analysis deferred pending caller discovery.
+
+---
 
 ---
 
@@ -5820,6 +6065,8 @@ the `lui reg, 0`. If K is non-zero in that addiu, use extern-at-K.
 
 ---
 
+---
+
 <a id="feedback-unique-extern-breaks-shared-base"></a>
 ## Unique-extern alias trick BACKFIRES when target reuses a single &D base for multiple offsets
 
@@ -5878,6 +6125,8 @@ If you see `lui rA, 0` followed by 2+ `lw/sw, OFFSET(rA)` with rA constant — D
 - `feedback_combine_prologue_steals_with_unique_extern.md` — works when target genuinely uses different aliases.
 - `feedback_usoplaceholder_unique_extern.md` — for cross-USO call placeholders, not data-base CSE.
 - `feedback_ido_base_adjust_for_clustered_offsets.md` — the OTHER unreproducible base-register form.
+
+---
 
 ---
 
@@ -5945,6 +6194,8 @@ By using `D_a` for BOTH `gl_func(D_a)` AND `(*(int**)((char*)D_a + 0x6A8))->0xC`
 - `feedback_usoplaceholder_unique_extern.md` — the base technique
 - `feedback_objdiff_reloc_tolerance.md` — objdiff tolerates same-address symbol-name diffs in data relocs (so the unique-extern names don't need to match target's symbol names)
 - `feedback_undefined_syms_link_time_only_doesnt_fix_o_jal_bytes.md` — undefined_syms is link-time only, but for DATA relocs (lui/addiu/lw) the linker resolves the address — and objdiff compares by address for data relocs
+
+---
 
 ---
 
@@ -6027,6 +6278,8 @@ Target emits 3N — so the unique-extern form matches expected exactly.
 
 ---
 
+---
+
 <a id="feedback-unique-extern-with-if-arm-swap"></a>
 ## 2-arm USO-placeholder dispatcher needs BOTH unique-extern (3 calls) AND if-arm-swap to match target's bne direction
 
@@ -6092,6 +6345,8 @@ The signature features:
 - `feedback_usoplaceholder_unique_extern.md` — the first knob in isolation.
 - `feedback_ido_arg_save_reg_pick.md` — explains why the residual register-renumber diffs aren't C-flippable.
 - `feedback_refresh_expected_misuse_hides_real_diffs.md` — DON'T refresh-expected to "fix" the residual — it would poison the baseline since the diff is real opcode bytes, not just reloc names.
+
+---
 
 ---
 
@@ -6215,6 +6470,8 @@ this recipe context flips it.
 
 ---
 
+---
+
 <a id="feedback-unrolled-loop-via-c-macro-for-decomp"></a>
 ## For long unrolled loops, write the iter body as a C `#define` macro and invoke it N times — IDO emits N independent copies cleanly
 
@@ -6307,6 +6564,8 @@ Linear extrapolation to 38 iters: ~80pp fuzzy from the loop alone.
 
 ---
 
+---
+
 <a id="feedback-upstream-segment-revert-intentional"></a>
 ## Upstream segment-wide revert-to-INCLUDE_ASM can be intentional — respect it
 
@@ -6329,6 +6588,8 @@ Plausible reasons this happens:
 4. Don't dig into git log trying to understand WHY the revert happened unless the user asks. The instruction "intentional, don't revert" is sufficient.
 
 **Anti-pattern:** Seeing the matched count drop, feeling an urge to "catch up" by re-decompiling the now-INCLUDE_ASM functions. That would just fight the upstream reset.
+
+---
 
 ---
 
@@ -6399,6 +6660,8 @@ stuck at intermediate 0% / 75% / 87% plateaus.
 **Origin:** 2026-05-03, `timproc_uso_b5_func_00000000` lift. Pre-existing NM wrap
 (written without these techniques) was at 0% baseline; full recipe landed exact match
 in a single /decompile run.
+
+---
 
 ---
 
@@ -6485,6 +6748,8 @@ _The standard USO accessor templates (int/float/Vec3/Quad4 reader) often compile
 
 ---
 
+---
+
 <a id="feedback-uso-accessor-o0-variant"></a>
 ## USO accessor template has -O0 variant (19 insns) alongside -O2 (15 insns) — three-signal fingerprint
 
@@ -6556,6 +6821,8 @@ void func(int *dst) {
 
 ---
 
+---
+
 <a id="feedback-uso-accessor-skip-via-scratch"></a>
 ## USO accessor templates can be called with a discardable scratch arg to advance the underlying loader stream
 
@@ -6619,6 +6886,8 @@ The `gl_func_00000000(&D, buf, 4)` is what advances the stream by 4 bytes. Each 
 **Related:**
 - `feedback_uso_accessor_template_reuse.md` — the underlying accessor template recipe
 - `feedback_game_libs_jal_targets.md` — gl_func_00000000 placeholder semantics
+
+---
 
 ---
 
@@ -6744,6 +7013,8 @@ Without all three pads (only pad[5]) you get 99.78 %. With pads in three positio
 
 ---
 
+---
+
 <a id="feedback-uso-assert-panic-signature"></a>
 ## USO assert/panic call signature — `jal 0` + `addiu $a2, $zero, 0xNNN` line number
 
@@ -6784,6 +7055,8 @@ For NM wraps, just document:
 
 ---
 
+---
+
 <a id="feedback-uso-branch-placeholder-trampoline"></a>
 ## USO inter-segment branch trampoline — beq+jr+nop is unmatchable from IDO C
 
@@ -6816,6 +7089,8 @@ The beq branch target resolves to an offset *past the end of the declaring USO* 
 **Observed instances:** `h2hproc_uso_func_00000000` (2026-04-21). Likely more across the other USOs; worth a segment-wide scan next time the mass-match pattern work needs filler.
 
 **Parallel: JAL placeholder** — see `feedback_game_libs_jal_targets.md`, `feedback_uso_multi_placeholder_wrapper.md`, `feedback_usoplaceholder_unique_extern.md` for the JAL-style patching convention. This BEQ variant has no existing "extern trick" equivalent because C can't express a branch-to-extern.
+
+---
 
 ---
 
@@ -6868,6 +7143,8 @@ offset; struct typing is a future-pass concern.
 covers the small (≤0x70-byte) standard templates. This memo extends it
 to ARBITRARY-size functions — including big constructors. The technique
 is the same: byte-diff first, copy wrap if match.
+
+---
 
 ---
 
@@ -6948,6 +7225,8 @@ expected/.../*.c.o` should report 0 diffs.
 
 ---
 
+---
+
 <a id="feedback-uso-entry-trampoline-1000xxxx"></a>
 ## USO entry-point trampoline (`beq zero,zero,+N` / word 0x1000XXXX) at offset 0 — not reproducible from C
 
@@ -6978,6 +7257,8 @@ The two `jr ra; nop` pairs are unreachable dead code after the always-taken bran
 **Detection tip:** `grep -l "^\s*/\*[^/]*\*/\s*\.word 0x1000[0-9A-F]\{4\}" asm/nonmatchings/*/**/func_00000000.s` finds all trampoline-prefixed USO entries.
 
 **Origin:** 2026-04-20, agent-a, boarder5_uso_func_00000000 (0x40 int reader + trampoline at 0x1000736F). Confirmed same pattern in arcproc/h2hproc/eddproc/n64proc with their own branch offsets.
+
+---
 
 ---
 
@@ -7029,6 +7310,8 @@ Extra `mtc1` + different FP reg ($f12 instead of $f4) = unreproducible.
 
 ---
 
+---
+
 <a id="feedback-uso-internal-jal-expected-contamination"></a>
 ## USO wrappers with internal jal targets need contaminated expected baseline
 
@@ -7061,6 +7344,8 @@ Precedent: ALL 6 matched boarder1/boarder2/.../boarder5 wrappers (`func_00000094
 **Do NOT do this** for real byte differences (check `DIFF_ARG_MISMATCH` is the ONLY diff kind — no `DIFF_OPCODE_MISMATCH`, `DIFF_IMM_MISMATCH`, etc.). Those mean the C emits different bytes, not just different reloc names.
 
 **Origin:** 2026-04-20, `map4_data_uso_b2_func_00000094` decomp. Body-identical to boarder1_uso_func_00000094 (both 2-call wrappers: `tmp int reader + Quad4 reader(dst+0x10)` template). boarder1 reported 100 % because its expected was contaminated long ago; map4 reported `None` with clean pure-asm baseline. Manual `cp build → expected` promoted to 100 %.
+
+---
 
 ---
 
@@ -7103,6 +7388,8 @@ The target addresses (0x4DC, 0x5AC) usually point to the **trailing-nop area** b
 **Distinction from `feedback_usoplaceholder_unique_extern.md`:**
 
 That memo applies to `jal 0` (target = 0, encoded `0x0C000000`) — declaring a uniquely-typed extern at address 0 lets IDO emit the right spill pattern AND the bytes still match (both sides produce `0x0C000000`). This memo (`feedback_uso_jal_placeholder_target.md`) is the harder case where the target is **non-zero** and the bytes literally differ.
+
+---
 
 ---
 
@@ -7150,6 +7437,8 @@ D_mgr_B20_2 = 0x00000000;
 **Why you can't share D_00000000 for all N calls:** all N would share the same reloc target address at link time. That's fine for the LINKED bytes (all zero), but the USO loader's runtime patching writes to each relocation slot independently — if they share a symbol, the loader can only patch one of them. So the target binary uses N distinct symbols (each written as its own reloc) and needs your `.o` to match that shape.
 
 **Origin:** 2026-04-20, agent-a, mgrproc_uso_func_00000B20 (3-call wrapper, 15 insns, exact match).
+
+---
 
 ---
 
@@ -7207,6 +7496,8 @@ done
 ```
 
 **Origin:** 2026-04-20, agent-a, eddproc_uso_func_00000144 (3-insn `sw a0; jr ra; sw a1`). Previously documented in commit 9d0d66d (the eddproc split-fragments pass) as "stays INCLUDE_ASM"; tick 16 added an explicit NM wrap with `(void)a0; (void)a1` body for documentation.
+
+---
 
 ---
 
@@ -7269,6 +7560,8 @@ Each `lui+lw 0(t)+lw OFF(t)+jal+nop_or_addiu_continued` block is a "load global 
 
 ---
 
+---
+
 <a id="feedback-uso-split-fragments-breaks-expected-match"></a>
 ## split-fragments.py on USO functions breaks matching unless expected/.o is regenerated
 
@@ -7311,6 +7604,8 @@ lines + deleting the new `.s` files restored the prior state.
 
 ---
 
+---
+
 <a id="feedback-uso-stray-trailing-insns"></a>
 ## USO functions can have non-nop "stray" trailing instructions inside declared size
 
@@ -7338,6 +7633,8 @@ _Similar to feedback_function_trailing_nop_padding.md but with real opcodes inst
   4. Refresh expected baseline (`scripts/refresh-expected-baseline.py`), build. The function symbol is now the trimmed size in both expected and built, so objdiff reports 100% on the body while the stray bytes live in a sibling local symbol — ROM layout unchanged.
 
 **Origin:** 2026-04-19, gui_func_0000267C decomp attempt. Wrapped at 87%. **2026-04-20 update:** game_uso_func_0000039C had a stray `mtc1 zero, $f0` at offset 0x3F4 past the real `jr ra; nop`. Trimmed `.s` from 0x5C→0x58, added 1-word `_pad.s` with `.word 0x44800000`, pragma-inlined. 100% match.
+
+---
 
 ---
 
@@ -7386,6 +7683,8 @@ If you see `sw v0, OFF(sp); lw aN, OFF(sp)` you might guess "spill arg and reloa
 - `feedback_nm_wrap_post_jal_arg_vs_return.md` — sibling: rewrite `q=func(r); q->X` to `func(r); r->X` to discard return when asm shows $aN preserved post-jal
 - `feedback_ido_swap_stores_for_jal_delay_fill.md` — IDO scheduler picking delay-slot fills
 - `feedback_ido_v0_reuse_via_locals.md` — when v0 stays as $v0 vs gets shuffled
+
+---
 
 ---
 
@@ -7493,6 +7792,8 @@ The crunch64 step lives in the Makefile and is invoked per Yay0 block. For each 
 
 ---
 
+---
+
 <a id="feedback-usoplaceholder-unique-extern"></a>
 ## For USO-placeholder wrappers with defensive arg spills, use a unique-named extern (mapped to 0x0 via undefined_syms_auto.txt) instead of the shared `gl_func_00000000`
 
@@ -7529,6 +7830,8 @@ The linker resolves `gl_func_XXXXX_inner` to address 0, so the `jal` bytes are s
 
 ---
 
+---
+
 <a id="feedback-uv"></a>
 ## use_uv_sync
 
@@ -7538,6 +7841,8 @@ Always use `uv sync` for installing/syncing dependencies in this project. Do not
 
 **Why:** Project uses uv with an existing .venv; `uv sync` is the correct workflow.
 **How to apply:** Any time dependencies need installing or updating, run `uv sync`.
+
+---
 
 ---
 
@@ -7614,6 +7919,8 @@ mips-linux-gnu-objdump -d build/src/<seg>/<file>.c.o | \
 
 ---
 
+---
+
 <a id="feedback-volatile-for-codegen-shape-must-stay-unconsumed"></a>
 ## `volatile T saved_x = x;` for codegen-shaping must remain UNCONSUMED — using the local in a condition regresses
 
@@ -7666,6 +7973,8 @@ producing. Don't try to eliminate it via consumption.
 TODO. Verified that consumption regresses 94.66%→89.5%. The TODO was
 based on flawed intuition; updated wrap doc to "no middle ground" and
 saved this memory so future-me doesn't waste another tick on it.
+
+---
 
 ---
 
@@ -7771,6 +8080,8 @@ write-then-read pattern, or PERM_RANDOMIZE).
 
 ---
 
+---
+
 <a id="feedback-word-only-skip-rule-doesnt-block-episode-logging"></a>
 ## The "all .word directives" skip rule applies to fresh decomp, NOT to episode logging — `.word`-only USO functions are still episode-eligible if byte-correct via INCLUDE_ASM
 
@@ -7823,6 +8134,8 @@ The discriminator is the GOAL:
 - `feedback_byte_correct_match_via_include_asm_not_c_body.md` — INCLUDE_ASM tautology
 - `feedback_splat_folds_unknown_reloc_into_nearest_func_symbol.md` — different splat-encoding issue
 - `feedback_uso_accessor_template_reuse.md` — case-2 templates that decode cleanly
+
+---
 
 ---
 
@@ -7887,6 +8200,8 @@ on offsets without checking base registers.
 
 ---
 
+---
+
 <a id="feedback-yay0-uso-blocks-file-split-recipe"></a>
 ## -O0 file-split recipe doesn't apply to Yay0-compressed USOs (single .o → compressed blob)
 
@@ -7921,3 +8236,4 @@ Only ONE .o file feeds into the Yay0 compressor. Splitting the source .c into tw
 
 ---
 
+---

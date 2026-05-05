@@ -6,15 +6,16 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 ## Index
 
-- [1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches](#feedback-1080-rsp-ucode-not-f3dex2) — Spiked 2026-05-04. Built all 20 F3DEX2/F3DZEX variants in Mr-Wiseguy/f3dex2 and substring-searched their code+data sections against the 56 K
-- [game_libs absolute-address data refs use `extern T *gl_ref_XXXXXXXX` + undefined_syms](#feedback-game-libs-gl-ref-data) — For `lui $rN, %hi(SYM); lw $rN, %lo(SYM)($rN)` pairs in game_libs (USO) that load a pointer from a fixed absolute address, declare `extern T
-- [game_libs JAL targets are largely placeholders; use gl_func_00000000 for target=0, extern stubs for non-zero non-boundary targets](#feedback-game-libs-jal-targets) — In game_libs (relocatable USO at VRAM=0), JAL targets in the ROM are runtime-patched placeholders, not real call targets. For JAL target=0 (
-- [GFX display-list data vs RSP microcode forensic — top-byte distribution is necessary but NOT sufficient; substring-match against public IMEM bins is the real check](#feedback-gfx-dl-data-vs-rsp-ucode-forensic-check) — GFX-opcode top-byte counting at 8-byte alignment can give FALSE NEGATIVES on mixed blobs (CPU code + RSP IMEM concatenated together). 1080's
-- [HW address literal vs symbol encoding](#feedback-hw-addr-encoding) — Both forms produce identical ROM bytes via asm-processor — don't chase objdiff's per-.o "diff" when comparing against an INCLUDE_ASM baselin
-- [N64 RSP ucode data-section layout — id-string at fixed offset within 0x800 block, used as fingerprint anchor](#feedback-n64-ucode-data-section-layout-id-offset-signature) — Stock Nintendo F3DEX 1.x gfx ucodes pack their banner ID string at offset 0x2B0 within a 0x800-byte DMEM data section; aspMain audio ucodes 
-- [N64 ucode IMEM + DMEM can live in different ROM segments — search both before declaring a blob "non-ucode"](#feedback-n64-ucode-imem-dmem-split-across-segments) — 1080 stores gfx ucode IMEM (5 KB each, F3DEX 1.x family) in `game_libs` segment ROM 0xDFA43C+, but the paired DMEM data tables (0x800 each) 
+- [1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches](#feedback-1080-rsp-ucode-not-f3dex2) — Spiked 2026-05-04.
+- [game_libs absolute-address data refs use `extern T *gl_ref_XXXXXXXX` + undefined_syms](#feedback-game-libs-gl-ref-data) — _For `lui $rN, %hi(SYM); lw $rN, %lo(SYM)($rN)` pairs in game_libs (USO) that load a pointer from a fixed absolute address, declare `extern T *gl_ref_ADDR;` in game_libs.c and add `gl_ref_ADDR = 0xADDR;` to…
+- [game_libs JAL targets are largely placeholders; use gl_func_00000000 for target=0, extern stubs for non-zero non-boundary targets](#feedback-game-libs-jal-targets) — _In game_libs (relocatable USO at VRAM=0), JAL targets in the ROM are runtime-patched placeholders, not real call targets.
+- [GFX display-list data vs RSP microcode forensic — top-byte distribution is necessary but NOT sufficient; substring-match against public IMEM bins is the real check](#feedback-gfx-dl-data-vs-rsp-ucode-forensic-check) — _GFX-opcode top-byte counting at 8-byte alignment can give FALSE NEGATIVES on mixed blobs (CPU code + RSP IMEM concatenated together). 1080's `game_libs_text2` (originally renamed to `_dl_data` based on this heuristic)…
+- [HW address literal vs symbol encoding](#feedback-hw-addr-encoding) — _Both forms produce identical ROM bytes via asm-processor — don't chase objdiff's per-.o "diff" when comparing against an INCLUDE_ASM baseline_
+- [N64 RSP ucode data-section layout — id-string at fixed offset within 0x800 block, used as fingerprint anchor](#feedback-n64-ucode-data-section-layout-id-offset-signature) — _Stock Nintendo F3DEX 1.x gfx ucodes pack their banner ID string at offset 0x2B0 within a 0x800-byte DMEM data section; aspMain audio ucodes put it near the end (~0x7F0).
+- [N64 ucode IMEM + DMEM can live in different ROM segments — search both before declaring a blob "non-ucode"](#feedback-n64-ucode-imem-dmem-split-across-segments) — _1080 stores gfx ucode IMEM (5 KB each, F3DEX 1.x family) in `game_libs` segment ROM 0xDFA43C+, but the paired DMEM data tables (0x800 each) in `bootup_uso_pre` ROM 0xDB7140+.
 - [n64sym is unreliable](#feedback-n64sym) — n64sym has very high false positive rate — validate ALL names against real function prologues before using
-- [Splat-bundled "function" with 100+ jr-ra-byte patterns is opaque data — but its TYPE (RSP ucode vs GFX DL data vs other) needs forensic check](#feedback-rsp-microcode-mistaken-for-code) — When a bundled "function" has anomalous size (50+ KB) with high `grep -c 03E00008` count, it's NOT CPU code — that part of the original clai
+- [Splat-bundled "function" with 100+ jr-ra-byte patterns is opaque data — but its TYPE (RSP ucode vs GFX DL data vs other) needs forensic check](#feedback-rsp-microcode-mistaken-for-code) — _When a bundled "function" has anomalous size (50+ KB) with high `grep -c 03E00008` count, it's NOT CPU code — that part of the original claim still holds.
+
 
 ---
 
@@ -46,6 +47,8 @@ _Spiked 2026-05-04. Built all 20 F3DEX2/F3DZEX variants in Mr-Wiseguy/f3dex2 and
 - Don't re-run F3DEX2 fingerprinting on this blob. The result is conclusive.
 - If a future revision of Mr-Wiseguy/f3dex2 (or a sibling repo) adds libgdl variants or custom-Nintendo variants, re-spike then.
 - A separate but cheaper task: identify any AUDIO ucode in 1080 (typical position differs from gfx) and check if it matches stock Nintendo aspMain/aspMainNoVS variants. The current bin-wrap covers gfx; audio might be elsewhere in the ROM.
+
+---
 
 ---
 
@@ -140,6 +143,8 @@ void gl_func_00006DC8(int a0) {
 
 ---
 
+---
+
 <a id="feedback-game-libs-jal-targets"></a>
 ## game_libs JAL targets are largely placeholders; use gl_func_00000000 for target=0, extern stubs for non-zero non-boundary targets
 
@@ -169,6 +174,8 @@ _In game_libs (relocatable USO at VRAM=0), JAL targets in the ROM are runtime-pa
 4. Otherwise: add `gl_ref_{target:08X} = 0x{target:08X};` to `undefined_syms_auto.txt` and call `gl_ref_XXXXXXXX`.
 
 **Origin:** 2026-04-18 game_libs decomp batch, first function `gl_func_00027160` (JAL target=0 pure delegator, 8 insts).
+
+---
 
 ---
 
@@ -236,6 +243,8 @@ If ANY sm64 IMEM bin appears as a complete byte substring → blob is at least p
 
 ---
 
+---
+
 <a id="feedback-hw-addr-encoding"></a>
 ## HW address literal vs symbol encoding
 
@@ -253,6 +262,8 @@ C code can write a hardware register address as either a literal cast or a `exte
 - If your decompiled C uses literals and objdiff shows a `.o`-level diff against an INCLUDE_ASM-derived baseline, **verify the actual final ROM bytes via Python before assuming the function doesn't match** — the diff is likely just relocation form.
 - After confirming ROM bytes match, `make expected RUN_CC_CHECK=0` to re-snapshot the baseline so objdiff agrees. Only do this once you're confident the linked output matches the original baserom; re-snapshotting from a wrong build silently overwrites the baseline.
 - Either C form is fine to commit. Match the surrounding file's convention — kernel_011 uses literals; libultra projects often use symbols defined in `include/regs.h`.
+
+---
 
 ---
 
@@ -309,6 +320,8 @@ not duplicate ucode payloads).
 
 ---
 
+---
+
 <a id="feedback-n64-ucode-imem-dmem-split-across-segments"></a>
 ## N64 ucode IMEM + DMEM can live in different ROM segments — search both before declaring a blob "non-ucode"
 
@@ -348,6 +361,8 @@ The IMEM+DMEM pairs are loaded together via `G_LOAD_UCODE` at runtime, but store
 
 ---
 
+---
+
 <a id="feedback-n64sym"></a>
 ## n64sym is unreliable
 
@@ -362,6 +377,8 @@ Never trust n64sym output blindly. On 1080 Snowboarding, only 2 out of 231 funct
 2. Verify the prologue is preceded by `jr $ra`, `nop`, or another epilogue
 3. Remove any n64sym names that don't land on validated prologues
 4. Only then add to symbol_addrs.txt
+
+---
 
 ---
 
@@ -429,3 +446,4 @@ None of these are CPU instructions emitted by IDO. They're RSP (Reality Signal P
 
 ---
 
+---

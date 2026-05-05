@@ -4,81 +4,102 @@
 
 _73 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
-## Index
+## Quick reference by sub-topic
 
-- [.NON_MATCHING alias-removal scales bulk — scan whole segment FIRST, batch-fix all candidates in one commit](#feedback-alias-removal-bulk-scan-first) — The .NON_MATCHING alias-removal recipe (per feedback_structurally_locked_wrap_may_be_bytes_already_correct.md) is per-function in the docs b
-- [DO NOT REMOVE the `nonmatching` macro from .s files — it's the mechanism that excludes INCLUDE_ASM placeholders from the matched-progress metric](#feedback-alias-removal-is-metric-pollution-do-not-use) — Past sessions wrote memos endorsing `.NON_MATCHING` alias removal as a legitimate way to lift "scoring noise" 0% wraps to 100%. THAT WAS A C
-- [Aliased-pointer local shifts IDO -O2 jal-spill slot offset by 4 bytes without adding insns](#feedback-aliased-pointer-local-shifts-spill-slot) — When IDO -O2 spills a pointer in a jal delay slot at the wrong sp offset (e.g. sp+0x18 vs target's sp+0x1C), declare a SECOND char* local al
-- [asm-processor auto-wraps C bodies in #ifdef NON_MATCHING when sibling _pad.s exists; symbol disappears, objdiff returns null %](#feedback-asmproc-auto-nm-wrap-kills-objdiff-pct) — When you replace `INCLUDE_ASM(<func>); #pragma GLOBAL_ASM(<func>_pad.s)` with a bare C function body (no source-level #ifdef), asm-processor
-- [byte-verify functions via symbol-table addr+size + objcopy bytes, NOT objdump disasm-string compare](#feedback-byte-verify-via-objcopy-not-objdump-string) — Comparing two .o files for byte-equality of a specific function via `mips-linux-gnu-objdump -d` BLOCK STRINGS (extracting `<func>:` to next 
-- [Cross-file fragment merge: undefined_syms_auto.txt needs aliases for ALL absorbed symbols, not just shared-tail entries](#feedback-cross-file-fragment-merge-needs-all-aliases) — When a cross-file fragment merge absorbs N functions into a single C body in another file, every absorbed symbol still callable from elsewhe
-- [Cross-file fragment merge unblock — MOVE the INCLUDE_ASM to predecessor's .c file first, then do same-file merge](#feedback-cross-file-fragment-unblock-via-move-then-merge) — When a function fragment lives in a different .c file than its predecessor (e.g., 47E4 in kernel_000.c vs predecessor 47B0 in kernel_027.c),
-- [Epilogue-only "function" = cross-function tail-entry used by other callers — not matchable standalone](#feedback-cross-function-epilogue-entry) — When a "function" at address X has ONLY an epilogue-style body (`addiu $sp, +N; jr $ra; nop`) with no prologue, it's not a real function. It
-- [Cross-function tail-share — beql/b targets an insn inside the ADJACENT function to reuse its `jr ra` return code](#feedback-cross-function-tail-share) — If a function's branch target computes to an address PAST its own declared end and lands inside the next function's body, it's using the adj
-- [cross-function tail-share via beql to sibling body produces unmatchable standalone signature](#feedback-cross-function-tail-share-unmatchable-standalone) — When function A's beql lands inside function B's body (e.g. B's 2nd insn), B's standalone shape includes setup that depends on A's register 
+### NM wrap mechanics
+
+- [asm-processor auto-wraps C bodies in #ifdef NON_MATCHING when sibling _pad.s exists; symbol disappears, objdiff returns null %](#feedback-asmproc-auto-nm-wrap-kills-objdiff-pct) — _When you replace `INCLUDE_ASM(<func>); #pragma GLOBAL_ASM(<func>_pad.s)` with a bare C function body (no source-level #ifdef), asm-processor outputs `#ifdef NON_MATCHING / [your C] / #else / void…
+- [redeclaring `extern char D_00000000` in NM wrap blocks NM-build when file already has it as `extern int`](#feedback-extern-redeclaration-blocks-nm-build) — _IDO cfe rejects extern redeclarations with conflicting types.
+- [Inline NM-wrap match-percent comments rot — re-measure before trusting](#feedback-inline-nm-percentages-rot) — _Old match % claims in #ifdef NON_MATCHING comment blocks can silently go stale when the toolchain changes.
+- [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — _Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined NULL, stray apostrophes) compile fine by default but break the moment anyone…
+- [-DNON_MATCHING build of multi-function -O0 file corrupts the byte alignment of NM-wrapped neighbors](#feedback-nm-build-corrupts-neighbors-in-multi-func-o0-file) — _When you have multiple functions in a `<seg>_o0_NNN.c` file (each NM-wrapped) and build with `-DNON_MATCHING`, function N's wrong-size emit (e.g. extra `b +1; nop`) shifts function N+1's start offset, which the…
+- [`expected/.o` can carry prior -DNON_MATCHING build bytes; always refresh baseline before trusting a "matches" signal](#feedback-nm-build-expected-contamination) — _The existing `feedback_make_expected_contamination.md` covers `make expected` accidentally copying YOUR C build as the baseline.
+- [Build incantation for testing a NON_MATCHING C body in 1080](#feedback-nm-build-incantation) — _The working way to compile the #ifdef NON_MATCHING path against the real toolchain is `make <.o> CPPFLAGS="-I include -I src -DNON_MATCHING"`.
+- [Building with -DNON_MATCHING fails on `NULL` undefined — existing NM bodies assume headers not pulled in by default](#feedback-nm-build-null-undefined) — _`make CPPFLAGS="-I include -I src -DNON_MATCHING"` can fail with cfe error 'NULL undefined' because some already-committed NM-path C uses `NULL` but the project's default headers (common.h via IDO) don't define it in…
+- [NM-build can be broken file-wide when accumulated NM wraps shrink .text below TRUNCATE_TEXT](#feedback-nm-build-truncate-breaks-per-file) — _One NM-wrap that shrinks .text past TRUNCATE_TEXT breaks the NM-build (`-DNON_MATCHING`) for the entire .c file with `.text is already smaller (0xN < 0xM)`.
+- [NM-comment "unreproducible from C" claims should be re-verified with a build — they can be wrong](#feedback-nm-comment-claims-recheck) — _When inheriting an NM wrap whose comment asserts a specific pattern is "not reproducible from standard C" (pre-prologue mtc1, specific scheduling, etc), re-verify with `make RUN_CC_CHECK=0 CPPFLAGS="...…
+- [Editing an NM comment block risks clobbering parallel-agent variant notes — always `git log <file>` first](#feedback-nm-comment-clobber-parallel-agent) — _NM wraps accumulate variant-test annotations across agents (`(1) TRIED ...`, `(2) TRIED ...`, etc.).
+- [99% NM wraps may have silently become byte-exact — try unwrapping first](#feedback-nm-wrap-99pct-may-be-silently-exact) — _Before applying complex recipes (INSN_PATCH, make-expected refresh) for a 99% wrap, just remove the wrap and rebuild — the C body may already match expected_
+- [NM-wrap body changes may not show in fuzzy until you `rm -f build/non_matching/<path>.c.o`](#feedback-nm-wrap-body-change-needs-rm-o) — _After editing the C body of an `#ifdef NON_MATCHING` wrap (substantial structural change, not just comment tweaks), `make RUN_CC_CHECK=0 build/non_matching/<file>.c.o` can re-emit the build artifact but report.json…
+- [An NM-wrapped function with documented "X% cap" may actually match 100% — the doc rots when sibling code changes alter codegen](#feedback-nm-wrap-doc-can-be-stale) — _When picking from source 1 (existing NM wrap 80-99%), FIRST verify the current actual match% via `make build/.o CPPFLAGS="-DNON_MATCHING"` + `objdiff-cli report generate`.
+- [NM-wrap doc % drifts in either direction over time due to unrelated parallel-agent commits](#feedback-nm-wrap-doc-pct-drifts) — When picking up an NM wrap whose comment says "X% cap", re-measure the build BEFORE grinding.
+- [NM-wrap doc-comments may claim historical match % that no longer reproduces — re-verify before grinding](#feedback-nm-wrap-historical-pct-drift) — _An NM wrap's comment block may say "~95% match (date)" reflecting the % at the time it was last actively worked.
+- [NM-wrap doc comments MUST start with the actual `%` match — never write "structural cap" without measuring](#feedback-nm-wrap-must-include-pct) — _User-mandated convention (2026-05-02): every `#ifdef NON_MATCHING` wrap's doc comment must lead with the measured fuzzy_match_percent (e.g. "72.21% NM. ...").
+- [NM-wrap logic can confuse jal-return vs jal-arg pointer for post-call stores](#feedback-nm-wrap-post-jal-arg-vs-return) — When an old NM wrap has `q = func(r); q->field = X;` but the asm uses the same input register $aN for the post-jal stores (e.g. `sw $tN, OFF($a1)` where $a1 was the 2nd arg, not $v0 the return), the actual logic is…
+- [After committing an NM wrap, FORCE-rebuild build/non_matching/<file>.c.o BEFORE kicking off any batch land — broken NM C body cascades 10+ failures](#feedback-nm-wrap-verify-non-matching-build-before-batch-land) — _NM wraps with `#ifdef NON_MATCHING / void func() { ... }` only run the C body under -DNON_MATCHING (the dual-build path).
+- [TRUNCATE_TEXT can block a smaller-emit C variant that would otherwise improve match](#feedback-truncate-text-blocks-smaller-nm-emit) — When a NM-wrap C body compiles to FEWER bytes than the baseline (e.g. switching `if/return; if/return;` to `return X;` ternary single-return), the truncate-elf-text post-cc step errors with `.text is already smaller…
+
+### objdiff scoring quirks
+
+- [byte-verify functions via symbol-table addr+size + objcopy bytes, NOT objdump disasm-string compare](#feedback-byte-verify-via-objcopy-not-objdump-string) — _Comparing two .o files for byte-equality of a specific function via `mips-linux-gnu-objdump -d` BLOCK STRINGS (extracting `<func>:` to next blank line, then string-equality) is brittle: the disasm output contains the…
+- [1080's land script now accepts byte-verify against expected/.o as an alternative to fuzzy=100.0](#feedback-land-script-accepts-byte-verify-for-post-cc-recipes) — _As of commit bbc3b6e (2026-05-04), `scripts/land-successful-decomp.sh` lands a function if EITHER `fuzzy_match_percent == 100.0` OR `mips-linux-gnu-objdump` of the function's disasm in build/<unit>.c.o equals…
+- [Land script byte_verify symbol-table parser had two latent bugs (single-letter type field + .NON_MATCHING alias collision)](#feedback-land-script-byte-verify-objdump-parse-bugs) — _scripts/land-successful-decomp.sh's byte_verify hit two parsing bugs that silently truncated extracted bytes — single-letter 'F'/'O' type field gets parsed as size=15/24 hex, AND .NON_MATCHING aliased symbols get…
+- [objdiff reports 100% for every INCLUDE_ASM-only .c file — baseline swap is a no-op](#feedback-objdiff-include-asm-only-file-bogus-100pct) — _`refresh-expected-baseline.py` prevents build==expected contamination for files with decomp C by swapping bodies to INCLUDE_ASM before regenerating expected.
+- [`fuzzy_match_percent: null` in objdiff report does NOT mean 100 % match — it means "not in the tracked diff set"](#feedback-objdiff-null-percent-means-not-tracked) — _When `jq '.units[].functions[] | select(...) | .fuzzy_match_percent'` on report.json returns `null`, it means objdiff didn't produce a fuzzy-match entry for that function — NOT that the function is exact.
+- [objdiff tolerates different-symbol-same-target relocations (D_NNNN vs func_MMM+offset)](#feedback-objdiff-reloc-tolerance) — _If the target .o has a relocation `R_MIPS_LO16 func_NAME` with immediate 0x40, and your build has `R_MIPS_LO16 D_NNNN` with immediate 0 (both resolving to the same absolute address after link), objdiff reports these as…
+- [objdiff report.json caches per-function state — `rm -f report.json` before regen if a function "stays unmatched" after expected/.o refresh](#feedback-objdiff-report-caches-stale-per-function-state) — _After cp'ing build/.o to expected/.o (per-file refresh), `objdiff-cli report generate` keeps the prior report.json's per-function fuzzy_match_percent values for affected symbols.
+- [objdiff `fuzzy_match_percent: None` means size mismatch too large to align, not "function missing"](#feedback-objdiff-returns-none-on-large-size-mismatch) — _When the built .o's symbol size differs significantly from the expected .o's symbol size, objdiff sets `fuzzy_match_percent: null` (Python `None`) in report.json instead of computing a low fuzzy score.
+- [objdiff treats functions with .NON_MATCHING symbol alias as unscored (None) regardless of byte match](#feedback-objdiff-skips-nonmatching-alias) — _The `nonmatching` macro in .s files emits a `.NON_MATCHING` data alias at the same address as the function symbol. objdiff sees this alias and skips fuzzy_match scoring entirely (reports None) — even when the…
+
+### expected/ baseline care
+
+- [expected/ baseline can silently capture wrong-size decompiles; check ROM size periodically](#feedback-expected-baseline-can-capture-bloat) — When a function decompiles to wrong-size C, `make expected` snapshots the bloat into the baseline. objdiff then reports the function as 100% match (wrong against wrong).
+- [After fragment merge that deletes .s files, the standard `stash→build→cp expected` recipe fails — the stashed .c still references the deleted .s](#feedback-expected-baseline-refresh-after-asm-delete) — _Refreshing expected/.o by stashing your decomp C and rebuilding INCLUDE_ASM-only assumes the stashed .c can build.
+- [After file-split (one .c into two), refresh BOTH expected/<orig>.c.o (remove moved function) AND create expected/<new>.c.o (with the moved function) — byte_verify uses path-matched expected/.o lookups](#feedback-file-split-needs-paired-expected-o-refresh) — _When splitting a function from kernel_NNN.c into kernel_NNNb.c (e.g. for OPT_FLAGS difference), the build/.o pair updates automatically but expected/.o doesn't.
+- [Don't run `make expected` while your decomp C is in place — it copies your build AS the baseline](#feedback-make-expected-contamination) — _`make expected` copies `build/*.o` → `expected/*.o`.
+- [`make expected RUN_CC_CHECK=0` blindly overwrites ALL expected/.c.o — corrupts baselines for unrelated files](#feedback-make-expected-overwrites-unrelated) — Running `make expected` after touching one .c file copies the CURRENT build/.c.o for EVERY unit to expected/, including files where current build is wrong/partial.
+- [`make expected` rewrites ALL segments' .o files (~30+), not just yours — selectively `git checkout HEAD --` the unrelated ones before commit to avoid parallel-agent merge conflicts](#feedback-make-expected-touches-all-segments) — _`make expected` runs `cp build/src/<d>/*.o expected/src/<d>/` for every segment directory.
+
+### fragment / cross-file merge
+
+- [Cross-file fragment merge: undefined_syms_auto.txt needs aliases for ALL absorbed symbols, not just shared-tail entries](#feedback-cross-file-fragment-merge-needs-all-aliases) — _When a cross-file fragment merge absorbs N functions into a single C body in another file, every absorbed symbol still callable from elsewhere needs `func_X = 0xX;` in undefined_syms_auto.txt.
+- [Cross-file fragment merge unblock — MOVE the INCLUDE_ASM to predecessor's .c file first, then do same-file merge](#feedback-cross-file-fragment-unblock-via-move-then-merge) — _When a function fragment lives in a different .c file than its predecessor (e.g., 47E4 in kernel_000.c vs predecessor 47B0 in kernel_027.c), `feedback_merge_fragments_blocked_across_o_files.md` says cross-.o merge is…
+- [Epilogue-only "function" = cross-function tail-entry used by other callers — not matchable standalone](#feedback-cross-function-epilogue-entry) — _When a "function" at address X has ONLY an epilogue-style body (`addiu $sp, +N; jr $ra; nop`) with no prologue, it's not a real function.
+- [Cross-function tail-share — beql/b targets an insn inside the ADJACENT function to reuse its `jr ra` return code](#feedback-cross-function-tail-share) — _If a function's branch target computes to an address PAST its own declared end and lands inside the next function's body, it's using the adjacent function's return-code tail for code-size (or because the compiler laid…
+- [cross-function tail-share via beql to sibling body produces unmatchable standalone signature](#feedback-cross-function-tail-share-unmatchable-standalone) — When function A's beql lands inside function B's body (e.g.
+- [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
+- [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — _When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.c at -O1, fragments in kernel_018.c at -O2 because they're across an opt-level…
+- [When the full N-way fragment merge is cross-file-blocked, a same-.c-file partial subset merge IS still safe](#feedback-merge-fragments-partial-safe-subset) — _feedback_merge_fragments_blocked_across_o_files.md says "don't merge" when parent + fragments span different .c files.
+- [After merge-fragments edits, rebuild can keep OLD symbol layout in .o without `rm -f build/<file>.o` first](#feedback-merge-fragments-stale-o-caches-old-symbols) — _When you grow a function via merge-fragments (edit `asm/nonmatchings/.../func_PARENT.s` to absorb the fragment, increase its `nonmatching SIZE`, delete the fragment's .s, drop INCLUDE_ASM for the fragment in the .c),…
+- [merge-fragments operations get silently undone by main-branch integration merges — re-check after every big drift catchup](#feedback-merge-fragments-undone-by-integration) — _A successful same-file merge-fragments commit (delete a .s file, expand parent .s with the fragment's instructions, drop INCLUDE_ASM from .c, add caller alias to undefined_syms_auto.txt) can get undone when the agent…
+- [Merging a structural .c-split PR against parallel decomp branches — port single-line decomps by hand, selectively refresh expected/](#feedback-merge-split-pr-with-parallel-decomps) — _When an agent branch does a structural split (e.g. one .c → pre/post + bin) and main adds per-function decomps in the post-split range during the PR's lifetime, the real merge work is tiny — only the INCLUDE_ASM lines…
+- [After fragment merge, re-export absorbed fragment addresses in undefined_syms_auto.txt — they may be jal targets from other functions](#feedback-merged-fragment-re-export-jal-targets) — _When merging splat fragments into a parent, the absorbed fragments may be jal'd from other .s files as separate entry points (shared-tail pattern).
+- [Splat/generate-uso-asm merges no-prologue leaf functions into the preceding function's .s](#feedback-splat-fragment-split-no-prologue-leaf) — _Mirror of the merge-fragments case.
+- [Splat fragments can be detected by register-flow across boundaries, not just `.L` label refs](#feedback-splat-fragment-via-register-flow) — The `merge-fragments` skill detects fragments by backward `.L` label references crossing function boundaries.
+
+### alias handling
+
+- [.NON_MATCHING alias-removal scales bulk — scan whole segment FIRST, batch-fix all candidates in one commit](#feedback-alias-removal-bulk-scan-first) — _The .NON_MATCHING alias-removal recipe (per feedback_structurally_locked_wrap_may_be_bytes_already_correct.md) is per-function in the docs but scales N-to-1 when bulk-applied.
+- [DO NOT REMOVE the `nonmatching` macro from .s files — it's the mechanism that excludes INCLUDE_ASM placeholders from the matched-progress metric](#feedback-alias-removal-is-metric-pollution-do-not-use) — _Past sessions wrote memos endorsing `.NON_MATCHING` alias removal as a legitimate way to lift "scoring noise" 0% wraps to 100%.
+
+### episode / discover
+
 - [feedback_episodes](#feedback-episodes) — Always log episodes after an exact match, using the canonical helper and schema (updated 2026-04-19)
-- [expected/ baseline can silently capture wrong-size decompiles; check ROM size periodically](#feedback-expected-baseline-can-capture-bloat) — When a function decompiles to wrong-size C, `make expected` snapshots the bloat into the baseline. objdiff then reports the function as 100%
-- [After fragment merge that deletes .s files, the standard `stash→build→cp expected` recipe fails — the stashed .c still references the deleted .s](#feedback-expected-baseline-refresh-after-asm-delete) — Refreshing expected/.o by stashing your decomp C and rebuilding INCLUDE_ASM-only assumes the stashed .c can build. After a fragment merge th
-- [redeclaring `extern char D_00000000` in NM wrap blocks NM-build when file already has it as `extern int`](#feedback-extern-redeclaration-blocks-nm-build) — IDO cfe rejects extern redeclarations with conflicting types. When adding a new NM wrap that needs &D_00000000 access, check the file's TOP 
-- [After file-split (one .c into two), refresh BOTH expected/<orig>.c.o (remove moved function) AND create expected/<new>.c.o (with the moved function) — byte_verify uses path-matched expected/.o lookups](#feedback-file-split-needs-paired-expected-o-refresh) — When splitting a function from kernel_NNN.c into kernel_NNNb.c (e.g. for OPT_FLAGS difference), the build/.o pair updates automatically but 
-- [Inline NM-wrap match-percent comments rot — re-measure before trusting](#feedback-inline-nm-percentages-rot) — Old match % claims in #ifdef NON_MATCHING comment blocks can silently go stale when the toolchain changes. Always re-build with CPPFLAGS=-DN
-- [1080's land script now accepts byte-verify against expected/.o as an alternative to fuzzy=100.0](#feedback-land-script-accepts-byte-verify-for-post-cc-recipes) — As of commit bbc3b6e (2026-05-04), `scripts/land-successful-decomp.sh` lands a function if EITHER `fuzzy_match_percent == 100.0` OR `mips-li
-- [Land script byte_verify symbol-table parser had two latent bugs (single-letter type field + .NON_MATCHING alias collision)](#feedback-land-script-byte-verify-objdump-parse-bugs) — scripts/land-successful-decomp.sh's byte_verify hit two parsing bugs that silently truncated extracted bytes — single-letter 'F'/'O' type fi
-- [/loop's interval is cron fire cadence, NOT a per-invocation timeout](#feedback-loop-interval-not-timeout) — `/loop Nm <prompt>` fires `<prompt>` on a cron every N minutes. Each firing has NO time budget and should run until the task naturally compl
-- [In /loop /decompile, start the next iteration immediately — don't ScheduleWakeup with a delay](#feedback-loop-no-wait) — User's preference for the /decompile loop in 1080 Snowboarding. The default dynamic-mode pattern of scheduling a 150–300s fallback wakeup be
-- [Don't run `make expected` while your decomp C is in place — it copies your build AS the baseline](#feedback-make-expected-contamination) — `make expected` copies `build/*.o` → `expected/*.o`. If decomp C has replaced an INCLUDE_ASM before this runs, the new baseline IS your buil
-- [`make expected RUN_CC_CHECK=0` blindly overwrites ALL expected/.c.o — corrupts baselines for unrelated files](#feedback-make-expected-overwrites-unrelated) — Running `make expected` after touching one .c file copies the CURRENT build/.c.o for EVERY unit to expected/, including files where current 
-- [`make expected` rewrites ALL segments' .o files (~30+), not just yours — selectively `git checkout HEAD --` the unrelated ones before commit to avoid parallel-agent merge conflicts](#feedback-make-expected-touches-all-segments) — `make expected` runs `cp build/src/<d>/*.o expected/src/<d>/` for every segment directory. Even if your work only touched one segment, every
-- [`make objects` is the right Makefile target for tools that only need .c.o files](#feedback-make-objects-skips-link-yay0-checksum) — 1080's Makefile defines `objects: $(C_O_FILES)` — builds C objects only, skipping link, Yay0 repack, and md5sum. Use it for any tool/script 
-- [make setup regenerates tenshoe.ld and CLOBBERS per-segment .o split customizations](#feedback-make-setup-clobbers-tenshoe-ld-manual-edits) — Running `make setup` (splat) on 1080 overwrites tenshoe.ld with auto-generated single-`.c.o` per-segment includes, blowing away the carefull
-- [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fi
-- [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.
-- [When the full N-way fragment merge is cross-file-blocked, a same-.c-file partial subset merge IS still safe](#feedback-merge-fragments-partial-safe-subset) — feedback_merge_fragments_blocked_across_o_files.md says "don't merge" when parent + fragments span different .c files. But a PARTIAL merge t
-- [After merge-fragments edits, rebuild can keep OLD symbol layout in .o without `rm -f build/<file>.o` first](#feedback-merge-fragments-stale-o-caches-old-symbols) — When you grow a function via merge-fragments (edit `asm/nonmatchings/.../func_PARENT.s` to absorb the fragment, increase its `nonmatching SI
-- [merge-fragments operations get silently undone by main-branch integration merges — re-check after every big drift catchup](#feedback-merge-fragments-undone-by-integration) — A successful same-file merge-fragments commit (delete a .s file, expand parent .s with the fragment's instructions, drop INCLUDE_ASM from .c
-- [Merging a structural .c-split PR against parallel decomp branches — port single-line decomps by hand, selectively refresh expected/](#feedback-merge-split-pr-with-parallel-decomps) — When an agent branch does a structural split (e.g. one .c → pre/post + bin) and main adds per-function decomps in the post-split range durin
-- [After fragment merge, re-export absorbed fragment addresses in undefined_syms_auto.txt — they may be jal targets from other functions](#feedback-merged-fragment-re-export-jal-targets) — When merging splat fragments into a parent, the absorbed fragments may be jal'd from other .s files as separate entry points (shared-tail pa
-- [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined N
-- [-DNON_MATCHING build of multi-function -O0 file corrupts the byte alignment of NM-wrapped neighbors](#feedback-nm-build-corrupts-neighbors-in-multi-func-o0-file) — When you have multiple functions in a `<seg>_o0_NNN.c` file (each NM-wrapped) and build with `-DNON_MATCHING`, function N's wrong-size emit 
-- [`expected/.o` can carry prior -DNON_MATCHING build bytes; always refresh baseline before trusting a "matches" signal](#feedback-nm-build-expected-contamination) — The existing `feedback_make_expected_contamination.md` covers `make expected` accidentally copying YOUR C build as the baseline. A subtler v
-- [Build incantation for testing a NON_MATCHING C body in 1080](#feedback-nm-build-incantation) — The working way to compile the #ifdef NON_MATCHING path against the real toolchain is `make <.o> CPPFLAGS="-I include -I src -DNON_MATCHING"
-- [Building with -DNON_MATCHING fails on `NULL` undefined — existing NM bodies assume headers not pulled in by default](#feedback-nm-build-null-undefined) — `make CPPFLAGS="-I include -I src -DNON_MATCHING"` can fail with cfe error 'NULL undefined' because some already-committed NM-path C uses `N
-- [NM-build can be broken file-wide when accumulated NM wraps shrink .text below TRUNCATE_TEXT](#feedback-nm-build-truncate-breaks-per-file) — One NM-wrap that shrinks .text past TRUNCATE_TEXT breaks the NM-build (`-DNON_MATCHING`) for the entire .c file with `.text is already small
-- [NM-comment "unreproducible from C" claims should be re-verified with a build — they can be wrong](#feedback-nm-comment-claims-recheck) — When inheriting an NM wrap whose comment asserts a specific pattern is "not reproducible from standard C" (pre-prologue mtc1, specific sched
-- [Editing an NM comment block risks clobbering parallel-agent variant notes — always `git log <file>` first](#feedback-nm-comment-clobber-parallel-agent) — NM wraps accumulate variant-test annotations across agents (`(1) TRIED ...`, `(2) TRIED ...`, etc.). When multiple agents edit the same NM c
-- [99% NM wraps may have silently become byte-exact — try unwrapping first](#feedback-nm-wrap-99pct-may-be-silently-exact) — Before applying complex recipes (INSN_PATCH, make-expected refresh) for a 99% wrap, just remove the wrap and rebuild — the C body may alread
-- [NM-wrap body changes may not show in fuzzy until you `rm -f build/non_matching/<path>.c.o`](#feedback-nm-wrap-body-change-needs-rm-o) — After editing the C body of an `#ifdef NON_MATCHING` wrap (substantial structural change, not just comment tweaks), `make RUN_CC_CHECK=0 bui
-- [An NM-wrapped function with documented "X% cap" may actually match 100% — the doc rots when sibling code changes alter codegen](#feedback-nm-wrap-doc-can-be-stale) — When picking from source 1 (existing NM wrap 80-99%), FIRST verify the current actual match% via `make build/.o CPPFLAGS="-DNON_MATCHING"` +
-- [NM-wrap doc % drifts in either direction over time due to unrelated parallel-agent commits](#feedback-nm-wrap-doc-pct-drifts) — When picking up an NM wrap whose comment says "X% cap", re-measure the build BEFORE grinding. The documented % is point-in-time and can drif
-- [NM-wrap doc-comments may claim historical match % that no longer reproduces — re-verify before grinding](#feedback-nm-wrap-historical-pct-drift) — An NM wrap's comment block may say "~95% match (date)" reflecting the % at the time it was last actively worked. Toolchain drift (asm-proces
-- [NM-wrap doc comments MUST start with the actual `%` match — never write "structural cap" without measuring](#feedback-nm-wrap-must-include-pct) — User-mandated convention (2026-05-02): every `#ifdef NON_MATCHING` wrap's doc comment must lead with the measured fuzzy_match_percent (e.g. 
-- [NM-wrap logic can confuse jal-return vs jal-arg pointer for post-call stores](#feedback-nm-wrap-post-jal-arg-vs-return) — When an old NM wrap has `q = func(r); q->field = X;` but the asm uses the same input register $aN for the post-jal stores (e.g. `sw $tN, OFF
-- [After committing an NM wrap, FORCE-rebuild build/non_matching/<file>.c.o BEFORE kicking off any batch land — broken NM C body cascades 10+ failures](#feedback-nm-wrap-verify-non-matching-build-before-batch-land) — NM wraps with `#ifdef NON_MATCHING / void func() { ... }` only run the C body under -DNON_MATCHING (the dual-build path). The default build 
-- [objdiff reports 100% for every INCLUDE_ASM-only .c file — baseline swap is a no-op](#feedback-objdiff-include-asm-only-file-bogus-100pct) — `refresh-expected-baseline.py` prevents build==expected contamination for files with decomp C by swapping bodies to INCLUDE_ASM before regen
-- [`fuzzy_match_percent: null` in objdiff report does NOT mean 100 % match — it means "not in the tracked diff set"](#feedback-objdiff-null-percent-means-not-tracked) — When `jq '.units[].functions[] | select(...) | .fuzzy_match_percent'` on report.json returns `null`, it means objdiff didn't produce a fuzzy
-- [objdiff tolerates different-symbol-same-target relocations (D_NNNN vs func_MMM+offset)](#feedback-objdiff-reloc-tolerance) — If the target .o has a relocation `R_MIPS_LO16 func_NAME` with immediate 0x40, and your build has `R_MIPS_LO16 D_NNNN` with immediate 0 (bot
-- [objdiff report.json caches per-function state — `rm -f report.json` before regen if a function "stays unmatched" after expected/.o refresh](#feedback-objdiff-report-caches-stale-per-function-state) — After cp'ing build/.o to expected/.o (per-file refresh), `objdiff-cli report generate` keeps the prior report.json's per-function fuzzy_matc
-- [objdiff `fuzzy_match_percent: None` means size mismatch too large to align, not "function missing"](#feedback-objdiff-returns-none-on-large-size-mismatch) — When the built .o's symbol size differs significantly from the expected .o's symbol size, objdiff sets `fuzzy_match_percent: null` (Python `
-- [objdiff treats functions with .NON_MATCHING symbol alias as unscored (None) regardless of byte match](#feedback-objdiff-skips-nonmatching-alias) — The `nonmatching` macro in .s files emits a `.NON_MATCHING` data alias at the same address as the function symbol. objdiff sees this alias a
-- [PREFIX_BYTES Makefile var + scripts/inject-prefix-bytes.py — unblocks USO entry-0 trampoline funcs](#feedback-prefix-byte-inject-unblocks-uso-trampoline) — Mirror of PROLOGUE_STEALS for the leading-prefix case. Post-cc inserts N bytes at func_addr in .c.o, grows st_size, shifts symbols/relocs. U
-- ["Leading pad sidecar" doesn't work via `#pragma GLOBAL_ASM` — symbol collision + size mismatch](#feedback-prefix-sidecar-symbol-collision) — Trailing pad sidecars (feedback_pad_sidecar_unblocks_trailing_nops.md) work because the appended asm lives AFTER the function's symbol — it 
-- [game_libs function starts with `sw rX, N($at)` using uninit $at — splat boundary artifact, not reproducible from C](#feedback-splat-at-register-carryover) — If the `.s` file begins the function with a `sw` or `lw` using `$at` as the base register WITHOUT a preceding `lui $at` inside the function,
-- [Backfill episodes for splat's auto-generated empty functions](#feedback-splat-auto-empty-episodes) — Splat writes `void f(void) {}` (not INCLUDE_ASM) for every `jr $ra; nop` leaf in its initial C stub. These are real matches that count for p
-- [Splat sometimes folds an unknown rodata reloc into the nearest preceding function symbol — `func_X + 0xN` references reading INSIDE another function's body](#feedback-splat-folds-unknown-reloc-into-nearest-func-symbol) — When splat encounters a `lui+lwc1`/`lui+lw` pair targeting an address with no symbol, it falls back to the nearest preceding symbol (often a
-- [Splat/generate-uso-asm merges no-prologue leaf functions into the preceding function's .s](#feedback-splat-fragment-split-no-prologue-leaf) — Mirror of the merge-fragments case. When a leaf function has NO `addiu $sp, -N` prologue (just stores through $a0 and `jr $ra`), generate-us
-- [Splat fragments can be detected by register-flow across boundaries, not just `.L` label refs](#feedback-splat-fragment-via-register-flow) — The `merge-fragments` skill detects fragments by backward `.L` label references crossing function boundaries. A separate pattern: splat may 
-- [Splat's "func_NAME + 0xNN" notation is a data symbol at FUNC+OFFSET, not a call into mid-function](#feedback-splat-func-plus-offset-data) — In 1080's USO asm, spimdisasm/splat sometimes emits `%hi(func_00000008 + 0x28)` / `%lo(…)($at)` relocations. This isn't a weird partial call
-- [Splat-regenerated `.s` files can add a `nonmatching <name>, <size>` header that silently clobbers 100%-exact functions to fuzzy=None](#feedback-splat-nonmatching-header-silently-clobbers-100pct) — When splat regenerates an asm/nonmatchings/<seg>/<func>.s file, it may add a leading `nonmatching <func>, <size>` declaration where the prev
-- [Splat sometimes emits duplicate function symbols (1-insn prefix of an adjacent function's prologue) that are pure cruft — safe to delete](#feedback-splat-orphan-duplicate-symbol-pruning) — When splat misidentifies a function boundary, it can produce TWO `.s` files at adjacent addresses where the smaller (e.g. `func_800005D8.s`,
-- [Splat mis-boundary direction 4 — successor's prologue stolen by predecessor (reverse merge)](#feedback-splat-prologue-stolen-by-predecessor) — When a function's prologue is `lui $reg, 0; addiu $reg, $reg, 0` loading a base pointer BEFORE the `addiu $sp, $sp, -N` stack adjust, splat 
-- [Re-running splat clobbers tenshoe.ld and include_asm.h](#feedback-splat-rerun-gotchas) — splat regenerates tenshoe.ld and include/include_asm.h from scratch every run, destroying hand-tuned per-file ordering and asm-processor mac
-- [A 1-word "function" (size 0x4) containing a single arg-load is the stolen HEAD of the next function](#feedback-splat-size4-arg-load-is-next-func-head) — Splat sometimes peels the first 1-2 instructions (pre-prologue arg loads or USO-placeholder loads) off a function into their own tiny symbol
-- [scripts/truncate-elf-text.py must shrink trailing symbols past sh_size, not just .text section size](#feedback-truncate-elf-text-must-shrink-symbols) — When TRUNCATE_TEXT shrinks .text below where the last function symbol ends, objdiff rejects the .o with `Symbol data out of bounds: 0xN..0xM
-- [TRUNCATE_TEXT blocks C conversion of asm-padded functions in bootup_uso](#feedback-truncate-text-blocks-c-conversion) — In 1080's bootup_uso.c (and its tail[1-4].c splits), converting an `INCLUDE_ASM` to C can fail with "`.text is already smaller (0xNNNN < 0xM
-- [TRUNCATE_TEXT can block a smaller-emit C variant that would otherwise improve match](#feedback-truncate-text-blocks-smaller-nm-emit) — When a NM-wrap C body compiles to FEWER bytes than the baseline (e.g. switching `if/return; if/return;` to `return X;` ternary single-return
-- [TRUNCATE_TEXT must run AFTER SUFFIX_BYTES in the Makefile build rule, not before](#feedback-truncate-text-must-run-after-suffix-bytes) — TRUNCATE_TEXT errors with `.text is already smaller` if a function's C body emit is shorter than its INCLUDE_ASM bytes AND SUFFIX_BYTES is m
-- [TRUNCATE_TEXT must match natural compiled size, not the clean ROM boundary — drift cuts real code](#feedback-truncate-text-preserve-drift) — When splitting a .c file with TRUNCATE_TEXT, set the target to the natural compiled size (including asm-processor drift), not the expected c
-- [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC),
+- [Backfill episodes for splat's auto-generated empty functions](#feedback-splat-auto-empty-episodes) — _Splat writes `void f(void) {}` (not INCLUDE_ASM) for every `jr $ra; nop` leaf in its initial C stub.
+
+### other
+
+- [Aliased-pointer local shifts IDO -O2 jal-spill slot offset by 4 bytes without adding insns](#feedback-aliased-pointer-local-shifts-spill-slot) — _When IDO -O2 spills a pointer in a jal delay slot at the wrong sp offset (e.g. sp+0x18 vs target's sp+0x1C), declare a SECOND char* local aliased to the spilled pointer (`char *p, *spillee; spillee = p;`).
+- [/loop's interval is cron fire cadence, NOT a per-invocation timeout](#feedback-loop-interval-not-timeout) — `/loop Nm <prompt>` fires `<prompt>` on a cron every N minutes.
+- [In /loop /decompile, start the next iteration immediately — don't ScheduleWakeup with a delay](#feedback-loop-no-wait) — User's preference for the /decompile loop in 1080 Snowboarding.
+- [`make objects` is the right Makefile target for tools that only need .c.o files](#feedback-make-objects-skips-link-yay0-checksum) — _1080's Makefile defines `objects: $(C_O_FILES)` — builds C objects only, skipping link, Yay0 repack, and md5sum.
+- [make setup regenerates tenshoe.ld and CLOBBERS per-segment .o split customizations](#feedback-make-setup-clobbers-tenshoe-ld-manual-edits) — _Running `make setup` (splat) on 1080 overwrites tenshoe.ld with auto-generated single-`.c.o` per-segment includes, blowing away the carefully-crafted manual `kernel_NNN.c.o` linker fragments.
+- [PREFIX_BYTES Makefile var + scripts/inject-prefix-bytes.py — unblocks USO entry-0 trampoline funcs](#feedback-prefix-byte-inject-unblocks-uso-trampoline) — _Mirror of PROLOGUE_STEALS for the leading-prefix case.
+- ["Leading pad sidecar" doesn't work via `#pragma GLOBAL_ASM` — symbol collision + size mismatch](#feedback-prefix-sidecar-symbol-collision) — _Trailing pad sidecars (feedback_pad_sidecar_unblocks_trailing_nops.md) work because the appended asm lives AFTER the function's symbol — it doesn't overlap.
+- [game_libs function starts with `sw rX, N($at)` using uninit $at — splat boundary artifact, not reproducible from C](#feedback-splat-at-register-carryover) — If the `.s` file begins the function with a `sw` or `lw` using `$at` as the base register WITHOUT a preceding `lui $at` inside the function, the previous function's last instructions include a trailing `lui $at` that…
+- [Splat sometimes folds an unknown rodata reloc into the nearest preceding function symbol — `func_X + 0xN` references reading INSIDE another function's body](#feedback-splat-folds-unknown-reloc-into-nearest-func-symbol) — _When splat encounters a `lui+lwc1`/`lui+lw` pair targeting an address with no symbol, it falls back to the nearest preceding symbol (often a function) and adds the byte offset.
+- [Splat's "func_NAME + 0xNN" notation is a data symbol at FUNC+OFFSET, not a call into mid-function](#feedback-splat-func-plus-offset-data) — _In 1080's USO asm, spimdisasm/splat sometimes emits `%hi(func_00000008 + 0x28)` / `%lo(…)($at)` relocations.
+- [Splat-regenerated `.s` files can add a `nonmatching <name>, <size>` header that silently clobbers 100%-exact functions to fuzzy=None](#feedback-splat-nonmatching-header-silently-clobbers-100pct) — _When splat regenerates an asm/nonmatchings/<seg>/<func>.s file, it may add a leading `nonmatching <func>, <size>` declaration where the previous version had none.
+- [Splat sometimes emits duplicate function symbols (1-insn prefix of an adjacent function's prologue) that are pure cruft — safe to delete](#feedback-splat-orphan-duplicate-symbol-pruning) — _When splat misidentifies a function boundary, it can produce TWO `.s` files at adjacent addresses where the smaller (e.g. `func_800005D8.s`, 1 insn = single `addiu sp,sp,-N` prologue) is a strict prefix of the larger…
+- [Splat mis-boundary direction 4 — successor's prologue stolen by predecessor (reverse merge)](#feedback-splat-prologue-stolen-by-predecessor) — When a function's prologue is `lui $reg, 0; addiu $reg, $reg, 0` loading a base pointer BEFORE the `addiu $sp, $sp, -N` stack adjust, splat can't see those 2 insns as part of the function and appends them to the…
+- [Re-running splat clobbers tenshoe.ld and include_asm.h](#feedback-splat-rerun-gotchas) — _splat regenerates tenshoe.ld and include/include_asm.h from scratch every run, destroying hand-tuned per-file ordering and asm-processor macros.
+- [A 1-word "function" (size 0x4) containing a single arg-load is the stolen HEAD of the next function](#feedback-splat-size4-arg-load-is-next-func-head) — _Splat sometimes peels the first 1-2 instructions (pre-prologue arg loads or USO-placeholder loads) off a function into their own tiny symbol (size 0x4 or 0x8).
+- [scripts/truncate-elf-text.py must shrink trailing symbols past sh_size, not just .text section size](#feedback-truncate-elf-text-must-shrink-symbols) — _When TRUNCATE_TEXT shrinks .text below where the last function symbol ends, objdiff rejects the .o with `Symbol data out of bounds: 0xN..0xM`.
+- [TRUNCATE_TEXT blocks C conversion of asm-padded functions in bootup_uso](#feedback-truncate-text-blocks-c-conversion) — _In 1080's bootup_uso.c (and its tail[1-4].c splits), converting an `INCLUDE_ASM` to C can fail with "`.text is already smaller (0xNNNN < 0xMMMM)`" when the original asm has trailing alignment nops that IDO doesn't…
+- [TRUNCATE_TEXT must run AFTER SUFFIX_BYTES in the Makefile build rule, not before](#feedback-truncate-text-must-run-after-suffix-bytes) — _TRUNCATE_TEXT errors with `.text is already smaller` if a function's C body emit is shorter than its INCLUDE_ASM bytes AND SUFFIX_BYTES is meant to restore the trailing bytes.
+- [TRUNCATE_TEXT must match natural compiled size, not the clean ROM boundary — drift cuts real code](#feedback-truncate-text-preserve-drift) — _When splitting a .c file with TRUNCATE_TEXT, set the target to the natural compiled size (including asm-processor drift), not the expected clean boundary.
+- [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — _For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC), DO NOT try fixing it by adding the symbol to undefined_syms_auto.txt.
+
 
 ---
 
@@ -149,6 +170,8 @@ commit. Per-tick rate jumped from 1/tick → 36/tick.
 **Repeat for other segments:** the scan should find similar batches
 in `kernel`, `bootup_uso`, `arcproc_uso`, `mgrproc_uso`, `eddproc_uso`,
 etc. Each segment is one tick's worth of work for tens of promotions.
+
+---
 
 ---
 
@@ -245,6 +268,8 @@ session doesn't make the same mistake.
 
 ---
 
+---
+
 <a id="feedback-aliased-pointer-local-shifts-spill-slot"></a>
 ## Aliased-pointer local shifts IDO -O2 jal-spill slot offset by 4 bytes without adding insns
 
@@ -313,6 +338,8 @@ The aliased-pointer is the cheapest knob — try it first.
 
 ---
 
+---
+
 <a id="feedback-asmproc-auto-nm-wrap-kills-objdiff-pct"></a>
 ## asm-processor auto-wraps C bodies in #ifdef NON_MATCHING when sibling _pad.s exists; symbol disappears, objdiff returns null %
 
@@ -374,6 +401,8 @@ Symbol table (`mips-linux-gnu-objdump -t build/<seg>.o`):
 - `feedback_pad_sidecar_unblocks_trailing_nops.md` — the pad-sidecar workflow
 - `feedback_objdiff_null_percent_means_not_tracked.md` — null % means objdiff skipped
 - `feedback_dnonmatching_with_wrap_intact_false_match.md` — building -DNON_MATCHING with wrap intact gives bogus 0-diff
+
+---
 
 ---
 
@@ -483,6 +512,8 @@ bytes."
 
 ---
 
+---
+
 <a id="feedback-cross-file-fragment-merge-needs-all-aliases"></a>
 ## Cross-file fragment merge: undefined_syms_auto.txt needs aliases for ALL absorbed symbols, not just shared-tail entries
 
@@ -542,6 +573,8 @@ If your merge commit shows `kernel_X.c.o byte-identical to expected/.o` but the 
 
 ---
 
+---
+
 <a id="feedback-cross-file-fragment-unblock-via-move-then-merge"></a>
 ## Cross-file fragment merge unblock — MOVE the INCLUDE_ASM to predecessor's .c file first, then do same-file merge
 
@@ -574,6 +607,8 @@ Deferred this tick (multi-step infra work). Documented as the next-pass plan in 
 - `feedback_merge_fragments_blocked_across_o_files.md` — the original "cross-file is unsafe" rule
 - `feedback_merge_fragments_partial_safe_subset.md` — the "same-file safe" subset
 - `feedback_merge_fragments_stale_o_caches_old_symbols.md` — post-merge .o cache invalidation gotcha
+
+---
 
 ---
 
@@ -629,6 +664,8 @@ Both are cross-function code-sharing optimizations the original compiler did tha
 
 ---
 
+---
+
 <a id="feedback-cross-function-tail-share"></a>
 ## Cross-function tail-share — beql/b targets an insn inside the ADJACENT function to reuse its `jr ra` return code
 
@@ -677,6 +714,8 @@ IDO can't generate a branch to a symbol it doesn't see as part of this function.
 
 ---
 
+---
+
 <a id="feedback-cross-function-tail-share-unmatchable-standalone"></a>
 ## cross-function tail-share via beql to sibling body produces unmatchable standalone signature
 
@@ -710,6 +749,8 @@ arg-ignore — none produce the two-step shape.
   table. Both require infrastructure changes outside a single tick.
 - Don't try `register float r asm("$f2")` — IDO rejects (per
   `feedback_ido_no_gcc_register_asm.md`).
+
+---
 
 ---
 
@@ -750,6 +791,8 @@ This writes `episodes/<name>.json` in the structured `Episode` / `Step` schema (
 **Validator:** `/home/dan/Documents/code/decomp/scripts/validate_episode_schema.py`. Run `python3 scripts/validate_episode_schema.py episodes/<name>.json --require-match` to sanity-check a file manually.
 
 **Origin:** 2026-04-19 user announcement migrating all agents to the canonical schema. `decomp/logging/episode.py:132` defines `log_exact_match`; `decomp/episode.py` is marked legacy-only.
+
+---
 
 ---
 
@@ -807,6 +850,8 @@ _When a function decompiles to wrong-size C, `make expected` snapshots the bloat
 
 ---
 
+---
+
 <a id="feedback-expected-baseline-refresh-after-asm-delete"></a>
 ## After fragment merge that deletes .s files, the standard `stash→build→cp expected` recipe fails — the stashed .c still references the deleted .s
 
@@ -856,6 +901,8 @@ Don't try to use `git stash` to undo a partial state when the partial state span
 
 ---
 
+---
+
 <a id="feedback-extern-redeclaration-blocks-nm-build"></a>
 ## redeclaring `extern char D_00000000` in NM wrap blocks NM-build when file already has it as `extern int`
 
@@ -895,6 +942,8 @@ redundant extern — the file-top declaration is in scope for the whole TU.
 
 ---
 
+---
+
 <a id="feedback-file-split-needs-paired-expected-o-refresh"></a>
 ## After file-split (one .c into two), refresh BOTH expected/<orig>.c.o (remove moved function) AND create expected/<new>.c.o (with the moved function) — byte_verify uses path-matched expected/.o lookups
 
@@ -928,6 +977,8 @@ This works because build/.o (post-INSN_PATCH if applicable) is byte-identical to
 
 ---
 
+---
+
 <a id="feedback-inline-nm-percentages-rot"></a>
 ## Inline NM-wrap match-percent comments rot — re-measure before trusting
 
@@ -954,6 +1005,8 @@ Something in the pipeline changed between when (1)-(6) were measured and now —
 **Anti-pattern:** Spending 20 min trying variants to "improve 95 % → 100 %" when the real starting point is 33 %. The problem space is different.
 
 **Context lever:** The reference memo `feedback_ido_sreg_order_not_decl_driven.md` is still correct (decl reorder is a no-op); what changed is which specific $s-regs IDO picks for which locals.
+
+---
 
 ---
 
@@ -1012,6 +1065,8 @@ PREFIX_BYTES / SUFFIX_BYTES / INSN_PATCH are different — those are intentional
 
 ---
 
+---
+
 <a id="feedback-land-script-byte-verify-objdump-parse-bugs"></a>
 ## Land script byte_verify symbol-table parser had two latent bugs (single-letter type field + .NON_MATCHING alias collision)
 
@@ -1049,6 +1104,8 @@ The fix is in scripts/land-successful-decomp.sh ~line 86 (alias-skip via `parts[
 
 ---
 
+---
+
 <a id="feedback-loop-interval-not-timeout"></a>
 ## /loop's interval is cron fire cadence, NOT a per-invocation timeout
 
@@ -1073,6 +1130,8 @@ A doc-comment-only commit is a BAIL, not "progress." Valid stopping points:
 
 ---
 
+---
+
 <a id="feedback-loop-no-wait"></a>
 ## In /loop /decompile, start the next iteration immediately — don't ScheduleWakeup with a delay
 
@@ -1089,6 +1148,8 @@ _User's preference for the /decompile loop in 1080 Snowboarding. The default dyn
 - If truly blocked (build broken, agent conflict, unmatchable function queue ahead), THEN stop and tell the user — don't silently schedule.
 
 **Origin:** 2026-04-19 1080 Snowboarding agent-a. After gui_func_000014B4 commit+land, scheduled a 150s wake and user said: "can you make the tick immediately after you finish? idk why you're waiting multiple minutes after finishing a decomp".
+
+---
 
 ---
 
@@ -1116,6 +1177,8 @@ Fallbacks (only if the script is unavailable):
 **Double-check a "100 %" match you don't trust:** disassemble raw bytes directly from the .s file (or from a fresh INCLUDE_ASM build) and compare to your build's objdump. If `lw` registers differ, objdiff/expected has been contaminated.
 
 **Origin:** 2026-04-20, after split-fragments work on game_uso. Three decomps reported 100 % but actually had wrong register allocation; caught by manually reading the .s file bytes and noticing `8C8F00B4` (t7) vs my build's `8C8200B4` (v0).
+
+---
 
 ---
 
@@ -1152,6 +1215,8 @@ git diff --stat expected/
 The proper full-baseline regenerator is `scripts/refresh-expected-baseline.py` — it strips decomp C → INCLUDE_ASM, builds, then `make expected`. That's appropriate when you want the WHOLE expected/ to reflect the raw-asm baseline. Don't conflate `make expected` with that.
 
 **Symptom that you forgot the restore:** report.json's overall fuzzy_match_percent goes UP without an obvious cause (e.g. you decomped 1 small function but fuzzy% rose 0.5pp+). That's the false-positive boost from inflated unrelated wraps.
+
+---
 
 ---
 
@@ -1240,6 +1305,8 @@ In normal /decompile run flow, prefer the per-file `cp` form.
 
 ---
 
+---
+
 <a id="feedback-make-objects-skips-link-yay0-checksum"></a>
 ## `make objects` is the right Makefile target for tools that only need .c.o files
 
@@ -1265,6 +1332,8 @@ Compare to `all: verify` (the default) which depends on the full ROM build → m
 - Any tooling that needs `tenshoe.z64` / linked output.
 
 **General rule:** when wrapping `make` from a Python tool with `check_call`, prefer the narrowest target that produces what you need. Wide targets (`all`) couple your tool to every downstream build artifact's success. If a target you want doesn't exist, add one to the Makefile rather than reaching for `subprocess.call` to swallow exit codes — that path masks real failures.
+
+---
 
 ---
 
@@ -1296,6 +1365,8 @@ where you only expected to add ~30 lines for the new sub-segment.
 
 **Companion**: `feedback_make_expected_touches_all_segments.md` (same anti-pattern,
 different make target).
+
+---
 
 ---
 
@@ -1350,6 +1421,8 @@ When you find a function flagged as cross-function-tail-share unmatchable (e.g.,
 
 ---
 
+---
+
 <a id="feedback-merge-fragments-blocked-across-o-files"></a>
 ## merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)
 
@@ -1385,6 +1458,8 @@ For 1080's func_80006698 specifically, option (3) was chosen since the kernel_00
 - The merge-fragments skill itself doesn't currently warn about this case. Future improvement: add a precondition check.
 - `feedback_truncate_elf_text_must_shrink_symbols.md` — adjacent issue with cross-file size changes.
 - `feedback_o0_cluster_split_with_layout_shim.md` — the inverse case (deliberately splitting a .c file across opt-levels with a layout shim).
+
+---
 
 ---
 
@@ -1434,6 +1509,8 @@ ROM mismatch can pre-exist and is not your merge's fault.
 
 ---
 
+---
+
 <a id="feedback-merge-fragments-stale-o-caches-old-symbols"></a>
 ## After merge-fragments edits, rebuild can keep OLD symbol layout in .o without `rm -f build/<file>.o` first
 
@@ -1470,6 +1547,8 @@ Single merged symbol, correct.
 - `feedback_merge_fragments_partial_safe_subset.md` — when same-.c-file merges are safe
 - `feedback_merge_fragments_blocked_across_o_files.md` — when merges are blocked
 - General `rm -f build/.o` hygiene applies broadly to asm-processor codegen but is most surprising in merge-fragments because the .s file content visibly changed yet the .o doesn't reflect it.
+
+---
 
 ---
 
@@ -1534,6 +1613,8 @@ Same recipe as the original merge. Total time ~5 minutes if you have your own pr
 
 ---
 
+---
+
 <a id="feedback-merge-split-pr-with-parallel-decomps"></a>
 ## Merging a structural .c-split PR against parallel decomp branches — port single-line decomps by hand, selectively refresh expected/
 
@@ -1565,6 +1646,8 @@ git commit --no-edit                                 # merge commit
 **Rule of thumb:** commit expected/*.o only for units whose source files changed in THIS merge (the PR's own changes + the conflict-resolved changes).
 
 **Origin:** 2026-04-20, PR #3 (game_libs ucode split). Merged against main with 9 new decomps landed in parallel; only one decomp (`gl_func_000601B4`) was in the post-split range — 3-line hand-port. expected/ had ~25 "conflicts" but all were drift, resolved by selective staging.
+
+---
 
 ---
 
@@ -1602,6 +1685,8 @@ This is the same shared-tail pattern as `func_80006640` (see kernel_016.c) — m
 
 ---
 
+---
+
 <a id="feedback-nm-body-cpp-errors-silent"></a>
 ## NM-wrap bodies can harbor silent CPP errors that don't fail the default build
 
@@ -1632,6 +1717,8 @@ Both hid for days because the default build path never reaches them.
 4. **Periodic sweep**: when touching multiple NM wraps, a whole-tree `make CPPFLAGS=...-DNON_MATCHING` validates all files at once (many will fail; look for regressions).
 
 **Why this matters:** `-DNON_MATCHING` is the primary test channel for NM iteration (per `feedback_nm_build_incantation.md`). If the file won't even compile under NM, no one can grind that function forward. Every silent CPP error is a functional gate on the NM path for a whole file.
+
+---
 
 ---
 
@@ -1677,6 +1764,8 @@ Then eyeball-diff against the .s file to count actual mismatches.
 
 ---
 
+---
+
 <a id="feedback-nm-build-expected-contamination"></a>
 ## `expected/.o` can carry prior -DNON_MATCHING build bytes; always refresh baseline before trusting a "matches" signal
 
@@ -1711,6 +1800,8 @@ mips-linux-gnu-objdump -d -M no-aliases --disassemble=<func> expected/src/<seg>/
 **Generalizes from:** `feedback_make_expected_contamination.md` (user's C body copied into expected via bare `make expected`). THIS memo adds: -DNON_MATCHING builds can stomp `build/`, so even the `refresh-expected-baseline.py` swap can pick up NM bytes if not run cleanly.
 
 **Side note:** the `-DNON_MATCHING` build symbol-dedup pattern — asm-processor emits both `gui_func_X` and `gui_func_X.NON_MATCHING` — is a tell that the NM path compiled. If you see a `.NON_MATCHING` suffix in `objdump -t`, your build is in NM mode and expected/.o should NOT be derived from it.
+
+---
 
 ---
 
@@ -1752,6 +1843,8 @@ grep -c "^void <func>" build/src/<segment>/<file>.c           # should be 1 (CPP
 
 ---
 
+---
+
 <a id="feedback-nm-build-null-undefined"></a>
 ## Building with -DNON_MATCHING fails on `NULL` undefined — existing NM bodies assume headers not pulled in by default
 
@@ -1768,6 +1861,8 @@ _`make CPPFLAGS="-I include -I src -DNON_MATCHING"` can fail with cfe error 'NUL
 **Don't fix existing NM wraps wholesale** — they were committed by earlier runs without verifying they compile under -DNON_MATCHING. Treat the NM body as a reference comment, not a build-testable branch, unless the project ships a canonical `-DNON_MATCHING` target.
 
 **Follow-up candidate (not done):** add `#include <stddef.h>` or `#define NULL ((void*)0)` to `include/common.h` inside the NM path, so the global NM build works. Then add a `make nonmatching` Makefile target that builds with -DNON_MATCHING. Would make NM wraps uniformly testable.
+
+---
 
 ---
 
@@ -1804,6 +1899,8 @@ If you see the error, NM-build is broken for this file. You can still add NM wra
 
 ---
 
+---
+
 <a id="feedback-nm-comment-claims-recheck"></a>
 ## NM-comment "unreproducible from C" claims should be re-verified with a build — they can be wrong
 
@@ -1835,6 +1932,8 @@ mips-linux-gnu-objdump -d -M no-aliases --disassemble=<func> build/src/<path>.o 
 4. Only THEN consult the comment's tried-variants list to avoid re-testing dead ends.
 
 **Generalization:** comments age, especially when multiple agents touch the same function. Treat them as hypotheses needing verification, not facts.
+
+---
 
 ---
 
@@ -1877,6 +1976,8 @@ Not a merge conflict — my rebase onto origin/main had already resolved cleanly
 
 ---
 
+---
+
 <a id="feedback-nm-wrap-99pct-may-be-silently-exact"></a>
 ## 99% NM wraps may have silently become byte-exact — try unwrapping first
 
@@ -1912,6 +2013,8 @@ notes downward drift); this case is upward drift to silent exact.
 
 ---
 
+---
+
 <a id="feedback-nm-wrap-body-change-needs-rm-o"></a>
 ## NM-wrap body changes may not show in fuzzy until you `rm -f build/non_matching/<path>.c.o`
 
@@ -1935,6 +2038,8 @@ _After editing the C body of an `#ifdef NON_MATCHING` wrap (substantial structur
 - Pairs with `feedback_merge_fragments_stale_o_caches_old_symbols.md`'s same-mechanism gotcha for merge-fragments.
 
 **Companion symptom:** `objdump --disassemble=<func> build/non_matching/.../*.c.o` will show your NEW code while `report.json` reports OLD fuzzy. That mismatch is the diagnostic — if both look "unchanged", the build genuinely didn't pick up your edit (probably a syntax error in the NM-only branch that silently kept the previous .o; check `make` stderr).
+
+---
 
 ---
 
@@ -1980,6 +2085,8 @@ If `fuzzy_match_percent` is 100.0 — promote to exact:
 - `feedback_objdiff_null_percent_means_not_tracked.md` — null fuzzy% in default build is normal for NM wraps; need -DNON_MATCHING to measure.
 - `feedback_nm_body_cpp_errors_silent.md` — sometimes -DNON_MATCHING build fails (D_xxx redecl etc.); fix or skip.
 - `feedback_dnonmatching_with_wrap_intact_false_match.md` — opposite trap (wrap intact + DNM = bogus 100%).
+
+---
 
 ---
 
@@ -2029,6 +2136,8 @@ drift is always negative — re-measure regardless of direction expected.
 
 ---
 
+---
+
 <a id="feedback-nm-wrap-historical-pct-drift"></a>
 ## NM-wrap doc-comments may claim historical match % that no longer reproduces — re-verify before grinding
 
@@ -2069,6 +2178,8 @@ Compare to the wrap's claim. If they differ by ≥10 pp, ADD a `(N) RE-VERIFIED 
 - `feedback_doc_only_commits_are_punting.md` — doc-only updates without C changes ARE punting (this memo's recommendation: empirical re-verify counts as productive only when paired with at least one new variant attempt)
 - `feedback_old_nm_wraps_can_lie.md` — sibling: wrong jal targets in old wraps
 - `feedback_nm_wrap_post_jal_arg_vs_return.md` — sibling: wrong post-jal pointer assumptions in old wraps
+
+---
 
 ---
 
@@ -2118,6 +2229,8 @@ If DNM build fails for the file (per `feedback_nm_body_cpp_errors_silent.md` / `
 **Apply to existing wraps:** when editing or commenting on an existing wrap, if the leading `%` is missing, measure and add it. Backfilling is faster than re-measuring later.
 
 **The four sibling-A97C wraps I'd written are all 72.21%** — sibling-shape claims correctly tracked relative match but the absolute number was ~25 percentage points off "near-match" expectations. Always measure.
+
+---
 
 ---
 
@@ -2197,6 +2310,8 @@ grep -c "gl_func_00000000(" <wrap C body>            # number of calls in wrap
 ```
 
 If these numbers don't match, fix the C body BEFORE attempting any "register-allocation" or "CSE" workaround. Doc-comment claims are not trustworthy; the asm IS.
+
+---
 
 ---
 
@@ -2306,6 +2421,8 @@ by the verification recipe above):
 
 ---
 
+---
+
 <a id="feedback-objdiff-include-asm-only-file-bogus-100pct"></a>
 ## objdiff reports 100% for every INCLUDE_ASM-only .c file — baseline swap is a no-op
 
@@ -2355,6 +2472,8 @@ Before reporting progress numbers from `refresh-report.sh` or `objdiff-cli repor
 
 ---
 
+---
+
 <a id="feedback-objdiff-null-percent-means-not-tracked"></a>
 ## `fuzzy_match_percent: null` in objdiff report does NOT mean 100 % match — it means "not in the tracked diff set"
 
@@ -2394,6 +2513,8 @@ This resolves both original failure modes:
 So: the byte-verify is only trustworthy if expected/ is trustworthy. Keep a habit of running `refresh-expected-baseline.py` after splits/merges/Makefile changes.
 
 **History:** initially tightened to `== 100.0` strict (commit 4978ea3) after BF7C false-match. That over-rejected legit matches (gui_func_0000267C, gui_func_000026CC had to be landed manually). Relaxed with byte-verify fallback (commit e612168).
+
+---
 
 ---
 
@@ -2450,6 +2571,8 @@ into $v0, fall back to NM wrap.
 
 ---
 
+---
+
 <a id="feedback-objdiff-report-caches-stale-per-function-state"></a>
 ## objdiff report.json caches per-function state — `rm -f report.json` before regen if a function "stays unmatched" after expected/.o refresh
 
@@ -2497,6 +2620,8 @@ regen before deeper investigation.
 - `feedback_land_script_stale_report_after_insn_patch.md` (similar but
   about cached .o mtimes, not report.json caching)
 - `feedback_per_file_expected_refresh_recipe.md` (the cp recipe itself)
+
+---
 
 ---
 
@@ -2550,6 +2675,8 @@ The land script's exact-match check (`fuzzy_match_percent == 100.0`) handles `No
 **Related**:
 - `feedback_cross_function_tail_share_unmatchable_standalone.md` — sibling pattern (cross-function tail share, also unmatchable)
 - `feedback_byte_correct_match_via_include_asm_not_c_body.md` — sibling caveat about wrap-tautology
+
+---
 
 ---
 
@@ -2633,6 +2760,8 @@ the skip-list invariant.
 
 ---
 
+---
+
 <a id="feedback-prefix-byte-inject-unblocks-uso-trampoline"></a>
 ## PREFIX_BYTES Makefile var + scripts/inject-prefix-bytes.py — unblocks USO entry-0 trampoline funcs
 
@@ -2683,6 +2812,8 @@ Add another opcode if you hit a fourth valid prologue shape.
 **Detect-and-skip:** the script no-ops if the function's first insn already matches the prefix (e.g. INCLUDE_ASM build path where the .s already contains the trampoline `.word`). Same Makefile recipe works for both C-emit and INCLUDE_ASM-emit builds — important for `refresh-expected-baseline.py` flows.
 
 **Per `feedback_prefix_sidecar_symbol_collision.md`** — supersedes that memo's "out of scope" decision. The 2026-04-21 conclusion ("needs linker-level symbol-table patching that the project doesn't yet have") is no longer accurate; the patching is now in `scripts/inject-prefix-bytes.py`.
+
+---
 
 ---
 
@@ -2747,6 +2878,8 @@ Option C: give up on the glabel name matching. Use a completely different C func
 
 ---
 
+---
+
 <a id="feedback-splat-at-register-carryover"></a>
 ## game_libs function starts with `sw rX, N($at)` using uninit $at — splat boundary artifact, not reproducible from C
 
@@ -2778,6 +2911,8 @@ sw    a2, 0($at)         ; delay (this one is legit)
 **Related:** `feedback_splat_rerun_gotchas.md` (splat re-runs clobber config files). `feedback_function_trailing_nop_padding.md` (splat over-extending by trailing padding — similar class of sizing error).
 
 **Origin:** 2026-04-19 game_libs gl_func_00031D7C. Function starts with `sw a1, 0($at)` — no preceding lui inside. `gl_func_00031A74` ends with `3C010000 AC240000 3C010000` (lui $at; sw $a0, 0($at); lui $at) — the final lui is the actual prologue of gl_func_00031D7C. Matched to 97.8 %, wrapped NON_MATCHING.
+
+---
 
 ---
 
@@ -2820,6 +2955,8 @@ for name in re.findall(r'void (func_[0-9A-Fa-f]+)\(void\) \{\n\}', text):
 Run once per segment after initial splat, and again after any splat re-run that might introduce new empty-leaf boundaries.
 
 **Origin:** user asked 2026-04-18 "are you still writing episodes for successful decompilations?" while batching bootup_uso work. 148 episodes logged for active decomps, 10 empty-function matches silently missing until then.
+
+---
 
 ---
 
@@ -2896,6 +3033,8 @@ This emits a different reloc from what the original compiler emitted — the ori
 
 ---
 
+---
+
 <a id="feedback-splat-fragment-split-no-prologue-leaf"></a>
 ## Splat/generate-uso-asm merges no-prologue leaf functions into the preceding function's .s
 
@@ -2930,6 +3069,8 @@ _Mirror of the merge-fragments case. When a leaf function has NO `addiu $sp, -N`
 - 2+ insns including a `jr $ra` and meaningful body = genuine function, DO split
 
 **Follow-up memory to write when extending:** once `generate-uso-asm.py` is patched to detect jr-ra boundaries, update or retire this memo and re-run detection. Expect the 400+ candidate count to apply to other USOs too — high leverage.
+
+---
 
 ---
 
@@ -2977,6 +3118,8 @@ ADCD0028   sw    t5, 0x28(t6)     ; uses t5 and t6 from parent!
 
 ---
 
+---
+
 <a id="feedback-splat-func-plus-offset-data"></a>
 ## Splat's "func_NAME + 0xNN" notation is a data symbol at FUNC+OFFSET, not a call into mid-function
 
@@ -3021,6 +3164,8 @@ The built .o's relocation records will be semantically different from the asm (a
 - Related memory: `feedback_game_libs_gl_ref_data.md` covers the `gl_ref_XXXX` convention for game_libs; this memo generalizes to any USO's data-symbol-via-func-offset notation.
 
 **Origin:** 2026-04-19 while decompiling `func_0000F7D0` in bootup_uso's -O0 Run 2. First non-template -O0 function successfully matched in the run. Pattern will recur across other -O0 functions in the run (e.g. `func_0000F954` uses `%hi(func_00000188 + 0x8)` = address 0x190).
+
+---
 
 ---
 
@@ -3079,6 +3224,8 @@ Fix took 4 commands: edit .s (delete 2 lines), rebuild build/.o, cp to expected/
 - `feedback_splat_rerun_gotchas.md` (the broader splat clobber list — tenshoe.ld, undefined_syms_auto.txt, .set preludes)
 - `feedback_alias_removal_is_metric_pollution_DO_NOT_USE.md` (DO NOT remove `.NON_MATCHING` aliases from .o; fix the .s source instead)
 - `feedback_byte_correct_match_via_include_asm_not_c_body.md` (INCLUDE_ASM tautology — explains why a function with no C body still scores 100% pre-splat-clobber)
+
+---
 
 ---
 
@@ -3154,6 +3301,8 @@ The `discover` tool sorts by size ascending and presents these dupes as small un
 
 ---
 
+---
+
 <a id="feedback-splat-prologue-stolen-by-predecessor"></a>
 ## Splat mis-boundary direction 4 — successor's prologue stolen by predecessor (reverse merge)
 
@@ -3221,6 +3370,8 @@ Concrete signal: the NM wrap's stores use `*(int*)((char*)a0 + N)` but target's 
 
 ---
 
+---
+
 <a id="feedback-splat-rerun-gotchas"></a>
 ## Re-running splat clobbers tenshoe.ld and include_asm.h
 
@@ -3255,6 +3406,8 @@ for f in glob.glob('asm/nonmatchings/<NEW_SEG>/*.s'):
 Then re-apply your intended yaml edits manually to tenshoe.ld and keep moving.
 
 **Origin:** discovered 2026-04-18 while adding bootup_uso to 1080 Snowboarding's splat config. First splat run clobbered the kernel's 55-file linker ordering and the asm-processor no-op macro, silently breaking the kernel build.
+
+---
 
 ---
 
@@ -3318,6 +3471,8 @@ Concrete 2026-04-20 case: 0xB498 had 8-insn real body + `lui $v1, 0; lw $v1, 0x2
 
 ---
 
+---
+
 <a id="feedback-truncate-elf-text-must-shrink-symbols"></a>
 ## scripts/truncate-elf-text.py must shrink trailing symbols past sh_size, not just .text section size
 
@@ -3357,6 +3512,8 @@ This is a related-but-distinct issue from `feedback_dnonmatching_with_wrap_intac
 **Related:**
 - `feedback_prologue_stolen_successor_no_recipe.md` — splice-function-prefix.py background
 - `scripts/truncate-elf-text.py` — the fixed tool
+
+---
 
 ---
 
@@ -3450,6 +3607,8 @@ If a real fix appears later (upstream objdiff change, or a confidently-scoped lo
 
 ---
 
+---
+
 <a id="feedback-truncate-text-blocks-smaller-nm-emit"></a>
 ## TRUNCATE_TEXT can block a smaller-emit C variant that would otherwise improve match
 
@@ -3474,6 +3633,8 @@ make: *** [...] Error 1
 - (c) Accept the cap and document.
 
 **Origin:** 2026-05-03, arcproc_uso_func_0000012C grinding session. Discovered when ternary single-return `return *a0 == 0;` triggered the truncate error after looking like the obvious fix for the trailing dead-branch cap.
+
+---
 
 ---
 
@@ -3539,6 +3700,8 @@ smaller (0xX < 0xY)`, set TRUNCATE_TEXT to 0xX.
 
 ---
 
+---
+
 <a id="feedback-truncate-text-preserve-drift"></a>
 ## TRUNCATE_TEXT must match natural compiled size, not the clean ROM boundary — drift cuts real code
 
@@ -3558,6 +3721,8 @@ _When splitting a .c file with TRUNCATE_TEXT, set the target to the natural comp
 3. Cross-check: `objdump -t .../file.c.o | grep gl_func_<boundary>` should show the boundary function's address matches (expected_addr + drift), where drift = (compiled_size - expected_size).
 
 **Origin:** 2026-04-20, issue #2 (game_libs ucode split). Initial TRUNCATE_TEXT := 0xEBF8 cut the trailing `jr ra; nop` (8 bytes) of gl_func_0000EBC8. Fixed by bumping to 0xEC00.
+
+---
 
 ---
 
@@ -3616,3 +3781,4 @@ When an NM wrap caps at ~92% with the diff being EXACTLY the 26-bit jal target f
 
 ---
 
+---

@@ -41,6 +41,7 @@ This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-d
 - **Commit per-function, don't batch.** One match → one commit with its episode → land via script → push.
 - **`report.json` is git-tracked but updated by the land script.** Before landing, `git checkout HEAD -- report.json` if your worktree has stomped it during local diffing.
 - **asm-processor (IDO) / KMC GCC (Glover)** — per-project compiler. See each project's notes in the `/decompile` skill.
+- **Project knowledge → `docs/`, NOT a memo.** When you discover a non-obvious decomp pattern, IDO quirk, build gotcha, or recipe that future agents would benefit from, write it directly to the relevant `docs/*.md` file (with a section heading + body + Index entry). Memos in `~/.claude/projects/.../memory/` are reserved for per-conversation context that doesn't belong in the repo: user preferences, project-state-of-the-day, work-in-progress notes. Codex and other non-Claude agents can't see memory; they CAN see docs. Choose accordingly. (Convention established 2026-05-05 after migrating ~400 accumulated memos to docs/.)
 
 ## Not in this repo
 

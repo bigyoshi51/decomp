@@ -6,26 +6,27 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 ## Index
 
-- [Prologue-stolen successor + IDO &D-CSE: combine PROLOGUE_STEALS with a unique extern to break the CSE and reach 100 %](#feedback-combine-prologue-steals-with-unique-extern) — When a prologue-stolen successor uses v0=&D for in-body field stores AND the target ALSO emits a fresh `lui aN; lw aN, 0(aN)` for a *D deref
-- [INSN_PATCH can rewrite a function's trailing region when IDO emits dead BB markers PLUS TRUNCATE_TEXT clips the actual epilogue — collapse the dead bytes INTO the missing epilogue](#feedback-insn-patch-collapses-dead-bb-into-truncated-tail) — A function whose IDO-emitted body has dead 'b epilogue; nop' BB markers BEFORE the real epilogue, AND whose `.o` is TRUNCATE_TEXT'd to a siz
-- [INSN_PATCH Makefile var + scripts/patch-insn-bytes.py promotes 99% IDO-cap wraps to 100%](#feedback-insn-patch-for-ido-codegen-caps) — For functions where the C body is correct but 1-2 instructions cap below 100% due to IDO scheduler/allocator choices that aren't reachable f
-- [INSN_PATCH is a NO-OP when the function is wrapped `#ifdef NON_MATCHING / #else INCLUDE_ASM` — drop the wrap to make it effective](#feedback-insn-patch-noop-under-include-asm-wrap) — When a function uses the `#ifdef NON_MATCHING { body } #else INCLUDE_ASM(...); #endif` template AND has INSN_PATCH defined for it in the Mak
-- [INSN_PATCH offsets are body-dependent — drop C-only crutches before applying a ported patch](#feedback-insn-patch-offsets-body-dependent) — When porting an INSN_PATCH from a sibling worktree, the patch's word offsets reference positions WITHIN the function as it's emitted. If you
-- [INSN_PATCH on R_MIPS_HI16/LO16 reloc instructions makes build/.o vs expected/.o byte_verify FAIL even though post-link ROM bytes match](#feedback-insn-patch-on-reloc-instructions-breaks-byte-verify) — When INSN_PATCH targets the lui/lw pair of an extern symbol access (e.g., `lui t0, %hi(D_X); lw t0, %lo(D_X)(t0)`), it bakes the post-resolu
-- [Check sibling worktrees BEFORE declaring INSN_PATCH (or any tool) missing](#feedback-insn-patch-recipe-infra-missing-on-agent-a) — A previous tick concluded "INSN_PATCH infra missing on agent-a/origin/main" without checking projects/1080-agent-b/. The script + Makefile r
-- [INSN_PATCH cannot fix functions where IDO emits a different INSTRUCTION COUNT than target — only operand-order / register-choice diffs at fixed offsets](#feedback-insn-patch-size-diff-blocked) — scripts/patch-insn-bytes.py overwrites N specific 4-byte words in place — function size is unchanged. So if your C body emits N insns and ta
-- [INSN_PATCH leaves stale relocs at patched offsets — safe for USO segments because the externs are at address 0](#feedback-insn-patch-stale-reloc-safe-for-uso) — scripts/patch-insn-bytes.py only rewrites .text bytes; it doesn't update the .rel.text table. The reloc still points at the original offset,
-- [land-script's report regenerate runs against stale .o files — INSN_PATCH lands show as `None` in pushed report.json](#feedback-land-script-stale-report-after-insn-patch) — After landing an INSN_PATCH-promoted function, the land-script's `objdiff-cli report generate` step re-runs without forcing a rebuild, so ca
-- [NM-wrap docs predicting "INSN_PATCH at offset 0xN" can drift over time — re-measure offsets at apply time](#feedback-predicted-insn-patch-offsets-drift) — Wrap docs that predict an exact patch recipe ("3-word INSN_PATCH at func+0x38/0x68/0x6C") can have offsets drift by 8-16 bytes due to upstre
-- [PREFIX_BYTES + INSN_PATCH combo can break "permanently locked" caps when C-emit shape differs from target by N leading + 1 trailing insn](#feedback-prefix-bytes-plus-insn-patch-breaks-documented-caps) — A documented "permanently locked" NM cap (e.g. cross-function tail-share, IDO scheduling unflippables) can sometimes be broken by combining 
-- [inject-prefix-bytes.py whitelist broadened 2026-05-04 — leaf-arithmetic entries now accepted](#feedback-prefix-bytes-refuses-leaf-functions) — HISTORICAL — inject-prefix-bytes.py used to refuse functions whose first insn wasn't addiu sp / jr ra / opcode 0x09. As of 2026-05-04 the wh
-- [PROLOGUE_STEALS belongs on the non_matching Makefile rule too — it's not metric-cheating like other post-cc recipes](#feedback-prologue-steals-belongs-on-non-matching-too) — The non_matching build rule (`build/non_matching/src/%.c.o`) was originally written to skip ALL post-cc recipes (PROLOGUE_STEALS / PREFIX_BY
-- [PROLOGUE_STEALS and INSN_PATCH compose cleanly on the same function — strip prefix bytes first, then patch mid-function caps](#feedback-prologue-steals-plus-insn-patch-compose) — Both recipes operate post-cc on the .o file. PROLOGUE_STEALS=N strips the leading N bytes from a function symbol (shifts subsequent bytes/sy
-- [PROLOGUE_STEALS works even when the rest of the body has dangling-register uses — write C with non-char extern + PROLOGUE_STEALS=8 to splice the load](#feedback-prologue-steals-with-dangling-register-use) — Standard prologue-stolen-successor recipe (PROLOGUE_STEALS=8 + extern char D_X cast) works fine when the C body only uses the address (`&D_X
-- [SUFFIX_BYTES Makefile entry must be REMOVED if the function is NM-wrapped (not always-C)](#feedback-suffix-bytes-breaks-include-asm-build) — Unlike PROLOGUE_STEALS (which silently skips when the function's first insn isn't a recognized prologue), SUFFIX_BYTES injection trips its v
-- [SUFFIX_BYTES with N words of `0x03E00008,0x00000000` absorbs bundled trailing empty functions in a USO .s file](#feedback-suffix-bytes-for-bundled-empty-trailers) — When a USO .s file bundles a real function plus N small empty (`jr ra; nop`) functions that splat couldn't separate, write only the main C b
-- [SUFFIX_BYTES + PROLOGUE_STEALS combo only matches when successor's data setup is at function start, not mid-function](#feedback-suffix-bytes-only-helps-start-of-function) — SUFFIX_BYTES injects bytes at predecessor's tail; PROLOGUE_STEALS splices bytes from successor's start. Combo works ONLY if the successor's 
-- [SUFFIX_BYTES (not pad-sidecar) is the right tool for 4-byte trailing stolen-prologue from predecessor](#feedback-suffix-bytes-unblocks-4byte-stolen-prologue) — When a predecessor function has a SINGLE trailing instruction (e.g. `lw t8, 0x23C(a0)`) that's the stolen prologue for the next function, pa
+- [Prologue-stolen successor + IDO &D-CSE: combine PROLOGUE_STEALS with a unique extern to break the CSE and reach 100 %](#feedback-combine-prologue-steals-with-unique-extern) — _When a prologue-stolen successor uses v0=&D for in-body field stores AND the target ALSO emits a fresh `lui aN; lw aN, 0(aN)` for a *D dereference at a call site (instead of reusing v0), straight C with PROLOGUE_STEALS…
+- [INSN_PATCH can rewrite a function's trailing region when IDO emits dead BB markers PLUS TRUNCATE_TEXT clips the actual epilogue — collapse the dead bytes INTO the missing epilogue](#feedback-insn-patch-collapses-dead-bb-into-truncated-tail) — _A function whose IDO-emitted body has dead 'b epilogue; nop' BB markers BEFORE the real epilogue, AND whose `.o` is TRUNCATE_TEXT'd to a size that drops the trailing jr ra + nop, looks like it has fewer insns than…
+- [INSN_PATCH Makefile var + scripts/patch-insn-bytes.py promotes 99% IDO-cap wraps to 100%](#feedback-insn-patch-for-ido-codegen-caps) — _For functions where the C body is correct but 1-2 instructions cap below 100% due to IDO scheduler/allocator choices that aren't reachable from C source (FPU pipeline-driven add.s operand order, reg-allocator t6 vs t9…
+- [INSN_PATCH is a NO-OP when the function is wrapped `#ifdef NON_MATCHING / #else INCLUDE_ASM` — drop the wrap to make it effective](#feedback-insn-patch-noop-under-include-asm-wrap) — _When a function uses the `#ifdef NON_MATCHING { body } #else INCLUDE_ASM(...); #endif` template AND has INSN_PATCH defined for it in the Makefile, the byte-correct build (`build/src/.../*.c.o`) takes the `#else` branch…
+- [INSN_PATCH offsets are body-dependent — drop C-only crutches before applying a ported patch](#feedback-insn-patch-offsets-body-dependent) — _When porting an INSN_PATCH from a sibling worktree, the patch's word offsets reference positions WITHIN the function as it's emitted.
+- [INSN_PATCH on R_MIPS_HI16/LO16 reloc instructions makes build/.o vs expected/.o byte_verify FAIL even though post-link ROM bytes match](#feedback-insn-patch-on-reloc-instructions-breaks-byte-verify) — _When INSN_PATCH targets the lui/lw pair of an extern symbol access (e.g., `lui t0, %hi(D_X); lw t0, %lo(D_X)(t0)`), it bakes the post-resolution bytes (0x3C08A404, 0x8D080010 for D_A4040010) directly into the .o.
+- [Check sibling worktrees BEFORE declaring INSN_PATCH (or any tool) missing](#feedback-insn-patch-recipe-infra-missing-on-agent-a) — _A previous tick concluded "INSN_PATCH infra missing on agent-a/origin/main" without checking projects/1080-agent-b/.
+- [INSN_PATCH cannot fix functions where IDO emits a different INSTRUCTION COUNT than target — only operand-order / register-choice diffs at fixed offsets](#feedback-insn-patch-size-diff-blocked) — _scripts/patch-insn-bytes.py overwrites N specific 4-byte words in place — function size is unchanged.
+- [INSN_PATCH leaves stale relocs at patched offsets — safe for USO segments because the externs are at address 0](#feedback-insn-patch-stale-reloc-safe-for-uso) — _scripts/patch-insn-bytes.py only rewrites .text bytes; it doesn't update the .rel.text table.
+- [land-script's report regenerate runs against stale .o files — INSN_PATCH lands show as `None` in pushed report.json](#feedback-land-script-stale-report-after-insn-patch) — _After landing an INSN_PATCH-promoted function, the land-script's `objdiff-cli report generate` step re-runs without forcing a rebuild, so cached .o files from before the Makefile INSN_PATCH addition still don't have…
+- [NM-wrap docs predicting "INSN_PATCH at offset 0xN" can drift over time — re-measure offsets at apply time](#feedback-predicted-insn-patch-offsets-drift) — _Wrap docs that predict an exact patch recipe ("3-word INSN_PATCH at func+0x38/0x68/0x6C") can have offsets drift by 8-16 bytes due to upstream changes (decl reordering, different compiler version, frame-size…
+- [PREFIX_BYTES + INSN_PATCH combo can break "permanently locked" caps when C-emit shape differs from target by N leading + 1 trailing insn](#feedback-prefix-bytes-plus-insn-patch-breaks-documented-caps) — _A documented "permanently locked" NM cap (e.g. cross-function tail-share, IDO scheduling unflippables) can sometimes be broken by combining PREFIX_BYTES (inject N leading bytes that C can't produce) + INSN_PATCH…
+- [inject-prefix-bytes.py whitelist broadened 2026-05-04 — leaf-arithmetic entries now accepted](#feedback-prefix-bytes-refuses-leaf-functions) — _HISTORICAL — inject-prefix-bytes.py used to refuse functions whose first insn wasn't addiu sp / jr ra / opcode 0x09.
+- [PROLOGUE_STEALS belongs on the non_matching Makefile rule too — it's not metric-cheating like other post-cc recipes](#feedback-prologue-steals-belongs-on-non-matching-too) — _The non_matching build rule (`build/non_matching/src/%.c.o`) was originally written to skip ALL post-cc recipes (PROLOGUE_STEALS / PREFIX_BYTES / SUFFIX_BYTES / INSN_PATCH / TRUNCATE_TEXT) under the rationale "those…
+- [PROLOGUE_STEALS and INSN_PATCH compose cleanly on the same function — strip prefix bytes first, then patch mid-function caps](#feedback-prologue-steals-plus-insn-patch-compose) — _Both recipes operate post-cc on the .o file.
+- [PROLOGUE_STEALS works even when the rest of the body has dangling-register uses — write C with non-char extern + PROLOGUE_STEALS=8 to splice the load](#feedback-prologue-steals-with-dangling-register-use) — _Standard prologue-stolen-successor recipe (PROLOGUE_STEALS=8 + extern char D_X cast) works fine when the C body only uses the address (`&D_X + offset`).
+- [SUFFIX_BYTES Makefile entry must be REMOVED if the function is NM-wrapped (not always-C)](#feedback-suffix-bytes-breaks-include-asm-build) — _Unlike PROLOGUE_STEALS (which silently skips when the function's first insn isn't a recognized prologue), SUFFIX_BYTES injection trips its verify check on the INCLUDE_ASM build path because the trailing dead bytes are…
+- [SUFFIX_BYTES with N words of `0x03E00008,0x00000000` absorbs bundled trailing empty functions in a USO .s file](#feedback-suffix-bytes-for-bundled-empty-trailers) — _When a USO .s file bundles a real function plus N small empty (`jr ra; nop`) functions that splat couldn't separate, write only the main C body and use SUFFIX_BYTES to add N×8 bytes of `0x03E00008,0x00000000` per empty.
+- [SUFFIX_BYTES + PROLOGUE_STEALS combo only matches when successor's data setup is at function start, not mid-function](#feedback-suffix-bytes-only-helps-start-of-function) — _SUFFIX_BYTES injects bytes at predecessor's tail; PROLOGUE_STEALS splices bytes from successor's start.
+- [SUFFIX_BYTES (not pad-sidecar) is the right tool for 4-byte trailing stolen-prologue from predecessor](#feedback-suffix-bytes-unblocks-4byte-stolen-prologue) — _When a predecessor function has a SINGLE trailing instruction (e.g. `lw t8, 0x23C(a0)`) that's the stolen prologue for the next function, pad-sidecar fails (asm-processor alignment shifts the successor by +4).
+
 
 ---
 
@@ -110,6 +111,8 @@ For the simpler `lui+addiu` (address-only) case, declare the extern at `0x000000
 
 ---
 
+---
+
 <a id="feedback-insn-patch-collapses-dead-bb-into-truncated-tail"></a>
 ## INSN_PATCH can rewrite a function's trailing region when IDO emits dead BB markers PLUS TRUNCATE_TEXT clips the actual epilogue — collapse the dead bytes INTO the missing epilogue
 
@@ -186,6 +189,8 @@ function symbol now contains the correct 30 insns end-to-end.
 - `feedback_ido_o0_eq_operand_swap_for_load_order.md` — the load-order
   prerequisite that got this function from 82.3% to 93.33% before
   INSN_PATCH took it the rest of the way
+
+---
 
 ---
 
@@ -312,6 +317,8 @@ residual cap.
 
 ---
 
+---
+
 <a id="feedback-insn-patch-noop-under-include-asm-wrap"></a>
 ## INSN_PATCH is a NO-OP when the function is wrapped `#ifdef NON_MATCHING / #else INCLUDE_ASM` — drop the wrap to make it effective
 
@@ -394,6 +401,8 @@ make build/src/<seg>/<unit>.c.o RUN_CC_CHECK=0 2>&1 | grep "patch-insn"
 
 ---
 
+---
+
 <a id="feedback-insn-patch-offsets-body-dependent"></a>
 ## INSN_PATCH offsets are body-dependent — drop C-only crutches before applying a ported patch
 
@@ -444,6 +453,8 @@ left in place would have mis-applied; correct path was strip-first,
 patch-second. 0/N patches applied with the volatile present (verified
 mentally from offsets — didn't actually attempt with it in place since
 the body shape difference was visible up front).
+
+---
 
 ---
 
@@ -510,6 +521,8 @@ Diffs vs target across 7 fixed-offset words. Offsets 0x0/0x4 are R_MIPS_HI16/LO1
 
 ---
 
+---
+
 <a id="feedback-insn-patch-recipe-infra-missing-on-agent-a"></a>
 ## Check sibling worktrees BEFORE declaring INSN_PATCH (or any tool) missing
 
@@ -571,6 +584,8 @@ agent-a" — user pushed back, agent-b inspection revealed both the
 script AND a per-function entry (`func_00010324=0x10:0x008f1021,
 0x14:0x24420084`) ready to port. Promoted the function from 7/8 NM cap
 to exact in one tick after porting.
+
+---
 
 ---
 
@@ -643,6 +658,8 @@ invent a complex C restructure that adds spills (the cure is worse).
 
 ---
 
+---
+
 <a id="feedback-insn-patch-stale-reloc-safe-for-uso"></a>
 ## INSN_PATCH leaves stale relocs at patched offsets — safe for USO segments because the externs are at address 0
 
@@ -696,6 +713,8 @@ approach is to ALSO emit a paired "remove this reloc" or "move reloc
 to offset N" directive — but the current script doesn't support that.
 If you hit a non-USO case that fails, inject a python script step that
 patches the .rel.text table to clear or move the affected entries.
+
+---
 
 ---
 
@@ -777,6 +796,8 @@ this bug.
 
 ---
 
+---
+
 <a id="feedback-predicted-insn-patch-offsets-drift"></a>
 ## NM-wrap docs predicting "INSN_PATCH at offset 0xN" can drift over time — re-measure offsets at apply time
 
@@ -819,6 +840,8 @@ not literal about the offsets.
 **Companion to:** `feedback_insn_patch_for_ido_codegen_caps.md` (general
 INSN_PATCH usage), `feedback_insn_patch_offsets_body_dependent.md` (the
 deeper version: any C body change shifts offsets).
+
+---
 
 ---
 
@@ -924,6 +947,8 @@ All four classes share the same property: the C body has zero useful information
 
 ---
 
+---
+
 <a id="feedback-prefix-bytes-refuses-leaf-functions"></a>
 ## inject-prefix-bytes.py whitelist broadened 2026-05-04 — leaf-arithmetic entries now accepted
 
@@ -969,6 +994,8 @@ remains an unmatchable 0% diff.
 - Long-term: relax the script's prologue check to allow any insn (with
   appropriate confirmation), or add a separate "leaf" mode. Out of
   single-tick scope; document the cap inline in the wrap.
+
+---
 
 ---
 
@@ -1032,6 +1059,8 @@ Land script rejects: `not an exact match (fuzzy_match_percent=97.10)`.
 - `feedback_prologue_stolen_successor_no_recipe.md` (the original PROLOGUE_STEALS recipe spec)
 - `feedback_prologue_steals_plus_insn_patch_compose.md` (composition with INSN_PATCH)
 - `feedback_predicted_insn_patch_offsets_drift.md` (offsets drift after C body changes)
+
+---
 
 ---
 
@@ -1099,6 +1128,8 @@ before relying on it.)
 
 ---
 
+---
+
 <a id="feedback-prologue-steals-with-dangling-register-use"></a>
 ## PROLOGUE_STEALS works even when the rest of the body has dangling-register uses — write C with non-char extern + PROLOGUE_STEALS=8 to splice the load
 
@@ -1160,6 +1191,8 @@ The DIFFERENCE here is the predecessor's tail does `lui+lw` (loads a VALUE, not 
 
 ---
 
+---
+
 <a id="feedback-suffix-bytes-breaks-include-asm-build"></a>
 ## SUFFIX_BYTES Makefile entry must be REMOVED if the function is NM-wrapped (not always-C)
 
@@ -1190,6 +1223,8 @@ When the wrap goes back to fully-C (no NM wrap, default-built body), re-add the 
 - `feedback_prefix_byte_inject_unblocks_uso_trampoline.md` — the prefix script's auto-skip works because the prefix bytes pattern is distinguishable (e.g. trampoline word).
 - `feedback_prologue_stolen_predecessor_no_recipe.md` — the SUFFIX_BYTES recipe + script.
 - `feedback_nm_build_truncate_breaks_per_file.md` — adjacent issue: NM-build can break per-file due to TRUNCATE_TEXT mismatch when wrapped functions emit shorter than expected.
+
+---
 
 ---
 
@@ -1272,6 +1307,8 @@ script with comma-separated hex words.
 
 ---
 
+---
+
 <a id="feedback-suffix-bytes-only-helps-start-of-function"></a>
 ## SUFFIX_BYTES + PROLOGUE_STEALS combo only matches when successor's data setup is at function start, not mid-function
 
@@ -1333,6 +1370,8 @@ mid-function lui+lw is the diff.
 
 ---
 
+---
+
 <a id="feedback-suffix-bytes-unblocks-4byte-stolen-prologue"></a>
 ## SUFFIX_BYTES (not pad-sidecar) is the right tool for 4-byte trailing stolen-prologue from predecessor
 
@@ -1391,3 +1430,4 @@ Drop the prior NM wrap, emit C body unconditionally; SUFFIX_BYTES appends the no
 
 ---
 
+---

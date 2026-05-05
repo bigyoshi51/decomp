@@ -6,19 +6,20 @@ _13 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 ## Index
 
-- [Files in agent-X worktree CAN be modified externally during a session — stage edits immediately, don't trust working-tree state across long Bash invocations](#feedback-agent-worktree-external-modification) — Despite the worktree-per-agent isolation, files in /home/dan/Documents/code/decomp/projects/1080-agent-X/ have been observed to mutate witho
-- [`assets/` is per-worktree (copied, not shared) — new splat entries need per-worktree asset extraction](#feedback-assets-dir-not-shared-between-worktrees) — When a parallel agent adds a new `bin` segment to `tenshoe.yaml` (e.g. a newly-discovered RSP ucode blob) and runs splat, the extracted `ass
-- [When bash cwd has drifted to main worktree, Edit (absolute path) and grep/make/sed (cwd-relative) target DIFFERENT files — edits "vanish" without warning](#feedback-bash-cwd-drift-creates-edit-grep-split) — After the land-script's `cd` leaves the bash session's cwd in the main worktree, Edit/Write/Read calls with the agent-b absolute path target
-- [Bash session can drift to main worktree OR ORCHESTRATOR REPO after `cd` for tooling — always verify pwd/branch before commit](#feedback-bash-cwd-drifts-to-main-worktree) — After running the land-successful-decomp.sh script OR after explicitly `cd`ing to the orchestrator (e.g. `cd /home/dan/Documents/code/decomp
-- [Always check `gh auth status` active account BEFORE running mutating gh commands (issue create, PR create, comment)](#feedback-check-gh-auth-active-user-before-mutating) — gh CLI silently uses whichever account is "Active account: true". Two accounts are configured here (djsaunde + bigyoshi51) and the active on
-- [`git add -A` accidentally tracks the `tools/ido-static-recomp` symlink, breaking the land script](#feedback-git-add-a-traps-symlink) — Don't use `git add -A` in agent-X worktrees. The `tools/ido-static-recomp` symlink (set up locally per `reference_worktrees.md`) is gitignor
-- [Don't `git add -A` / `git add .` in a 1080-decomp worktree — stages local-only symlinks](#feedback-git-add-all-stages-worktree-symlinks) — Each 1080 agent worktree has `tools/asm-processor/asm-processor` and `tools/ido-static-recomp` as symlinks pointing at the main worktree's t
-- [`git commit --amend --no-edit` in a parallel-agent worktree can absorb a wrong commit message](#feedback-git-amend-no-edit-parallel-agent-danger) — When another agent pushes to main mid-operation, a local HEAD can shift underneath your feet. `git commit --amend --no-edit` then re-uses wh
-- [`git stash` is shared across all worktrees of the same repo — never `git stash pop` blind on a multi-agent project](#feedback-git-stash-shared-across-worktrees) — Stashes live in the parent repo's `.git/refs/stash`, not per-worktree. So sister agents' stashes (created in `agent-c-worktree`, `agent-d-wo
-- [GitHub PAT used by `git push` lacks `workflow` scope; pushing changes to .github/workflows/ is rejected](#feedback-pat-lacks-workflow-scope-blocks-yml-push) — Pushing to bigyoshi51/1080-decomp from a CLI agent fails with "remote rejected ... refusing to allow a Personal Access Token to create or up
-- [When an NM-wrap commit shows .text mismatch, FIRST stash to confirm — upstream state may already be broken](#feedback-pre-existing-text-mismatch-diagnose-via-stash) — When you add an `#ifdef NON_MATCHING / void func() { ... } / #else INCLUDE_ASM(...) / #endif` wrap and observe `cmp build/.o.text expected/.
-- [Bash `cd` into main worktree during land persists across later turns — run land from subshell](#feedback-shell-cwd-drift-in-worktree) — In 1080 parallel-agent worktree flow, the manual land fallback is `cd <main-worktree> && git merge --ff-only <agent-branch> && git push`. Th
-- [Recovering when another agent's process has mass-reverted your worktree's src/ files](#feedback-worktree-mass-revert-recovery) — With multiple parallel agents on 1080-decomp, one agent's rebase/reset/splat-rerun can mass-revert another worktree's src/ .c files to all-I
+- [Files in agent-X worktree CAN be modified externally during a session — stage edits immediately, don't trust working-tree state across long Bash invocations](#feedback-agent-worktree-external-modification) — Despite the worktree-per-agent isolation, files in /home/dan/Documents/code/decomp/projects/1080-agent-X/ have been observed to mutate without local action — most likely a parallel agent or a human running…
+- [`assets/` is per-worktree (copied, not shared) — new splat entries need per-worktree asset extraction](#feedback-assets-dir-not-shared-between-worktrees) — _When a parallel agent adds a new `bin` segment to `tenshoe.yaml` (e.g. a newly-discovered RSP ucode blob) and runs splat, the extracted `assets/X.bin` file ONLY lands in their worktree.
+- [When bash cwd has drifted to main worktree, Edit (absolute path) and grep/make/sed (cwd-relative) target DIFFERENT files — edits "vanish" without warning](#feedback-bash-cwd-drift-creates-edit-grep-split) — _After the land-script's `cd` leaves the bash session's cwd in the main worktree, Edit/Write/Read calls with the agent-b absolute path target one file, while grep/sed/make/`git status` target main worktree's file.
+- [Bash session can drift to main worktree OR ORCHESTRATOR REPO after `cd` for tooling — always verify pwd/branch before commit](#feedback-bash-cwd-drifts-to-main-worktree) — After running the land-successful-decomp.sh script OR after explicitly `cd`ing to the orchestrator (e.g. `cd /home/dan/Documents/code/decomp` to use `uv run python -m decomp.main`), the bash session's cwd persists.
+- [Always check `gh auth status` active account BEFORE running mutating gh commands (issue create, PR create, comment)](#feedback-check-gh-auth-active-user-before-mutating) — gh CLI silently uses whichever account is "Active account: true".
+- [`git add -A` accidentally tracks the `tools/ido-static-recomp` symlink, breaking the land script](#feedback-git-add-a-traps-symlink) — _Don't use `git add -A` in agent-X worktrees.
+- [Don't `git add -A` / `git add .` in a 1080-decomp worktree — stages local-only symlinks](#feedback-git-add-all-stages-worktree-symlinks) — _Each 1080 agent worktree has `tools/asm-processor/asm-processor` and `tools/ido-static-recomp` as symlinks pointing at the main worktree's tool dirs (per reference_worktrees.md setup).
+- [`git commit --amend --no-edit` in a parallel-agent worktree can absorb a wrong commit message](#feedback-git-amend-no-edit-parallel-agent-danger) — When another agent pushes to main mid-operation, a local HEAD can shift underneath your feet. `git commit --amend --no-edit` then re-uses whatever the current HEAD's message is — which might not be the commit you THINK…
+- [`git stash` is shared across all worktrees of the same repo — never `git stash pop` blind on a multi-agent project](#feedback-git-stash-shared-across-worktrees) — Stashes live in the parent repo's `.git/refs/stash`, not per-worktree.
+- [GitHub PAT used by `git push` lacks `workflow` scope; pushing changes to .github/workflows/ is rejected](#feedback-pat-lacks-workflow-scope-blocks-yml-push) — Pushing to bigyoshi51/1080-decomp from a CLI agent fails with "remote rejected ... refusing to allow a Personal Access Token to create or update workflow ... without `workflow` scope" any time .github/workflows/*.yml is…
+- [When an NM-wrap commit shows .text mismatch, FIRST stash to confirm — upstream state may already be broken](#feedback-pre-existing-text-mismatch-diagnose-via-stash) — _When you add an `#ifdef NON_MATCHING / void func() { ... } / #else INCLUDE_ASM(...) / #endif` wrap and observe `cmp build/.o.text expected/.o.text` reports a diff, the natural assumption is that your wrap broke…
+- [Bash `cd` into main worktree during land persists across later turns — run land from subshell](#feedback-shell-cwd-drift-in-worktree) — In 1080 parallel-agent worktree flow, the manual land fallback is `cd <main-worktree> && git merge --ff-only <agent-branch> && git push`.
+- [Recovering when another agent's process has mass-reverted your worktree's src/ files](#feedback-worktree-mass-revert-recovery) — _With multiple parallel agents on 1080-decomp, one agent's rebase/reset/splat-rerun can mass-revert another worktree's src/ .c files to all-INCLUDE_ASM, wiping your in-progress NM wraps and exact matches.
+
 
 ---
 
@@ -52,6 +53,8 @@ _Despite the worktree-per-agent isolation, files in /home/dan/Documents/code/dec
 
 ---
 
+---
+
 <a id="feedback-assets-dir-not-shared-between-worktrees"></a>
 ## `assets/` is per-worktree (copied, not shared) — new splat entries need per-worktree asset extraction
 
@@ -81,6 +84,8 @@ make: *** [Makefile:148: build/tenshoe.elf] Error 1
 **Origin:** 2026-04-20 — agent-f added `game_libs_ucode` segment (RSP ucode region, 0xDF3CD0-0xE01AE8), which I pulled into agent-e. Build failed with missing asset; copied from agent-f's worktree, build succeeded. 1 minute to diagnose.
 
 **Prevention (project-level):** could symlink `assets/` across worktrees OR commit extracted bins to git, but both have downsides (symlinks break find traversal; committed bins balloon repo size). The copy-on-demand pattern is fine once documented — this memo IS the documentation.
+
+---
 
 ---
 
@@ -162,6 +167,8 @@ same file, committing on main is just a faster path.
 
 ---
 
+---
+
 <a id="feedback-bash-cwd-drifts-to-main-worktree"></a>
 ## Bash session can drift to main worktree OR ORCHESTRATOR REPO after `cd` for tooling — always verify pwd/branch before commit
 
@@ -236,6 +243,8 @@ cd back to the agent worktree before running git.
 
 ---
 
+---
+
 <a id="feedback-check-gh-auth-active-user-before-mutating"></a>
 ## Always check `gh auth status` active account BEFORE running mutating gh commands (issue create, PR create, comment)
 
@@ -291,6 +300,8 @@ exact identity that the next mutating call will attribute to.
 
 ---
 
+---
+
 <a id="feedback-git-add-a-traps-symlink"></a>
 ## `git add -A` accidentally tracks the `tools/ido-static-recomp` symlink, breaking the land script
 
@@ -315,6 +326,8 @@ Or if multiple commits ahead: rebase + drop.
 **Related:**
 - `reference_worktrees.md` — the symlink setup
 - `feedback_agent_worktree_external_modification.md` — other "stage immediately" gotcha
+
+---
 
 ---
 
@@ -359,6 +372,8 @@ git commit -m "..."
 
 ---
 
+---
+
 <a id="feedback-git-amend-no-edit-parallel-agent-danger"></a>
 ## `git commit --amend --no-edit` in a parallel-agent worktree can absorb a wrong commit message
 
@@ -386,6 +401,8 @@ _When another agent pushes to main mid-operation, a local HEAD can shift underne
 - If `git log` shows a commit message that doesn't match what you just did, TRUST the log, not your memory. Reset and redo.
 
 **Origin:** 2026-04-20 agent-a, titproc_uso_func_00000230 (5th prologue-stolen chain match). Land-script failure → amend → wrong message → hard reset → re-apply cleanly → commit eeaff42 landed successfully.
+
+---
 
 ---
 
@@ -439,6 +456,8 @@ Then later `git stash pop` would have applied agent-d's WIP. Caught by reading
 
 ---
 
+---
+
 <a id="feedback-pat-lacks-workflow-scope-blocks-yml-push"></a>
 ## GitHub PAT used by `git push` lacks `workflow` scope; pushing changes to .github/workflows/ is rejected
 
@@ -465,6 +484,8 @@ error: failed to push some refs to 'https://github.com/bigyoshi51/1080-decomp.gi
 
 **Why this isn't an in-band fix:**
 The PAT scope is a credential property, not a repo property. Updating it requires the user's GitHub account UI. The agent has no way to grant itself the scope.
+
+---
 
 ---
 
@@ -572,6 +593,8 @@ The wrap commit is safe to land — it's a doc-only change in default build. The
 
 ---
 
+---
+
 <a id="feedback-shell-cwd-drift-in-worktree"></a>
 ## Bash `cd` into main worktree during land persists across later turns — run land from subshell
 
@@ -614,6 +637,8 @@ Option C — prefer `scripts/land-successful-decomp.sh <func>` over the manual f
 
 ---
 
+---
+
 <a id="feedback-worktree-mass-revert-recovery"></a>
 ## Recovering when another agent's process has mass-reverted your worktree's src/ files
 
@@ -648,3 +673,4 @@ This re-syncs your worktree to the last landed state. Any uncommitted local edit
 
 ---
 
+---

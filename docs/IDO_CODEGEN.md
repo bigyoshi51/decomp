@@ -4,125 +4,161 @@
 
 _117 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
-## Index
+## Quick reference by sub-topic
 
-- [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off
-- [IDO `addu` operand order depends on whether expression is split into a named local](#feedback-ido-addu-operand-order) — For `v1 = A + B` in C, IDO picks `addu $rd, $rs, $rt` with `$rs = first-computed operand` and `$rt = second-computed operand`. Inlining both
-- [IDO doesn't share `lui $at` across stores to adjacent externs — struct retype DOESN'T fix it at -O1](#feedback-ido-adjacent-extern-shared-at) — IDO -O1 (and possibly -O2) emits a fresh `lui $at` before EACH store to an external symbol, even when the symbols are adjacent bytes AND are
-- [Two adjacent-offset global stores — split into per-store extern symbols to force `lui $at` per store](#feedback-ido-adjacent-store-extern-split) — When target emits `lui $at, HI; sw X, 0($at); lui $at, HI; sw Y, 4($at)` (two independent `lui $at` per store, no cached base pointer), writ
-- [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc tern
-- [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO sp
-- [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes
-- [IDO picks $a1 (not $a3) to save an arg across a jal — can't reliably flip from C](#feedback-ido-arg-save-reg-pick) — When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; s
-- [IDO schedules arg-save `or sN, aN, zero` into bne delay slot when an immediate `if (aN == 0)` test follows the prologue](#feedback-ido-arg-save-to-sreg-in-bne-delay) — When function body starts with `if (a0 == 0)` after prologue, IDO -O2 schedules `or s0, a0, zero` (the s-reg copy of a0) into the bne delay 
-- [IDO C compiler treats `__asm__("nop")` as a FUNCTION CALL, not inline-asm](#feedback-ido-asm-intrinsic-treated-as-function-call) — IDO 7.1 does NOT support GCC's `__asm__("...")` inline-asm syntax. Writing `__asm__("nop");` in C compiles to a cross-USO function call (`lu
-- [IDO target's "base-adjust trick" (addiu base, base, +N then use smaller offsets) isn't reachable from natural C](#feedback-ido-base-adjust-for-clustered-offsets) — When target asm does `addiu $v1, $v1, +0x2C` once and then accesses fields at offsets 0xC, 0x0, 0x10, etc. (= original 0x38, 0x2C, 0x3C of t
-- [IDO emits the if-body's first store TWICE around a beql — once in delay slot (annulled on taken) + once at fall-through](#feedback-ido-beql-speculative-store-double-emit) — For `if (cond) { dst = val; ... }` IDO -O2 emits `beql cond_reg, $0, end; sw val, dst_off(dst_reg)` in the delay slot AND ALSO `sw val, dst_
-- [Asm `blez/blezl` vs `bne/beql` distinguishes `> 0` (signed) from `!= 0` (eq) source](#feedback-ido-blez-vs-bne-signed-compare) — When target asm uses `blez $rs, X` or `blezl $rs, X` for a conditional, the C source MUST be `if (val > 0)` (signed comparison), NOT `if (va
-- [IDO `bnel` with value-in-delay-likely comes from C with the EQUAL case in the `if` arm](#feedback-ido-bnel-arm-swap) — When the target asm has `bnel $a, $b, .exit; or v0, zero, zero` (branch-likely with "set 0" in delay-likely) and the other path sets v0=1 vi
-- [bnel-likely with shared store-in-delay = `if (!cond) helper(); shared_store;`](#feedback-ido-bnel-shared-store-after-helper) — When asm shows `bnel ptr,zero,+N; sw <val>,off(reg) [delay-likely]; jal helper; ...; sw <val>,off(reg)` (same store on both paths), the C so
-- [IDO bnel tail-merging routes the false-path epilogue through the true-path's register-restore tail (cosmetic, ~99 % cap)](#feedback-ido-bnel-tail-merge-register-restore) — When the function body is `if (cond) { several jal calls }` and the true path ends with reload-args-then-jal patterns like `lw a0,0x18(sp); 
-- [For multi-condition state checks, single boolean-return expression beats if-return chain by 70+ pp](#feedback-ido-boolean-return-xor-sltiu-chain) — When target uses `xor; sltiu; bne` chains for `(c1 || c2 || c3)` style checks (computing each condition as a 0/1 value, branching on non-zer
-- [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely). The equivalent `if (cond) { body; return 1; } r
-- [IDO stack placement — use `int buf[2]` not `int buf` to force 8-byte alignment](#feedback-ido-buf-array-alignment) — When a stack buffer ends up 4 bytes higher than target, try declaring it as `T buf[2]` instead of `T buf`; IDO aligns arrays to 8 bytes, sim
-- [IDO 7.1 cfe rejects specific non-C-syntax chars EVEN IN COMMENTS — concrete blocklist](#feedback-ido-cfe-strict-ascii-gotchas) — The general rule "no unicode in C source" is well known, but IDO 7.1's cfe is stricter than standard C — it rejects specific characters even
-- [IDO treats plain `char` as UNSIGNED by default — use `signed char` for `lb` opcodes](#feedback-ido-char-default-unsigned) — Casting `(char)int_val` at IDO -O2 emits `lbu` (zero-extend), not `lb` (sign-extend). If the target asm has `lb`, write `(signed char)int_va
-- [IDO -O2 constant-folds the load-address even when the base is a register-declared local](#feedback-ido-constant-address-load-fold-inevitable) — For `arg = *(int*)((char*)base + N)` where base = `&D_constant`, IDO emits a fresh `lui+lw` rather than `lw arg, N($base_reg)` even with `re
-- [For 16-case sparse dispatchers in segments without .rodata, `if (a1 == N) goto cN;` chain beats both switch (jumptable) and if-else-if chain](#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse) — When the target asm is a chain of sequential `li at, K; beq a1, at, body_K` (compares grouped at top, case bodies after), straight `if-else-
-- [IDO -O2 folds `/2.0f` to `*0.5f` (different opcode); -mips2 schedules across mtc1 load-delays while -mips1 emits strict nops](#feedback-ido-div-2-mul-fold-and-mtc1-load-delay-nops) — Two IDO codegen rules surfaced on bootup_uso func_000102A4. (1) `expr / 2.0f` compiles to `mul.s ..., 0.5f` (lui 0x3F000000, mtc1, mul.s) in
-- [IDO -O2 emits double return into $f0+$f1 pair, not $f0+$f2 — kills "force $f2 via double-trick" theory](#feedback-ido-double-return-uses-f0-f1-not-f2) — For `double f(void){return 0;}`, IDO -O2 emits `mtc1 zero,$f1; mtc1 zero,$f0; jr ra; nop` — upper-half lands in $f1 (o32 paired-register con
-- [IDO folds prologue sw ra into early-return beq's delay slot](#feedback-ido-early-return-ra-delay-slot) — When `if (a0 == 0) return;` is the first statement, IDO moves the prologue `sw ra` into the beq's delay slot — write the C naturally and the
-- [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — `do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the 
-- [IDO -O2 `void f(void) {}` produces exactly `jr ra; nop` — empty functions ARE matchable](#feedback-ido-empty-void-matchable) — The CLAUDE.md general note ("Empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop") is WRONG for IDO
-- [Function reads $f0 at entry without setting it — caller-context "implicit zero" pattern](#feedback-ido-f0-implicit-zero-at-entry) — Some IDO -O2 functions store $f0 (float return reg, NOT a standard arg) to memory at the start of the body. This means the caller arranges $
-- [IDO -O2 always folds `return 0.0f` paths through $f0 directly — `mtc1 $0, $f2; mov.s $f0, $f2` unreachable from C](#feedback-ido-f2-intermediate-unreproducible) — Target 4-insn leaves that return 0.0f via an intermediate ($fN != $f0) like `mtc1 $0,$f2; nop; jr $ra; mov.s $f0,$f2` cannot be reproduced f
-- [IDO's fabs idiom leaves an unreachable `mov.s` at the merge point — branch-likely artifact unmatchable from C](#feedback-ido-fabs-dead-mov) — IDO emits fabs as `bc1fl fall_taken; mov.s fDst, fSrc (taken=positive); b merge; neg.s fDst, fSrc (delay-always=negative); mov.s fDst, fSrc 
-- [Tiny branch-predicate funcs with forced `addiu sp, -8/+8` frame + explicit `b` to epilogue — unreachable from IDO -O0/-O1/-O2](#feedback-ido-forced-frame-tiny-predicate) — Some 7-9-insn predicate functions (e.g. `return (a & MASK) != 0;`) have a target shape with a forced stack frame (`addiu sp, -8` prologue / 
-- [IDO -O2 final-add operand order in FPU reductions (`add.s fd, fs, ft`) follows source evaluation; can't easily flip without changing load order](#feedback-ido-fpu-reduction-operand-order) — For dot products and chained FPU adds like `a[0]*b[0] + a[1]*b[1] + ... + a[n]*b[n]`, IDO emits the final reduction `add.s fd, fs, ft` with 
-- [IDO `-g3` disables delay-slot filling while keeping -O2 optimization — unfilled-`sw; jr; nop` IS matchable](#feedback-ido-g3-disables-delay-slot-fill) — Compiling with `-O2 -g3` produces unfilled-delay-slot epilogues (`sw; jr ra; nop` instead of `sw; jr ra; sw(delay)`). This SUPERSEDES feedba
-- [IDO -g does NOT suppress delay-slot fill (unlike KMC GCC -g2) — don't borrow the Glover technique](#feedback-ido-g-flag-does-not-suppress-delay-slot-fill) — KMC GCC -g2 disables delay-slot reordering (per project_compiler_findings.md). It would be tempting to assume IDO behaves the same. **Verifi
-- [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half 
-- [Use `goto end` for early-return from alloc-check; plain `return` emits extra branch](#feedback-ido-goto-epilogue) — IDO compiles `return a0` from inside a nested if into `b + lw ra` redundancy, not a direct `beqz/bnez` to the epilogue. A `goto end_label` a
-- [IDO -O2 hoists `move sN, aM` above adjacent jal when no data dependency; source order `jal; p = a0;` doesn't keep them in source order](#feedback-ido-hoists-save-reg-init-above-jal) — When you write `func(...); p = a0;` in C, IDO -O2 schedules the `move sN, aM` (the p=a0 emit) BEFORE the jal because there's no data dep. To
-- [IDO -O2 if-guarded do-while defers register-only assignment past jal](#feedback-ido-if-guarded-do-while-defers-reg-move) — When a `p = a0;`-style register-only move is hoisted by IDO ahead of an unrelated jal (no data dep), wrapping the loop as `if (count > 0) { 
-- [IDO implicit decl conflicts with later explicit extern](#feedback-ido-implicit-decl-extern-conflict) — K&R-implicit `int func()` from a call BEFORE the explicit `extern void func()` declaration causes IDO cfe to error "Incompatible function re
-- [Inline function-pointer call → IDO uses `jalr $t9`; naming as local → `$a1` or other](#feedback-ido-indirect-call-t9) — For indirect calls via a struct member (`(*struct->callback)(args)`), keep the function-pointer EXPRESSION inline inside the call. A named l
-- [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops be
-- [Inline nested pointer deref uses $v0; named local forces $t-reg](#feedback-ido-inline-deref-v0) — When target asm uses `lw $v0, off(a0); lw $tN, 0x10($v0)` for a two-step pointer deref, keep the expression inline as `*(int*)(*(int*)(a0 + 
-- [Inlining intermediates into a fn-ptr call expression drops IDO's defensive arg-register spill](#feedback-ido-inline-fnptr-call-drops-arg-spill) — When IDO -O2 spills caller-arg regs ($a1) defensively before an indirect call, factoring out the named local intermediates and inlining the 
-- [IDO inline expression keeps $t6/$t7 registers, named local moves to $at/$v1](#feedback-ido-inline-keeps-t-regs) — For pointer-arithmetic functions like `return a0 + idx*N + K`, fully inline single-expression form keeps temps in $t6/$t7 registers (matchin
-- [K&R-declared extern can't be called with float args under IDO (no way to get direct jal)](#feedback-ido-knr-float-call) — In game_libs (1080), `gl_func_00000000` is declared as `extern int gl_func_00000000();` (K&R / no prototype). Calling it with float args pro
+### branch likely / bnel
+
+- [IDO emits the if-body's first store TWICE around a beql — once in delay slot (annulled on taken) + once at fall-through](#feedback-ido-beql-speculative-store-double-emit) — _For `if (cond) { dst = val; ... }` IDO -O2 emits `beql cond_reg, $0, end; sw val, dst_off(dst_reg)` in the delay slot AND ALSO `sw val, dst_off(dst_reg)` at the fall-through.
+- [Asm `blez/blezl` vs `bne/beql` distinguishes `> 0` (signed) from `!= 0` (eq) source](#feedback-ido-blez-vs-bne-signed-compare) — When target asm uses `blez $rs, X` or `blezl $rs, X` for a conditional, the C source MUST be `if (val > 0)` (signed comparison), NOT `if (val != 0)`.
+- [IDO `bnel` with value-in-delay-likely comes from C with the EQUAL case in the `if` arm](#feedback-ido-bnel-arm-swap) — When the target asm has `bnel $a, $b, .exit; or v0, zero, zero` (branch-likely with "set 0" in delay-likely) and the other path sets v0=1 via `b + addiu v0, zero, 1`, write the C with the `==` case inside the `if`, not…
+- [bnel-likely with shared store-in-delay = `if (!cond) helper(); shared_store;`](#feedback-ido-bnel-shared-store-after-helper) — When asm shows `bnel ptr,zero,+N; sw <val>,off(reg) [delay-likely]; jal helper; ...; sw <val>,off(reg)` (same store on both paths), the C source is `if (cond == 0) helper(); store;` — the store happens both as…
+- [IDO bnel tail-merging routes the false-path epilogue through the true-path's register-restore tail (cosmetic, ~99 % cap)](#feedback-ido-bnel-tail-merge-register-restore) — When the function body is `if (cond) { several jal calls }` and the true path ends with reload-args-then-jal patterns like `lw a0,0x18(sp); jal; lw a1,0x1C(sp)`, IDO sets the bnel branch target to the MIDDLE of those…
+- [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
+- [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
+- [IDO -O2 sparse-case switch (case 0 + case 1) compiles to 3-arm beql dispatch with delay-slot pre-loads — unreachable from C if-else; switch is also rejected (.rodata jumptable)](#feedback-ido-sparse-switch-beql-preload-unreachable) — _When target asm shows `addiu $at,zero,1; beql v0,zero,caseA; <lw delay>; beql v0,$at,caseB; <lw delay>; b end; <lw ra delay>` (3-arm beql dispatch with each delay slot pre-loading the case body's first lw), this is a…
+
+### FPU / float specifics
+
+- [IDO -O2 folds `/2.0f` to `*0.5f` (different opcode); -mips2 schedules across mtc1 load-delays while -mips1 emits strict nops](#feedback-ido-div-2-mul-fold-and-mtc1-load-delay-nops) — _Two IDO codegen rules surfaced on bootup_uso func_000102A4. (1) `expr / 2.0f` compiles to `mul.s ..., 0.5f` (lui 0x3F000000, mtc1, mul.s) instead of `div.s ..., 2.0f` (lui 0x40000000, mtc1, div.s).
+- [IDO -O2 emits double return into $f0+$f1 pair, not $f0+$f2 — kills "force $f2 via double-trick" theory](#feedback-ido-double-return-uses-f0-f1-not-f2) — For `double f(void){return 0;}`, IDO -O2 emits `mtc1 zero,$f1; mtc1 zero,$f0; jr ra; nop` — upper-half lands in $f1 (o32 paired-register convention), NOT $f2.
+- [Function reads $f0 at entry without setting it — caller-context "implicit zero" pattern](#feedback-ido-f0-implicit-zero-at-entry) — Some IDO -O2 functions store $f0 (float return reg, NOT a standard arg) to memory at the start of the body.
+- [IDO -O2 always folds `return 0.0f` paths through $f0 directly — `mtc1 $0, $f2; mov.s $f0, $f2` unreachable from C](#feedback-ido-f2-intermediate-unreproducible) — Target 4-insn leaves that return 0.0f via an intermediate ($fN != $f0) like `mtc1 $0,$f2; nop; jr $ra; mov.s $f0,$f2` cannot be reproduced from any tested IDO-O2 C body — literal, local var, volatile local (→stack…
+- [IDO's fabs idiom leaves an unreachable `mov.s` at the merge point — branch-likely artifact unmatchable from C](#feedback-ido-fabs-dead-mov) — _IDO emits fabs as `bc1fl fall_taken; mov.s fDst, fSrc (taken=positive); b merge; neg.s fDst, fSrc (delay-always=negative); mov.s fDst, fSrc (fallthrough, unreachable); merge:`.
+- [IDO -O2 final-add operand order in FPU reductions (`add.s fd, fs, ft`) follows source evaluation; can't easily flip without changing load order](#feedback-ido-fpu-reduction-operand-order) — _For dot products and chained FPU adds like `a[0]*b[0] + a[1]*b[1] + ... + a[n]*b[n]`, IDO emits the final reduction `add.s fd, fs, ft` with `fs` = running-sum register and `ft` = last-product register.
+- [K&R-declared extern can't be called with float args under IDO (no way to get direct jal)](#feedback-ido-knr-float-call) — _In game_libs (1080), `gl_func_00000000` is declared as `extern int gl_func_00000000();` (K&R / no prototype).
+- [Target asm with `mfc1 $aN, $f12` (float-bits-to-int-reg) is hard to reproduce from IDO C](#feedback-ido-mfc1-from-c) — When the target has a single `mfc1 aN, $f12` instruction converting a float arg's bits to an int register for passing as arg, IDO's C compiler emits a stack round-trip (swc1 + lw) instead — at least 14 C variants tried…
+- [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — _In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum — shifts IDO's FPU register allocation and instruction order across the WHOLE…
+- [IDO -O2 needs named float locals to load-batch all loads before stores; inlined float derefs interleave load/store](#feedback-ido-named-float-locals-enable-load-batching) — When asm shows `lwc1 f14; lwc1 f12; lwc1 f2; lwc1 f0; swc1 f14; swc1 f12; swc1 f2; swc1 f0` (4 loads then 4 stores), the C source MUST have 4 named float locals.
+- [O32 passes floats in $aN when preceded by a non-float arg — use `mtc1 aN, fM` reconstruction](#feedback-ido-o32-float-in-int-reg) — _When a function signature is `(int_like, float, ...)`, MIPS O32 passes the float in $a1 (the int register), not $f14.
+- [o32 mixed-mode ABI — when first arg is int, a float second-arg passes in $a1 (int reg) not $f14, triggering `mtc1 $a1, $f12` at function entry](#feedback-ido-o32-mixed-mode-float-in-a1) — _o32 reserves $f12/$f14 for floats only when ALL leading args are floats.
+- [IDO target `swc1 $f0, N(sp)` x4 at entry WITHOUT preceding `mtc1 $0, $f0` — $f0 inherited from caller](#feedback-ido-swc1-f0-without-mtc1) — Some functions store $f0 to multiple stack slots at entry (e.g. `swc1 $f0, 0x34..0x40(sp)` for a 4-float out-buffer) without any `mtc1 $0, $f0` to initialize $f0 first.
+
+### argument / save register
+
+- [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
+- [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
+- [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO spill a0 early and reload via a fresh temp ($t6).
+- [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes a0 as a parameter and passes it through unchanged
+- [IDO picks $a1 (not $a3) to save an arg across a jal — can't reliably flip from C](#feedback-ido-arg-save-reg-pick) — _When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; sw a1, N(sp); ...jal...; lw a1, N(sp)`.
+- [IDO schedules arg-save `or sN, aN, zero` into bne delay slot when an immediate `if (aN == 0)` test follows the prologue](#feedback-ido-arg-save-to-sreg-in-bne-delay) — When function body starts with `if (a0 == 0)` after prologue, IDO -O2 schedules `or s0, a0, zero` (the s-reg copy of a0) into the bne delay slot rather than into the inter-spill gap.
+- [IDO -O2 hoists `move sN, aM` above adjacent jal when no data dependency; source order `jal; p = a0;` doesn't keep them in source order](#feedback-ido-hoists-save-reg-init-above-jal) — When you write `func(...); p = a0;` in C, IDO -O2 schedules the `move sN, aM` (the p=a0 emit) BEFORE the jal because there's no data dep.
+- [Inlining intermediates into a fn-ptr call expression drops IDO's defensive arg-register spill](#feedback-ido-inline-fnptr-call-drops-arg-spill) — _When IDO -O2 spills caller-arg regs ($a1) defensively before an indirect call, factoring out the named local intermediates and inlining the deref chain INTO the call expression keeps the arg dead at the spill point —…
+- [IDO emits extra `andi`/`sll+sra` for narrow (char/short) function parameters](#feedback-ido-narrow-arg-promotion) — Declaring a function arg as `char` or `short` makes IDO insert byte/halfword promotion at the prologue that breaks matching.
+- [IDO does not CSE repeated immediate args at -O2](#feedback-ido-no-cse-arg-immediates) — Passing the same literal constant (e.g. 1) to multiple stack-arg slots and a register-arg in one call materializes a fresh `addiu rN, zero, K` per slot — no shared register
+- [IDO pre-call outgoing-arg spills (`sw aN, N(sp)` before jal for args loaded from globals) are not C-reproducible for K&R callees](#feedback-ido-precall-arg-spill-unreachable) — _Some IDO-compiled functions emit extra `sw $a1, 4(sp); sw $a2, 8(sp)` stores IMMEDIATELY before a jal, saving the OUTGOING arg values (just loaded from global memory) into the caller's arg-save slots.
+- [IDO -O2 empty `void f(int a0) {}` produces exactly `jr ra; sw a0, 0(sp)` — save-arg sentinels ARE matchable from C](#feedback-ido-save-arg-sentinel-empty-body) — _The 2-insn "save-arg-to-caller-shadow-space" sentinel (`jr ra; sw a0, 0(sp)`) — previously documented as non-C-expressible — IS matchable from IDO -O2 with the trivial C body `void f(int a0) { }`.
+- [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a1's register assignment, IDO spills a0 to the caller's arg-save slot (extra `sw…
+- [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
+
+### scheduling / delay slot
+
+- [IDO folds prologue sw ra into early-return beq's delay slot](#feedback-ido-early-return-ra-delay-slot) — When `if (a0 == 0) return;` is the first statement, IDO moves the prologue `sw ra` into the beq's delay slot — write the C naturally and the scheduler handles it
+- [IDO `-g3` disables delay-slot filling while keeping -O2 optimization — unfilled-`sw; jr; nop` IS matchable](#feedback-ido-g3-disables-delay-slot-fill) — _Compiling with `-O2 -g3` produces unfilled-delay-slot epilogues (`sw; jr ra; nop` instead of `sw; jr ra; sw(delay)`).
+- [IDO -g does NOT suppress delay-slot fill (unlike KMC GCC -g2) — don't borrow the Glover technique](#feedback-ido-g-flag-does-not-suppress-delay-slot-fill) — _KMC GCC -g2 disables delay-slot reordering (per project_compiler_findings.md).
+- [IDO -O1 target `lw $sN, spill(sp)` in jal delay slot — can't force via explicit C assignment](#feedback-ido-o1-delay-slot-s-reload) — rmon-style -O1 funcs spill arg `a0` to caller slot, then fill the first jal's delay slot with `lw $s0, SPILL(sp)` to promote msg into a callee-saved reg for later use.
+- [Swap source order of two stores to let IDO's scheduler fill a jal delay slot with the SECOND-listed store](#feedback-ido-swap-stores-for-jal-delay-fill) — _When target asm has `sw $tA, OFFSET_X(a0); jal func; sw $tB, OFFSET_Y(a0)` (two consecutive stores with the second in the delay slot), write the C with the OTHER order: put the X-offset store SECOND in source.
+
+### $s register allocation
+
+- [At IDO -O0, count target's `sw sN, ...` saves to set the EXACT number of `register T x;` declarations](#feedback-ido-o0-register-count-matches-target-s-saves-exactly) — _At -O0, IDO promotes register-typed locals to s0/s1/s2/... in declaration order.
+- [IDO -O2 global s-register allocator is NOT driven by local declaration order](#feedback-ido-sreg-order-not-decl-driven) — _`feedback_ido_local_ordering.md` covers STACK OFFSETS (first-declared → highest sp offset).
+
+### constant fold / immediate / CSE
+
+- [IDO -O2 constant-folds the load-address even when the base is a register-declared local](#feedback-ido-constant-address-load-fold-inevitable) — _For `arg = *(int*)((char*)base + N)` where base = `&D_constant`, IDO emits a fresh `lui+lw` rather than `lw arg, N($base_reg)` even with `register` keyword.
+- [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — _When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half (lui+addiu) into a single saved register ($s3 typical) and reuses it across…
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
-- [IDO places locals first-declared-highest; add leading pad local to shift scratch slot down](#feedback-ido-local-ordering) — If your local `scratch` ends up at sp+0x1C but the target wants sp+0x18, declare an extra `int pad` BEFORE scratch. IDO places first-declare
-- [`or v0, v1, zero` after jal = wrapper returning low word of callee's 64-bit return](#feedback-ido-long-long-v1-move) — In 1080 USO wrappers, the target `or v0, v1, zero` right before `jr ra` means the callee returns a `long long` and the wrapper returns only 
-- [Target asm with `mfc1 $aN, $f12` (float-bits-to-int-reg) is hard to reproduce from IDO C](#feedback-ido-mfc1-from-c) — When the target has a single `mfc1 aN, $f12` instruction converting a float arg's bits to an int register for passing as arg, IDO's C compil
-- [Mix named-local and inlined access in the SAME function to get per-use-site reg allocation (named → $v, inline → $t)](#feedback-ido-mix-named-and-inline-per-usesite) — When a function has the same expression (e.g. `(int*)a0[OFF/4]`) used both in pre-call argument setup AND in post-call follow-up stores, the
-- [Named intermediate `char *t = base + OFFSET` forces IDO to split `lw/sw` addressing into `lw + addiu + sw(N)` even when the offset fits in 16 bits](#feedback-ido-named-base-forces-addiu-split) — When target has `lw t, 0x30(a0); addiu t, t, 0x758; swc1 fN, 0x10(t)` but inline-deref C generates `lw t, 0x30(a0); swc1 fN, 0x768(t)` (merg
-- [Named `unsigned char c = *p;` forces $v0; inline `*p` in the comparison keeps the load in $t6](#feedback-ido-named-char-v0-vs-t6) — When the target has `lbu $t6, 0($sN)` for a char loaded from memory and compared immediately, declaring it as a local (`unsigned char c = *p
-- [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum
-- [IDO -O2 needs named float locals to load-batch all loads before stores; inlined float derefs interleave load/store](#feedback-ido-named-float-locals-enable-load-batching) — When asm shows `lwc1 f14; lwc1 f12; lwc1 f2; lwc1 f0; swc1 f14; swc1 f12; swc1 f2; swc1 f0` (4 loads then 4 stores), the C source MUST have 
-- [reusing one named local across sequential alloc-then-populate blocks regresses IDO match](#feedback-ido-named-local-reuse-across-alloc-blocks) — When a function has multiple `out = alloc(N); if (out!=0) write(out, ...)` blocks back-to-back, sharing one named `out` local across them co
-- [IDO emits extra `andi`/`sll+sra` for narrow (char/short) function parameters](#feedback-ido-narrow-arg-promotion) — Declaring a function arg as `char` or `short` makes IDO insert byte/halfword promotion at the prologue that breaks matching. Use `int` arg +
-- [IDO doesn't accept bare `__asm__("")` as a scheduling barrier](#feedback-ido-no-asm-barrier) — The GCC trick of `__asm__("")` to force an instruction ordering barrier is NOT supported by IDO 7.1. IDO's cfe does not recognize the GCC-st
-- [IDO does not CSE repeated immediate args at -O2](#feedback-ido-no-cse-arg-immediates) — Passing the same literal constant (e.g. 1) to multiple stack-arg slots and a register-arg in one call materializes a fresh `addiu rN, zero, 
-- [IDO cfe does not accept `register T var asm("$N")` (GCC extension)](#feedback-ido-no-gcc-register-asm) — The `register T var asm("$register")` trick for forcing a specific MIPS register — which IS supported by KMC GCC 2.7.2 (Glover) — is NOT sup
-- [0x14 stub `sw a0,0(sp); b +1; nop; jr ra; nop` = `void f(int a0) {}` compiled at -O0](#feedback-ido-o0-empty-stub) — The IDO -O0 output for `void f(int a0) {}` is exactly 5 instructions — no prologue/epilogue, a0 spilled to caller's arg slot, a redundant fo
-- [IDO -O0 swap == operands to control which side loads FIRST](#feedback-ido-o0-eq-operand-swap-for-load-order) — For an `if (LHS == RHS)` comparison in IDO -O0 mode, the side on the RIGHT of `==` is evaluated FIRST. To match a target asm whose memory lo
-- [IDO -O0 field-load order isn't controlled by C expression order](#feedback-ido-o0-load-order-not-expression-driven) — At -O0, reading two fields from the same base pointer (`p[1]` and `p[2]`) inside a single boolean expression emits loads in the OPPOSITE ord
-- [IDO -O0 `lui tA; lw tA, %lo(D)(tA)` reuse is the default; forcing fresh-temp `lw tB` is unreliable](#feedback-ido-o0-lui-lw-reuse) — When the target asm reads a D_* global at -O0 with `lui tA; lw tB, %lo(D)(tA)` (fresh register for dest), plain `if (D == C)` produces the r
-- [IDO -O0 — `++j < N` keeps j in register across back-edge slt; `j++; while(...)` spills+reloads](#feedback-ido-o0-pre-increment-keeps-register) — For do-while loops at IDO -O0, `do {...} while (++j < N)` keeps the incremented j in $t8 across the loop-end `slt at, j, N` test. The semant
-- [IDO -O0 gives target-prefix bytes for unfilled-delay-slot leaves, but adds dead trailing jr-nop — not trimmable from C](#feedback-ido-o0-prefix-match-dead-epilogue) — For 3-insn leaf setters (`sw X, off(a0); jr ra; nop`) that IDO -O2 compacts into 2 insns (`jr ra; sw X, off(a0)`) — the classic `feedback_id
-- [IDO -O0 respects `register` for $s0 and inline-callable exprs avoid stack spills](#feedback-ido-o0-register-and-inline) — At -O0, IDO normally assigns every local to a stack slot and reloads on every use. But `register T *p` forces $s0 allocation (survives inter
-- [At IDO -O0, count target's `sw sN, ...` saves to set the EXACT number of `register T x;` declarations](#feedback-ido-o0-register-count-matches-target-s-saves-exactly) — At -O0, IDO promotes register-typed locals to s0/s1/s2/... in declaration order. Each one adds an `sw sN, OFF(sp)` to the prologue and an `l
-- [IDO -O0 with two `register` locals — declaration order flips which gets $a2 vs $a3 (later-declared gets HIGHER-numbered $a-reg)](#feedback-ido-o0-register-decl-order-flips-a-alloc) — When matching an -O0 function that uses two `register` locals filling the unused $a-slots (e.g., $a2 and $a3 when only a0/a1 are real args),
-- [IDO -O0 reserves a 4-byte backup stack slot for EACH `register`-typed local — adds frame overhead beyond what target needs](#feedback-ido-o0-register-locals-reserve-backup-stack-slots) — At -O0, IDO honors `register T *p` hints to save callee-save s-regs (s0/s1/s2/s3) — but ALSO reserves a 4-byte backup stack slot per registe
-- [IDO -O1 target `lw $sN, spill(sp)` in jal delay slot — can't force via explicit C assignment](#feedback-ido-o1-delay-slot-s-reload) — rmon-style -O1 funcs spill arg `a0` to caller slot, then fill the first jal's delay slot with `lw $s0, SPILL(sp)` to promote msg into a call
-- [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue. Don'
-- [IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C](#feedback-ido-o2-tiny-wrapper-unflippable) — Simple `void f(void) { func(&SYM); }` wrappers at IDO -O2 always emit `addiu sp; sw ra; lui a0; jal; addiu a0(delay)`. If the target has `ad
-- [O32 passes floats in $aN when preceded by a non-float arg — use `mtc1 aN, fM` reconstruction](#feedback-ido-o32-float-in-int-reg) — When a function signature is `(int_like, float, ...)`, MIPS O32 passes the float in $a1 (the int register), not $f14. The asm starts with `m
-- [o32 mixed-mode ABI — when first arg is int, a float second-arg passes in $a1 (int reg) not $f14, triggering `mtc1 $a1, $f12` at function entry](#feedback-ido-o32-mixed-mode-float-in-a1) — o32 reserves $f12/$f14 for floats only when ALL leading args are floats. As soon as an integer arg appears in position 1+, subsequent floats
-- [IDO -O3 produces byte-identical output to -O2 for single-file compiles — file-split with OPT_FLAGS=-O3 only adds value for inter-module (IPO) builds, which the per-.c.o pipeline doesn't use](#feedback-ido-o3-equals-o2-for-single-file-compile) — When a function is stuck at -O2 codegen and you're considering file-split-with-OPT_FLAGS to try -O3, don't bother — IDO's -O3 differs from -
-- [`&BASE + 0xOFFSET` vs `extern SYM_AT_OFFSET` produces different .o byte patterns even when addresses are equal](#feedback-ido-offset-in-instruction-vs-reloc) — When target asm has `lw $reg, 0xNNN($at)` (offset baked into the instruction), write `*(int*)((char*)&BASE + 0xNNN)` in C — this emits `lw $
-- [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO 
-- [IDO pre-call outgoing-arg spills (`sw aN, N(sp)` before jal for args loaded from globals) are not C-reproducible for K&R callees](#feedback-ido-precall-arg-spill-unreachable) — Some IDO-compiled functions emit extra `sw $a1, 4(sp); sw $a2, 8(sp)` stores IMMEDIATELY before a jal, saving the OUTGOING arg values (just 
-- [IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent](#feedback-ido-reg-only-store-ordering) — For 6+arg setters where stack args (sp+0x10, sp+0x14) go to struct fields, IDO's scheduler hoists cheap register-only stores (`sw aN, N(a0)`
+- [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
+- [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
+- [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C.
+
+### loop / unroll
+
+- [IDO -O2 if-guarded do-while defers register-only assignment past jal](#feedback-ido-if-guarded-do-while-defers-reg-move) — When a `p = a0;`-style register-only move is hoisted by IDO ahead of an unrelated jal (no data dep), wrapping the loop as `if (count > 0) { p = a0; do { ... } while (i < count); }` forces the move AFTER the count load…
+- [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops between (size 0x28).
+- [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
+- [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
+- [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
+
+### char / int / signed / narrow
+
+- [For multi-condition state checks, single boolean-return expression beats if-return chain by 70+ pp](#feedback-ido-boolean-return-xor-sltiu-chain) — When target uses `xor; sltiu; bne` chains for `(c1 || c2 || c3)` style checks (computing each condition as a 0/1 value, branching on non-zero to a shared exit), use `return c1 || c2 || c3;` in C — NOT `if (c1) return 1;…
+- [IDO treats plain `char` as UNSIGNED by default — use `signed char` for `lb` opcodes](#feedback-ido-char-default-unsigned) — _Casting `(char)int_val` at IDO -O2 emits `lbu` (zero-extend), not `lb` (sign-extend).
+- [Named `unsigned char c = *p;` forces $v0; inline `*p` in the comparison keeps the load in $t6](#feedback-ido-named-char-v0-vs-t6) — When the target has `lbu $t6, 0($sN)` for a char loaded from memory and compared immediately, declaring it as a local (`unsigned char c = *p`) forces IDO to allocate $v0 for the load instead.
+- [IDO -O2 picks bgez vs srl+beqz for sign-test based on C form — `(unsigned)x>>31` forces 2-insn srl+beqz](#feedback-ido-sign-test-form-choice) — For `if (x < 0) {...}`, IDO -O2 emits the 1-insn `bgez x, .Lend` form (branch if non-negative, skipping the body).
+- [`bgez v0; sra t, v0, 1; addiu at, v0, 1; sra t, at, 1` is IDO's signed `/2` lowering](#feedback-ido-signed-divide-2-idiom) — Signed-integer division by 2 in IDO doesn't become a single `sra`.
+
+### inline / register keyword
+
+- [Inline nested pointer deref uses $v0; named local forces $t-reg](#feedback-ido-inline-deref-v0) — When target asm uses `lw $v0, off(a0); lw $tN, 0x10($v0)` for a two-step pointer deref, keep the expression inline as `*(int*)(*(int*)(a0 + off) + 0x10)` — a named local `int *t = ...; t[...]` makes IDO pick a $t-reg…
+- [IDO inline expression keeps $t6/$t7 registers, named local moves to $at/$v1](#feedback-ido-inline-keeps-t-regs) — For pointer-arithmetic functions like `return a0 + idx*N + K`, fully inline single-expression form keeps temps in $t6/$t7 registers (matching target's natural pick); naming a local for the offset shifts temps to $at/$v1.
+- [Mix named-local and inlined access in the SAME function to get per-use-site reg allocation (named → $v, inline → $t)](#feedback-ido-mix-named-and-inline-per-usesite) — When a function has the same expression (e.g. `(int*)a0[OFF/4]`) used both in pre-call argument setup AND in post-call follow-up stores, the natural choice (one named local) caps below 100% because IDO reuses the…
+- [Named intermediate `char *t = base + OFFSET` forces IDO to split `lw/sw` addressing into `lw + addiu + sw(N)` even when the offset fits in 16 bits](#feedback-ido-named-base-forces-addiu-split) — When target has `lw t, 0x30(a0); addiu t, t, 0x758; swc1 fN, 0x10(t)` but inline-deref C generates `lw t, 0x30(a0); swc1 fN, 0x768(t)` (merged offset), use a named local `char *t = ... + 0x758;` followed by `*(float*)(t…
+- [reusing one named local across sequential alloc-then-populate blocks regresses IDO match](#feedback-ido-named-local-reuse-across-alloc-blocks) — When a function has multiple `out = alloc(N); if (out!=0) write(out, ...)` blocks back-to-back, sharing one named `out` local across them confuses IDO's dataflow tracking and tanks the match.
+- [IDO cfe does not accept `register T var asm("$N")` (GCC extension)](#feedback-ido-no-gcc-register-asm) — The `register T var asm("$register")` trick for forcing a specific MIPS register — which IS supported by KMC GCC 2.7.2 (Glover) — is NOT supported by IDO 7.1's cfe.
+- [IDO -O0 — `++j < N` keeps j in register across back-edge slt; `j++; while(...)` spills+reloads](#feedback-ido-o0-pre-increment-keeps-register) — _For do-while loops at IDO -O0, `do {...} while (++j < N)` keeps the incremented j in $t8 across the loop-end `slt at, j, N` test.
+- [IDO -O0 respects `register` for $s0 and inline-callable exprs avoid stack spills](#feedback-ido-o0-register-and-inline) — At -O0, IDO normally assigns every local to a stack slot and reloads on every use.
+- [IDO -O0 with two `register` locals — declaration order flips which gets $a2 vs $a3 (later-declared gets HIGHER-numbered $a-reg)](#feedback-ido-o0-register-decl-order-flips-a-alloc) — When matching an -O0 function that uses two `register` locals filling the unused $a-slots (e.g., $a2 and $a3 when only a0/a1 are real args), the order you DECLARE them controls which gets which slot.
+- [IDO -O0 reserves a 4-byte backup stack slot for EACH `register`-typed local — adds frame overhead beyond what target needs](#feedback-ido-o0-register-locals-reserve-backup-stack-slots) — _At -O0, IDO honors `register T *p` hints to save callee-save s-regs (s0/s1/s2/s3) — but ALSO reserves a 4-byte backup stack slot per register-typed local.
 - [IDO register keyword for $s0 allocation](#feedback-ido-register) — IDO respects 'register' as a strong hint — required to match libultra interrupt-bracket functions
-- [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads. IDO's constant-propagation pass folds the li
-- [IDO `register` keyword promotes to $s-class but doesn't pin the $s-number](#feedback-ido-register-promotes-class-not-number) — Adding `register T x;` on locals forces IDO to allocate them to callee-saved $s-regs instead of caller-saved $t/spills. But WHICH $s-number 
-- [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce th
-- [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; o
-- [IDO -O2 empty `void f(int a0) {}` produces exactly `jr ra; sw a0, 0(sp)` — save-arg sentinels ARE matchable from C](#feedback-ido-save-arg-sentinel-empty-body) — The 2-insn "save-arg-to-caller-shadow-space" sentinel (`jr ra; sw a0, 0(sp)`) — previously documented as non-C-expressible — IS matchable fr
-- [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test 
-- [IDO -O2 picks bgez vs srl+beqz for sign-test based on C form — `(unsigned)x>>31` forces 2-insn srl+beqz](#feedback-ido-sign-test-form-choice) — For `if (x < 0) {...}`, IDO -O2 emits the 1-insn `bgez x, .Lend` form (branch if non-negative, skipping the body). Target asm sometimes uses
-- [`bgez v0; sra t, v0, 1; addiu at, v0, 1; sra t, at, 1` is IDO's signed `/2` lowering](#feedback-ido-signed-divide-2-idiom) — Signed-integer division by 2 in IDO doesn't become a single `sra`. It expands to a branch-based round-toward-zero sequence: for non-negative
-- [IDO -O2 leaf with `addiu sp,-8` but no stack use is unreachable from standard C](#feedback-ido-sp-frame-without-stack-use) — When target has a leaf function with stack frame adjust (`addiu sp, sp, -8` / `addiu sp, sp, +8`) but NO sw/lw using the frame, no standard 
-- [kernel/func_80008030 (SP_STATUS & 3 check) not reproducible from C at -O1 or -O2](#feedback-ido-sp-status-check-unreachable) — Simple `if ((SP_STATUS & 3) == 0) ret |= 1;` function (0x24 = 9 insns, no stack frame, ret in $v0 with `or v0,zero,zero` + `ori v0,v0,1`) is
-- [IDO -O2 sparse-case switch (case 0 + case 1) compiles to 3-arm beql dispatch with delay-slot pre-loads — unreachable from C if-else; switch is also rejected (.rodata jumptable)](#feedback-ido-sparse-switch-beql-preload-unreachable) — When target asm shows `addiu $at,zero,1; beql v0,zero,caseA; <lw delay>; beql v0,$at,caseB; <lw delay>; b end; <lw ra delay>` (3-arm beql di
-- [IDO spill+reload register pair — partially flippable via volatile-spill-shaping](#feedback-ido-spill-reload-register-pair-locked) — Initial belief: spill+reload pair across a jal is jointly locked (89.5% cap). UPDATE 2026-05-03: `volatile int saved_aN = aN;` shifts regist
-- [IDO -O2 picks the lowest-available spill slot when the frame has unused space; can't force a higher slot without bloating the frame](#feedback-ido-spill-slot-picks-low-offset) — When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWEST available slot above the ra-save (e.g. if ra=sp+0x14, it pi
-- [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C. A single `x | 0x06000001
-- [Split `char pad[N]` into pad-before-buf + pad-after-locals to fine-tune array offset within a fixed frame size](#feedback-ido-split-pad-for-buf-offset) — When you need a buf at a specific stack offset (e.g., target wants `swc1 $f0, 0x34(sp)` with frame 0x48 but your single `pad[N]` only puts b
-- [IDO -O2 global s-register allocator is NOT driven by local declaration order](#feedback-ido-sreg-order-not-decl-driven) — `feedback_ido_local_ordering.md` covers STACK OFFSETS (first-declared → highest sp offset). The REGISTER allocator ($s0..$s7) is different —
-- [IDO -O2 schedules "store non-delay" before "addu feeding delay-slot store" — unreachable from C](#feedback-ido-sw-before-addu-unreachable) — IDO -O2's list scheduler picks `sw $reg, N(a0)` before `addu $t1, a0, $t0` when both are ready and the addu's output is needed for the jr de
-- [Swap source order of two stores to let IDO's scheduler fill a jal delay slot with the SECOND-listed store](#feedback-ido-swap-stores-for-jal-delay-fill) — When target asm has `sw $tA, OFFSET_X(a0); jal func; sw $tB, OFFSET_Y(a0)` (two consecutive stores with the second in the delay slot), write
-- [IDO target `swc1 $f0, N(sp)` x4 at entry WITHOUT preceding `mtc1 $0, $f0` — $f0 inherited from caller](#feedback-ido-swc1-f0-without-mtc1) — Some functions store $f0 to multiple stack slots at entry (e.g. `swc1 $f0, 0x34..0x40(sp)` for a 4-float out-buffer) without any `mtc1 $0, $
-- [IDO `switch` statements emit a `.rodata` jump table — breaks 1080's linker (rodata discarded)](#feedback-ido-switch-rodata-jumptable) — Writing a C `switch` at IDO -O2 with 3+ cases produces a jump table in `.rodata` and a `lui+addu+lw+jr` dispatch. In 1080's build, `.rodata`
-- [IDO $t-register swap unreachable — first-seen pseudo gets lowest $t number, can't be flipped from C](#feedback-ido-t-register-swap-unreachable) — When target has `$t7` for the FIRST paired-load and `$t6` for the SECOND (i.e. registers in DECREASING order), IDO at -O2 will always pick t
-- [bootup_uso void setters use unfilled delay slot (sw; jr; nop) — not matchable from C](#feedback-ido-unfilled-store-return) — Some bootup_uso tiny void setters produce `sw; jr $ra; nop` instead of `jr $ra; sw` (delay slot). IDO at any -O level always fills the slot.
-- [Splat synthetic stubs — INCLUDE_ASM + file-scope `extern int f()` (K&R, int return)](#feedback-ido-unspecified-args) — For stubs like bootup_uso's func_00000000 that callers use with varying arg counts and sometimes want a return value: INCLUDE_ASM the body, 
-- [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a
-- [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a
-- [IDO $v0 vs $t-regs — named locals get $v0, inlined expressions get $t6/$t7/$t8](#feedback-ido-v0-reuse-via-locals) — IDO assigns $v0 to named locals (esp. short-lived ones) and $t-regs to intermediate expression temps. Match C's local structure to the targe
-- [`void f(int a0, ...)` with empty body spills all 4 arg regs to caller slots](#feedback-ido-varargs-empty-body) — When target asm is `addiu sp, -8; sw a0, 8(sp); sw a1, 12(sp); sw a2, 16(sp); sw a3, 20(sp); jr ra; addiu sp, 8` — 4 consecutive spills of a
-- [Typed-varargs extern (`int f(int,int,...)`) does NOT force IDO -O2 caller-side stack-arg spills (sw a1,4(sp); sw a2,8(sp))](#feedback-ido-varargs-extern-doesnt-force-caller-spill) — When target asm shows defensive `sw a1,4(sp); sw a2,8(sp)` spills around a jal but mine doesn't, the natural fix-attempt is to declare a uni
-- [Use `void` return when target doesn't restore $v0 — int return forces IDO to spill v0 across calls](#feedback-ido-void-return-avoids-v0-spill) — When the asm doesn't have an explicit final `or v0, ...` epilogue insn AND v0 is consumed by an intermediate call (e.g. as $a2 arg in delay 
-- [`volatile T buf[N]` forces IDO to emit `addiu tA, sp, off; lw tB, 0(tA)` (pointer-indirect load) instead of `lw tB, off(sp)` (direct sp-relative)](#feedback-ido-volatile-buf-pointer-indirect) — When the target asm uses `addiu tA, sp, off; lw tB, 0(tA)` (materialize stack address into a temp register, then load via the temp) instead 
-- [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), 
-- [Use `volatile T *arg` to prevent IDO from fusing two `sb`/`sw` stores to the same address](#feedback-ido-volatile-preserve-redundant-io) — When the target asm has two distinct stores to the same address (e.g. `sb $t9, 0(a0); sb $t0, 0(a0)` where the second value is derived from 
-- [`volatile int saved_arg = aN;` forces IDO to spill aN to a LOCAL stack slot instead of the caller's outgoing-arg slot](#feedback-ido-volatile-unused-local-forces-local-slot-spill) — When target has `sw $aN, 0x24(sp)` (local-slot offset) but your IDO build emits `sw $aN, 0xBC(sp)` (caller's outgoing-arg slot at sp+frame_s
-- [-O0-cluster split mid-file requires a paired -O2 layout shim, not just the -O0 file](#feedback-o0-cluster-split-with-layout-shim) — When a -O0 cluster sits MID-file (not at start or end), splitting it out needs THREE files: predecessor (truncated), the -O0 cluster file, A
-- [New -O0 .c file split needs FOUR config touches; objdiff.json is the easy-to-miss one](#feedback-o0-file-split-objdiff-json-step) — When carving an -O0 function out of its parent .c into a dedicated `<seg>_o0_<offset>.c` file, you need (1) Makefile per-file `OPT_FLAGS := 
-- [-O0 variant of the int-reader accessor template — 19 insns / 0x4C bytes vs the standard -O2 template's 16 insns / 0x40 bytes](#feedback-o0-int-reader-template-variant) — When scanning USO accessor templates, also check 0x4C-byte / 19-instruction variants — these are -O0 compiles of the SAME body. Byte signatu
+- [IDO `register` keyword promotes to $s-class but doesn't pin the $s-number](#feedback-ido-register-promotes-class-not-number) — _Adding `register T x;` on locals forces IDO to allocate them to callee-saved $s-regs instead of caller-saved $t/spills.
+- [IDO spill+reload register pair — partially flippable via volatile-spill-shaping](#feedback-ido-spill-reload-register-pair-locked) — _Initial belief: spill+reload pair across a jal is jointly locked (89.5% cap).
+- [IDO $t-register swap unreachable — first-seen pseudo gets lowest $t number, can't be flipped from C](#feedback-ido-t-register-swap-unreachable) — When target has `$t7` for the FIRST paired-load and `$t6` for the SECOND (i.e. registers in DECREASING order), IDO at -O2 will always pick the opposite — first-seen → $t6, second-seen → $t7.
+
+### optimization level (-O0/-O1/-O2/-O3)
+
+- [0x14 stub `sw a0,0(sp); b +1; nop; jr ra; nop` = `void f(int a0) {}` compiled at -O0](#feedback-ido-o0-empty-stub) — The IDO -O0 output for `void f(int a0) {}` is exactly 5 instructions — no prologue/epilogue, a0 spilled to caller's arg slot, a redundant forward-1 branch.
+- [IDO -O0 swap == operands to control which side loads FIRST](#feedback-ido-o0-eq-operand-swap-for-load-order) — _For an `if (LHS == RHS)` comparison in IDO -O0 mode, the side on the RIGHT of `==` is evaluated FIRST.
+- [IDO -O0 field-load order isn't controlled by C expression order](#feedback-ido-o0-load-order-not-expression-driven) — _At -O0, reading two fields from the same base pointer (`p[1]` and `p[2]`) inside a single boolean expression emits loads in the OPPOSITE order from what the C says — and flipping the expression doesn't flip the emitted…
+- [IDO -O0 `lui tA; lw tA, %lo(D)(tA)` reuse is the default; forcing fresh-temp `lw tB` is unreliable](#feedback-ido-o0-lui-lw-reuse) — _When the target asm reads a D_* global at -O0 with `lui tA; lw tB, %lo(D)(tA)` (fresh register for dest), plain `if (D == C)` produces the reuse form `lw tA, %lo(D)(tA)`.
+- [IDO -O0 gives target-prefix bytes for unfilled-delay-slot leaves, but adds dead trailing jr-nop — not trimmable from C](#feedback-ido-o0-prefix-match-dead-epilogue) — _For 3-insn leaf setters (`sw X, off(a0); jr ra; nop`) that IDO -O2 compacts into 2 insns (`jr ra; sw X, off(a0)`) — the classic `feedback_ido_unfilled_store_return.md` cap — -O0 DOES emit the 3 target insns as a…
+- [IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C](#feedback-ido-o2-tiny-wrapper-unflippable) — _Simple `void f(void) { func(&SYM); }` wrappers at IDO -O2 always emit `addiu sp; sw ra; lui a0; jal; addiu a0(delay)`.
+- [IDO -O3 produces byte-identical output to -O2 for single-file compiles — file-split with OPT_FLAGS=-O3 only adds value for inter-module (IPO) builds, which the per-.c.o pipeline doesn't use](#feedback-ido-o3-equals-o2-for-single-file-compile) — _When a function is stuck at -O2 codegen and you're considering file-split-with-OPT_FLAGS to try -O3, don't bother — IDO's -O3 differs from -O2 only in inter-module optimization (requires `cc -O3 -j ...`).
+- [-O0-cluster split mid-file requires a paired -O2 layout shim, not just the -O0 file](#feedback-o0-cluster-split-with-layout-shim) — _When a -O0 cluster sits MID-file (not at start or end), splitting it out needs THREE files: predecessor (truncated), the -O0 cluster file, AND a successor "layout shim" (-O2 INCLUDE_ASMs only) holding everything…
+- [New -O0 .c file split needs FOUR config touches; objdiff.json is the easy-to-miss one](#feedback-o0-file-split-objdiff-json-step) — _When carving an -O0 function out of its parent .c into a dedicated `<seg>_o0_<offset>.c` file, you need (1) Makefile per-file `OPT_FLAGS := -O0` and `TRUNCATE_TEXT`, (2) tenshoe.ld entry, (3) source split itself, AND…
+- [-O0 variant of the int-reader accessor template — 19 insns / 0x4C bytes vs the standard -O2 template's 16 insns / 0x40 bytes](#feedback-o0-int-reader-template-variant) — _When scanning USO accessor templates, also check 0x4C-byte / 19-instruction variants — these are -O0 compiles of the SAME body.
+
+### indirect / function pointer
+
+- [Inline function-pointer call → IDO uses `jalr $t9`; naming as local → `$a1` or other](#feedback-ido-indirect-call-t9) — _For indirect calls via a struct member (`(*struct->callback)(args)`), keep the function-pointer EXPRESSION inline inside the call.
+- [`volatile T buf[N]` forces IDO to emit `addiu tA, sp, off; lw tB, 0(tA)` (pointer-indirect load) instead of `lw tB, off(sp)` (direct sp-relative)](#feedback-ido-volatile-buf-pointer-indirect) — When the target asm uses `addiu tA, sp, off; lw tB, 0(tA)` (materialize stack address into a temp register, then load via the temp) instead of the standard direct `lw tB, off(sp)`, declaring the local buffer as…
+
+### other
+
+- [IDO `addu` operand order depends on whether expression is split into a named local](#feedback-ido-addu-operand-order) — For `v1 = A + B` in C, IDO picks `addu $rd, $rs, $rt` with `$rs = first-computed operand` and `$rt = second-computed operand`.
+- [IDO doesn't share `lui $at` across stores to adjacent externs — struct retype DOESN'T fix it at -O1](#feedback-ido-adjacent-extern-shared-at) — _IDO -O1 (and possibly -O2) emits a fresh `lui $at` before EACH store to an external symbol, even when the symbols are adjacent bytes AND are declared as fields of a single struct.
+- [Two adjacent-offset global stores — split into per-store extern symbols to force `lui $at` per store](#feedback-ido-adjacent-store-extern-split) — _When target emits `lui $at, HI; sw X, 0($at); lui $at, HI; sw Y, 4($at)` (two independent `lui $at` per store, no cached base pointer), writing the obvious C `*(int*)&SYM = X; *((int*)&SYM + 1) = Y;` makes IDO cache…
+- [IDO C compiler treats `__asm__("nop")` as a FUNCTION CALL, not inline-asm](#feedback-ido-asm-intrinsic-treated-as-function-call) — _IDO 7.1 does NOT support GCC's `__asm__("...")` inline-asm syntax.
+- [IDO target's "base-adjust trick" (addiu base, base, +N then use smaller offsets) isn't reachable from natural C](#feedback-ido-base-adjust-for-clustered-offsets) — When target asm does `addiu $v1, $v1, +0x2C` once and then accesses fields at offsets 0xC, 0x0, 0x10, etc. (= original 0x38, 0x2C, 0x3C of the struct), it's an IDO-O2 base-adjust optimization for accessing a CLUSTER of…
+- [IDO stack placement — use `int buf[2]` not `int buf` to force 8-byte alignment](#feedback-ido-buf-array-alignment) — When a stack buffer ends up 4 bytes higher than target, try declaring it as `T buf[2]` instead of `T buf`; IDO aligns arrays to 8 bytes, simple scalars to 4.
+- [IDO 7.1 cfe rejects specific non-C-syntax chars EVEN IN COMMENTS — concrete blocklist](#feedback-ido-cfe-strict-ascii-gotchas) — _The general rule "no unicode in C source" is well known, but IDO 7.1's cfe is stricter than standard C — it rejects specific characters even inside `/* ... */` comment blocks.
+- [For 16-case sparse dispatchers in segments without .rodata, `if (a1 == N) goto cN;` chain beats both switch (jumptable) and if-else-if chain](#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse) — _When the target asm is a chain of sequential `li at, K; beq a1, at, body_K` (compares grouped at top, case bodies after), straight `if-else-if` produces 49 % match (interleaves bodies) and `switch` produces 69 %…
+- [IDO -O2 `void f(void) {}` produces exactly `jr ra; nop` — empty functions ARE matchable](#feedback-ido-empty-void-matchable) — _The CLAUDE.md general note ("Empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop") is WRONG for IDO 7.1 at -O2.
+- [Tiny branch-predicate funcs with forced `addiu sp, -8/+8` frame + explicit `b` to epilogue — unreachable from IDO -O0/-O1/-O2](#feedback-ido-forced-frame-tiny-predicate) — Some 7-9-insn predicate functions (e.g. `return (a & MASK) != 0;`) have a target shape with a forced stack frame (`addiu sp, -8` prologue / `addiu sp, +8` in jr delay slot) AND an explicit `b` to the epilogue-merge…
+- [Use `goto end` for early-return from alloc-check; plain `return` emits extra branch](#feedback-ido-goto-epilogue) — _IDO compiles `return a0` from inside a nested if into `b + lw ra` redundancy, not a direct `beqz/bnez` to the epilogue.
+- [IDO implicit decl conflicts with later explicit extern](#feedback-ido-implicit-decl-extern-conflict) — K&R-implicit `int func()` from a call BEFORE the explicit `extern void func()` declaration causes IDO cfe to error "Incompatible function return type"
+- [IDO places locals first-declared-highest; add leading pad local to shift scratch slot down](#feedback-ido-local-ordering) — If your local `scratch` ends up at sp+0x1C but the target wants sp+0x18, declare an extra `int pad` BEFORE scratch.
+- [`or v0, v1, zero` after jal = wrapper returning low word of callee's 64-bit return](#feedback-ido-long-long-v1-move) — In 1080 USO wrappers, the target `or v0, v1, zero` right before `jr ra` means the callee returns a `long long` and the wrapper returns only the low 32 bits.
+- [IDO doesn't accept bare `__asm__("")` as a scheduling barrier](#feedback-ido-no-asm-barrier) — _The GCC trick of `__asm__("")` to force an instruction ordering barrier is NOT supported by IDO 7.1.
+- [`&BASE + 0xOFFSET` vs `extern SYM_AT_OFFSET` produces different .o byte patterns even when addresses are equal](#feedback-ido-offset-in-instruction-vs-reloc) — _When target asm has `lw $reg, 0xNNN($at)` (offset baked into the instruction), write `*(int*)((char*)&BASE + 0xNNN)` in C — this emits `lw $reg, 0xNNN(...)` matching the target.
+- [IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent](#feedback-ido-reg-only-store-ordering) — For 6+arg setters where stack args (sp+0x10, sp+0x14) go to struct fields, IDO's scheduler hoists cheap register-only stores (`sw aN, N(a0)`) into load-use gaps.
+- [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — _When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce this from C.
+- [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — _When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; or v1, ret_hi, zero; jr ra`), the function signature is `long long`/s64 (o32…
+- [IDO -O2 leaf with `addiu sp,-8` but no stack use is unreachable from standard C](#feedback-ido-sp-frame-without-stack-use) — When target has a leaf function with stack frame adjust (`addiu sp, sp, -8` / `addiu sp, sp, +8`) but NO sw/lw using the frame, no standard C idiom produces this at IDO -O2.
+- [kernel/func_80008030 (SP_STATUS & 3 check) not reproducible from C at -O1 or -O2](#feedback-ido-sp-status-check-unreachable) — _Simple `if ((SP_STATUS & 3) == 0) ret |= 1;` function (0x24 = 9 insns, no stack frame, ret in $v0 with `or v0,zero,zero` + `ori v0,v0,1`) is not reachable from IDO C. -O1 spills ret to stack (adds 4 insns); -O2 routes…
+- [IDO -O2 picks the lowest-available spill slot when the frame has unused space; can't force a higher slot without bloating the frame](#feedback-ido-spill-slot-picks-low-offset) — When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWEST available slot above the ra-save (e.g. if ra=sp+0x14, it picks sp+0x18).
+- [Split `char pad[N]` into pad-before-buf + pad-after-locals to fine-tune array offset within a fixed frame size](#feedback-ido-split-pad-for-buf-offset) — When you need a buf at a specific stack offset (e.g., target wants `swc1 $f0, 0x34(sp)` with frame 0x48 but your single `pad[N]` only puts buf at 0x28 or 0x38), split the pad into TWO declarations bracketing your…
+- [IDO -O2 schedules "store non-delay" before "addu feeding delay-slot store" — unreachable from C](#feedback-ido-sw-before-addu-unreachable) — IDO -O2's list scheduler picks `sw $reg, N(a0)` before `addu $t1, a0, $t0` when both are ready and the addu's output is needed for the jr delay slot store.
+- [IDO `switch` statements emit a `.rodata` jump table — breaks 1080's linker (rodata discarded)](#feedback-ido-switch-rodata-jumptable) — Writing a C `switch` at IDO -O2 with 3+ cases produces a jump table in `.rodata` and a `lui+addu+lw+jr` dispatch.
+- [bootup_uso void setters use unfilled delay slot (sw; jr; nop) — not matchable from C](#feedback-ido-unfilled-store-return) — _Some bootup_uso tiny void setters produce `sw; jr $ra; nop` instead of `jr $ra; sw` (delay slot).
+- [Splat synthetic stubs — INCLUDE_ASM + file-scope `extern int f()` (K&R, int return)](#feedback-ido-unspecified-args) — _For stubs like bootup_uso's func_00000000 that callers use with varying arg counts and sometimes want a return value: INCLUDE_ASM the body, and file-scope declare `extern int f();`.
+- [IDO $v0 vs $t-regs — named locals get $v0, inlined expressions get $t6/$t7/$t8](#feedback-ido-v0-reuse-via-locals) — IDO assigns $v0 to named locals (esp. short-lived ones) and $t-regs to intermediate expression temps.
+- [`void f(int a0, ...)` with empty body spills all 4 arg regs to caller slots](#feedback-ido-varargs-empty-body) — When target asm is `addiu sp, -8; sw a0, 8(sp); sw a1, 12(sp); sw a2, 16(sp); sw a3, 20(sp); jr ra; addiu sp, 8` — 4 consecutive spills of a0..a3 to caller's arg area, no jal, no other body — the original C was a…
+- [Typed-varargs extern (`int f(int,int,...)`) does NOT force IDO -O2 caller-side stack-arg spills (sw a1,4(sp); sw a2,8(sp))](#feedback-ido-varargs-extern-doesnt-force-caller-spill) — _When target asm shows defensive `sw a1,4(sp); sw a2,8(sp)` spills around a jal but mine doesn't, the natural fix-attempt is to declare a unique-aliased extern with explicit varargs sig.
+- [Use `void` return when target doesn't restore $v0 — int return forces IDO to spill v0 across calls](#feedback-ido-void-return-avoids-v0-spill) — When the asm doesn't have an explicit final `or v0, ...` epilogue insn AND v0 is consumed by an intermediate call (e.g. as $a2 arg in delay slot), the C should be `void` return, not `int`.
+- [Use `volatile T *arg` to prevent IDO from fusing two `sb`/`sw` stores to the same address](#feedback-ido-volatile-preserve-redundant-io) — When the target asm has two distinct stores to the same address (e.g. `sb $t9, 0(a0); sb $t0, 0(a0)` where the second value is derived from the first), plain C emits ONE store because IDO fuses `*a0 = val; *a0 = val |…
+- [`volatile int saved_arg = aN;` forces IDO to spill aN to a LOCAL stack slot instead of the caller's outgoing-arg slot](#feedback-ido-volatile-unused-local-forces-local-slot-spill) — _When target has `sw $aN, 0x24(sp)` (local-slot offset) but your IDO build emits `sw $aN, 0xBC(sp)` (caller's outgoing-arg slot at sp+frame_size+slot), the difference is whether IDO treats the saved arg as "live local"…
+
 
 ---
 
@@ -173,6 +209,8 @@ If the function has additional uses of $a0/the array AFTER the jal, IDO might fi
 
 ---
 
+---
+
 <a id="feedback-ido-addu-operand-order"></a>
 ## IDO `addu` operand order depends on whether expression is split into a named local
 
@@ -219,6 +257,8 @@ Prefer the array form when the target has base-first operand order.
 
 ---
 
+---
+
 <a id="feedback-ido-adjacent-extern-shared-at"></a>
 ## IDO doesn't share `lui $at` across stores to adjacent externs — struct retype DOESN'T fix it at -O1
 
@@ -254,6 +294,8 @@ sb    t1, 7(at)
 **Bottom line as of 2026-04-20:** the struct retype prescription in the PREVIOUS version of this memo was wrong. Do NOT recommend struct retype as the fix until confirmed on at least one function. Mark as NON_MATCHING and move on, or try a real `char*` base-pointer local.
 
 **Origin:** 2026-04-20, kernel/func_80004E50. Both plain-externs and full-struct versions produced separate `lui $at` per store. The target's shared-`$at` output is still unexplained.
+
+---
 
 ---
 
@@ -317,6 +359,8 @@ Both `lui $at` are independent (same HI=0 at link time for USO placeholders, but
 
 ---
 
+---
+
 <a id="feedback-ido-alloc-or-passthrough-ternary"></a>
 ## IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary
 
@@ -371,6 +415,8 @@ body that populates a Vec3 in `out`.
 **Decision rule:**
 - Target asm has `bnel ptr,zero,...` → use ternary `out = ptr ? ptr : alloc(N);`
 - Target asm has `bnez ptr,zero,...` → use if-else `if (p == 0) { p = alloc(N); ... }` + `goto end` for early-exit
+
+---
 
 ---
 
@@ -435,6 +481,8 @@ If target asm shows `lw aN, offset(a0)` EARLY in the prologue (while a0 still ho
 
 ---
 
+---
+
 <a id="feedback-ido-arg-passthrough"></a>
 ## Function that never sets or spills a0 is forwarding caller's a0 to a callee
 
@@ -473,6 +521,8 @@ void timproc_uso_b1_func_00001100(int a0) {
 ```
 
 **Origin:** 2026-04-19 timproc_uso_b1/b3 passthrough wrappers. Both matched 100 %.
+
+---
 
 ---
 
@@ -515,6 +565,8 @@ All produce `$a1`. 98 % match with only the register field differing.
 
 ---
 
+---
+
 <a id="feedback-ido-arg-save-to-sreg-in-bne-delay"></a>
 ## IDO schedules arg-save `or sN, aN, zero` into bne delay slot when an immediate `if (aN == 0)` test follows the prologue
 
@@ -537,6 +589,8 @@ _When function body starts with `if (a0 == 0)` after prologue, IDO -O2 schedules
 **How to apply:** when the only diff in an otherwise byte-identical match is the position of `or sN,aN,zero` (target inline-prologue, ours in bne delay slot), accept the ~95-97 % match and NM-wrap. Don't grind register hints; they don't help here. Permuter might find an offset-shift via local variable reorder, but the cap is structural for IDO -O2 with this idiom.
 
 **Related:** `feedback_ido_arg_save_reg_pick.md` — sibling case where IDO picks the WRONG arg-save reg ($a1 vs $a3); also unflippable.
+
+---
 
 ---
 
@@ -567,6 +621,8 @@ _IDO 7.1 does NOT support GCC's `__asm__("...")` inline-asm syntax. Writing `__a
 **Companion memos:**
 - `feedback_byte_correct_match_via_include_asm_not_c_body.md` — wrap-via-INCLUDE_ASM is the byte-correct path when C can't reach the shape.
 - `feedback_uso_entry0_trampoline_95pct_cap_class.md` — explains why post-cc recipes (PREFIX/SUFFIX/INSN_PATCH) are the structural fallback when C-emit can't reach byte-correct.
+
+---
 
 ---
 
@@ -609,6 +665,8 @@ The base-adjust costs 1 extra `addiu` insn but doesn't shorten any individual lo
 When you see this pattern in target — especially with the `sw $vN; lw $vN` spill+reload of the shifted base across a jal — recognize it as the base-adjust trick. Skip the function or NM-wrap with a note. Don't try `int *p2 = (int*)(p + 0x2C);` from C — IDO will eliminate the alias.
 
 **Related:** `feedback_ido_3save_vs_2save_arg_preserve.md` — similar "target uses an extra reg-shuffle that IDO won't reproduce."
+
+---
 
 ---
 
@@ -676,6 +734,8 @@ a programmer mistake.
 
 ---
 
+---
+
 <a id="feedback-ido-blez-vs-bne-signed-compare"></a>
 ## Asm `blez/blezl` vs `bne/beql` distinguishes `> 0` (signed) from `!= 0` (eq) source
 
@@ -735,6 +795,8 @@ IDO emits: `lw t7, 0x24(t6); blezl t7, +3` (branch-on-LE-zero-likely). Matches t
 
 ---
 
+---
+
 <a id="feedback-ido-bnel-arm-swap"></a>
 ## IDO `bnel` with value-in-delay-likely comes from C with the EQUAL case in the `if` arm
 
@@ -781,6 +843,8 @@ You'd expect the "natural" translation of `bnel v0, t6 → return 0` to be `if (
 
 ---
 
+---
+
 <a id="feedback-ido-bnel-shared-store-after-helper"></a>
 ## bnel-likely with shared store-in-delay = `if (!cond) helper(); shared_store;`
 
@@ -817,6 +881,8 @@ The IDO emit naturally produces the bnel-likely + shared-store-in-delay shape be
 - This is DISTINCT from `feedback_ido_alloc_or_passthrough_ternary.md` (bnel for alloc-or-passthrough); recognize the difference: alloc form has TWO different code paths writing the SAME variable; this form has ONE store that runs on both paths.
 
 **Origin:** 2026-05-03, gl_func_0005FE7C (38-insn resource-load function). Hit 90.79% NM first try with the natural `if (*global == 0) helper(); a0[6] = 0;` shape. Sibling of gl_func_0005FDCC/FCC4/FD20.
+
+---
 
 ---
 
@@ -870,6 +936,8 @@ Branch target lands directly at the epilogue with `lw ra` in the delay slot. Cle
 **Origin (2026-04-20):** `titproc_uso_func_00000FD0` — body is `if (*a1 == 21) { gl_func(); gl_func(a0); gl_func(a0,a1); }`. Reached 99.42 % with named local `int v = *a1`, but bnel target landed at `addiu sp` (epilogue) while target lands at `lw a1, 0x1C(sp)` (3 instructions earlier). All flip variants tried produced the same result.
 
 **Combine with `feedback_ido_v0_reuse_via_locals.md`:** that memo handles the inlined-vs-local choice for the deref register ($v0 vs $t-reg). This memo handles the bnel target offset within the matched-otherwise body. Both can apply to the same function.
+
+---
 
 ---
 
@@ -943,6 +1011,8 @@ Vs:
 
 ---
 
+---
+
 <a id="feedback-ido-branch-likely-arm-choice"></a>
 ## For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely
 
@@ -989,6 +1059,8 @@ int f(int *a0) {
 
 ---
 
+---
+
 <a id="feedback-ido-buf-array-alignment"></a>
 ## IDO stack placement — use `int buf[2]` not `int buf` to force 8-byte alignment
 
@@ -1006,6 +1078,8 @@ The original code probably used a small struct or an array too, for the same rea
 - Verify via `/tmp/test.c` standalone compile before patching the real source.
 
 **Origin:** hit 2026-04-18 on bootup_uso func_00000008/00000044 (read-4-bytes wrappers that call `func_00000000(&SYM, &buf, 4); *dst = buf;`). Scalar `int buf` produced sp+0x1C offset; `int buf[2]` matched at sp+0x18.
+
+---
 
 ---
 
@@ -1047,6 +1121,8 @@ The `Unknown character` error tells you exactly which char is the problem. The c
 **Project-wide note:** the project README/skill says "Do NOT use unicode/emoji in C source — the assembler uses EUC-JP encoding." This memo enumerates the SPECIFIC characters seen in practice. Many src files have em-dashes (`—`) inside comments and build fine, so the rule is char-specific not blanket-unicode — `@` and arrow combos are the consistent breakers.
 
 **Verified break + fix (2026-05-05, src/kernel/kernel_020.c):** added a 4-sub-function bundle wrap with `→`, `@`, `\*` characters; build failed with `Unknown character @ ignored` + nested-comment-terminator cascade. Fixed by ASCII-substituting all listed chars. Triggered when running `scripts/land-successful-decomp.sh` for an unrelated function (kernel_000.c.o was rebuilt, but kernel_020's NM build was clean — turned out kernel_020's NON_MATCHING-build-only path tried to compile the comment that had survived the default INCLUDE_ASM tautology path).
+
+---
 
 ---
 
@@ -1102,6 +1178,8 @@ Produces: `addiu a2, sp, 0x18` and `lb a2, 0x1B(sp)`.
 
 ---
 
+---
+
 <a id="feedback-ido-constant-address-load-fold-inevitable"></a>
 ## IDO -O2 constant-folds the load-address even when the base is a register-declared local
 
@@ -1143,6 +1221,8 @@ reload `arg1 = base[0x40]`. 3 variants tried — all failed:
 - This affects loop-tail reloads in functions that re-read fixed
   extern memory each iteration. Common in dispatcher loops over
   global state arrays.
+
+---
 
 ---
 
@@ -1214,6 +1294,8 @@ This cap may need permuter to break.
 - `feedback_ido_switch_rodata_jumptable.md` — base reference; this memo extends it with the matching idiom.
 - `feedback_ido_branch_likely_arm_choice.md` — last-comparison bnel cap reasoning.
 - `feedback_ido_goto_epilogue.md` — `goto end` to share epilogue (similar idiom).
+
+---
 
 ---
 
@@ -1298,6 +1380,8 @@ operation), this is the load-delay-nop class. Function size will be
 
 ---
 
+---
+
 <a id="feedback-ido-double-return-uses-f0-f1-not-f2"></a>
 ## IDO -O2 emits double return into $f0+$f1 pair, not $f0+$f2 — kills "force $f2 via double-trick" theory
 
@@ -1355,6 +1439,8 @@ promising but emits to $f1 not $f2.
 
 ---
 
+---
+
 <a id="feedback-ido-early-return-ra-delay-slot"></a>
 ## IDO folds prologue sw ra into early-return beq's delay slot
 
@@ -1392,6 +1478,8 @@ void f(void *a0, ...) {
 - For "if (cond) return; body;" patterns, write the early-return at the top — DO NOT wrap the body in `if (!cond) { body; }`. The scheduler needs the early-return branch as the carrier for the ra save.
 - Don't pre-spill ra or insert dummy locals trying to "encourage" the scheduler — the natural pattern works.
 - This is the OPPOSITE of `feedback_ido_unfilled_store_return.md` (which describes when IDO leaves the delay slot empty for store-then-return patterns in leaf setters); the difference is that here we have an early-return guarded by a condition, with body code following.
+
+---
 
 ---
 
@@ -1465,6 +1553,8 @@ IDO codegen choices).
 
 ---
 
+---
+
 <a id="feedback-ido-empty-void-matchable"></a>
 ## IDO -O2 `void f(void) {}` produces exactly `jr ra; nop` — empty functions ARE matchable
 
@@ -1505,6 +1595,8 @@ Size: 0x8. This IS the target bytes for the standard `jr ra; nop` leaf empty fun
 
 ---
 
+---
+
 <a id="feedback-ido-f0-implicit-zero-at-entry"></a>
 ## Function reads $f0 at entry without setting it — caller-context "implicit zero" pattern
 
@@ -1542,6 +1634,8 @@ When you see `swc1 $f0, N(sp)` as the first FPU op with no prior $f0 setter, rec
 
 ---
 
+---
+
 <a id="feedback-ido-f2-intermediate-unreproducible"></a>
 ## IDO -O2 always folds `return 0.0f` paths through $f0 directly — `mtc1 $0, $f2; mov.s $f0, $f2` unreachable from C
 
@@ -1576,6 +1670,8 @@ mov.s $f0, $f2     ; delay slot copies to return reg
 
 ---
 
+---
+
 <a id="feedback-ido-fabs-dead-mov"></a>
 ## IDO's fabs idiom leaves an unreachable `mov.s` at the merge point — branch-likely artifact unmatchable from C
 
@@ -1604,6 +1700,8 @@ The final `mov.s $fDst, $fSrc` at the fallthrough is UNREACHABLE — both paths 
 **Implication:** when a function uses fabs AND you can match everything else, the last-insn-of-body gap is likely this dead `mov.s`. Cap the match at `(insns-1)/insns` and note the artifact.
 
 **Origin:** 2026-04-20, game_uso_func_00007538 insn 0x768C decode. The dead `mov.s $f14, $f12` is part of a fabs+mod9 sub-expression within the function's arg1 & 0x20 dispatch arm. Identified as unreachable by flow analysis (both bc1fl taken and b-fallthrough paths branch to the merge label, bypassing 0x768C).
+
+---
 
 ---
 
@@ -1662,6 +1760,8 @@ No stack frame. No explicit `b` to merge. Can't reach target from any C form tes
 
 ---
 
+---
+
 <a id="feedback-ido-fpu-reduction-operand-order"></a>
 ## IDO -O2 final-add operand order in FPU reductions (`add.s fd, fs, ft`) follows source evaluation; can't easily flip without changing load order
 
@@ -1691,6 +1791,8 @@ Naive C `a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + b[3]*a[3]` produces 15/16 instructi
 **Related:**
 - `feedback_ido_v0_reuse_via_locals.md` — sibling case for integer register choice
 - `feedback_ido_arg_save_to_sreg_in_bne_delay.md` — IDO instruction-scheduler caps from C
+
+---
 
 ---
 
@@ -1755,6 +1857,8 @@ The reason: most of the 7 pre-matched functions were either empty (`void f() {}`
 
 ---
 
+---
+
 <a id="feedback-ido-g-flag-does-not-suppress-delay-slot-fill"></a>
 ## IDO -g does NOT suppress delay-slot fill (unlike KMC GCC -g2) — don't borrow the Glover technique
 
@@ -1808,6 +1912,8 @@ existing wrap doc speculated "Common IDO -O2 -> O1-style unfilled-slot
 mismatch" — implying -O1 produces unfilled slots. Verified empirically that
 neither -O0 nor -O1 (with or without -g) produces the target's exact shape.
 The wrap was updated to remove the speculative -g claim.
+
+---
 
 ---
 
@@ -1915,6 +2021,8 @@ sibling-memo trick finds a way to break the CSE.
 
 ---
 
+---
+
 <a id="feedback-ido-goto-epilogue"></a>
 ## Use `goto end` for early-return from alloc-check; plain `return` emits extra branch
 
@@ -1966,6 +2074,8 @@ end:
 All 20 insts match byte-for-byte. Plain `return a0` in the inner if would produce 22 insts (one b + one extra lw ra).
 
 **Related:** the skill's `decomp-permuter` section has `PERM_GENERAL(if (old == 0xA) { *arg0 = val; return val; }, if (old == 0xA) goto store)` as a common variation — same idea.
+
+---
 
 ---
 
@@ -2032,6 +2142,8 @@ IDO's scheduler hoists `move s0, s2` ABOVE the jal because s0 isn't read by the 
 
 ---
 
+---
+
 <a id="feedback-ido-if-guarded-do-while-defers-reg-move"></a>
 ## IDO -O2 if-guarded do-while defers register-only assignment past jal
 
@@ -2082,6 +2194,8 @@ The if-guard's count test gets fused with the do-while's count test (IDO sees bo
 
 ---
 
+---
+
 <a id="feedback-ido-implicit-decl-extern-conflict"></a>
 ## IDO implicit decl conflicts with later explicit extern
 
@@ -2109,6 +2223,8 @@ The first call (above the extern) gets implicitly declared as `int func()` per C
 - The relaxation is safe because the underlying symbol is a placeholder (target=0) that's runtime-patched to whatever the loader chooses; no caller actually depends on the return type.
 
 Used at arcproc_uso.c (2026-04-19) for `arcproc_uso_func_00001B88` — relaxed `void arcproc_uso_func_00000000(void);` to `int arcproc_uso_func_00000000();`. Both the new 3-arg caller and the existing no-arg caller (`arcproc_uso_func_00001488`) matched.
+
+---
 
 ---
 
@@ -2153,6 +2269,8 @@ Emits `lw $t9, 0xC($v1); lh $t6, 8($v1); jalr $t9; addu $a0, $t6, $v0` — ✓ c
 **Caveat:** this only fixes the `$t9` allocation. The v0/v1 assignment for the surrounding pointer chain (p1 in $v0 vs $v1, etc.) is separately determined by IDO's SSA renumbering and is often NOT controllable from C without decomp-permuter.
 
 **Origin:** 2026-04-19 game_libs gl_func_0004E150. With named `int (*func)() = ...`: 95.8 %. With fully inline call: 97.5 % (only v0/v1 swap remained). NON_MATCHING wrapped at 97.5 %.
+
+---
 
 ---
 
@@ -2209,6 +2327,8 @@ nop                   # offset 0x24
 **Related:**
 - `feedback_function_trailing_nop_padding.md` — different class (trailing pad blocks ~75% cap, nothing to do with infinite loops).
 - `feedback_pad_sidecar_unblocks_trailing_nops.md` — would unblock IF the only diff were trailing nops; but here the middle bytes also differ.
+
+---
 
 ---
 
@@ -2307,6 +2427,8 @@ This was a 2-byte (2-insn) diff at 99.83% NM. Verified arcproc_uso_func_00000D70
 
 ---
 
+---
+
 <a id="feedback-ido-inline-fnptr-call-drops-arg-spill"></a>
 ## Inlining intermediates into a fn-ptr call expression drops IDO's defensive arg-register spill
 
@@ -2378,6 +2500,8 @@ a 0x28-frame call to 0x38 with local at sp+0x2C.
 
 ---
 
+---
+
 <a id="feedback-ido-inline-keeps-t-regs"></a>
 ## IDO inline expression keeps $t6/$t7 registers, named local moves to $at/$v1
 
@@ -2418,6 +2542,8 @@ char *f(char *a0) {
 **Origin:** 2026-05-03, bootup_uso/func_00010324 (8-insn pointer-arithmetic leaf). 11+ variants tested across 2 sessions; inline form is strictly best for this class.
 
 **Related:** `feedback_ido_addu_operand_order.md` (general guidance on splitting addu operands — but that recipe COSTS register identity here).
+
+---
 
 ---
 
@@ -2488,6 +2614,8 @@ The remaining 32 % gap is the lw-vs-lwc1 opcode diff: target uses float-reg pipe
 
 ---
 
+---
+
 <a id="feedback-ido-load-cse-swap-v0-v1"></a>
 ## IDO load-CSE swap to flip $v0/$v1 regalloc
 
@@ -2528,6 +2656,8 @@ Search NM docs for "v0/v1 swap" or "first-loaded" — likely applies to
 other instances. Doesn't apply when the two values use different load
 expressions (e.g., `p1 = a0->X; p2 = a0->Y;` — no shared subexpression
 to CSE).
+
+---
 
 ---
 
@@ -2590,6 +2720,8 @@ void gl_func_XXXXXXXX(int *dst) {
 
 ---
 
+---
+
 <a id="feedback-ido-long-long-v1-move"></a>
 ## `or v0, v1, zero` after jal = wrapper returning low word of callee's 64-bit return
 
@@ -2620,6 +2752,8 @@ int wrapper(int a0) {
 **Related caveat — the a0 spill in the jal delay slot:** the target for `gl_func_00035164` also had `sw $a0, 0x18($sp)` in the jal delay slot (saving a0 to caller's arg save area). I could NOT reproduce this spill from C declarations alone — varargs on callee didn't trigger it, neither did varargs on caller. 93 % is as close as you get without grinding. Wrap NON_MATCHING at that point.
 
 **Origin:** 2026-04-19 game_libs gl_func_00035164. `or v0, v1, zero` is the signal — recognize it immediately as 64-bit-return-truncation idiom. Matched instruction count, structure, register move exactly; only the a0 spill in delay slot differs.
+
+---
 
 ---
 
@@ -2686,6 +2820,8 @@ The float arg lands in `$a3` because positional MIPS O32 ABI puts arg #4 there r
 
 ---
 
+---
+
 <a id="feedback-ido-mix-named-and-inline-per-usesite"></a>
 ## Mix named-local and inlined access in the SAME function to get per-use-site reg allocation (named → $v, inline → $t)
 
@@ -2728,6 +2864,8 @@ The trick: re-typing `(int*)a0[OFF/4]` inline each time prevents IDO from CSEing
 **Related:**
 - `feedback_ido_v0_reuse_via_locals.md` — base rule (named → $v, inline → $t)
 - `feedback_ido_inline_deref_v0.md` — inline nested derefs to flip allocation
+
+---
 
 ---
 
@@ -2789,6 +2927,8 @@ So the full rule: `*(char**)(a0 + 0x30) + OFFSET` (inline deref + add) produces 
 
 ---
 
+---
+
 <a id="feedback-ido-named-char-v0-vs-t6"></a>
 ## Named `unsigned char c = *p;` forces $v0; inline `*p` in the comparison keeps the load in $t6
 
@@ -2819,6 +2959,8 @@ Related knobs from the same function grind (gui_func_00001514):
 **How to apply:** Before settling for a 90-99% NM wrap, run through these 4 IDO-register-allocation knobs in order. They're each cheap (one-line rewrite) and each can be the last thing between NM and 100%.
 
 **Origin:** 2026-04-20 agent-a, gui_func_00001514 (text-width accumulator). Went from NM wrap → 89% → 81% → 19% → 0% diffs via this 4-step sequence in one tick. Commit ff54d31.
+
+---
 
 ---
 
@@ -2869,6 +3011,8 @@ should be inlined.
   1-insn cap on FPU reductions.
 - `feedback_ido_v0_reuse_via_locals.md` — the analogous int-side rule
   (named local vs inline → $v vs $t register).
+
+---
 
 ---
 
@@ -2952,6 +3096,8 @@ declaration-order to f0/f2/f12/f14 and it's not C-controllable.
 
 ---
 
+---
+
 <a id="feedback-ido-named-local-reuse-across-alloc-blocks"></a>
 ## reusing one named local across sequential alloc-then-populate blocks regresses IDO match
 
@@ -2993,6 +3139,8 @@ just-returned alloc result.
   ONE alloc block at a time and verify NM% doesn't regress before
   moving to the next. If a new block regresses, immediately reach for
   separate-named-locals before assuming logic error.
+
+---
 
 ---
 
@@ -3052,6 +3200,8 @@ matches the `sw $aN, off(sp); lbu $rT, off+3(sp)` pattern for each narrow arg th
 
 ---
 
+---
+
 <a id="feedback-ido-no-asm-barrier"></a>
 ## IDO doesn't accept bare `__asm__("")` as a scheduling barrier
 
@@ -3088,6 +3238,8 @@ The compile step (cfe) silently accepts it as a function call; the linker then f
 
 ---
 
+---
+
 <a id="feedback-ido-no-cse-arg-immediates"></a>
 ## IDO does not CSE repeated immediate args at -O2
 
@@ -3114,6 +3266,8 @@ addiu a3, zero, 1   ;  arg3 (delay slot)
 - This holds for stack-arg constants too: 4-arg + N-stack-arg calls with repeated literals expand cleanly without local helpers.
 
 **Origin:** game_uso_func_00011428 (2026-04-19) — `f(a0, *(int*)(a0+0x74), 4, 1, 1, 1)` matched first try when written with three literal `1`s; using a local `int one = 1` would have shrunk to one `addiu` and broken the match.
+
+---
 
 ---
 
@@ -3156,6 +3310,8 @@ cfe: Error: src/<file>.c, line N: Syntax Error
 
 ---
 
+---
+
 <a id="feedback-ido-o0-empty-stub"></a>
 ## 0x14 stub `sw a0,0(sp); b +1; nop; jr ra; nop` = `void f(int a0) {}` compiled at -O0
 
@@ -3192,6 +3348,8 @@ Confirmed by testing all 4 opt levels on `void f(int a0) {}`:
 **Related:** `feedback_ido_unfilled_store_return.md` captures the separate issue of `sw; jr; nop` leaf setters (also not matchable from -O2 C but via a different mechanism — scheduler bias).
 
 **Origin:** 2026-04-19 while scanning bootup_uso for small candidates. Empirically tested with `-O0`/`-O1`/`-O2`/`-O3` on IDO 7.1.
+
+---
 
 ---
 
@@ -3243,6 +3401,8 @@ that diff.
 
 ---
 
+---
+
 <a id="feedback-ido-o0-load-order-not-expression-driven"></a>
 ## IDO -O0 field-load order isn't controlled by C expression order
 
@@ -3283,6 +3443,8 @@ Flipping to `if (a0[2] == a0[1] + 1)` — SAME output (same wrong order). The -O
 
 ---
 
+---
+
 <a id="feedback-ido-o0-lui-lw-reuse"></a>
 ## IDO -O0 `lui tA; lw tA, %lo(D)(tA)` reuse is the default; forcing fresh-temp `lw tB` is unreliable
 
@@ -3318,6 +3480,8 @@ Fresh-temp form DOES appear naturally when the `lw` destination is an ARG regist
 **Related:** The `.NON_MATCHING` symbol asm-processor adds when INCLUDE_ASM is in effect makes `objdiff-cli report` tag the function as 0 % (non-matching) even when .text bytes are byte-identical to expected. That's by design — INCLUDE_ASM is not a decomp match. So wrapping a partial C in `#ifdef NON_MATCHING ... #else INCLUDE_ASM ... #endif` still reports 0 % in the default build; the wrap's value is preserving the C body for future permuter/agent runs, not boosting report stats.
 
 **Origin:** 2026-04-19, 1080 bootup_uso/func_00012818 (Run 10, dead-s0 + hw-register check).
+
+---
 
 ---
 
@@ -3388,6 +3552,8 @@ the increment and the back-edge slt.
 
 ---
 
+---
+
 <a id="feedback-ido-o0-prefix-match-dead-epilogue"></a>
 ## IDO -O0 gives target-prefix bytes for unfilled-delay-slot leaves, but adds dead trailing jr-nop — not trimmable from C
 
@@ -3429,6 +3595,8 @@ AC800078  sw  $zero, 0x78($a0)     ; matches target[0]
 **Bottom line:** cap is real. -O0 is an interesting finding but doesn't open a path to match. Supersedes scope of `feedback_ido_unfilled_store_return.md` by documenting what -O0 does (useful negative result — saves future-me from re-running this experiment).
 
 **Only remaining recourse:** permuter, or split the function out to its own .c file and use `#pragma GLOBAL_ASM` for just that function (effectively still INCLUDE_ASM).
+
+---
 
 ---
 
@@ -3522,6 +3690,8 @@ The inline form recomputes the 2-level deref path TEXTUALLY twice, but IDO at -O
 
 ---
 
+---
+
 <a id="feedback-ido-o0-register-count-matches-target-s-saves-exactly"></a>
 ## At IDO -O0, count target's `sw sN, ...` saves to set the EXACT number of `register T x;` declarations
 
@@ -3583,6 +3753,8 @@ Implication: when target's source has multiple register-typed locals that are al
 
 ---
 
+---
+
 <a id="feedback-ido-o0-register-decl-order-flips-a-alloc"></a>
 ## IDO -O0 with two `register` locals — declaration order flips which gets $a2 vs $a3 (later-declared gets HIGHER-numbered $a-reg)
 
@@ -3624,6 +3796,8 @@ The same idea may apply at -O1/-O2 for $s-reg ties when ref counts and live leng
 - `feedback_ido_local_ordering.md` — first-declared-at-highest-stack-offset (for stack locals, opposite direction)
 - `feedback_ido_no_gcc_register_asm.md` — `register T x asm("$N")` rejected
 - `feedback_ido_register.md` — IDO honors `register` keyword as strong $s-reg hint
+
+---
 
 ---
 
@@ -3679,6 +3853,8 @@ For -O0 functions where frame size is critical:
 
 ---
 
+---
+
 <a id="feedback-ido-o1-delay-slot-s-reload"></a>
 ## IDO -O1 target `lw $sN, spill(sp)` in jal delay slot — can't force via explicit C assignment
 
@@ -3713,6 +3889,8 @@ IDO's scheduler chose `lw s0` in the delay slot because later basic blocks read 
 **Related:** `feedback_ido_register_promotes_class_not_number.md` covers the $s-class vs $s-number distinction. This memo is about the *timing* of when $s-reg gets filled, not *which* $s-reg.
 
 **Origin:** 2026-04-20, agent-a, kernel_054/func_8000969C. Permuter previously ran 14k iters with best score 15 — structural diff is real, not just scheduling noise.
+
+---
 
 ---
 
@@ -3769,6 +3947,8 @@ If the target asm insists on `div.s` by a power-of-2 constant, it's probably eit
 
 ---
 
+---
+
 <a id="feedback-ido-o2-tiny-wrapper-unflippable"></a>
 ## IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C
 
@@ -3817,6 +3997,8 @@ All land at 77.78 % fuzzy match (7/9 insns). **Below the 80 % NON_MATCHING thres
 **Related:** `feedback_ido_unfilled_store_return.md` (similar "unfixable at C level" scheduler quirks in bootup_uso tiny funcs — different pattern but same "skip it" advice).
 
 **Origin:** 2026-04-19, 1080 bootup_uso/func_00006204. 13 C variants tried; all 77 %.
+
+---
 
 ---
 
@@ -3903,6 +4085,8 @@ void func_00000B2C(void **a0, float a1) {
 
 ---
 
+---
+
 <a id="feedback-ido-o32-mixed-mode-float-in-a1"></a>
 ## o32 mixed-mode ABI — when first arg is int, a float second-arg passes in $a1 (int reg) not $f14, triggering `mtc1 $a1, $f12` at function entry
 
@@ -3965,6 +4149,8 @@ the rest.
 
 ---
 
+---
+
 <a id="feedback-ido-o3-equals-o2-for-single-file-compile"></a>
 ## IDO -O3 produces byte-identical output to -O2 for single-file compiles — file-split with OPT_FLAGS=-O3 only adds value for inter-module (IPO) builds, which the per-.c.o pipeline doesn't use
 
@@ -3992,6 +4178,8 @@ When considering a file-split-with-different-OPT_FLAGS to fix a codegen cap:
 - `feedback_file_split_needs_paired_expected_o_refresh.md` — file-split mechanics
 - `feedback_ido_g_flag_does_not_suppress_delay_slot_fill.md` — IDO -g is also a no-op
 - `feedback_o0_int_reader_template_variant.md` — example of meaningful -O0 vs -O2 difference
+
+---
 
 ---
 
@@ -4033,6 +4221,8 @@ The second form compiles to `lw $a0, 0($a0)` (offset=0) with the 0xA8 encoded in
 **Relation to extern-split memo:** `feedback_ido_adjacent_store_extern_split.md` describes the INVERSE: when target emits `lui $at; sw X, 0($at); lui $at; sw Y, 0($at)` for two INDEPENDENT symbols at adjacent offsets (offset=0 in each instruction), declare two separate externs. That's the "offset-in-relocation" case. This memo is the "offset-in-instruction" case. Which to use depends on target's byte encoding.
 
 **Origin:** 2026-04-20, titproc_uso_func_00000388. First attempt used `D_000000A8` extern → wrong bytes (offset=0 instead of 0xA8). Switched to `&D_00000000 + 0xA8` → correct bytes. Promoted 90%→98.3% (remainder was register-allocation diff).
+
+---
 
 ---
 
@@ -4100,6 +4290,8 @@ optimizer. Instead document the cap and move on.
 **Origin:** 2026-05-04, func_80001184 5th-variant grind. Wraps doc was
 already documenting 4 prior variants as failed; the 5th confirms the
 loop-optimizer-pass nature of the cap.
+
+---
 
 ---
 
@@ -4173,6 +4365,8 @@ Conclusion: the spill is NOT reachable from IDO 7.1 / 5.3 with any tested input.
 
 ---
 
+---
+
 <a id="feedback-ido-reg-only-store-ordering"></a>
 ## IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent
 
@@ -4232,6 +4426,8 @@ Matches exactly.
 **Related:** A similar issue blocks `func_000020AC` (82 %, NON_MATCHING-wrapped) — "swap-of-independent-stores scheduling issue." Same family of fix; try reordering the final two stores if stuck at ≥80 %.
 
 **Origin:** 2026-04-19, 1080 bootup_uso/func_00002060 (6-arg struct setter).
+
+---
 
 ---
 
@@ -4340,6 +4536,8 @@ The permuter confirmed this with 14k iterations, best score 15 (not 0). Conclusi
 
 ---
 
+---
+
 <a id="feedback-ido-register-keyword-doesnt-block-constant-fold"></a>
 ## IDO `register T x = const;` does NOT prevent constant-folding through reads of x
 
@@ -4365,6 +4563,8 @@ This means the matching technique of "use `register int one = 1; flag = one;` to
 - `feedback_ido_local_ordering.md` — IDO's local-declaration order doesn't drive $s-reg numbering (allocator is weight-driven).
 - `feedback_unique_extern_with_offset_cast_breaks_cse.md` — for pointer-to-extern, you CAN break CSE with a proxy zero, at the cost of register-renumber penalty.
 - `feedback_ido_no_gcc_register_asm.md` — IDO rejects `register T x asm("$N")`, so explicit register binding is unavailable.
+
+---
 
 ---
 
@@ -4397,6 +4597,8 @@ After adding `register char *base`, `register int flag`, etc.: IDO promoted all 
 - **Number miss**: you see `s2`/`s3`/etc. used consistently BUT swapped with target. Don't keep trying `register` — it won't help. Redistribute refs or permute.
 
 **Origin:** 2026-04-20, agent-a, n64proc_uso_func_00000014 promotion from ~33% to partial-$s-reg allocation. All 6 locals ended up in $s-regs after adding `register`, but $s2/$s3 swap blocked byte match.
+
+---
 
 ---
 
@@ -4442,6 +4644,8 @@ Target's use of $v1 + move appears to be a minor scheduling variation inside IDO
 
 ---
 
+---
+
 <a id="feedback-ido-s64-pack-return-via-lo-hi"></a>
 ## For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`
 
@@ -4484,6 +4688,8 @@ If only v0 is set and v1 is left untouched (or v1 was set by a sibling load with
 
 **Related:**
 - `feedback_ido_double_return_uses_f0_f1_not_f2.md` — analogous gotcha for `double` return (uses $f1, not $f2)
+
+---
 
 ---
 
@@ -4538,6 +4744,8 @@ afa40000 sw    a0,0(sp)
 **$a0+$a1 variant:** 3-insn save-arg stubs like `sw a0,0(sp); jr ra; sw a1,4(sp)` — body `void f(int a0, int a1) {}` should match (untested yet).
 
 **Origin:** 2026-04-20 tick. Discovered by trying -O2 plain empty body as source=3's first yielded candidate (func_000031B8). Got byte-exact match on first try. Commit landed via land-successful-decomp.sh.
+
+---
 
 ---
 
@@ -4621,6 +4829,8 @@ In any unrolled loop with `addiu $at, $zero, -N` followed by `bne $s1, $at, ...`
 
 ---
 
+---
+
 <a id="feedback-ido-sign-test-form-choice"></a>
 ## IDO -O2 picks bgez vs srl+beqz for sign-test based on C form — `(unsigned)x>>31` forces 2-insn srl+beqz
 
@@ -4660,6 +4870,8 @@ register-allocation knobs — the encoding choice IS the source-level lever.
 
 ---
 
+---
+
 <a id="feedback-ido-signed-divide-2-idiom"></a>
 ## `bgez v0; sra t, v0, 1; addiu at, v0, 1; sra t, at, 1` is IDO's signed `/2` lowering
 
@@ -4694,6 +4906,8 @@ GCC (and IDO) emit this 4-instruction sequence for every signed `/2` because the
 - `u32 >> n` emits `srl`; `s32 >> n` emits `sra`. For a plain right-shift with no "+1" correction, the C is `>>`, not `/`.
 
 **Origin:** 2026-04-19 gui_uso gui_func_000014B4. Target had the 4-inst sequence for `result / 2`. Wrote `a1 - (call_result / 2)` in C — matched first try.
+
+---
 
 ---
 
@@ -4748,6 +4962,8 @@ jr    ra
 
 ---
 
+---
+
 <a id="feedback-ido-sp-status-check-unreachable"></a>
 ## kernel/func_80008030 (SP_STATUS & 3 check) not reproducible from C at -O1 or -O2
 
@@ -4786,6 +5002,8 @@ nop
 **Action:** leave as INCLUDE_ASM in kernel_031.c. Not a candidate for grinding until we understand the IDO $v0 allocation trigger better.
 
 **Origin:** 2026-04-20, agent-a tick.
+
+---
 
 ---
 
@@ -4857,6 +5075,8 @@ When target asm dispatch starts with `addiu $at,zero,N; beql v0,zero,...; <lw de
 
 ---
 
+---
+
 <a id="feedback-ido-spill-reload-register-pair-locked"></a>
 ## IDO spill+reload register pair — partially flippable via volatile-spill-shaping
 
@@ -4898,6 +5118,8 @@ If the function reaches ~94% with the volatile, the residual gap is the 8-byte f
 
 ---
 
+---
+
 <a id="feedback-ido-spill-slot-picks-low-offset"></a>
 ## IDO -O2 picks the lowest-available spill slot when the frame has unused space; can't force a higher slot without bloating the frame
 
@@ -4920,6 +5142,8 @@ _When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWES
 **If you can afford a bigger frame** (e.g. function has no size-sensitive neighbors and the target's actual frame is indeed 0x28 not 0x20 — double-check), add an unused int local to push a0 to the higher slot. But if target frame=0x20, this technique can't match.
 
 **Origin:** 2026-04-20, agent-a, game_libs/gl_func_0004E180 (tiny wrapper: store ptr, call callback, store ptr again).
+
+---
 
 ---
 
@@ -4981,6 +5205,8 @@ gl_func_00000000(0x06000001 | ((v & 0xFF) << 8), -1);
 **Related if/else arm swap:** while we're at it, this function also needed ternary arms swapped (`a0 == 0 ? 1 : 5` instead of `a0 != 0 ? 5 : 1`) to match `beqz` vs `bnez`. The existing "If/else arm swapping" guidance in the decompile skill covers that.
 
 **Origin:** 2026-04-19 game_libs gl_func_0002FB10. First attempt used combined constant → 72 %; split-or + arm-swap → 100 %.
+
+---
 
 ---
 
@@ -5046,6 +5272,8 @@ When `objdiff` shows your function has the right frame size but `swc1`/`sw`/`lw`
 
 ---
 
+---
+
 <a id="feedback-ido-sreg-order-not-decl-driven"></a>
 ## IDO -O2 global s-register allocator is NOT driven by local declaration order
 
@@ -5101,6 +5329,8 @@ When does decl order matter? Likely when **two locals have EQUAL priority** unde
 
 ---
 
+---
+
 <a id="feedback-ido-sw-before-addu-unreachable"></a>
 ## IDO -O2 schedules "store non-delay" before "addu feeding delay-slot store" — unreachable from C
 
@@ -5143,6 +5373,8 @@ IDO at -O2 schedules `sw t9; addu t1; jr; sw a1(delay)` — same instruction set
 **How to recognize:** target asm has `addu tN, base, idx_scaled; sw tX, FIELD(base); jr ra; sw tY, FIELD2(tN)`. Your C produces `sw tX, FIELD(base); addu tN, base, idx_scaled; jr ra; sw tY, FIELD2(tN)` — two independent instructions flipped at positions [-4, -3] before jr.
 
 **Origin:** 2026-04-20, bootup_uso/func_000020AC (array-append-pair to list at offsets 0xC0/0xC4 in a struct).
+
+---
 
 ---
 
@@ -5211,6 +5443,8 @@ Result: `jal gl_func; sw v0, 0x6B4(a2)` (delay-slot store), no spill, exact matc
 
 ---
 
+---
+
 <a id="feedback-ido-swc1-f0-without-mtc1"></a>
 ## IDO target `swc1 $f0, N(sp)` x4 at entry WITHOUT preceding `mtc1 $0, $f0` — $f0 inherited from caller
 
@@ -5239,6 +5473,8 @@ The target has 4 stores but zero initialization of $f0 — a 1-insn gap.
 **When to give up:** after trying 3-4 zero-init C variants, wrap NM with the dispatcher logic documented. The 1-insn gap is the cost.
 
 **Origin:** 2026-04-20, agent-a, n64proc_uso_func_00000364. 49-insn dispatcher with 4x swc1 $f0 at entry to pre-zero a 4-float out-buffer at sp+0x34..0x40. Caller unknown; $f0 assumed 0.0f but not enforced.
+
+---
 
 ---
 
@@ -5308,6 +5544,8 @@ This pattern is **target-friendly** and matches what game source likely had. **U
 
 ---
 
+---
+
 <a id="feedback-ido-t-register-swap-unreachable"></a>
 ## IDO $t-register swap unreachable — first-seen pseudo gets lowest $t number, can't be flipped from C
 
@@ -5359,6 +5597,8 @@ IDO's local register allocator assigns pseudos in first-seen order to the lowest
 
 ---
 
+---
+
 <a id="feedback-ido-unfilled-store-return"></a>
 ## bootup_uso void setters use unfilled delay slot (sw; jr; nop) — not matchable from C
 
@@ -5385,6 +5625,8 @@ The pattern appears on some bootup_uso void setters (e.g. func_00010A9C `sw zero
 **Note on related patterns:** `sw $a0, 0($sp); jr $ra; sw $a1, 4($sp)` (save args to caller's stack) and `sw $a0, 0($sp); b .L; nop; .L: jr; nop` (save-and-return sentinels, e.g. func_0000214C, func_0000F7F4 family) are also non-C-expressible — keep as INCLUDE_ASM.
 
 **Origin:** 2026-04-18 bootup_uso batch. Out of ~18 small (<0x20) tested, 3 matched (filled delay), 4 had unfilled-store-return patterns, 5 had save-arg-to-stack patterns. The mix suggests original source used inline-asm or different build flags for the setters. Not worth investigating further; just skip.
+
+---
 
 ---
 
@@ -5435,6 +5677,8 @@ void func_000008F4(int *a0, int arg1) {
 
 ---
 
+---
+
 <a id="feedback-ido-unused-arg-fix-pass-to-callee"></a>
 ## Fix IDO unused-a0 spill by passing a0 through to the jal callee
 
@@ -5478,6 +5722,8 @@ void game_uso_func_00001714(int a0, int *a1) {
 **Why it works:** IDO's `feedback_ido_unused_arg_save.md` rule triggers ONLY for unused named parameters in non-leaf functions. Using the parameter (even forwarding it to a callee) makes it live, disabling the spill.
 
 **Origin:** 2026-04-20, agent-a promoted NM→exact on game_uso_func_00001714.
+
+---
 
 ---
 
@@ -5533,6 +5779,8 @@ lw t6, 0x10(a3)         <- normal arg work
 lw v0, 0x10(sp)         <- read 5th arg (Vec3 *) from caller's stack-arg slot
 ```
 In C: `void f(int unused, Vec3 *a1, Vec3 *a2, int *a3, Vec3 *p4)` — declaring the 5-arg signature gets the spill emitted automatically. Do NOT try to omit the unused first arg or rename it; IDO's ABI conformance requires it. **Matched on first try with 100 % bytes** when written this way.
+
+---
 
 ---
 
@@ -5607,6 +5855,8 @@ Both principles reduce to one: **the C's local structure determines IDO's regall
 
 ---
 
+---
+
 <a id="feedback-ido-varargs-empty-body"></a>
 ## `void f(int a0, ...)` with empty body spills all 4 arg regs to caller slots
 
@@ -5660,6 +5910,8 @@ The 2-spill case is clearly distinct from varargs: no `addiu sp, -8`, only 2 sto
 
 ---
 
+---
+
 <a id="feedback-ido-varargs-extern-doesnt-force-caller-spill"></a>
 ## Typed-varargs extern (`int f(int,int,...)`) does NOT force IDO -O2 caller-side stack-arg spills (sw a1,4(sp); sw a2,8(sp))
 
@@ -5696,6 +5948,8 @@ gl_func_FOO(a0, p[0], p[1], -1);
 - `feedback_ido_unspecified_args.md` — K&R int-return stub is the right shape for value-using callers.
 - `feedback_usoplaceholder_unique_extern.md` — unique-extern alias breaks IDO CSE for the placeholder address; that's about hi/lo merge, NOT spill triggering.
 - `feedback_ido_3save_vs_2save_arg_preserve.md` — related arg-save scheduling cap, also unreachable from C.
+
+---
 
 ---
 
@@ -5736,6 +5990,8 @@ Don't reflexively write `int` when the function appears to "compute and return a
 
 ---
 
+---
+
 <a id="feedback-ido-volatile-buf-pointer-indirect"></a>
 ## `volatile T buf[N]` forces IDO to emit `addiu tA, sp, off; lw tB, 0(tA)` (pointer-indirect load) instead of `lw tB, off(sp)` (direct sp-relative)
 
@@ -5772,6 +6028,8 @@ void f(int *dst) {
 **Origin (2026-04-20):** `game_uso_func_0000035C` int-reader variant. Standard `int buf[2]` produced direct sp-relative load (92 % match cap). `volatile int buf[2]` flipped to pointer-indirect form (98.1 % match — only register choice differs).
 
 **How to apply:** When you see a NM wrap with comment "target uses pointer-indirect load" or you see the asm contain `addiu tA, sp, NN; lw tB, 0(tA)` for a stack-local buffer access, try `volatile T buf[N]`. Cheap to test, often unlocks a structural improvement.
+
+---
 
 ---
 
@@ -5841,6 +6099,8 @@ When you see a loop with `lw rA, N(sp); ... sw rB, N(sp)` IN THE LOOP BODY (not 
 
 ---
 
+---
+
 <a id="feedback-ido-volatile-preserve-redundant-io"></a>
 ## Use `volatile T *arg` to prevent IDO from fusing two `sb`/`sw` stores to the same address
 
@@ -5875,6 +6135,8 @@ Without the `volatile`, IDO sees the first store as dead (overwritten before any
 **Caveat:** this gives the two stores but doesn't fix register allocation. If the target picks specific temp registers (e.g. `$t9`, `$t0`) that the general allocator doesn't, you may still land at 97–99 % and need NON_MATCHING. The memory `feedback_ido_v0_reuse_via_locals.md` covers the broader register-allocation levers.
 
 **Origin:** 2026-04-19 game_libs gl_func_0002A4D0. Without volatile: 91 % (one `sb` instead of two). With volatile on the param: 97.67 % (both `sb` but registers $v0/$t6 vs target $t9/$t0). Wrapped as NON_MATCHING at 97.67 %.
+
+---
 
 ---
 
@@ -5950,6 +6212,8 @@ When NM diff shows ONE wrong store of an arg ($a0/$a1/$a2/$a3) at the caller's o
 **Anti-pattern:** Don't `int *p = &saved_a1;` — taking the address grows the frame by 8 bytes (alters slot offsets for all downstream locals). Keep it as a plain `volatile int`.
 
 **Related:** `feedback_ido_unused_arg_save.md` (unused arg gets caller-slot spill), `feedback_ido_volatile_buf_pointer_indirect.md` (volatile buf forces pointer-indirect addressing).
+
+---
 
 ---
 
@@ -6051,6 +6315,8 @@ if (set) { t = p2; *t = *t | 8; } else { t = p2; *t = *t & ~8; }
 
 ---
 
+---
+
 <a id="feedback-o0-file-split-objdiff-json-step"></a>
 ## New -O0 .c file split needs FOUR config touches; objdiff.json is the easy-to-miss one
 
@@ -6103,6 +6369,8 @@ src/arcproc_uso/arcproc_uso_o0_12C {'name': 'arcproc_uso_func_0000012C', 'size':
 - `feedback_uso_accessor_o0_variant.md` — accessor templates that need -O0 file split.
 - `feedback_objdiff_null_percent_means_not_tracked.md` — the broader rule for null %.
 - `feedback_non_aligned_o_split.md` — TRUNCATE_TEXT mechanics for non-16-aligned splits.
+
+---
 
 ---
 
@@ -6187,3 +6455,4 @@ AF0F0000 sw t7,0(t8)             # *dst = buf[0]
 
 ---
 
+---

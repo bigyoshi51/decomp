@@ -46,6 +46,20 @@ if [[ "$BRANCH" != "main" ]]; then
     fi
 fi
 
-# 4. Roll a candidate source for /decompile (1..5). The skill commits to whatever
+# 4. Warn on memory-dir bloat. The convention (CLAUDE.md, 2026-05-05) is that
+#    project knowledge belongs in docs/ not in feedback memos. Fresh
+#    feedback_*.md files that aren't tombstones signal the convention is
+#    drifting — surface it before the dir balloons again.
+MEM_DIR="$HOME/.claude/projects/-home-dan-Documents-code-decomp/memory"
+if [[ -d "$MEM_DIR" ]]; then
+    FEEDBACK_NEW=$(grep -L '^type: pointer$' "$MEM_DIR"/feedback_*.md 2>/dev/null | wc -l)
+    if [[ "${FEEDBACK_NEW:-0}" -gt 10 ]]; then
+        echo "(preflight) NOTE: $FEEDBACK_NEW feedback memos in $MEM_DIR are not tombstones."
+        echo "(preflight)       Project-knowledge memos belong in docs/ — see CLAUDE.md."
+        echo "(preflight)       Review them, append to relevant docs/*.md, then tombstone."
+    fi
+fi
+
+# 5. Roll a candidate source for /decompile (1..5). The skill commits to whatever
 #    candidate this source yields — see /decompile "Picking a function".
 echo "source=$((RANDOM % 5 + 1))"

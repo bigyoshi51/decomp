@@ -6,13 +6,14 @@ _7 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 ## Index
 
-- [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used 
-- [CI / decomp.dev compares fresh build/.o vs committed expected/.o — `make expected` results MUST be git-committed for changes to show on the dashboard](#feedback-expected-must-be-committed-for-decomp-dev) — The land script and `scripts/refresh-report.sh` do NOT run `make expected`. CI checks out the repo, builds fresh `build/.o`, then runs `objd
-- [Ghidra struct annotation does NOT auto-propagate across xrefs — each function in a family needs its own prototype set](#feedback-ghidra-struct-annotation-doesnt-auto-propagate) — Validated 2026-05-04 on 1080's rmon family. Setting `RmonMsg *msg` on func_80006D0C makes its decomp use `msg->type / msg->id / msg->domain`
-- [Permuter scores ≥1000 genuinely mean "structural issue, no match possible" — stop grinding](#feedback-permuter-1000-plus-structural) — Ran decomp-permuter random mode for ~3 minutes on `n64proc_uso_func_00000014` (12k+ iterations). Best score 1030. Per the skill's score-band
-- [pyghidra-mcp setup notes for N64 decomp work — JDK 21, raw-binary load, MIPS:BE:32:default, ~7-min auto-analysis](#feedback-pyghidra-mcp-setup-for-n64-decomp) — pyghidra-mcp install gotchas verified 2026-05-04. Needs Ghidra 12.x + JDK 21 (NOT JDK 17). N64 ROMs need raw-binary load with explicit langu
-- [report.json was overstating because land script used `make expected` — RESOLVED 2026-05-04](#feedback-report-json-vs-decomp-dev-diverge) — HISTORICAL — the land script's `make expected` blanket-cp build/→expected/ used to pollute expected/ with decomp-bodies build, inflating mat
-- [When to consult Ghidra during /decompile (trigger list — m2c remains the default)](#feedback-when-to-consult-ghidra-during-decomp) — 1080 has a Ghidra project + MCP server, but reaching for Ghidra has cost (slower than m2c, GCC-flavored not IDO-flavored). Use only when one
+- [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used code and naturally drives type discovery.
+- [CI / decomp.dev compares fresh build/.o vs committed expected/.o — `make expected` results MUST be git-committed for changes to show on the dashboard](#feedback-expected-must-be-committed-for-decomp-dev) — The land script and `scripts/refresh-report.sh` do NOT run `make expected`.
+- [Ghidra struct annotation does NOT auto-propagate across xrefs — each function in a family needs its own prototype set](#feedback-ghidra-struct-annotation-doesnt-auto-propagate) — _Validated 2026-05-04 on 1080's rmon family.
+- [Permuter scores ≥1000 genuinely mean "structural issue, no match possible" — stop grinding](#feedback-permuter-1000-plus-structural) — _Ran decomp-permuter random mode for ~3 minutes on `n64proc_uso_func_00000014` (12k+ iterations).
+- [pyghidra-mcp setup notes for N64 decomp work — JDK 21, raw-binary load, MIPS:BE:32:default, ~7-min auto-analysis](#feedback-pyghidra-mcp-setup-for-n64-decomp) — pyghidra-mcp install gotchas verified 2026-05-04.
+- [report.json was overstating because land script used `make expected` — RESOLVED 2026-05-04](#feedback-report-json-vs-decomp-dev-diverge) — _HISTORICAL — the land script's `make expected` blanket-cp build/→expected/ used to pollute expected/ with decomp-bodies build, inflating matched_code_percent by ~1pp (8.84% reported vs 7.68% truth).
+- [When to consult Ghidra during /decompile (trigger list — m2c remains the default)](#feedback-when-to-consult-ghidra-during-decomp) — _1080 has a Ghidra project + MCP server, but reaching for Ghidra has cost (slower than m2c, GCC-flavored not IDO-flavored).
+
 
 ---
 
@@ -56,6 +57,8 @@ Mass-matching game_libs because it's the biggest segment with the most easy wins
 
 ---
 
+---
+
 <a id="feedback-expected-must-be-committed-for-decomp-dev"></a>
 ## CI / decomp.dev compares fresh build/.o vs committed expected/.o — `make expected` results MUST be git-committed for changes to show on the dashboard
 
@@ -87,6 +90,8 @@ After ANY change that affects compiled output (decomp, NM wrap, GLOBAL_ASM pragm
 **For sweeping changes (e.g., trim-trailing-nops rollout):** ALWAYS commit the fresh `expected/` after the source-change commit. 22 expected/.o files were stale after the pad-sidecar rollout because I forgot this — committing them bumped the CI / decomp.dev % from 5.01 % → expected ~5.08 %.
 
 **Edge case:** `expected/` files are binary blobs. `git diff --stat` shows them as 0 lines but Bin XXX -> YYY bytes. They're NOT compressible by .gitignore (`*.o` would gitignore them — they're force-tracked despite the pattern).
+
+---
 
 ---
 
@@ -146,6 +151,8 @@ Cost is one transaction per N functions — fast even for 30+ at once.
 
 ---
 
+---
+
 <a id="feedback-permuter-1000-plus-structural"></a>
 ## Permuter scores ≥1000 genuinely mean "structural issue, no match possible" — stop grinding
 
@@ -193,6 +200,8 @@ When to TRY permuter:
 **Key distinction:** permuter can flip instruction ORDER but not register ASSIGNMENT. If the target and mine differ only in "what register holds this value" (regardless of $s/$a/$t class), random-mode permuter cannot reach the target — the allocator's decision is deterministic given the RTL shape, and permuter's random C mutations usually preserve the shape enough that the allocator makes the same choice.
 
 **Cost:** ~3 min + a few MB of output variants in `nonmatchings/<func>/`. Always clean up with `rm -rf nonmatchings/` after.
+
+---
 
 ---
 
@@ -327,6 +336,8 @@ This exposes `decompile_function`, `get_xrefs_to/from`, `set_function_prototype`
 
 ---
 
+---
+
 <a id="feedback-report-json-vs-decomp-dev-diverge"></a>
 ## report.json was overstating because land script used `make expected` — RESOLVED 2026-05-04
 
@@ -350,6 +361,8 @@ The ALSO-wrong number 8.07% (decomp.dev's view) came from a related but distinct
 - Trust the post-fix `report.json` (and decomp.dev once it ingests). They will match.
 - For ad-hoc local truth: `git checkout HEAD -- expected/ && make clean && make RUN_CC_CHECK=0 objects && objdiff-cli report generate -o /tmp/r.json`.
 - If you add a new post-cc recipe type, follow the "INCLUDE_ASM-aware skip path" pattern in `feedback_refresh_expected_baseline_blocks_on_yay0_rom_mismatch.md`. Otherwise it'll silently break refresh-expected-baseline.py the next time it runs.
+
+---
 
 ---
 
@@ -388,3 +401,4 @@ _1080 has a Ghidra project + MCP server, but reaching for Ghidra has cost (slowe
 
 ---
 
+---
