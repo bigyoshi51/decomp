@@ -24,7 +24,15 @@ This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-d
 - **Spin up a parallel agent worktree:** `scripts/spin-up-agent.sh <project>` (auto-picks the next free `agent-<letter>`).
 - **Add a new game:** `/new-project` skill.
 - **Debug a stuck diff:** `objdiff-cli diff -u <unit> <func>` for mnemonic-level comparison; falls back to `objdump -M no-aliases` for exact-byte verification.
-- **Research a technique:** the user's auto-memory at `~/.claude/projects/-home-dan-Documents-code-decomp/memory/` has ~100 feedback memos on IDO/GCC matching gotchas. `MEMORY.md` is the always-loaded index.
+- **Research a technique:** see `docs/` (checked into the repo, accessible to all agents):
+  - `docs/IDO_CODEGEN.md` — IDO 7.1 codegen quirks (~115 entries)
+  - `docs/PATTERNS.md` — asm-shape pattern recipes (~145 entries)
+  - `docs/MATCHING_WORKFLOW.md` — NM wraps, fragment merging, objdiff, expected/, build hygiene (~70 entries)
+  - `docs/POST_CC_RECIPES.md` — PROLOGUE_STEALS, INSN_PATCH, SUFFIX_BYTES, PREFIX_BYTES (~20 entries)
+  - `docs/N64_FORENSICS.md` — RSP ucode, splat config, 1080-specific
+  - `docs/TOOLING_GIT.md` and `docs/TOOLING_DECOMP.md` — git/gh and m2c/Ghidra/permuter gotchas
+  - Each doc has an Index at the top — skim, then jump to the relevant section. Don't load whole docs.
+  - Claude-only: `~/.claude/projects/.../memory/` keeps per-conversation context (user preferences, project-state-of-the-day) that doesn't belong in the repo.
 
 ## Key conventions
 

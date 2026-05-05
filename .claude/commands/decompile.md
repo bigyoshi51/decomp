@@ -1,5 +1,17 @@
 Decompile a function in the N64 decomp project. The user may provide a function name as an argument, or you should pick the next best candidate.
 
+## Reference docs (consult before / during a stuck attempt)
+
+`docs/` (in the repo) contains ~400 entries of accumulated decomp knowledge. Don't load whole files — index-skim the relevant doc, jump to the matching entry:
+
+- `docs/IDO_CODEGEN.md` — IDO 7.1 emit-pattern lookup (when target asm shows pattern X, what C shape produces it?). Search by the asm idiom (e.g., "bnel", "branch-likely", "save-arg-to-sreg").
+- `docs/PATTERNS.md` — recipes by C-shape (alloc-cascade, args-loaded-before-conditional, typed-stack-struct).
+- `docs/MATCHING_WORKFLOW.md` — NM wraps, fragment merging, expected/ baseline care, objdiff null/cap behaviors. Search by error/symptom (e.g., "fuzzy=None", "expected_baseline_capture_bloat").
+- `docs/POST_CC_RECIPES.md` — last-resort patches when IDO codegen caps below 100% (PROLOGUE_STEALS / INSN_PATCH / SUFFIX_BYTES / PREFIX_BYTES). Read entirely if you're stuck at 95-99% fuzzy.
+- `docs/N64_FORENSICS.md`, `docs/TOOLING_GIT.md`, `docs/TOOLING_DECOMP.md` — situational.
+
+When you find a useful entry, link to it in your commit message (e.g. "applied recipe from `docs/POST_CC_RECIPES.md#feedback-suffix-bytes-unblocks-4byte-stolen-prologue`"). When you discover something not in the docs, add a section to the relevant doc directly.
+
 ## Finding the project
 
 The decomp project lives under `projects/`. Find the splat YAML config and the `src/` directory.
