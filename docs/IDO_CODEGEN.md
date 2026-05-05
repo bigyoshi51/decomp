@@ -6450,6 +6450,14 @@ src/arcproc_uso/arcproc_uso_o0_12C {'name': 'arcproc_uso_func_0000012C', 'size':
 
 **Bonus -O0 cap:** for `if(==) return 1; return 0;` shape, IDO -O0 emits an extra `b zero,zero,+1; nop` between the second `return` path and the epilogue (the implicit "end of function falls through to epilogue" goto). Caps at ~85.7% (24/28 for a 28-insn function). Same shape as `arcproc_uso_func_000000B4`. Tried swap-arms and explicit-else — both regress, neither flips. Don't grind further; commit as NM.
 
+**Extended 2026-05-05 (failed variants for the `if return / return` shape, -O0):** the actual cap pattern is the JOIN-POINT branch — IDO -O0 emits THREE branches total (if-arm exit + else-arm exit + dead trailer) when the if-arm has an explicit early `return X`. Expected shape has only TWO branches (if-arm direct-to-epilogue + dead trailer). Tested 4 more variants on `arcproc_uso_func_0000012C` (current 92.86 % drift):
+- (a) Explicit `else { return 0; }` — adds 4th branch (worse).
+- (b) `register int rv; if (...) rv=1; else rv=0; return rv;` — `register` keyword DOES place rv in $s, but the if/else still emits a join-point + return-branch + trailer (same 3 branches).
+- (c) Goto-zero-path (`if (cond) goto zero_path; return 1; zero_path: return 0;`) — adds extra `b zero_path` from else fall-through (worse).
+- (d) `register int rv; rv=0; if (cond) rv=1; return rv;` — same 3 branches (the rv-init creates a 0-arm join-point).
+
+**Conclusion:** IDO -O0's "early-return-in-if-arm" pattern always produces a join-point + dead trailer regardless of else-arm shape. The expected pattern (no join-point, if-arm branches direct-to-epilogue, else-arm has the dead trailer) requires dataflow normalization IDO -O0 doesn't perform. INSN_PATCH-blocked because the cap is +8 bytes (2 extra insns) — post-cc tools can shrink (PROLOGUE_STEALS) or overwrite (INSN_PATCH) but can't grow. Settle for ~92.86 % NM cap on this shape family.
+
 **Related:**
 - `feedback_uso_accessor_o0_variant.md` — accessor templates that need -O0 file split.
 - `feedback_objdiff_null_percent_means_not_tracked.md` — the broader rule for null %.
