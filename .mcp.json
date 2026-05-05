@@ -1,0 +1,18 @@
+{
+  "_comment": "MCP servers loaded when Claude Code starts from the parent decomp/ directory. Currently exposes pyghidra-mcp against 1080's Ghidra project. Per-project versions also exist at projects/1080-*/. mcp.json — if Claude Code is launched from there, those versions take precedence.",
+  "mcpServers": {
+    "pyghidra": {
+      "command": "/home/dan/.local/share/uv/tools/pyghidra-mcp/bin/pyghidra-mcp",
+      "args": [
+        "--transport", "stdio",
+        "--project-path", "/home/dan/Documents/code/decomp/projects/1080-agent-e/build/ghidra-project/tenshoe.gpr",
+        "--wait-for-analysis"
+      ],
+      "env": {
+        "JAVA_HOME": "/home/dan/Documents/code/decomp/tools/jdk-21.0.5",
+        "GHIDRA_INSTALL_DIR": "/home/dan/Documents/code/decomp/tools/ghidra-12.0.4",
+        "PATH": "/home/dan/Documents/code/decomp/tools/jdk-21.0.5/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      }
+    }
+  }
+}

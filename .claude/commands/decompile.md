@@ -93,6 +93,23 @@ Sources (indexed 1-5):
 
     **Last resort when stuck**: search https://decomp.me for scratches of this function (browser only — API is Cloudflare-gated). Paste your asm into the search; any matched scratch shows the exact C that matched elsewhere.
 
+1c. **Ghidra (1080 only, optional, decision-by-trigger)** — 1080 has a persistent Ghidra project at `projects/1080-*/build/ghidra-project/tenshoe.gpr` with all 2,500+ named functions and the entire ROM analyzed. Ghidra complements m2c with: typed-struct decomp output (`msg->id` instead of `*(int*)(arg+0xc)`), instant cross-references (`list_xrefs`), and persistent type annotations across queries.
+
+   Use Ghidra ONLY when one of these triggers fires (otherwise stick with m2c — faster, IDO-flavored):
+   - **Struct shape unknown**: function reads `*(T*)(arg + 0xN)` patterns and you don't know the struct → set the struct + prototype, re-decompile to see field names.
+   - **Family of related functions** (≥3 callers of a shared callee): use `list_xrefs` to enumerate the family in one call (vs grep), then batch-annotate.
+   - **Stuck partial wrap with structural mismatch** (fuzzy <50%, control flow unclear): Ghidra's canonical-form output often reveals the function is much simpler than your draft (e.g., `return (X & 3) == 0;` instead of build-up-and-return).
+   - **Suspected fragment**: Ghidra's output uses `in_t9` / `in_stack_*` (uninitialized regs/stack reads) → not a standalone function, caller passes registers. Diagnostic signal.
+
+   Don't reach for Ghidra: byte-correct matching (Ghidra's GCC-flavored decomp won't byte-match IDO emit), register-allocation grinding (use the permuter), final-mile tightening at >90% (m2c is closer-to-IDO).
+
+   **Tools** (1080 worktrees only):
+   - `bash scripts/ghidra-decompile-func.sh <func_name>` — one-shot decomp via cached project
+   - `python3 scripts/ghidra-annotate-family.py --struct-name RmonMsg --funcs func_A,func_B` — batch struct annotation
+   - `bash scripts/setup-ghidra.sh` — initial project build (~7 min one-time, ~5 sec incremental)
+   - MCP server (via `.mcp.json`) for in-Claude queries — read-side reliable; write-side has had hangs (`set_function_prototype`). Prefer direct CLI scripts for write operations.
+   - See `feedback_pyghidra_mcp_setup_for_n64_decomp.md` and `feedback_ghidra_struct_annotation_doesnt_auto_propagate.md` for setup quirks and the no-auto-propagation caveat.
+
 2. **Get initial C with m2c**: Run `uv run m2c --target mips-ido-c <asm_file>` to get pseudo-C. This gives a starting point but often needs adjustment.
 
 3. **Write the C code**: Replace the `INCLUDE_ASM` line in the source file with:
