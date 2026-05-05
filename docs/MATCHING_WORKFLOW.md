@@ -3782,3 +3782,17 @@ When an NM wrap caps at ~92% with the diff being EXACTLY the 26-bit jal target f
 ---
 
 ---
+
+## split-fragments.py false-positives on early-return if-chain functions — multiple `jr ra` in one logical function
+
+_split-fragments.py's heuristic ("after `jr ra`, if subsequent insns read caller-save regs `$a0-$a3` uninitialized, it's a new standalone function") false-positives on functions with **early-return if-chains**: multiple `if (cond) return X` exits each emit a `jr ra`, but all share the same `$a0` from the original entry. The script splits them as N functions when they're really one._
+
+**Diagnostic:** the function is a SERIES of independent tests on the same input arg (char-mapper, dispatch table, key-tester). Each test ends with `jr ra` + a single delay-slot insn (often `andi v0, a0, 0xFF` or `or v0, X, zero`). The post-`jr` insns read `$a0` because the original function still has `$a0` live across the early returns — not because they're new function entries.
+
+**Verified false-positive case:** `gui_func_00000000` (a 0x148-byte char-to-glyph-index converter with 12 `jr ra` exits, each from a `bne`/`bnel` test against an ASCII char). Running split-fragments.py recursively split it into 12 fake "functions" of 6-9 insns each. The pre-existing C source treats it as ONE function with a chain of `if (c == X) return Y;` tests, and that source builds correctly via the standard dual-build NM-wrap path.
+
+**Rule:** before running split-fragments.py on a bundle with many small `jr ra` exits, **read the pre-split C source** in `src/`. If the function is already wrapped with a chain of `if`/return tests (or the asm shape clearly shows independent-test-per-`jr`), DON'T split — the split breaks the working .c body's symbol table and produces an .o with wrong labels.
+
+**Recovery:** if you've already run the bad split, `git revert` the split commit. The .c file's INCLUDE_ASM gets rewritten to reference the split-off symbol names which no longer match the recovered single-symbol .s file; the revert restores both.
+
+Found 2026-05-05 on gui_func_00000000 (already had a working ~13-test C body that the split broke).
