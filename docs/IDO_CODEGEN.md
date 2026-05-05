@@ -1591,9 +1591,26 @@ Size: 0x8. This IS the target bytes for the standard `jr ra; nop` leaf empty fun
 
 **Siblings of other "empty void" matches already landed:**
 - func_00010344, func_000102E8, func_00010308, func_00010AA8, func_00011D70, func_00011DB4, func_00011DF8 (bootup_uso — all landed with `void f(void) {}`)
-- h2hproc_uso_func_0000000C (this tick)
+- h2hproc_uso_func_0000000C
 - eddproc_uso empty stubs (check)
 - USO tail empties post-split-fragments
+
+**Variant: K&R implicit-int empty `f() {}` for mixed-caller compatibility (added 2026-05-05).**
+
+Same byte emit (`jr ra; nop`, 0x8) but different type signature. Use this form when same-TU callers have inconsistent return-value usage:
+
+- Some lines: `func(...)` (discard return)
+- Other lines: `int ret = func(...)` (use return)
+
+`void f(void) {}` produces a cfe error at the value-using sites
+(`Reference of an expression of void type`). Explicit `int f() { }` would
+emit junk for $v0. K&R `f() {}` (no return type, K&R empty-args) accepts
+both call patterns and IDO -O2 still emits exactly `jr ra; nop`.
+
+Verified 2026-05-05 on `bootup_uso/func_00000000` (the splat synthetic
+JAL-target-0 symbol) — it had been left as INCLUDE_ASM specifically because
+"every caller supplies their own forward decl with the return type they
+need." K&R empty resolves the same goal at the C definition site.
 
 **Origin:** 2026-04-21 agent-a /decompile run. Source=2 (sibling of recently-matched). Sibling of h2hproc_uso_func_00000014 (split earlier this session). CLAUDE.md warning disproved for IDO compiler.
 
