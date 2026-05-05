@@ -946,6 +946,23 @@ All four classes share the same property: the C body has zero useful information
 - `feedback_land_script_accepts_byte_verify_for_post_cc_recipes.md` — the byte_verify-as-gate semantics that justify these recipes
 - `feedback_byte_correct_match_via_include_asm_not_c_body.md` — alternative path (INCLUDE_ASM tautology) for the same outcome but with no asm→C training pair
 
+**Build-break trap — interior `.L` labels referenced by sibling .s files (verified 2026-05-05, `func_80000568`):** when you decomp a function via PREFIX+INSN_PATCH, the C body REPLACES the `.s` file entirely, so any interior `.L<addr>` labels that file used to define disappear from the symbol table. If OTHER `.s` files in the same segment have `b .L<addr>` / `bnez .L<addr>` branches into the now-deleted region, the link breaks with `undefined reference to '.L<addr>'`. The land/build verify step that runs in the same /decompile run as the decomp may PASS (because the build/.o for the new C function still has its bytes), but the next clean rebuild fails at link time once the sibling .o files re-resolve.
+
+**Recognition before commit:**
+1. Before deleting a function's `.s` file (or before the C wrapper goes live), `grep -rn "\.L<addr_range>" asm/nonmatchings/<seg>/` for the address range you're about to absorb. Specifically: if the function spans 0x568–0x594, search for `.L8000056C`, `.L80000570`, `.L80000574`, etc.
+2. Any hits in OTHER `.s` files mean there are inbound branches into your function's interior. Those labels become unresolved relocs the moment the C body replaces the .s.
+
+**Fix:** add the labels to `undefined_syms_auto.txt` as absolute defs alongside the decomp commit:
+```
+.L8000056C = 0x8000056C;
+.L80000570 = 0x80000570;
+```
+Same mechanism as the existing `.L80000570 = 0x80000570;` family. The labels resolve to fixed VAs because PREFIX_BYTES + INSN_PATCH preserves the function's byte layout — interior addresses are still valid at runtime.
+
+**Why post-cc-recipe specifically:** plain "decompile to clean C" doesn't have this problem because `.s` files for OTHER functions are still authoritative for cross-function branches. PREFIX_BYTES + INSN_PATCH is a "delete the .s, rebuild bytes from C+post-cc" pattern — the .s deletion is what loses the labels.
+
+**Class diagnostic:** if `git show <decomp-commit> --stat` shows a `.s` deletion AND the function's address range overlaps any `.L` label referenced from a different function's branch, you need the undefined_syms entry.
+
 ---
 
 ---
