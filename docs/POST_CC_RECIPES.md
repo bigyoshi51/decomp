@@ -876,6 +876,8 @@ Pipeline:
 
 **Type signature mismatch is harmless:** the C body is declared `void` but the function semantically returns float — the post-cc bytes set $f0 at runtime via the injected mov.s. Document the mismatch in a wrap comment; byte_verify is the gate.
 
+**Caller-side caveat for same-TU callers:** when a function's PREFIX-recipe definition is `void f(void) {}` but other functions IN THE SAME .c FILE call it with args / expect a return value, IDO rejects the natural call form (`r = f(a, b)`) at compile time because the in-file prototype is `void f(void)`. Workaround: forward-declare a fn-ptr cast at the caller's scope: `extern void f(void); ... { s32 (*f_typed)(s32,s32) = (s32(*)(s32,s32))f; r = f_typed(a, b); }`. The runtime call is identical (post-cc bytes set $v0=0 or whatever), but the in-source call sees the cast-typed function pointer and accepts the args. Verified 2026-05-05 on `func_800004B8` (calls the prefix-recipe `func_80000568` in the same kernel_000.c). Cross-TU callers don't hit this — they declare their own extern with whatever prototype they want.
+
 **Caveat — opcode allow-list:**
 `scripts/inject-prefix-bytes.py` has a `VALID_ENTRY_OPCODES` safety list. C-emit's first insn (after PREFIX is conceptually inserted but before injection actually runs) must be on the list. For empty-body emit, the first insn is `jr ra` (handled via `is_jr_ra` special case). For other minimal bodies that emit `mtc1`/COP1 first, you may need to add opcode 0x11 (COP1) to the list. Verified 2026-05-05 — added 0x11 to the script.
 
