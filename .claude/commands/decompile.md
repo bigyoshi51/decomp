@@ -48,7 +48,7 @@ Use the `source=N` line from its output and commit to that number. Don't pick in
 
 Sources (indexed 1-5):
 
-1. **An existing NM wrap at 80-99%** — `grep -rn "#ifdef NON_MATCHING" src/`. Analysis is already done; a new technique may promote it to exact (e.g. the "pass unused a0 to callee" fix).
+1. **An existing NM wrap at 80-99%** — `grep -rn "#ifdef NON_MATCHING" src/`. Analysis is already done; a new technique may promote it to exact (e.g. the "pass unused a0 to callee" fix). **Filter for genuinely-not-yet-landed only**: `report.json`'s `fuzzy_match_percent < 100` is misleading — INSN_PATCH/PREFIX_BYTES/SUFFIX_BYTES-promoted functions report fuzzy 80-99% via objdiff's `.NON_MATCHING` alias artifact even when they're byte-correct against `expected/.o` and have an episode logged. Cross-check `ls episodes/<func>.json` (or `git log --grep=<func>`) before grinding — if an episode exists, the function is done; the fuzzy<100 is just the post-cc-recipe scoring quirk per `docs/MATCHING_WORKFLOW.md#feedback-byte-correct-match-via-include-asm-not-c-body`.
 2. **A sibling of a recently-matched function** — same offset range, similar asm shape. See `feedback_mirror_function.md`.
 3. **A small unstarted function (size-sort)** — `uv run decomp discover --sort-by size`. Fresh exploration. Caveat for 1080: discover misses prefixed USO names (`gl_func_*`, `game_uso_func_*`, etc.) — walk `asm/nonmatchings/<seg>/<seg>/` directly for those.
 4. **A small unstarted function in an untouched USO** — scan for the standard accessor templates (int reader / float reader / Vec3 reader / Quad4 reader). One C body matches the same template in every USO at different offsets. See `feedback_uso_accessor_template_reuse.md`.
