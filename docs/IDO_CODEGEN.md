@@ -1166,6 +1166,12 @@ int f(int *a0) {
 
 The 2-insn delta is because the negative form forces IDO to materialize the second-deref `lw` on BOTH branches of the inverted-skip, while the positive form lets IDO use beql annulled-delay to skip the second deref entirely on the null path. Same principle as the float-predicate case: target's branch-likely-with-success-fallthrough shape needs the C to express success as the inner positive arm.
 
+**Extension to plain int if-else dispatch (verified 2026-05-06 on `timproc_uso_b1_func_00000E40`):** when target uses plain `bnez` to JUMP TO the call-arm (vs target using `beql` to SKIP-OVER it), the arm-choice direction is OPPOSITE. For dispatch shape `bnez cond, call_label; nop; b end_label; sw store(in delay); call_label: jal; or a2,$0(in delay); end_label:`:
+- **Positive call-arm form** `if (cond != 0) call(); else store;` → IDO picks `beql` skip-on-zero (10 diffs).
+- **Negative store-arm form** `if (cond == 0) store; else call();` → IDO picks plain `bnez` jump-to-call (0 diffs = exact match).
+
+**Rule of thumb:** if target has plain `bnez/beq` JUMPING TO a call-arm (non-call-arm in fallthrough delay slot), write `if (cond == 0) non_call_arm; else call();`. If target has `beql/bnezl` SKIPPING a call-arm, write `if (cond != 0) call(); else non_call_arm;`. The C arm that contains the JUMP-TARGET work is opposite to the C arm that contains SKIPPED work.
+
 ---
 
 ---
