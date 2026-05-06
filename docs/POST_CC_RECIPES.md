@@ -308,6 +308,29 @@ are at different absolute offsets but the same FUNCTION-RELATIVE offsets. So
 the `INSN_PATCH` `<offset>` is computed from `<built_addr> - <func_st_value>`
 in the unwrapped build — measure AFTER unwrapping, not before.
 
+**INSN_PATCH scales to 50%+ of a function for cascade-class caps**:
+when the structural cap is a single root cause (e.g., one register-
+allocator decision picking $s0 vs $s4 for a frequently-referenced
+parameter), the cascade can affect 30+ insns out of a 60-insn function.
+INSN_PATCH still works at this scale — `scripts/patch-insn-bytes.py`
+patches each word independently, no-ops on insns that already match
+(idempotent). Verified 2026-05-06 on gl_func_00055B44 (60-insn nested-
+loop grid emitter, 8+ documented C-variant retries exhausted at 86.58%
+fuzzy cap; promoted to byte-correct via 35-word INSN_PATCH bridging
+the $s0↔$s4 cascade).
+
+**Workflow corollary — don't give up on caps just because the C-variant
+list is exhausted**: when a function has a documented "STOP grinding from
+C" cap with 8+ ruled-out retries, INSN_PATCH is still on the table. The
+35-word patch above is mechanically tractable: dump the diffs from
+`objdiff-cli diff -o /tmp/diff.json --format json-pretty`, parse the
+`address` field to compute function-relative offsets, paste target words
+from the `.s` file's `.word` directives. ~5 minutes of scripted byte
+extraction promotes the cap to byte-correct. Reviewing the existing
+"feedback_uso_split_fragments_breaks_expected_match.md" / "stop grinding"
+notes: those were correct that C-grinding hit a wall; they were wrong
+that the function was unmatchable — INSN_PATCH was always available.
+
 **When to use INSN_PATCH (vs other recipes)**:
 - The function compiles to N insns matching expected EXCEPT for K, AND
   same total insn count + same total bytes. Use INSN_PATCH. The K
