@@ -3302,6 +3302,41 @@ The `discover` tool sorts by size ascending and presents these dupes as small un
 
 **Verified case**: 1080's `func_800005D8.s` (kernel/, 0x4 = 1 insn). Pure orphan; deleted in commit 3964ce1; build still byte-identical.
 
+**Variant: `.L<addr>` jump-targets-as-functions (also pure splat artifacts)**
+
+Same pattern, different trigger: when the parent function uses `b .L<addr>` to jump to an internal label, splat sometimes ALSO creates a separate `func_<addr>.s` file for that label even though the address is inside the parent's `nonmatching SIZE` declaration. Detection signal differs slightly:
+
+```bash
+# 1. Small .s file has 1-3 insns (orphan stack-restore "addiu sp, sp, +N",
+#    or just "jr ra; nop", or fragment-shaped). NOT a strict prefix of an
+#    adjacent .s — its bytes live INSIDE the parent's body.
+cat asm/nonmatchings/kernel/func_800091F0.s
+# nonmatching func_800091F0, 0xC
+# /* A1F0 800091F0 27BD00C8 */  addiu sp, sp, 0xC8
+# /* A1F4 800091F4 03E00008 */  jr ra
+# /* A1F8 800091F8 00000000 */  nop
+
+# 2. Parent function's .s shows an internal .L label at the same address:
+grep "\.L800091F0" asm/nonmatchings/kernel/func_80009148.s
+# .L800091F0:
+#   /* A1F0 800091F0 27BD00C8 */ addiu sp, sp, 0xC8   <-- same byte
+#   ...
+
+# 3. The address is listed in undefined_syms_auto.txt (cross-function label):
+grep "func_800091F0" undefined_syms_auto.txt
+# func_800091F0 = 0x800091F0;
+
+# 4. Build .o reports it as UND (cross-function reference, not defined):
+mips-linux-gnu-readelf -s build/src/<owning>.o | grep func_800091F0
+# UND func_800091F0
+```
+
+If all 4 hold: pure splat cruft. Delete the orphan `.s`. The `undefined_syms_auto.txt` entry stays — it's still a valid cross-function jump-target alias, and removing it would break the parent's `b .L<addr>` reference.
+
+**Verified case**: 1080's `func_80001CB0.s`, `func_80001CF0.s`, `func_800091F0.s` (kernel/). All three are jump targets inside parents (`func_80001ADC` size 0x214 covers the first two; `func_80009148` size 0xB8 covers the third). Deleted in commit 0ae7a2ed; kernel_000.c.o and kernel_054.c.o both 0-byte diff before vs after.
+
+These tend to surface as the smallest candidates in size-sort rolls because their .s files contain only 1-3 insns. Recognizing them up-front saves a wasted /decompile run picking them as "small unstarted" candidates.
+
 **Related**:
 - `feedback_splat_fragment_via_register_flow.md` — different fragment class (uses uninitialized regs from caller-pre-load)
 - `feedback_splat_nonmatching_header_silently_clobbers_100pct.md` — another splat artifact
