@@ -71,6 +71,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 - [IDO -O2 constant-folds the load-address even when the base is a register-declared local](#feedback-ido-constant-address-load-fold-inevitable) — _For `arg = *(int*)((char*)base + N)` where base = `&D_constant`, IDO emits a fresh `lui+lw` rather than `lw arg, N($base_reg)` even with `register` keyword.
 - [Force shared base register across multiple loads from `&D + N` via deferred assign + named locals](#feedback-ido-shared-base-via-deferred-assign-and-named-locals) — _Counter to the above for TWO+ loads consumed by a single call: `register T *t; ... t = &D + N; v1 = t[0]; v2 = t[1]; f(..., v1, v2, ...)` produces shared-base form (lui+addiu once, 2 lw with offset), vs the natural `f(..., t[0], t[1], ...)` which inlines 2 separate luis._
+- [Force N-fold reload of `*(SYM+N)` via `volatile T **` + N intermediate locals (no CSE)](#feedback-ido-volatile-pp-forces-n-fold-pointer-reload) — _When target asm has `lui v1; addiu v1, 0; lw t?, OFF(v1)` repeated N times — i.e., the symbol address materialized once and N separate lw reloads from the same offset — natural C `base = *(...)` collapses to one load via IDO CSE. Use `volatile char **base_pp = ...; b1 = *base_pp; ... b2 = *base_pp; ...` with N separate intermediate locals to force N volatile reads._
 - [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — _When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half (lui+addiu) into a single saved register ($s3 typical) and reuses it across…
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
 - [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
@@ -1364,6 +1365,47 @@ game_uso_func_00000000(a0, v1, v2, 1);
 **Why:** the deferred assignment + intermediate locals split the address computation into a distinct basic-block from the consuming call's arg-setup. With the inlined `f(..., t[0], t[1], ...)` form, IDO's combine pass treats each `t[N]` as an independent address-fold candidate and re-emits the lui per access. With separate-statement `v1 = t[0]; v2 = t[1]; f(..., v1, v2, ...)`, IDO must materialize the base before the loads and reuses it across both.
 
 **Note:** doesn't promote the function on its own (still missing the varargs-style shadow spills) but tightens the structural shape, removing one diff source.
+
+---
+
+---
+
+<a id="feedback-ido-volatile-pp-forces-n-fold-pointer-reload"></a>
+## Force N-fold reload of `*(SYM+N)` via `volatile T **` + N intermediate locals (no CSE)
+
+_When target asm has `lui v1; addiu v1, v1, 0; lw t?, OFF(v1)` repeated N times — i.e., the symbol address materialized once and N separate lw reloads from the same offset — natural C `T *base = *(...)` collapses to ONE load via IDO CSE, then 3 register-base offset accesses against `base`. To force N separate reloads of `*(SYM+N)` itself, use a volatile pointer-pointer + N intermediate locals._
+
+**Pattern (verified 2026-05-06 on timproc_uso_b5_func_0000131C, 81.80% → 84.96%):**
+
+**Wrong C** (one load, 3 register-base offsets):
+```c
+char *base = *(char**)((char*)&D_00000000 + 0x134);
+*(int*)(self + 0x2C) = *(int*)(base + 0x84);
+*(int*)(self + 0x30) = *(int*)(base + 0x80);
+*(int*)(self + 0x34) = *(int*)(base + 0x8C);
+// emit: lui v1, %hi; lw t6, %lo+0x134(v1); lw t7, 0x84(t6); ...
+//       i.e., 1 base-load + 3 separate t-reg accesses via the cached pointer
+```
+
+**Good C** (3 reloads of the pointer, target shape):
+```c
+volatile char **base_pp = (volatile char**)((char*)&D_00000000 + 0x134);
+char *b1, *b2, *b3;
+b1 = (char*)*base_pp;  *(int*)(self + 0x2C) = *(int*)(b1 + 0x84);
+b2 = (char*)*base_pp;  *(int*)(self + 0x30) = *(int*)(b2 + 0x80);
+b3 = (char*)*base_pp;  *(int*)(self + 0x34) = *(int*)(b3 + 0x8C);
+// emit: lui v1, 0; addiu v1, v1, 0; lw t6, 0x134(v1); lw t7, 0x84(t6); ...
+//       lw t8, 0x134(v1); lw t9, 0x80(t8); ... lw t0, 0x134(v1); lw t1, 0x8C(t0); ...
+//       i.e., 3 separate `lw t?, 0x134(v1)` reloads of the pointer at SYM+0x134
+```
+
+**Why:** `volatile T **` makes each `*base_pp` an observable read; the C standard requires the compiler emit each one separately. The N intermediate locals (b1, b2, b3) prevent the compiler from CSE-ing across statements (without them, IDO might fold across the void context).
+
+**When NOT to use:** if the target only has ONE load of `*(SYM+N)` followed by multiple register-base offset accesses, the natural `base = *(...)` is correct — don't volatilize. This recipe is specifically for the pattern where target reloads the POINTER itself N times, not just the base register.
+
+**Cousin recipe:** `feedback-ido-shared-base-via-deferred-assign-and-named-locals` does the OPPOSITE — forces a SHARED base register across N independent loads of `&D+N`, `&D+M` etc. Both recipes target IDO's CSE behavior; one suppresses it, the other induces it.
+
+**Related:** `feedback-ido-constant-address-load-fold-inevitable` (the "natural" load-fold this is fighting against), `feedback-ido-volatile-loop-counter-for-stack-iter` (other volatile uses).
 
 ---
 
