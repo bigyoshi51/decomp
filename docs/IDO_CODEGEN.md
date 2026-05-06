@@ -2186,6 +2186,28 @@ func_00000000(p, arg0, D_X, &D_Y);
 - `feedback-ido-global-cse-extern-base-caps-unrolled-loops` — different cap class, applies to MANY sites
 - `feedback_unique_extern_with_offset_cast_breaks_cse.md` — unique externs at OFFSET addresses (different mechanism — addresses differ, not types)
 
+**2026-05-06 same-type unique-extern variant (cross-statement context):**
+
+The "same-type aliases don't break CSE" claim above is true for SAME-CALL-ARG context (both uses passed to one jal). But same-type aliases DO break CSE for CROSS-STATEMENT uses — verified on `func_00008F18` (75.97% → 100% via this technique alone, after `goto end`):
+
+```c
+/* Wrong (93.61% after goto-end): IDO CSE-folds the two &D_00000000 across statements */
+*(char**)(self + 0x28) = &D_00000000;       /* vtable store */
+handle = func_00000000(0, &D_X, &D_00000000, 0);  /* call-arg use */
+/* emit: lui $a2, 0; addiu $a2, 0; sw $a2, 0x28(s0); ... a2 reused for call arg */
+
+/* Right (100%): same-type but distinct names break CSE */
+extern char D_8F18_vtable;       /* both at link-addr 0x0 */
+extern char D_8F18_call_arg;
+*(char**)(self + 0x28) = &D_8F18_vtable;
+handle = func_00000000(0, &D_X, &D_8F18_call_arg, 0);
+/* emit: lui $t6, 0; addiu $t6, 0; sw $t6, 0x28(s0); lui $a2, 0; addiu $a2, 0; ... */
+```
+
+Generalization: "same-type aliases" rule above only applies WITHIN a single call's arg list. ACROSS statements (store + later call), distinct symbol names alone are enough to break CSE — no type split needed. The CSE engine seems to only consider "same value in registers" if uses are close enough (within one expression / one call-arg-list); cross-statement uses are tracked as separate pseudos by name.
+
+**Application:** when target shows separate `lui+addiu` for two uses of `&D` (one as struct-field-store, another as later call-arg), declare two `extern char D_alias_N;` aliases at 0x0 in `undefined_syms_auto.txt`. No type split required.
+
 ---
 
 ---
