@@ -2620,6 +2620,21 @@ into $v0, fall back to NM wrap.
 
 **Origin:** 2026-04-19, 1080 bootup_uso/func_00008920. Initially wrote `*(char**)((char*)func_000000F0 + 0x40)` (IDO rejected cast), then `D_00000130` (matched 100 %).
 
+**Re-verified 2026-05-06 on `timproc_uso_b1_func_00000D1C`:** target asm has
+`lui a1, 0x0; lw a1, 76(a1)` (offset 0x4C in lw immediate). Tried first with
+`extern int gl_ref_0000004C; ... gl_ref_0000004C | 0x001D0000` — produced
+`lw a1, 0(a1)` (offset baked in symbol value, lw immediate=0). Objdiff was
+NOT happy: 33/33 mnemonics matched but the immediate `0` vs `76` is a real
+byte difference. Switched to `*(int*)((char*)&D_00000000 + 0x4C) | 0x001D0000`
+— produced `lw a1, 76(a1)`, **byte-identical 33/33**.
+
+The recipe is: **for any USO `lw rN, OFF(rN)` after `lui rN, 0`, use
+`*(int*)((char*)&D_00000000 + OFF)` (or cast variant). The `gl_ref_OFF`
+named-extern form will fail because the addend ends up in the symbol value
+instead of the lw immediate**, and unlike the asymmetric case above where
+form-1 = my-form, this is form-1 = target-form, so no objdiff tolerance
+saves you.
+
 ---
 
 ---
