@@ -1595,6 +1595,8 @@ grep "func_FRAGMENT" src/<seg>/<file>.c       # only the extern decl, no INCLUDE
 
 If either check fails, the merge is undone. Re-apply.
 
+**Subtle 2nd-order symptom — broken NM-build, default-build OK** (verified 2026-05-06 on func_800021A4): when a merge gets undone but the merged-form C body in `src/.../<file>.c` (under `#ifdef NON_MATCHING`) is left alone — both `INCLUDE_ASM(func_PARENT)` and `INCLUDE_ASM(func_FRAGMENT)` come back, so the default build is byte-correct (asm covers both ranges). But the NM-build emits the merged-form C body trying to span both ranges AND emits the FRAGMENT's INCLUDE_ASM body — they collide at the link layer, or one silently overwrites the other depending on linker behavior. `report.json` shows the parent's fuzzy as `None` (objdiff can't compute fuzzy when symbol layouts diverge between build and expected). Detection: fuzzy=None on a function you previously knew the % of, with both `func_PARENT.s` and `func_FRAGMENT.s` present on disk, IS this exact symptom. Fix: re-merge per the procedure above.
+
 **How to prevent this** (best to worst):
 
 - Push the merge-fragments commit IMMEDIATELY (within minutes) after creating it, before other agents start their next /decompile run on top of stale main. The smaller the window, the less risk.
