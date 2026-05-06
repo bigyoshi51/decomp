@@ -73,6 +73,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Splat fragments can be detected by register-flow across boundaries, not just `.L` label refs](#feedback-splat-fragment-via-register-flow) — The `merge-fragments` skill detects fragments by backward `.L` label references crossing function boundaries.
 - [Fall-through prologue stub — 2-insn alternate entry point hidden in predecessor's tail-after-epilogue](#fall-through-prologue-stub--2-insn-alternate-entry-point-hidden-in-predecessors-tail-after-epilogue) — _A USO function may have TWO entry points: a "main" entry that assumes some register is pre-set, and a 2-insn fall-through stub that sets it up before falling through. Splat bundles the stub into the predecessor's symbol past its `jr ra`/`nop`. 5th boundary-bug variant — distinct from prologue-stolen-successor._
 - [Alt-entry-jal: in-segment jal lands inside another function with no clean symbol](#alt-entry-jal-in-segment-jal-lands-inside-another-function-with-no-clean-symbol) — _A USO function's `jal X` lands strictly inside another splat-extracted function with no symbol_addrs/undefined_syms entry at X. C emit can't reproduce. 6th boundary-bug variant. Verified on `gl_func_00021E08` calling `jal 0x365AC` (inside `gl_func_00036224`)._
+- [Reloc encoding pinning: structurally-identical C body still scores ~65% because expected pre-bakes `jal target` while C emits `jal 0 + R_MIPS_26`](#reloc-encoding-pinning-structurally-identical-c-body-still-scores-65-because-expected-pre-bakes-jal-target-while-c-emits-jal-0--r_mips_26) — _When replacing INCLUDE_ASM with byte-equivalent C, the .o-level `jal` encoding differs (pre-baked target vs reloc-pending) even though linked ROM is identical. objdiff scores 50–80%. Wrap NM with structural decode; ROM-level still exact. Verified on `gl_func_00021E58`._
 
 ### alias handling
 
@@ -4128,3 +4129,29 @@ _When a USO function's `jal` target lands strictly inside another splat-extracte
 **Verified case (2026-05-06):** `gl_func_00021E08` (20-insn alloc-via-jal-alt-entry helper at game_libs offset 0x21E08) called `jal 0x365AC` which lands inside `gl_func_00036224` (declared 0x36224..0x36690). 0x365AC is mid-way through that function's body — used as an internal alt-entry by callers. No symbol entry; both fixes are blocked. Wrapped NM with `void* f(int a0, char a1, int a2, char a3) { v0 = jal(0x365AC, a0); if (v0==0) return 0; v0[2]=a1; v0[12]=a2; v0[1]=a3; return v0[8]; }` decode + cap doc. Default build remains exact via INCLUDE_ASM.
 
 **Catching it during /decompile picking:** if you pick a tiny game_libs function (50-80 bytes, 0% match, no wrap) and its first/only `jal` decodes to a non-zero target, `grep <target>` in `undefined_syms_auto.txt symbol_addrs.txt` BEFORE writing C. If unmatched, this is the alt-entry-jal cap — write the doc-wrap and move on, don't grind register allocation.
+
+---
+
+## Reloc encoding pinning: structurally-identical C body still scores ~65% because expected pre-bakes `jal target` while C emits `jal 0 + R_MIPS_26`
+
+_When a function previously matched via `INCLUDE_ASM` and you replace it with a C body that produces byte-identical mnemonics + register allocation (verified by standalone IDO compile), objdiff can still score the function ~50–80% because the .o-level bytes for `jal <in-section-symbol>` differ between the two encodings — even though the LINKED ROM is identical._
+
+**Diagnostic:**
+1. Standalone IDO -O2 compile produces every instruction byte-identical to the target — except `jal` opcodes show as `0x0C000000` in your built .o vs `0x0C00XXXX` in expected/.o.
+2. `objdump -r build/...` shows `R_MIPS_26 gl_func_<TARGET>` at the `jal` offset; expected has the target field already filled in (no reloc, or applied at the same offset).
+3. `objdiff-cli report` scores the function 50–80% (one mismatch per `jal`), but the function is otherwise instruction-identical.
+
+**Why this happens:**
+- When the original symbol was defined via `INCLUDE_ASM` in the SAME `.s` block (i.e., the original C file used INCLUDE_ASM for the function body), the assembler saw both the caller and callee labels in the same translation unit and pre-baked the jal target field at assembly time. The .o has the final byte sequence with no reloc.
+- When you replace with a C body, IDO emits `jal gl_func_<TARGET>` from a C-level `extern` declaration. The assembler doesn't see the target's definition in the same .s output, so it emits `jal 0` plus an R_MIPS_26 relocation. The linker resolves it identically at link time, but the .o-level bytes differ.
+
+**Workarounds (none clean from C alone):**
+- (a) Keep the INCLUDE_ASM path active via `#ifdef NON_MATCHING` wrap — the default build still matches via raw bytes; the C body is for permuter / reference. Land script will refuse to log an episode (fuzzy<100), but ROM is exact.
+- (b) Inject the target as inline asm with `__asm__("jal gl_func_<TARGET>; nop")` — IDO 7.1 doesn't parse GCC inline-asm syntax (`feedback_ido_no_gcc_register_asm.md`), so this is BLOCKED.
+- (c) Manually pre-resolve via a function-pointer constant: `static int (*const callee)() = (int(*)())(0x36A48);` then `callee(a0)`. Produces `jalr` not `jal` — wrong opcode.
+
+**Practical implication:** for tiny in-USO helpers that call other in-USO helpers (very common in `game_libs` and `*_uso` segments), the .o-level fuzzy score caps at the encoding limit even when the C is byte-equivalent. Wrap NM with the structural decode + the cap citation; do NOT log an episode (the .o isn't byte-equal even though the ROM is). This is the same "byte-correct but fuzzy<100" class as `feedback_byte_correct_match_via_include_asm_not_c_body.md` but specifically scoped to in-section jal encoding.
+
+**Verified case (2026-05-06):** `gl_func_00021E58` (game_libs alloc-via-callee + 3-field-set + return v0[8]). Standalone IDO emits all 20 insns byte-identical to target, including correct `lb 0x27(sp)` for the `signed char a3` low-byte read. Only diff is the `jal` at offset 0x10: built `0x0C000000` vs expected `0x0C00DA92`. objdiff scores 65.65%. Wrap kept NM with the goto-form C body and this cap citation.
+
+**Catching it during /decompile picking:** if you pick a tiny function (50-80 bytes, ~70-90% match, no episode) and the only diffs are `jal` opcodes in expected vs `jal 0` + reloc in your build, this is the encoding pin — don't grind register allocation, write the wrap as documented above.
