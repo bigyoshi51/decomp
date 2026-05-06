@@ -28,6 +28,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [NM-wrap logic can confuse jal-return vs jal-arg pointer for post-call stores](#feedback-nm-wrap-post-jal-arg-vs-return) — When an old NM wrap has `q = func(r); q->field = X;` but the asm uses the same input register $aN for the post-jal stores (e.g. `sw $tN, OFF($a1)` where $a1 was the 2nd arg, not $v0 the return), the actual logic is…
 - [After committing an NM wrap, FORCE-rebuild build/non_matching/<file>.c.o BEFORE kicking off any batch land — broken NM C body cascades 10+ failures](#feedback-nm-wrap-verify-non-matching-build-before-batch-land) — _NM wraps with `#ifdef NON_MATCHING / void func() { ... }` only run the C body under -DNON_MATCHING (the dual-build path).
 - [TRUNCATE_TEXT can block a smaller-emit C variant that would otherwise improve match](#feedback-truncate-text-blocks-smaller-nm-emit) — When a NM-wrap C body compiles to FEWER bytes than the baseline (e.g. switching `if/return; if/return;` to `return X;` ternary single-return), the truncate-elf-text post-cc step errors with `.text is already smaller…
+- [Verify NM-wrap-only edits with `objcopy --only-section=.text` — `md5sum` on the whole `.o` shows false-positive metadata diffs](#feedback-objcopy-text-only-verifies-nm-wrap-edit-doesnt-affect-default-build) — _`md5sum` on the full .o picks up `.options` / `.reginfo` / `.comment` churn that doesn't affect ROM bytes; strip to `.text` first to confirm a wrap-only edit is truly compile-output-neutral._
 - [Cross-function register inheritance (chained-SUFFIX): wrap with placeholder externs, don't leave comment-only INCLUDE_ASM](#feedback-cross-function-inheritance-placeholder-extern-wrap) — _When a function is documented as "BLOCKED — inherits $tN/$v0/$hi from predecessor's SUFFIX_BYTES", the prior convention was to leave the source as a comment-only INCLUDE_ASM (no `#ifdef NON_MATCHING` block). Better convention: declare placeholder externs (e.g. `extern int D_<func>_inherited_t9`) for the inherited registers in `undefined_syms_auto.txt`, and write a structural NM body that reads them as if they were real globals. Body becomes compilable, permuter-testable, grep-discoverable. Won't byte-match (placeholder externs aren't the same as register inheritance) but documents the structural decode for future PREFIX_BYTES or split-function approaches. Applied 2026-05-06 to gl_func_0005165C / gl_func_00054228 / gl_func_0000B5AC._
 
 ### objdiff scoring quirks
@@ -56,6 +57,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 - [Cross-file fragment merge: undefined_syms_auto.txt needs aliases for ALL absorbed symbols, not just shared-tail entries](#feedback-cross-file-fragment-merge-needs-all-aliases) — _When a cross-file fragment merge absorbs N functions into a single C body in another file, every absorbed symbol still callable from elsewhere needs `func_X = 0xX;` in undefined_syms_auto.txt.
 - [Cross-file fragment merge unblock — MOVE the INCLUDE_ASM to predecessor's .c file first, then do same-file merge](#feedback-cross-file-fragment-unblock-via-move-then-merge) — _When a function fragment lives in a different .c file than its predecessor (e.g., 47E4 in kernel_000.c vs predecessor 47B0 in kernel_027.c), `feedback_merge_fragments_blocked_across_o_files.md` says cross-.o merge is…
+- [Move-then-merge fragment recipe is BLOCKED when ≥1 unrelated .o sits between source and destination .c.o in the linker script](#feedback-move-then-merge-blocked-by-non-adjacent-o-files) — _The `feedback-cross-file-fragment-unblock-via-move-then-merge` move-trick assumes the source and destination .o are adjacent in tenshoe.ld. With intermediate files, shifting them means…
 - [Epilogue-only "function" = cross-function tail-entry used by other callers — not matchable standalone](#feedback-cross-function-epilogue-entry) — _When a "function" at address X has ONLY an epilogue-style body (`addiu $sp, +N; jr $ra; nop`) with no prologue, it's not a real function.
 - [Cross-function tail-share — beql/b targets an insn inside the ADJACENT function to reuse its `jr ra` return code](#feedback-cross-function-tail-share) — _If a function's branch target computes to an address PAST its own declared end and lands inside the next function's body, it's using the adjacent function's return-code tail for code-size (or because the compiler laid…
 - [cross-function tail-share via beql to sibling body produces unmatchable standalone signature](#feedback-cross-function-tail-share-unmatchable-standalone) — When function A's beql lands inside function B's body (e.g.
@@ -611,6 +613,43 @@ Deferred this tick (multi-step infra work). Documented as the next-pass plan in 
 - `feedback_merge_fragments_blocked_across_o_files.md` — the original "cross-file is unsafe" rule
 - `feedback_merge_fragments_partial_safe_subset.md` — the "same-file safe" subset
 - `feedback_merge_fragments_stale_o_caches_old_symbols.md` — post-merge .o cache invalidation gotcha
+
+---
+
+<a id="feedback-move-then-merge-blocked-by-non-adjacent-o-files"></a>
+## Move-then-merge fragment recipe is BLOCKED when ≥1 unrelated .o sits between source and destination .c.o in the linker script
+
+The `feedback-cross-file-fragment-unblock-via-move-then-merge` recipe (above) only works when the source `.o` and destination `.o` are **adjacent** in `tenshoe.ld`. When unrelated `.o` files sit between them, you can't shift bytes between source and destination without also shifting the intermediate `.o`'s absolute addresses — which breaks every function in those intermediates.
+
+**Diagnostic:** look at tenshoe.ld lines for both .c files. If they're consecutive lines (or separated only by `*` directives), the move-recipe applies. If even one unrelated `build/src/<seg>/<other>.c.o(.text);` sits between them, this case is blocked.
+
+**Concrete example:** the merged 32-insn function at `0x800073DC` is split between `kernel_036.c` (prologue half, 0x1C bytes) and `kernel_018.c` (body half, 0x64 bytes). The two `.o`s are at lines 63 and 68 of tenshoe.ld with `kernel_047.c.o`, `kernel_048.c.o`, `kernel_049.c.o`, `kernel_043.c.o` between them. Removing 0x64 bytes from kernel_018.c.o would shift those 4 intermediate .o's down by 0x64, putting their functions at the wrong addresses. No layout-preserving merge possible without a much larger `.ld` reorganization.
+
+**What you can still do:** even when the merge is blocked, replacing the placeholder C body in the NM wrap with a real decomp (m2c-derived, signature reflecting the merged function's actual logic) is value-add. The wrap C is `#ifdef NON_MATCHING`-guarded so the default build's `.text` is unchanged — verify with `objcopy --only-section=.text` before/after (see `feedback-objcopy-text-only-verifies-nm-wrap-edit-doesnt-affect-default-build` below). Future agents reading the wrap get a correct semantic model even if the bytes still come from two separate `INCLUDE_ASM`s.
+
+**Don't:** waste cycles trying clever shim-padding tricks (declaring a static dummy function in the source `.c` to compensate for removed bytes). IDO's stripper may eliminate it, GCC's stripper may inline it, and any size-stable shim needs careful `__attribute__((used))` + matching alignment, which is more fragile than just leaving the two halves separate.
+
+---
+
+<a id="feedback-objcopy-text-only-verifies-nm-wrap-edit-doesnt-affect-default-build"></a>
+## Verify NM-wrap-only edits with `objcopy --only-section=.text` — `md5sum` on the whole `.o` shows false-positive metadata diffs
+
+When you change only `#ifdef NON_MATCHING` content (replacing a stub C body with a real decomp, fixing comments, etc.), the default build's compiled `.text` should be byte-identical because the `#ifdef` branch isn't compiled. But `md5sum build/src/.../<file>.c.o` may show a different checksum before/after — that's metadata churn (`.comment`, `.pdr`, source-file-relative offsets in debug-ish sections), not actual code changes.
+
+**To prove the edit is compile-output-neutral:**
+
+```bash
+mips-linux-gnu-objcopy -O binary --only-section=.text build/src/<seg>/<file>.c.o /tmp/text_old.bin
+# ... apply edit, force-rebuild ...
+mips-linux-gnu-objcopy -O binary --only-section=.text build/src/<seg>/<file>.c.o /tmp/text_new.bin
+diff /tmp/text_old.bin /tmp/text_new.bin && echo "TEXT_IDENTICAL"
+```
+
+If `.text` is identical, the change cannot affect ROM bytes; commit safely without further verification. If `.text` differs, the `#ifdef NON_MATCHING` was probably leaking into the default build — check for missing `#ifdef NON_MATCHING ... #else ... #endif` brackets, or for global/extern declarations placed inside the wrap that the default build relies on.
+
+**Why not just `md5sum`:** asm-processor and IDO emit `.options`, `.reginfo`, and similar mips-target sections with content that depends on the source's symbol table state, which can shift around even when `.text` is stable. `md5sum` on the whole .o picks up all of that as a "diff."
+
+**Use case:** a /decompile run that improves an NM wrap (better C body, better comments) without intending any compiled-output change. Run the verify-with-objcopy check before committing — proves the change is genuinely a docs/wrap-only delta.
 
 ---
 
