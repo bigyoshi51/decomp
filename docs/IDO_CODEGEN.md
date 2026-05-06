@@ -8,6 +8,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### branch likely / bnel
 
+- [Branch-likely opcode cheat sheet — decode raw `.word` correctly before drafting C control flow](#feedback-mips-branch-likely-opcode-cheatsheet) — Top 6 bits of the instruction (`(word >> 26) & 0x3F`): `0x14` = `beql`, `0x15` = `bnel`, `0x16` = `blezl`, `0x17` = `bgtzl`. In the high byte, that's `0x50–0x53` = `beql` (rs varies the low 2 bits), `0x54–0x57` = `bnel`, `0x58–0x5B` = `blezl`, `0x5C–0x5F` = `bgtzl`. So `5320000B` IS `beql $t9, $zero, +0xB` — branch on EQUAL, not `bnezl`. Misreading silently inverts the C if-condition direction; the body compiles fine but byte-matches drop dramatically.
 - [IDO emits the if-body's first store TWICE around a beql — once in delay slot (annulled on taken) + once at fall-through](#feedback-ido-beql-speculative-store-double-emit) — _For `if (cond) { dst = val; ... }` IDO -O2 emits `beql cond_reg, $0, end; sw val, dst_off(dst_reg)` in the delay slot AND ALSO `sw val, dst_off(dst_reg)` at the fall-through.
 - [Asm `blez/blezl` vs `bne/beql` distinguishes `> 0` (signed) from `!= 0` (eq) source](#feedback-ido-blez-vs-bne-signed-compare) — When target asm uses `blez $rs, X` or `blezl $rs, X` for a conditional, the C source MUST be `if (val > 0)` (signed comparison), NOT `if (val != 0)`.
 - [IDO `bnel` with value-in-delay-likely comes from C with the EQUAL case in the `if` arm](#feedback-ido-bnel-arm-swap) — When the target asm has `bnel $a, $b, .exit; or v0, zero, zero` (branch-likely with "set 0" in delay-likely) and the other path sets v0=1 via `b + addiu v0, zero, 1`, write the C with the `==` case inside the `if`, not…
@@ -671,6 +672,28 @@ When you see this pattern in target — especially with the `sw $vN; lw $vN` spi
 **Related:** `feedback_ido_3save_vs_2save_arg_preserve.md` — similar "target uses an extra reg-shuffle that IDO won't reproduce."
 
 ---
+
+---
+
+<a id="feedback-mips-branch-likely-opcode-cheatsheet"></a>
+## MIPS branch-likely opcode cheat sheet (decode raw `.word` before drafting C control flow)
+
+When the splat output is raw `.word` directives instead of decoded mnemonics, decode the opcode by hand before writing C — guessing at the mnemonic by the leading hex digit silently inverts control flow.
+
+Top 6 bits of the instruction = `(word >> 26) & 0x3F`:
+
+| Opcode | Mnemonic | Top byte range |
+|--------|----------|----------------|
+| `0x14` | `beql`   | `0x50`–`0x53`  |
+| `0x15` | `bnel`   | `0x54`–`0x57`  |
+| `0x16` | `blezl`  | `0x58`–`0x5B`  |
+| `0x17` | `bgtzl`  | `0x5C`–`0x5F`  |
+
+(Within each row, the low 2 bits of the top byte spill into the `rs` field — `0x53` = `beql` with rs's high bit set, e.g. `$t8` or `$t9`. The mnemonic is unchanged.)
+
+**Concrete failure:** for `mgrproc_uso_func_00001594`, raw word `5320000B` was misread as `bnezl t9` (a non-existent mnemonic — `bnezl` is the alias for `bnel rs, $zero`, opcode `0x15`, top byte `0x54-0x57`). The actual encoding is `beql $t9, $zero, +0xB` — branch ON EQUAL likely. The C body was written with the inverted condition (`if (entry != 0) early-return` instead of `if (entry == 0) early-return`); compiles fine but match dropped dramatically because all the downstream stores wound up on the wrong arm.
+
+**Fix:** when raw `.word` lines have the leading byte in the `0x5x` range, look up the table above before assigning a mnemonic. The other regular branches with single-bit-direction confusion (`beq`/`bne`, `blez`/`bgtz`, etc.) live in opcode range `0x04`-`0x07` (top byte `0x10`-`0x1F`).
 
 ---
 
