@@ -1469,6 +1469,8 @@ script with comma-separated hex words.
 - This memo — N-word `jr ra; nop` repeats for bundled empty trailers
   (a new variant)
 
+**Generalization (verified 2026-05-06 on mgrproc_uso_func_0000179C):** the recipe extends to any 2-insn alt-entry stubs, not only `jr ra; nop`. For trailers like `jr ra; sw a0, 0(sp)` (alt-entry that does a single store and returns), use the actual stub bytes in the SUFFIX_BYTES list (`0x03E00008,0xAFA40000` per stub). Eligibility check: trailers must contain NO relocations (no `lui+%hi` etc.) — pure raw bytes only.
+
 ---
 
 ---
