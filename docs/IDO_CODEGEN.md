@@ -6662,6 +6662,8 @@ If your `volatile int saved_aN` ends up at the SAME stack offset as the implicit
 
 Verified: func_0000553C frame -0x20 → -0x28 via `char pad[8]`, promoting 88.40% → 89.88%. The pad is consumed by frame-size accounting; no extra access insns emitted.
 
+**Caveat: pad alone does NOT grow the frame** (verified 2026-05-06 on game_uso_func_00003A28): IDO -O2 dead-eliminates the unused `char pad[N]` and frame stays at its natural size. The pad-grows-frame trick requires a PAIRED live local — typically the `volatile int saved_aN` from the parent recipe. The volatile is what keeps the frame "anchored" at the larger size; the pad just shifts WHERE the volatile spill lands relative to other slots. If your function has no arg-spill candidate to volatile-ize (no caller-arg-slot save needed), the pad won't help — you need a different lever.
+
 **Related:** `feedback_ido_unused_arg_save.md` (unused arg gets caller-slot spill), `feedback_ido_volatile_buf_pointer_indirect.md` (volatile buf forces pointer-indirect addressing).
 
 ---
