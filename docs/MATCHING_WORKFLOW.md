@@ -1731,8 +1731,9 @@ The `alabel` macro (in `include/labels.inc`) emits `.global func_800021D0; .type
 - Cross-FILE merges still need the alias approach because alabel only works within the same .s/.o.
 - Fragment-only callers in the SAME .o (rare) get inlined regardless; doesn't affect link.
 - expected/.o needs regeneration with `make expected RUN_CC_CHECK=0` after the merge — the new symbol layout (one big symbol + 0-byte alt-entry vs two separate symbols) must match the build/.o for the fuzzy diff to work.
+- **C-level `extern` declarations for absorbed symbols must remain.** If a C caller uses `(void(*)(...))func_<absorbed>` (function-pointer cast) or otherwise references the absorbed symbol by name in C, you need `extern void func_<absorbed>();` somewhere in the same .c file. The linker resolves the alabel fine, but cfe in the `-DNON_MATCHING` build path errors with "`func_X` undefined" if the C-level symbol is missing. Trap: removing a previous NM-wrap stub during merge cleanup also removes its implicit forward decl — re-add `extern` decls for any caller that takes the address.
 
-**Tested on:** `func_800021A4` + `func_800021D0` merge (same file kernel_000.c). After alabel + expected regeneration: fuzzy went from None (size mismatch artifact) to 85.81% (the C body's actual NM cap was previously masked).
+**Tested on:** `func_800021A4` + `func_800021D0` (kernel_000.c, 2-way merge), `func_80008E98 + EA0 + ED0 + FB0` (kernel_022.c, 4-way merge), `func_800005DC + 8000060C + 80000660` (kernel_000.c, 3-way merge with the C-extern caveat above triggered by a `(void(*)(...))func_80000660` caller cast that needed re-adding after the merge cleanup).
 
 ---
 
