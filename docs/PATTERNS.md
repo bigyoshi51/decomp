@@ -1794,6 +1794,12 @@ To get $s2 usage:
 - Restructure code to keep an existing value alive across more code.
 - Don't rely on `pad[N]` alone — it's allocated stack space, not a
   refcounted variable.
+- Don't rely on `register T x = arg; (void)x;` either — IDO discards
+  the dead register-typed local, no $s save emitted. Verified
+  2026-05-06 on game_uso_func_000044F4: `register char *s2_hold = a0;
+  (void)s2_hold;` was a no-op (1706 diff lines unchanged). The
+  variable must have REAL refs (loads + stores or a use that survives
+  optimization), not just a syntactic appearance, to gain weight.
 
 **Why I tried pad alone**: assumed frame size was the dominant factor.
 WRONG — IDO's global allocator decides $s-promotion separately from
