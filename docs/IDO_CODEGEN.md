@@ -84,6 +84,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
+- [IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C](#feedback-ido-o2-loop-array-strength-reduction) — When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 caches `s_reg = array + idx` and post-increments it. If target has the NON-strength-reduced form (per-iter `addu base, idx`), no C variant defeats it. Verified 2026-05-06 on gl_func_00055B44.
 
 ### char / int / signed / narrow
 
@@ -6820,3 +6821,20 @@ This preserves the 2-jal dispatch.
 **Verified 2026-05-05** on `mgrproc_uso_func_00001324`: switching from `if (v != 2) call();` to `if (v == 0) call(); else if (v != 2) call();` dropped diffs from 28/41 to 8/41 (80.5% byte match, remaining diffs are pure register-pick).
 
 **Detection signal:** target asm has 2 `jal SAME_FUNC` calls with identical args, gated by 2 separate compare-branch sequences with the SAME variable. C body that uses a single combined predicate produces only 1 jal.
+
+---
+
+<a id="feedback-ido-o2-loop-array-strength-reduction"></a>
+## IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C
+
+_When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 strength-reduces this into a cached pointer (`s_reg = array + idx_initial`) that's post-incremented per iter, replacing per-iter `addu base, idx; lbu val, 0(base)` with `lbu val, 0(s_reg); addiu s_reg, s_reg, 1`. If the target asm has the NON-strength-reduced form (re-adds base+idx each iter), no standard C variant defeats this — `v = idx; *(array+v); idx = v+1`, `register int idx`, and explicit pointer-cast variants all either no-op or REGRESS the diff. Verified 2026-05-06 on `gl_func_00055B44` (60-insn nested loop, 86.58% capped). Regress example: `v = byte_idx; ...; byte_idx = v+1` drove diffs from 60 → 75 lines._
+
+**Detection signal**: target's inner loop has `move v0,sN; addu tM,sK,v0; lbu/lw val,0(tM); addiu sN,sN,1` (4 insns per byte read) where built has `lbu/lw val,0(sM); addiu sM,sM,1` (2 insns, sM is the cached pointer). The 2-insn deficit per inner iter is the SR signature.
+
+**Why this isn't C-controllable**: IDO's strength reduction runs after register allocation in the optimizer pipeline. It detects loop induction variables purely from the data-flow graph — source-level expression structure (`a[i]` vs `*(a+i)` vs cached `v = i; *(a+v)`) all reduce to the same DFG and trigger SR identically. The DFG would need an extra dependency to PREVENT SR, but adding one (e.g., `volatile`) typically introduces other costly diffs (stack roundtrips, frame-size shifts) that regress the score elsewhere.
+
+**Promotion paths for SR-blocked functions**:
+- decomp-permuter (random shape variants might find a non-SR-able pattern by accident)
+- per-symbol INSN_PATCH for the SR-shifted insns (~4 insns per inner-loop iter × outer iters, but in the .o the bytes are just the static body — so 2-3 patches not Nx)
+- Defer until SR-suppression knob is added to the matching workflow (none exists today)
+
