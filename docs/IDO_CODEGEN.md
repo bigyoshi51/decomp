@@ -7275,3 +7275,30 @@ Use `D_<funcaddr>_<purpose>` per existing 1080 convention (e.g., `D_44F4_iter0`,
 ### When NOT to use
 
 Only reach for the split when the target's asm clearly uses TWO separate scratch registers for what would be the same C-level address. If the target uses a single shared base (like IDO's natural CSE'd output), forcing a split via 2 externs would REGRESS the match.
+
+---
+
+<a id="feedback-ido-extern-vs-literal-pointer-encoding-cap"></a>
+## `&extern_symbol` vs `(int*)0xNNNN` literal: lui+addiu (with reloc) vs lui+ori (no reloc) — when target has lui+addiu without relocs, neither C form reaches it
+
+_When the target ROM has a constant pointer materialised via `lui rX, HI16; addiu rX, rX, LO16(signed-extending)` BUT expected/.o has NO relocation entries (bytes are inline), neither natural C form reaches the exact byte sequence:_
+
+- **`extern T sym;` declared in `undefined_syms_auto.txt`** → IDO emits `lui+addiu` (correct shape) BUT also emits `R_MIPS_HI16` / `R_MIPS_LO16` relocations against `sym`. Result at .o level: `lui rX, 0; addiu rX, rX, 0` + reloc table entries. Linker resolves at link-time to the right bytes.
+- **`(int*)0x0003F020` literal cast** → IDO emits `lui+ori` (different shape!) with no relocations. Bytes inline as `lui rX, 0x3; ori rX, rX, 0xF020`. Same value but different encoding from the addiu pair.
+
+**Mismatch at .o-level:** if expected/.o has `lui 0x4; addiu -0xFE0` (sign-extending negative offset → 0x40000 − 0xFE0 = 0x3F020) inlined without relocations, then:
+- The `&extern` form gives matching `lui+addiu` shape but with relocations expected lacks.
+- The literal-cast form gives `lui+ori` (wrong instruction).
+
+**Verified 2026-05-06 on `gl_func_00061E58`** (1080 game_libs). 17-insn function with 3 lui+addiu pairs targeting `0x3F020` and `0x22038`. With `&gl_ref_0003F020` extern, built has correct mnemonic shape but extra reloc entries. With `(int*)0x0003F020` literal, built has `lui+ori` instead of `lui+addiu`. Neither reaches expected/.o byte-equality. Cap stays at ~65%.
+
+**Why expected has no relocs**: the original ROM was built from C using a typed-symbol pattern (likely `extern T D_3F020;` with a different declaration shape OR a #define that produced inline bytes via assembler-level constant). The post-cc-recipe SUFFIX_BYTES/INSN_PATCH pipeline COULD inject the exact bytes, but that's invasive for a small wrapper.
+
+**Practical rule**:
+- Use `&gl_ref_NNNNNNNN` form per `feedback-game-libs-jal-targets` for ROM-correctness — the linker resolves and the ROM matches.
+- Accept ~60-70% NM cap for these functions when expected/.o has bytes inlined without relocations.
+- Don't grind the literal-cast form expecting it to fix encoding; it switches `addiu` → `ori`, which is a worse mismatch.
+
+**Related:**
+- `feedback-game-libs-jal-targets` (in N64_FORENSICS.md) — the gl_ref recipe for absolute-symbol externs.
+- `feedback-ido-type-split-unique-extern-breaks-cse` — doesn't help here; CSE isn't the issue.
