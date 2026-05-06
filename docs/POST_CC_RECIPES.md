@@ -747,6 +747,24 @@ this one.
 the function with a clear comment explaining the size deficit. Don't
 invent a complex C restructure that adds spills (the cure is worse).
 
+**Equal-count case is also blocked when relocations don't move with patches.**
+Verified 2026-05-06 on h2hproc_uso_func_00001A6C: built and expected both
+36 insns, but the jal sat at offset 0x20 (built) vs 0x1c (expected) due
+to an extra `or a2, v0, zero` preserve-copy in the C-emit. Naive INSN_PATCH
+of all 22 byte diffs broke the link with `relocation truncated to fit:
+R_MIPS_26 against gl_func_00000000`. Reason: the original `.o`'s reloc
+table has R_MIPS_26 entries at the *original* jal offsets. INSN_PATCH
+overwrites bytes but doesn't touch `.rel.text`, so the reloc still applies
+at the old offset (now containing a different instruction like `sw` after
+the patch). The linker tries to OR the (target_addr >> 2) into bits 25-0
+of whatever opcode now sits there, which can either corrupt the bytes or
+trigger a truncation error. **Diagnostic**: if your INSN_PATCH includes
+a jal opcode (0x0c******) AND the byte at the same offset in built was
+NOT a jal, you're moving the jal — that needs reloc movement, not byte
+overwrite. NM-wrap the function instead. Same conclusion as the count-mismatch
+case: INSN_PATCH only handles register-rename / immediate-tweak diffs at
+positions where the opcode CLASS already matches.
+
 **Related**:
 - `feedback_insn_patch_for_ido_codegen_caps.md` — the recipe this
   memo extends
