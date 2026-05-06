@@ -96,9 +96,16 @@ Look at the access patterns in context to guess semantics. Conservative naming h
 If no strong signal: name as `D_OFFSET_<HEX>` (purely positional, but with prefix to distinguish from raw refs). Don't try to be clever — a positional name is a placeholder for a future supervised rename.
 
 **Naming convention:**
-- All-uppercase: `D_OFFSET_148`, `GAME_LEVEL_INDEX`, `GAME_FLAG_PAUSED`
-- Always prefixed (no naked names like `COUNT`) to avoid collision with code from other projects
-- For the macro form: `#define D_GAME_LEVEL_INDEX (*(int*)((char*)&D_00000000 + 0x148))` (lvalue form so it works as both read and write target)
+- All-uppercase, with a **segment prefix derived from the .c file's segment** to avoid cross-USO ambiguity. Each USO has its own runtime-relocated `D_00000000`, so offset `0x14C` in `timproc_uso_b1` and `mgrproc_uso` are different physical addresses with potentially different meanings — distinct names make this explicit.
+  - `timproc_uso_b1` → `TIMB1_*` (e.g., `TIMB1_D_14C`)
+  - `timproc_uso_b3` → `TIMB3_*`, `timproc_uso_b5` → `TIMB5_*`
+  - `mgrproc_uso` → `MGR_*`, `arcproc_uso` → `ARC_*`, `eddproc_uso` → `EDD_*`
+  - `titproc_uso` → `TIT_*`, `h2hproc_uso` → `H2H_*`, `n64proc_uso` → `N64_*`
+  - `game_uso` → `GAME_*`, `game_libs` → `GL_*`, `gui_uso` → `GUI_*`
+  - `bootup_uso` → `BOOT_*`, `boarder1_uso` → `BRDR1_*`, etc.
+- Within the segment prefix, append the offset as hex if no semantic signal: `TIMB1_D_14C`. With a semantic signal: `TIMB1_LEVEL_INDEX`.
+- Always all-uppercase (no naked lowercase names) to keep macros visually distinct from variables.
+- For the macro form: `#define TIMB1_D_14C (*(int*)((char*)&D_00000000 + 0x14C))` (lvalue form so it works as both read and write target)
 
 ### 5. Choose where to define the macro
 
@@ -120,10 +127,16 @@ If the file already has such a block (recognizable by the `Auto-managed by /stru
 ### 6. Replace call sites
 
 For each NM-wrap occurrence of the raw access in the chosen scope:
-- `*(int*)((char*)&D_00000000 + 0x148)` → `D_GAME_LEVEL_INDEX`
+- `*(int*)((char*)&D_00000000 + 0x148)` → `TIMB1_LEVEL_INDEX` (or whatever segment-prefixed name you chose)
 - Both read and write contexts (the lvalue macro form supports both)
 
 Replace ONLY inside `#ifdef NON_MATCHING ... #endif` blocks. NEVER touch code outside such blocks (those are exact-matched bodies; changing them would alter codegen).
+
+**Skip substitutions inside `/* ... */` block comments and `//` line comments.** A pilot tick caught a substitution inside a wrap's doc-comment block (which described the raw asm semantics) — that's fine compilation-wise but defeats the comment's intent. Doc-comments often reference the raw offset to explain what the original asm does; replacing it with the macro hides that. Don't use a blunt `replace_all`. Either:
+- Walk the source character-by-character with comment-tracking state and substitute only outside `/* */` and `//` regions, OR
+- Match each occurrence individually with surrounding context, manually verify it's not inside a comment, then replace.
+
+If a doc-comment incidentally gets the substitution and the comment was paraphrasing code (not asm), it's harmless and you can leave it. But if the comment was specifically documenting the raw access form, revert just that line.
 
 ### 7. Build-verification gate
 
