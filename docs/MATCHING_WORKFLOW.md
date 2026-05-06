@@ -69,6 +69,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Use `alabel <fragment>` inside the merged .s file to keep absorbed-fragment symbols live — cleaner than undefined_syms_auto.txt aliases](#feedback-alabel-preserves-fragment-symbol-on-merge) — When merging splat fragments into a parent, putting `alabel func_<fragment>` at the absorbed fragment's offset within the merged .s emits a 0-byte FUNCTION symbol at the right offset. Other callers' jals then resolve correctly without needing `func_X = 0xX;` linker aliases.
 - [Splat/generate-uso-asm merges no-prologue leaf functions into the preceding function's .s](#feedback-splat-fragment-split-no-prologue-leaf) — _Mirror of the merge-fragments case.
 - [Splat fragments can be detected by register-flow across boundaries, not just `.L` label refs](#feedback-splat-fragment-via-register-flow) — The `merge-fragments` skill detects fragments by backward `.L` label references crossing function boundaries.
+- [Fall-through prologue stub — 2-insn alternate entry point hidden in predecessor's tail-after-epilogue](#fall-through-prologue-stub--2-insn-alternate-entry-point-hidden-in-predecessors-tail-after-epilogue) — _A USO function may have TWO entry points: a "main" entry that assumes some register is pre-set, and a 2-insn fall-through stub that sets it up before falling through. Splat bundles the stub into the predecessor's symbol past its `jr ra`/`nop`. 5th boundary-bug variant — distinct from prologue-stolen-successor._
 
 ### alias handling
 
@@ -4037,3 +4038,26 @@ _split-fragments.py's heuristic ("after `jr ra`, if subsequent insns read caller
 **Recovery:** if you've already run the bad split, `git revert` the split commit. The .c file's INCLUDE_ASM gets rewritten to reference the split-off symbol names which no longer match the recovered single-symbol .s file; the revert restores both.
 
 Found 2026-05-05 on gui_func_00000000 (already had a working ~13-test C body that the split broke).
+
+---
+
+## Fall-through prologue stub — 2-insn alternate entry point hidden in predecessor's tail-after-epilogue
+
+_A USO function may have TWO entry points: a "main" entry that assumes some register is pre-set, and a 2-insn "fall-through stub" that initialises that register before falling through to the main entry. The stub is laid out IMMEDIATELY before the main entry (no `jr ra` of its own), but splat bundles those 2 stub insns into the **predecessor** function's symbol — past its actual `jr ra`/`nop` epilogue. This is a 5th boundary-bug variant alongside the four listed in the /decompile skill (bundled-leaf, N-function-bundle, too-small-tail, prologue-stolen-successor)._
+
+**Diagnostic:**
+1. Predecessor's `.s` file has its `jr ra` + `nop` epilogue, then 2 trailing instructions still inside the declared `nonmatching SIZE` (typically `lui $tN, 0; lw $tN, M($tN)` or `lui $tN, 0; addiu $tN, $tN, M`).
+2. The successor's `.s` (NEXT function in address order) starts with a normal `addiu $sp; sw $ra` prologue, then **immediately reads $tN** (often via `bnezl $tN, ...` or `lw X, M($tN)`) without setting it.
+3. The 2 trailing insns set EXACTLY the register the successor reads. ⇒ alt-entry pattern.
+
+**Distinguishing from "prologue-stolen successor"** (the variant the /decompile skill already documents):
+- _Prologue-stolen successor_: the 2 insns are INSIDE the predecessor's executing path (before its `jr ra`), serving dual-purpose as part of the predecessor's body AND as setup for the successor. The fix is `PROLOGUE_STEALS=8` on the SUCCESSOR — IDO emits 2 redundant prologue insns at the successor's start; splice strips them.
+- _Fall-through prologue stub_ (this case): the 2 insns are AFTER the predecessor's `jr ra` + delay-`nop` — dead code from the predecessor's perspective. They're a separate alternate entry point. The fix is to **split** the 2 insns off into their own symbol via `scripts/split-fragments.py <predecessor>`.
+
+**Verified case (2026-05-06):** `game_uso_func_000114FC` (size 0x68 declared) had 24 body insns ending with `jr ra; nop` at offset 0x58/0x5C, then `lui $t6, 0; lw $t6, 0x78($t6)` at offsets 0x60/0x64 inside the declared range. Successor `game_uso_func_00011564` started with `addiu $sp; sw $ra; bnezl $t6, +0x30` — `bnezl` reading $t6 unset. Split-fragments carved out a new 8-byte symbol `game_uso_func_0001155C` containing just those 2 insns. After split: 114FC truncated to 0x60 (24 insns), 1155C is the alt-entry, 11564 unchanged. All three byte-match against the snapshot expected/.o once `cp build/src/<seg>/<file>.c.o expected/src/<seg>/<file>.c.o` refreshes the baseline.
+
+**How split-fragments.py picks this up despite its docstring:** the script's docstring says it splits when post-boundary code "reads caller-save argument registers ($a0-$a3) without initialising them." This case post-boundary reads `$t6` (NOT a caller-save arg), but the script splits anyway — its actual implementation uses "any non-nop insns after `jr ra` + delay" as the split signal, with the args-read criterion only relevant for naming/categorisation (standalone-function vs trampoline-stub). So the script handles fall-through stubs correctly even though the docstring doesn't describe this variant.
+
+**Rule:** when picking a function from size-sort and the asm has 2 trailing insns AFTER a clean `jr ra; nop`, run `grep -c 03E00008 <file.s>` — if 1 (only the clean epilogue's jr), then check the trailing 2 insns. If they look like a register-setup stub AND the next function reads that register unset, run `scripts/split-fragments.py <predecessor>` BEFORE attempting any C wrap. Skipping this fix means the 2 trailing bytes will permanently mismatch and the function caps at ~92% mnemonic-level even with perfect C.
+
+**How to refresh expected/ after the split:** the `make expected` rule does `rm -rf expected; cp build/src/.../*.o expected/...` — wholesale snapshot. For an in-place refresh of a single .o, just `cp build/src/<seg>/<file>.c.o expected/src/<seg>/<file>.c.o` after rebuilding the regular (INCLUDE_ASM) .o. Don't run `make expected` while your decomp C is in place (per `## Don't run make expected while your decomp C is in place — it copies your build AS the baseline`).
