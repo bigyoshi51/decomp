@@ -6769,3 +6769,54 @@ char *t = P + N; val = *(T*)(t + M);         // untyped temp, single use
 - Multiple uses of the same intermediate — if `t = P + N` is dereferenced 2+ times, IDO may keep it materialized rather than folding.
 
 **Detection signal:** target asm has `addiu vX, base, N` then `lwc1/lw fY/tZ, M(vX)` (split), but your C produces `lwc1/lw fY/tZ, N+M(base)` (folded). The mathematical addresses are identical; only the addressing mode differs. Found while grinding `game_uso_func_00007448` (capped at 70.97% from this exact gap, 2026-05-05).
+
+---
+
+## IDO preserves explicit 2-test if/else-if; combined `(v != K)` collapses both arms
+
+_When target asm shows two separate `bne/beq` tests for what looks like one logical condition (e.g. `if (v == 0) X; else if (v == 2) skip; else X;`), do NOT simplify the C to `if (v != 2) X;`. Even though both forms are semantically equivalent ("execute X unless v == 2"), IDO emits them differently: the explicit 2-test form keeps both branches with separate jal sites; the simplified form collapses to one branch + one jal. To match the target's bytes, write the C as the original 2-test._
+
+**Pattern in target asm:**
+
+```
+bne $v0, $zero, .skip_first    # if v != 0, skip first call
+nop
+jal call(...)                  # v == 0: call
+b .merge
+addiu $at, $zero, 2
+.skip_first:
+beq $v0, $at, .merge           # if v == 2, skip second call
+nop
+jal call(...)                  # v != 2 (and v != 0): call
+.merge:
+```
+
+Two separate `jal` sites with identical args, gated by `v == 0` (do) and `v == 2` (skip).
+
+**C source — what NOT to write (single-test, semantically equivalent but different bytes):**
+
+```c
+if (v != 2) {
+    call(...);
+}
+```
+
+This compiles to ONE branch (`bne $v0, $at, .skip; nop; jal call; .skip:`) and ONE jal — collapsing the asm's 2-arm dispatch into a single test.
+
+**C source — match the asm's structure:**
+
+```c
+if (v == 0) {
+    call(...);
+} else if (v != 2) {
+    call(...);
+}
+```
+
+This preserves the 2-jal dispatch.
+
+**Why:** IDO -O2's optimizer is conservative about merging arithmetically-equivalent conditional branches when the bodies have side effects (function calls). It honors the source-level `if (v == 0) ... else if (...)` structure literally, even when the simplification `(v != 2) → (v == 0 || v != 2)` would produce shorter code. Likely a side effect of the `if-conversion` pass running before constant-folding on conditional values.
+
+**Verified 2026-05-05** on `mgrproc_uso_func_00001324`: switching from `if (v != 2) call();` to `if (v == 0) call(); else if (v != 2) call();` dropped diffs from 28/41 to 8/41 (80.5% byte match, remaining diffs are pure register-pick).
+
+**Detection signal:** target asm has 2 `jal SAME_FUNC` calls with identical args, gated by 2 separate compare-branch sequences with the SAME variable. C body that uses a single combined predicate produces only 1 jal.
