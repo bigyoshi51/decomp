@@ -72,6 +72,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Splat/generate-uso-asm merges no-prologue leaf functions into the preceding function's .s](#feedback-splat-fragment-split-no-prologue-leaf) — _Mirror of the merge-fragments case.
 - [Splat fragments can be detected by register-flow across boundaries, not just `.L` label refs](#feedback-splat-fragment-via-register-flow) — The `merge-fragments` skill detects fragments by backward `.L` label references crossing function boundaries.
 - [Fall-through prologue stub — 2-insn alternate entry point hidden in predecessor's tail-after-epilogue](#fall-through-prologue-stub--2-insn-alternate-entry-point-hidden-in-predecessors-tail-after-epilogue) — _A USO function may have TWO entry points: a "main" entry that assumes some register is pre-set, and a 2-insn fall-through stub that sets it up before falling through. Splat bundles the stub into the predecessor's symbol past its `jr ra`/`nop`. 5th boundary-bug variant — distinct from prologue-stolen-successor._
+- [Alt-entry-jal: in-segment jal lands inside another function with no clean symbol](#alt-entry-jal-in-segment-jal-lands-inside-another-function-with-no-clean-symbol) — _A USO function's `jal X` lands strictly inside another splat-extracted function with no symbol_addrs/undefined_syms entry at X. C emit can't reproduce. 6th boundary-bug variant. Verified on `gl_func_00021E08` calling `jal 0x365AC` (inside `gl_func_00036224`)._
 
 ### alias handling
 
@@ -4104,3 +4105,26 @@ _A USO function may have TWO entry points: a "main" entry that assumes some regi
 **How to refresh expected/ after the split:** the `make expected` rule does `rm -rf expected; cp build/src/.../*.o expected/...` — wholesale snapshot. For an in-place refresh of a single .o, just `cp build/src/<seg>/<file>.c.o expected/src/<seg>/<file>.c.o` after rebuilding the regular (INCLUDE_ASM) .o. Don't run `make expected` while your decomp C is in place (per `## Don't run make expected while your decomp C is in place — it copies your build AS the baseline`).
 
 **The split-off stub is fundamentally NOT decompilable to C** — it has no `jr ra` (`grep -c 03E00008 <stub>.s` returns 0). Any IDO-emitted C function appends a `jr ra` epilogue, so there's no C body that produces a 2-insn function ending with `lw` and falling through to the successor. Treat the split-off stub as a permanent INCLUDE_ASM — it's effectively handwritten asm. **Add it to the /decompile skill's "always skip" mental list:** when picking from size-sort, if the candidate's `.s` shows `grep -c 03E00008 = 0`, it's a fall-through stub split off from a predecessor — skip immediately and grind the next size-sort entry. The byte-correctness comes for free via INCLUDE_ASM at the boundary-fixed size; no episode is owed (episodes are for C-emit exact matches only).
+
+---
+
+## Alt-entry-jal: in-segment jal lands inside another function with no clean symbol
+
+_When a USO function's `jal` target lands strictly inside another splat-extracted function (between its glabel start and end) with NO entry in `undefined_syms_auto.txt` or `symbol_addrs.txt`, the C-level emit cannot reproduce the call. This is a 6th boundary-bug variant — distinct from the 5 listed in the /decompile skill (bundled-leaf, N-function-bundle, too-small-tail, prologue-stolen-successor, fall-through-prologue-stub)._
+
+**Diagnostic:**
+1. The function's asm has a `jal X` where X is decoded by objdump into a real address (not 0/runtime-relocated).
+2. `grep -E "0x?<X>|<X-as-symbol>" undefined_syms_auto.txt symbol_addrs.txt` returns nothing.
+3. `ls asm/nonmatchings/<seg>/<seg>/ | grep <closest-prefix-of-X>` shows the closest symbol is at offset Y < X, and looking inside `<seg>_func_Y.s` finds X within Y's declared size.
+
+**Why it matters:** without a symbol at X, the C declaration `extern T gl_func_X()` won't link — IDO emits `jal gl_func_X` with R_MIPS_26 reloc, but the linker has no Y-symbol-plus-offset entry to resolve it. The original asm's `0x0C00D96B` etc. is hardcoded, but C-level emit needs a reloc.
+
+**Two valid fixes (both heavyweight):**
+- (a) Add `gl_func_X = 0xX;` to `undefined_syms_auto.txt` + ensure containing function's content matches so post-link offset coincides. Fragile — any layout drift in the containing function moves X.
+- (b) Split the containing function at offset X into two separate splat symbols (one ending just before X, one starting at X). Blocked when the containing function is still INCLUDE_ASM via splat-fragment-split breaking expected-match (per the existing `feedback_uso_split_fragments_breaks_expected_match.md`).
+
+**For now:** wrap the caller NM with the full decoded body + a comment naming the alt-entry callee's address as the cap reason. Default INCLUDE_ASM build still matches via raw bytes. The wrap is then ready for promotion when either (a) symbol-injection or (b) safe-splittable conditions become available.
+
+**Verified case (2026-05-06):** `gl_func_00021E08` (20-insn alloc-via-jal-alt-entry helper at game_libs offset 0x21E08) called `jal 0x365AC` which lands inside `gl_func_00036224` (declared 0x36224..0x36690). 0x365AC is mid-way through that function's body — used as an internal alt-entry by callers. No symbol entry; both fixes are blocked. Wrapped NM with `void* f(int a0, char a1, int a2, char a3) { v0 = jal(0x365AC, a0); if (v0==0) return 0; v0[2]=a1; v0[12]=a2; v0[1]=a3; return v0[8]; }` decode + cap doc. Default build remains exact via INCLUDE_ASM.
+
+**Catching it during /decompile picking:** if you pick a tiny game_libs function (50-80 bytes, 0% match, no wrap) and its first/only `jal` decodes to a non-zero target, `grep <target>` in `undefined_syms_auto.txt symbol_addrs.txt` BEFORE writing C. If unmatched, this is the alt-entry-jal cap — write the doc-wrap and move on, don't grind register allocation.
