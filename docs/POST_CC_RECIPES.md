@@ -936,6 +936,8 @@ The doc's prediction is right ABOUT the technique (split-pad +
 addu-operand-order) and right ABOUT the diff count (3 words). Just
 not literal about the offsets.
 
+**Stale "size mismatch blocks INSN_PATCH" claims drift the same way (verified 2026-05-06 on `game_uso_func_00003A28`):** an earlier wrap-doc retry note said "frame 0x28 vs ours 0x20" implying INSN_PATCH was blocked by size mismatch. Re-measuring at apply time showed sizes ACTUALLY match (144/144 bytes — the C body's frame size depends on liveness, not the unused locals; what changed is which wrap-version was checked when). The 25-entry INSN_PATCH then promoted cleanly. **Rule extension:** before accepting a doc's "INSN_PATCH blocked by size mismatch" claim, re-run `len(build_bytes) == len(expected_bytes)`. Stale size claims drift just like stale offsets.
+
 **Companion to:** `feedback_insn_patch_for_ido_codegen_caps.md` (general
 INSN_PATCH usage), `feedback_insn_patch_offsets_body_dependent.md` (the
 deeper version: any C body change shifts offsets).
