@@ -6993,6 +6993,8 @@ void <name>(Quad4 *src) {
 }
 ```
 
+**Scanning gotcha — size match doesn't guarantee a template:** a size-based scan for accessor templates (0x4C / 0x64 / 0xA4 in particular) can yield false positives where the candidate is actually a parent fragment that continues PAST its declared size into a sibling .s file. Signal: the candidate's body has a forward branch (`bc1f`, `beq`, etc.) whose target offset would land OUTSIDE its `nonmatching SIZE`. Verify by computing the target: `pc + 4 + (offset_imm * 4)` — if that's past the function end, the next .s is a tail-fragment and merge-fragments is needed first. (Verified 2026-05-05 on `timproc_uso_b5_func_0000C710`: declared 0xA4, bc1f at +0x94 jumped to +0xD0 which sat inside the next .s `timproc_uso_b5_func_0000C7B4`. Combined size after merge: 0xD8, definitely not a Vec3 reader.)
+
 **5th template — composite "int + field reader at dst+0x10" (size 0x30):**
 
 ```c
