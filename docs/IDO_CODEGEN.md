@@ -70,6 +70,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 ### constant fold / immediate / CSE
 
 - [IDO -O2 constant-folds the load-address even when the base is a register-declared local](#feedback-ido-constant-address-load-fold-inevitable) — _For `arg = *(int*)((char*)base + N)` where base = `&D_constant`, IDO emits a fresh `lui+lw` rather than `lw arg, N($base_reg)` even with `register` keyword.
+- [Force shared base register across multiple loads from `&D + N` via deferred assign + named locals](#feedback-ido-shared-base-via-deferred-assign-and-named-locals) — _Counter to the above for TWO+ loads consumed by a single call: `register T *t; ... t = &D + N; v1 = t[0]; v2 = t[1]; f(..., v1, v2, ...)` produces shared-base form (lui+addiu once, 2 lw with offset), vs the natural `f(..., t[0], t[1], ...)` which inlines 2 separate luis._
 - [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — _When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half (lui+addiu) into a single saved register ($s3 typical) and reuses it across…
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
 - [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
@@ -1328,6 +1329,41 @@ reload `arg1 = base[0x40]`. 3 variants tried — all failed:
 - This affects loop-tail reloads in functions that re-read fixed
   extern memory each iteration. Common in dispatcher loops over
   global state arrays.
+
+---
+
+---
+
+<a id="feedback-ido-shared-base-via-deferred-assign-and-named-locals"></a>
+## To force IDO to share a single base register across multiple loads from `&D + N`, defer the pointer assignment past prior calls AND capture into named locals before the consuming call
+
+_Counter-example to `feedback-ido-constant-address-load-fold-inevitable`. When you have TWO+ loads from the same `&D + offset` base going into a SINGLE downstream call (e.g. `f(a0, t[0], t[1], 1)`), the natural form `int *t = &D + N; ... f(a0, t[0], t[1], 1)` makes IDO inline 2 separate `lui+lw` per access. To get target's shared-base form (`lui base; addiu base, base, N; lw r1, 0(base); lw r2, 4(base)`), use `register T *t; ... t = &D + N; v1 = t[0]; v2 = t[1]; f(a0, v1, v2, ...)` — defer the assign past prior calls AND capture into named locals before the call._
+
+**Pattern (verified 2026-05-06 on game_uso_func_00010E2C, 85.17 → 87.38%):**
+
+Bad C (2 lui per access):
+```c
+int *t = (int*)((char*)&D_00000000 + 0xE40);
+game_uso_func_00000000(a0, 0, 0, 1, 1, 1);
+game_uso_func_00000000(a0, t[0], t[1], 1);
+// emit: lui a1, 0; lui a2, 0; lw a2, 0xE44(a2); lw a1, 0xE40(a1)
+```
+
+Good C (shared base):
+```c
+register int *t;
+int v1, v2;
+game_uso_func_00000000(a0, 0, 0, 1, 1, 1);
+t = (int*)((char*)&D_00000000 + 0xE40);
+v1 = t[0];
+v2 = t[1];
+game_uso_func_00000000(a0, v1, v2, 1);
+// emit: lui v0, 0; addiu v0, v0, 0; lw a1, 0xE40(v0); lw a2, 0xE44(v0)
+```
+
+**Why:** the deferred assignment + intermediate locals split the address computation into a distinct basic-block from the consuming call's arg-setup. With the inlined `f(..., t[0], t[1], ...)` form, IDO's combine pass treats each `t[N]` as an independent address-fold candidate and re-emits the lui per access. With separate-statement `v1 = t[0]; v2 = t[1]; f(..., v1, v2, ...)`, IDO must materialize the base before the loads and reuses it across both.
+
+**Note:** doesn't promote the function on its own (still missing the varargs-style shadow spills) but tightens the structural shape, removing one diff source.
 
 ---
 
