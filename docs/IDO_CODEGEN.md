@@ -6656,6 +6656,12 @@ The int-cast severs the relationship between `saved_a0` and `arg0` from the comp
 
 **One more caveat from the same work:** Don't separate the cast into an intermediate `reloaded` local — that REGRESSES (89.80% → 84.20% in the test case). The `(int*)saved_a0` cast must stay inline at the use site for the reload to schedule correctly.
 
+**`char pad[N]` to grow frame when local-slot collides with caller-arg-slot** (added 2026-05-06 from func_0000553C):
+
+If your `volatile int saved_aN` ends up at the SAME stack offset as the implicit caller-arg-slot save (which happens when the natural frame size is small enough that the local lands at sp+frame_size = caller's $aN slot), IDO collapses both writes into ONE store. Target may have BOTH writes (one at sp+0x28 = caller-arg-slot, one at sp+0x1C = local). To get both, add `char pad[N]` (N=8 typical) to grow the frame so the local moves to a different offset.
+
+Verified: func_0000553C frame -0x20 → -0x28 via `char pad[8]`, promoting 88.40% → 89.88%. The pad is consumed by frame-size accounting; no extra access insns emitted.
+
 **Related:** `feedback_ido_unused_arg_save.md` (unused arg gets caller-slot spill), `feedback_ido_volatile_buf_pointer_indirect.md` (volatile buf forces pointer-indirect addressing).
 
 ---
