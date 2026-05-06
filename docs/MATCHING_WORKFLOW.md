@@ -64,6 +64,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [merge-fragments operations get silently undone by main-branch integration merges — re-check after every big drift catchup](#feedback-merge-fragments-undone-by-integration) — _A successful same-file merge-fragments commit (delete a .s file, expand parent .s with the fragment's instructions, drop INCLUDE_ASM from .c, add caller alias to undefined_syms_auto.txt) can get undone when the agent…
 - [Merging a structural .c-split PR against parallel decomp branches — port single-line decomps by hand, selectively refresh expected/](#feedback-merge-split-pr-with-parallel-decomps) — _When an agent branch does a structural split (e.g. one .c → pre/post + bin) and main adds per-function decomps in the post-split range during the PR's lifetime, the real merge work is tiny — only the INCLUDE_ASM lines…
 - [After fragment merge, re-export absorbed fragment addresses in undefined_syms_auto.txt — they may be jal targets from other functions](#feedback-merged-fragment-re-export-jal-targets) — _When merging splat fragments into a parent, the absorbed fragments may be jal'd from other .s files as separate entry points (shared-tail pattern).
+- [Use `alabel <fragment>` inside the merged .s file to keep absorbed-fragment symbols live — cleaner than undefined_syms_auto.txt aliases](#feedback-alabel-preserves-fragment-symbol-on-merge) — When merging splat fragments into a parent, putting `alabel func_<fragment>` at the absorbed fragment's offset within the merged .s emits a 0-byte FUNCTION symbol at the right offset. Other callers' jals then resolve correctly without needing `func_X = 0xX;` linker aliases.
 - [Splat/generate-uso-asm merges no-prologue leaf functions into the preceding function's .s](#feedback-splat-fragment-split-no-prologue-leaf) — _Mirror of the merge-fragments case.
 - [Splat fragments can be detected by register-flow across boundaries, not just `.L` label refs](#feedback-splat-fragment-via-register-flow) — The `merge-fragments` skill detects fragments by backward `.L` label references crossing function boundaries.
 
@@ -1684,8 +1685,54 @@ This is the same shared-tail pattern as `func_80006640` (see kernel_016.c) — m
 **Related:**
 - `feedback_splat_fragment_via_register_flow.md` — when to merge in the first place.
 - `kernel/kernel_016.c` (func_80006640 doc) — the original shared-tail-epilogue pattern this generalizes.
+- `feedback-alabel-preserves-fragment-symbol-on-merge` (below) — alternative: keep the fragment as an alt-entry inside the parent .s instead of using a linker alias.
 
 ---
+
+---
+
+<a id="feedback-alabel-preserves-fragment-symbol-on-merge"></a>
+## Use `alabel <fragment>` inside the merged .s file to keep absorbed-fragment symbols live — cleaner than undefined_syms_auto.txt aliases
+
+_When merging splat fragments into a parent, putting `alabel func_<fragment>` at the absorbed fragment's offset within the merged .s emits a 0-byte FUNCTION symbol at the right offset. Other callers' jals then resolve correctly without needing `func_X = 0xX;` linker aliases._
+
+Sibling to `feedback-merged-fragment-re-export-jal-targets`. Both approaches solve the same "absorbed fragment is jal'd from elsewhere" problem; `alabel` is the cleaner of the two:
+
+**alabel approach (preferred for same-file merges):**
+
+In the merged parent .s file, drop an `alabel` at the offset where the fragment used to start:
+
+```asm
+nonmatching func_800021A4, 0xAC
+
+glabel func_800021A4
+    /* ... 11 insns of original prologue ... */
+    /* 31CC 800021CC 24090004 */  addiu $t1, $zero, 0x4
+alabel func_800021D0
+    /* 31D0 800021D0 24080002 */  addiu $t0, $zero, 0x2
+    /* ... 32 insns of fragment body ... */
+endlabel func_800021A4
+```
+
+The `alabel` macro (in `include/labels.inc`) emits `.global func_800021D0; .type @function; .aent func_800021D0;` — a 0-byte FUNCTION symbol that the linker treats as a jal target. Cross-callers (other INCLUDE_ASM functions doing `jal func_800021D0`) resolve correctly because the symbol is REAL in the parent's .o, not synthetic via `undefined_syms_auto.txt`.
+
+**Verification:** `mips-linux-gnu-readelf -s build/src/<file>.c.o | grep func_<fragment>` should show:
+```
+... 0 FUNC GLOBAL DEFAULT 4 func_800021D0
+```
+(size 0, FUNC type, GLOBAL bind, defined in section .text.)
+
+**Why this beats undefined_syms_auto.txt aliases:**
+- Single source of truth — the fragment's location lives only in the .s file, not split between .s and undefined_syms.
+- No "undefined reference" link error to drive iterative discovery.
+- objdiff still reports the parent symbol cleanly (the alt-entry doesn't show as a separate function).
+
+**Caveats:**
+- Cross-FILE merges still need the alias approach because alabel only works within the same .s/.o.
+- Fragment-only callers in the SAME .o (rare) get inlined regardless; doesn't affect link.
+- expected/.o needs regeneration with `make expected RUN_CC_CHECK=0` after the merge — the new symbol layout (one big symbol + 0-byte alt-entry vs two separate symbols) must match the build/.o for the fuzzy diff to work.
+
+**Tested on:** `func_800021A4` + `func_800021D0` merge (same file kernel_000.c). After alabel + expected regeneration: fuzzy went from None (size mismatch artifact) to 85.81% (the C body's actual NM cap was previously masked).
 
 ---
 
