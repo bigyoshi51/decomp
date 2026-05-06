@@ -1544,6 +1544,40 @@ Drop the prior NM wrap, emit C body unconditionally; SUFFIX_BYTES appends the no
 
 ---
 
+<a id="feedback-makefile-insn-patch-second-line-overrides-first"></a>
+## Adding a new INSN_PATCH/SUFFIX_BYTES/PREFIX_BYTES entry must merge into the existing multi-line `:=` — a second `:=` line OVERRIDES the first
+
+_The 1080 Makefile uses per-`.o`-target multi-line assignments like `build/src/X.c.o: INSN_PATCH := \\<newline>entry1 \\<newline>entry2`. Adding a new entry by writing a SECOND `build/src/X.c.o: INSN_PATCH := newentry` line later in the Makefile silently OVERRIDES the first — losing all the existing patches. Always merge into the existing multi-line continuation._
+
+**The trap:**
+```makefile
+# Existing block:
+build/src/foo.c.o: INSN_PATCH := \
+    func_A=0x10:0xDEADBEEF \
+    func_B=0x20:0xCAFEBABE
+
+# Adding func_C as a new line:
+build/src/foo.c.o: INSN_PATCH := func_C=0x30:0x12345678   # ← OVERRIDES! func_A/B silently lost
+```
+
+Make's `:=` is a final assignment, not append. The second line wins; the first is discarded. This is true for any Makefile var (TRUNCATE_TEXT, OPT_FLAGS, SUFFIX_BYTES, PREFIX_BYTES, INSN_PATCH, PROLOGUE_STEALS).
+
+**The fix — merge into the existing block:**
+```makefile
+build/src/foo.c.o: INSN_PATCH := \
+    func_A=0x10:0xDEADBEEF \
+    func_B=0x20:0xCAFEBABE \
+    func_C=0x30:0x12345678
+```
+
+**How to recognize you've hit this trap:** post-cc patch logs show `patch-insn: <new_func> patched ...` but earlier patched functions silently regress. byte_verify against expected/.o starts failing for previously-landed functions in the same .o.
+
+**Defensive check before commit:** `git diff Makefile` — if you added a new `<target>: VAR :=` line and the same target+var combo already existed on a prior line, you've broken it. Merge.
+
+Verified 2026-05-05 on `gl_func_000661D8` INSN_PATCH addition (initial broken-second-line attempt; spotted via grep, merged into existing multi-line block).
+
+---
+
 ---
 
 <a id="feedback-prefix-bytes-idempotent-under-nm-wrap"></a>
