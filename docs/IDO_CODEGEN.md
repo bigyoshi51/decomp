@@ -1912,6 +1912,8 @@ Naive C `a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + b[3]*a[3]` produces 15/16 instructi
 
 **Single-call mul.s variant (verified 2026-05-06 on `gl_func_00052104`):** for `result = jal_returns_float() * fresh_loaded_float`, IDO assigns the FRESHLY-LOADED operand to `fs` and the call-return ($f0) to `ft` regardless of C operand order. Tried 3 variants — operand swap (`x*y` vs `y*x`), inlining the call into the multiplication, and decl-first ordering — all hit the same fs=fresh / ft=$f0 emit. If target has fs=$f0 / ft=fresh (call return on the LEFT in mul.s), no C-source variant flips it. Clean promotion: INSN_PATCH at the mul.s offset with the byte-swapped operands (e.g. `0x46003202` → `0x46060202` flips fs/ft from `$f6,$f0` to `$f0,$f6`). Promoted gl_func_00052104 from 99.38 % → byte-correct via `gl_func_00052104=0x2C:0x46060202` in the per-`.o` INSN_PATCH list.
 
+**Companion — `multu` two-memory-operand load order (verified 2026-05-06 on `gl_func_000520B8`):** IDO `multu` of two memory operands loads the RIGHT operand into `$t6` first, the LEFT into `$t7` (right-to-left evaluation of the binary expression). If the target's first `lh` is from offset `lo` and the second is from offset `hi`, the C must be `(a + hi) * (a + lo)` — the offset-`lo` operand on the RIGHT. The conventional left-to-right form `*(short*)(a+lo) * *(short*)(a+hi)` produces swapped `lh` order. Multiplication is commutative so the int product is identical, but the load order is observable in the diff. Combined with the single-call mul.s cap above, gl_func_000520B8 promotes byte-exact via operand swap + INSN_PATCH at offset 0x38.
+
 ---
 
 ---
