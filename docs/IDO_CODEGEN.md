@@ -3981,6 +3981,16 @@ For -O0 functions where frame size is critical:
 - `feedback_ido_no_gcc_register_asm.md` — `register T x asm("$N")` is rejected by IDO.
 - `feedback_uso_accessor_template_reuse.md` — the accessor template family this affects.
 
+**2026-05-06 bifurcation confirmation (func_0000F2EC):**
+
+Tested partial-removal of `register` qualifiers — only the bifurcation works at -O0:
+
+- All 4 register vars (p1, p2, q, src): frame `0x68`, s-regs s0-s3 saved ✓ — +16 byte overhead, 84.61% fuzzy.
+- 3 register vars (drop register from `q`, an unused-late-assigned local): frame `0x68` STILL — IDO -O0 reserves backup slots based on register-decl count at func entry, not just on used-vars. Removing register from a "barely-used" var does not save backup slots. Same +16 overhead, same 84.61% fuzzy.
+- 0 register vars (Vec3 *p1 = dst; etc., all stack-resident): frame `0x58` (matches target!) but `$tN`-only code, no $sN saves — different cap class (s-saves missing). Worse fuzzy.
+
+There is no middle ground: register-qualified locals at -O0 are all-or-nothing for the +N*4 backup overhead (where N = register-decl count >= 1). Either commit to register (correct s-reg usage, +16 frame) or no-register (correct frame, no s-regs). Neither byte-matches; the cap is structural.
+
 ---
 
 ---
