@@ -28,6 +28,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [NM-wrap logic can confuse jal-return vs jal-arg pointer for post-call stores](#feedback-nm-wrap-post-jal-arg-vs-return) — When an old NM wrap has `q = func(r); q->field = X;` but the asm uses the same input register $aN for the post-jal stores (e.g. `sw $tN, OFF($a1)` where $a1 was the 2nd arg, not $v0 the return), the actual logic is…
 - [After committing an NM wrap, FORCE-rebuild build/non_matching/<file>.c.o BEFORE kicking off any batch land — broken NM C body cascades 10+ failures](#feedback-nm-wrap-verify-non-matching-build-before-batch-land) — _NM wraps with `#ifdef NON_MATCHING / void func() { ... }` only run the C body under -DNON_MATCHING (the dual-build path).
 - [TRUNCATE_TEXT can block a smaller-emit C variant that would otherwise improve match](#feedback-truncate-text-blocks-smaller-nm-emit) — When a NM-wrap C body compiles to FEWER bytes than the baseline (e.g. switching `if/return; if/return;` to `return X;` ternary single-return), the truncate-elf-text post-cc step errors with `.text is already smaller…
+- [Cross-function register inheritance (chained-SUFFIX): wrap with placeholder externs, don't leave comment-only INCLUDE_ASM](#feedback-cross-function-inheritance-placeholder-extern-wrap) — _When a function is documented as "BLOCKED — inherits $tN/$v0/$hi from predecessor's SUFFIX_BYTES", the prior convention was to leave the source as a comment-only INCLUDE_ASM (no `#ifdef NON_MATCHING` block). Better convention: declare placeholder externs (e.g. `extern int D_<func>_inherited_t9`) for the inherited registers in `undefined_syms_auto.txt`, and write a structural NM body that reads them as if they were real globals. Body becomes compilable, permuter-testable, grep-discoverable. Won't byte-match (placeholder externs aren't the same as register inheritance) but documents the structural decode for future PREFIX_BYTES or split-function approaches. Applied 2026-05-06 to gl_func_0005165C / gl_func_00054228 / gl_func_0000B5AC._
 
 ### objdiff scoring quirks
 
@@ -3815,6 +3816,64 @@ make: *** [...] Error 1
 - (c) Accept the cap and document.
 
 **Origin:** 2026-05-03, arcproc_uso_func_0000012C grinding session. Discovered when ternary single-return `return *a0 == 0;` triggered the truncate error after looking like the obvious fix for the trailing dead-branch cap.
+
+---
+
+---
+
+<a id="feedback-cross-function-inheritance-placeholder-extern-wrap"></a>
+## Cross-function register inheritance (chained-SUFFIX): wrap with placeholder externs, don't leave comment-only INCLUDE_ASM
+
+_When a function inherits register state ($tN, $v0, $hi, etc.) from its predecessor's tail/SUFFIX_BYTES — making it standalone-uncallable from prototype-based C — the convention should be to write a compilable NM-wrap body that reads placeholder externs in place of the inherited registers. The body won't byte-match (the externs aren't real register inheritance), but it becomes compilable, permuter-testable, grep-discoverable, and serves as structural documentation for future PREFIX_BYTES or split-function approaches. The prior convention of leaving the source as a comment-only INCLUDE_ASM (no `#ifdef NON_MATCHING` block) loses all that for the agent who comes back later._
+
+**Pattern recognition.** A function exhibits cross-function inheritance when:
+
+- Its first interesting instruction reads a register that wasn't set by the function's prologue (e.g. `mfhi a1` at function entry, or `lw t0, 0x4(t9)` where $t9 was never assigned).
+- A wrap-header comment notes "INHERITS $X from predecessor", "BLOCKED — chained-SUFFIX inheritance pattern", or similar.
+- The predecessor's `.s` file (or the predecessor's known SUFFIX_BYTES recipe) sets exactly the registers the successor reads at entry.
+
+**The wrap convention.**
+
+```c
+#ifdef NON_MATCHING
+/* gl_func_NNNN: <N>-insn function INHERITS $X from predecessor func_PRED's
+ * SUFFIX. Decoded body uses inherited X as <description>:
+ *   <pseudocode>
+ *
+ * BLOCKED for prototype-based C — no GCC-style register asm constraint
+ * in IDO 7.1 (per feedback_ido_no_gcc_register_asm.md). Wrap below uses
+ * placeholder externs for the inherited register. Matching would need
+ * PREFIX_BYTES injection at function entry. */
+extern <type> D_<func>_inherited_X;  /* in undefined_syms_auto.txt: D_<func>_inherited_X = 0x0; */
+void gl_func_NNNN(<args>) {
+    /* readable C using D_<func>_inherited_X in place of $X */
+}
+#else
+INCLUDE_ASM("asm/nonmatchings/...", gl_func_NNNN);
+#endif
+```
+
+**Why this beats comment-only INCLUDE_ASM.**
+
+- **Compilable.** The body builds under `-DNON_MATCHING` so future agents can run the permuter against it.
+- **Grep-discoverable.** A reader searching for "Vec3 marshaller" or "alloc-or-passthrough flag" finds it via the C body, not just a buried comment.
+- **Structural documentation that compiles.** The placeholder externs make the inheritance explicit at the C level — `D_<func>_inherited_t9->_4` reads the same way as the asm intent, where a comment block requires the reader to mentally translate "$t9 inherited from predecessor" every time.
+- **Forward-compatible.** When a tool that DOES express register inheritance arrives (PREFIX_BYTES recipe extension, split-function with proper register-arg signature, etc.), the body becomes the C input — no need to re-decode from raw asm.
+
+**What this technique can NOT achieve.** The wrap will not byte-match because the placeholder extern emits a `lui+lw` for a global, while the target has the register pre-loaded. Match % stays at structural-only (typically 30-60%). This is documentation, not promotion. The actual byte-match still requires a recipe that injects the inherited register setup at function entry — usually PREFIX_BYTES, sometimes call-site-specific (when the inherited value varies per caller).
+
+**Applied 2026-05-06 to:**
+
+- `gl_func_0005165C` — $v1 inherited from `gl_func_000515FC`'s SUFFIX (`lui v0; addiu v1, v0, 0`).
+- `gl_func_00054228` — $t9/$t1 inherited from `gl_func_00053C04`'s SUFFIX (`addu t9, t7, t8; lw t1, 0(t9)`).
+- `gl_func_0000B5AC` — $hi/$v0 inherited from `gl_func_0000B560`'s SUFFIX (`sll v0, a1, 2; subu v0, v0, a1; addiu at, $0, 5; div`).
+
+All three were previously comment-only INCLUDE_ASM with detailed structural decode in the comment but no compilable body. Wraps now compile under `-DNON_MATCHING`, the structural-decode comments are preserved as wrap headers.
+
+**Related:**
+- `feedback_ido_no_gcc_register_asm.md` — why we can't express register inheritance with `register T x asm("$N")`
+- `docs/POST_CC_RECIPES.md` — PREFIX_BYTES / SUFFIX_BYTES family that creates the inheritance
+- `docs/MATCHING_WORKFLOW.md#feedback-include-asm-tautology-trap` — why these wraps must not be logged as episodes (build/.o would be circular for them)
 
 ---
 
