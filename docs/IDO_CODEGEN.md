@@ -3254,6 +3254,21 @@ with a named base pointer keeps them split. Verified on
 game_uso_func_0000D6E4 (93.73% → 100%, the missing addiu was the only
 size delta).
 
+**2026-05-06 NEGATIVE-RESULT counter-case** (gl_func_0002D710): the
+named-pointer trick does NOT apply when the cap is **lui PLACEMENT**, not
+sw immediate folding. Symptom: target has the `lui rN, %hi(SYM)` sitting
+INLINE between prologue and sw (e.g. `addiu sp,...; lui at,0; ...; sw a0,0(at)`
+with $at chosen as a fresh temporary). C-emit instead materializes
+`&SYM` into a saved-class register (`$v0`) UPFRONT via `lui v0; addiu v0`
+BEFORE the prologue, producing a 2-insn prefix (the prologue-stolen-
+predecessor pattern). Both compound `D_NNN = val` and named `int *p = &SYM; *p = val`
+produce the same 2-insn upfront materialization. The trick only helps
+when the issue is "sw imm folded vs split" (single store with an offset);
+when the issue is "where lui sits in the stream", neither form moves it.
+Recipe in this case: PROLOGUE_STEALS=8 alone is insufficient because the
+inner body's register allocation also diverges (got uses $v0+spill where
+target uses $at+inline). Falls back to NM wrap.
+
 ---
 
 ---
