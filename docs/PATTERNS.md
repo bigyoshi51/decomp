@@ -2927,6 +2927,12 @@ undefined reference to `h2hproc_uso_func_00000274_inner'
 
 **Skip-list addendum:** Future runs of `scripts/convert-trailing-nop-wraps.py` should treat fictitious-symbol wraps as a separate failure mode worth surfacing rather than silently leaving them NM. Could add a `--strict-link` mode that tries the conversion and reports link errors with a helpful pointer.
 
+**2026-05-06 expansion — "logic correct" claims also lie:**
+
+Even when an existing wrap's docstring says "logic correct, only register-alloc cap" — VERIFY the body against the asm anyway. Example: `gl_func_0000C49C` had body `a0[1] = a0[0]` and the comment claimed correct logic, but target asm was `lw $t8, 0($v0)` (= reading from `gl_func`'s RETURN value as a pointer, not from `a0`). Fixing to `a0[1] = r[0]` (where `r = (int*)gl_func(a0)`) jumped match 68% → 82.29% (+14pp) — well beyond what reg-alloc tweaks could achieve.
+
+**Diagnostic for "wrong base":** in target's post-call asm, look at the BASE REGISTER of every load/store after the jal. If it's `$v0` (the return reg) but your C reads `arg[N]`, your C is wrong — change to `(*(T**)retval)[N]` shape. The function probably returns a pointer (or a tagged-union pointer-or-NULL).
+
 ---
 
 ---
