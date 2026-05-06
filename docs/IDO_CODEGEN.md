@@ -7169,3 +7169,46 @@ _When target has `lui rX, 0; addiu rX, rX, K; lw rY, 0(rX); lw rZ, 4(rX)` (offse
 **Rule**: don't try volatile-offset to defeat IDO's `&SYMBOL + literal` constant fold. The fold is structural for symbol-relative addresses with literal offsets, and the only escape (volatile) introduces stack spills + runtime adds. If target's emit really requires the addiu+lw0 form, the function is C-unflippable; document it as a structural cap and INCLUDE_ASM-tautology it.
 
 **Verified 2026-05-06 on game_uso_func_00010E2C** (1080 Snowboarding spine wrap family). Cap stays at 87.38% with 4 attempts (`register int *t`, `register volatile int *t`, `*t++ / *t`, block-scope `extern int(int, ...)`, and now `volatile int off`). All structural; no C-level path forward.
+
+
+## In-place arg mutate `if (cond) a0 = N;` produces the `bnez at, skip; nop; li aN, N` pre-call shape — named-local `int v;` form regresses massively
+
+_When target has a conditional 2nd-arg setup before a jal (`bnez at, skip; nop; li a1, N; .skip: jal; <delay sets a0>`), the natural `int v; if (cond) v = N; else v = a0; jal(..., v);` form regresses sharply (~36 % vs target's shape) because IDO inserts an extra `move a2, a1` shuffle for the named local. Mutating the existing arg in-place — `if (cond) a0 = N;` then `jal(..., a0)` — produces the target shape directly and lands at ~94 %._
+
+**Pattern (target):**
+```
+slti  at, a1, K            ; condition
+bnez  at, .skip            ; skip the override if condition
+nop                        ; delay
+li    a1, N                ; override arg
+.skip:
+jal   gl_func
+lui   a0, ...              ; delay (1st arg setup)
+```
+
+**Wrong C** (named local, ~36 %):
+```c
+int v;
+gl_func(0xF0000000, a0);
+if (a0 >= K) { v = N; } else { v = a0; }
+gl_func(0xF0000000, v);
+```
+Built emits an extra `b skip; li v, N` pair plus `move a1, v` shuffle — 4 extra insns vs target.
+
+**Right C** (in-place mutate, ~94 %):
+```c
+gl_func(0xF0000000, a0);
+if (a0 >= K) {
+    a0 = N;
+}
+gl_func(0xF0000000, a0);
+```
+Built emits `bnez at, skip; nop; li a1, N; .skip: jal` directly — same shape as target.
+
+**Why:** the same-arg slot (here `a0`/`a1` after the move) is already live and register-stable. Mutating it via `aN = N` puts the override directly into the call's arg-register, no additional move needed. Introducing a named local forces IDO to allocate a scratch, write both branches' values into it, then move the scratch into the arg register before the call.
+
+**Detection**: target has the bnez+nop+li shape; the `nop` in the bnez-delay is the load-bearing signal that "the delay slot wasn't used to fill another insn from the override path" — meaning the override IS unconditional in path 2 (no else needed). When you see this, write `if (cond) arg = N;` (no else, no named local).
+
+**Verified 2026-05-06 on gl_func_0002D6C8** (1080 Snowboarding game_libs, 17/18 = 94 % byte-exact; only diff is a trailing `move a2, a0` dead-code that IDO emits but no C reaches). Same recipe as `feedback-ido-decrement-arg-in-place` extended from loop-counter to conditional-arg-override use.
+
+**Related:** `feedback-ido-decrement-arg-in-place` (decrement-in-place sister recipe), `feedback-ido-bnel-dispatch-modify-c-mask-return` (extends to multi-case sparse dispatch).
