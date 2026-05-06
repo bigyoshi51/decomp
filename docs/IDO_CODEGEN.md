@@ -731,7 +731,17 @@ The base-adjust costs 1 extra `addiu` insn but doesn't shorten any individual lo
 
 **How to apply:**
 
-When you see this pattern in target — especially with the `sw $vN; lw $vN` spill+reload of the shifted base across a jal — recognize it as the base-adjust trick. Skip the function or NM-wrap with a note. Don't try `int *p2 = (int*)(p + 0x2C);` from C — IDO will eliminate the alias.
+When you see this pattern in target — especially with the `sw $vN; lw $vN` spill+reload of the shifted base across a jal — recognize it as the base-adjust trick. Skip the function or NM-wrap with a note. Don't try `int *p2 = (int*)(p + 0x2C);` from C — IDO will eliminate the alias *if you only access it once*.
+
+**2026-05-06 partial walk-back — multi-offset access through a typed intermediate IS reachable.**
+
+Verified on `func_00007BF4` (bootup_uso): writing `short *p8 = (short*)((char*)arg + 8);` and accessing `p8[0]` (= flag), `p8[1]` (= idx), and `*(int*)((char*)p8 + 4)` (= fallback) DID make IDO emit `addiu v1, a0, 8` and reuse it for the cluster — promoting match from 69.5% to 79.8%. Three conditions seem to matter:
+
+1. **Multiple distinct offsets through the intermediate** — single-use gets inlined.
+2. **Smaller pointee type** (`short *` here) — type-mismatch with original arg `Cmd*` may stop IDO from collapsing the alias.
+3. **Mixed-width loads through the intermediate** — `p8[0]`/`p8[1]` are `lh`, plus an `lw` via cast — the typed-intermediate tells IDO this is a deliberate base.
+
+When the original `feedback_ido_base_adjust_for_clustered_offsets.md` claim was tested, both pre-conditions probably failed (single use OR same-typed alias). The base-adjust trick IS reachable; the gating is "multi-offset access through a different-typed intermediate."
 
 **Related:** `feedback_ido_3save_vs_2save_arg_preserve.md` — similar "target uses an extra reg-shuffle that IDO won't reproduce."
 
