@@ -72,6 +72,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 constant-folds the load-address even when the base is a register-declared local](#feedback-ido-constant-address-load-fold-inevitable) — _For `arg = *(int*)((char*)base + N)` where base = `&D_constant`, IDO emits a fresh `lui+lw` rather than `lw arg, N($base_reg)` even with `register` keyword.
 - [Force shared base register across multiple loads from `&D + N` via deferred assign + named locals](#feedback-ido-shared-base-via-deferred-assign-and-named-locals) — _Counter to the above for TWO+ loads consumed by a single call: `register T *t; ... t = &D + N; v1 = t[0]; v2 = t[1]; f(..., v1, v2, ...)` produces shared-base form (lui+addiu once, 2 lw with offset), vs the natural `f(..., t[0], t[1], ...)` which inlines 2 separate luis._
 - [Force N-fold reload of `*(SYM+N)` via `volatile T **` + N intermediate locals (no CSE)](#feedback-ido-volatile-pp-forces-n-fold-pointer-reload) — _When target asm has `lui v1; addiu v1, 0; lw t?, OFF(v1)` repeated N times — i.e., the symbol address materialized once and N separate lw reloads from the same offset — natural C `base = *(...)` collapses to one load via IDO CSE. Use `volatile char **base_pp = ...; b1 = *base_pp; ... b2 = *base_pp; ...` with N separate intermediate locals to force N volatile reads._
+- [Defeat IDO -O2 cross-USO-placeholder CSE by declaring two DISTINCT externs both aliased to the same address](#feedback-ido-cse-bust-via-distinct-externs) — _When target uses TWO separate `lui` instructions for `&D_00000000` accesses (one per scratch register), declare each access via a distinct C extern. Add aliases for both → same `0x0` in `undefined_syms_auto.txt`. Linker collapses, CSE doesn't. Verified on `gl_func_0002D710` (1/15 → 14/15)._
 - [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — _When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half (lui+addiu) into a single saved register ($s3 typical) and reuses it across…
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
 - [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
@@ -7214,3 +7215,63 @@ Built emits `bnez at, skip; nop; li a1, N; .skip: jal` directly — same shape a
 **Verified 2026-05-06 on gl_func_0002D6C8** (1080 Snowboarding game_libs, 17/18 = 94 % byte-exact; only diff is a trailing `move a2, a0` dead-code that IDO emits but no C reaches). Same recipe as `feedback-ido-decrement-arg-in-place` extended from loop-counter to conditional-arg-override use.
 
 **Related:** `feedback-ido-decrement-arg-in-place` (decrement-in-place sister recipe), `feedback-ido-bnel-dispatch-modify-c-mask-return` (extends to multi-case sparse dispatch).
+
+<a id="feedback-ido-cse-bust-via-distinct-externs"></a>
+## Defeat IDO -O2 cross-USO-placeholder CSE by declaring two DISTINCT externs both aliased to the same address
+
+_When a function accesses `D_00000000` (or any cross-USO placeholder) at multiple sites and the target asm uses TWO separate `lui` instructions (one per access) instead of CSE-folding both into a shared base register, declare each access via a distinct C extern name. Add aliases for both to `undefined_syms_auto.txt` mapping to the same `0x00000000`. Runtime relocation collapses them back to the same address; compile-time CSE sees them as distinct symbols and emits separate `lui`s._
+
+### Symptom
+
+Two-extern target asm:
+```
+lui  $at, 0           ; %hi(D_X) — store base
+lui  $a1, 0           ; %hi(D_Y) — array load base (separate reg!)
+sw   $a0, 0($at)
+lw   $a1, 0(...)
+```
+
+But IDO -O2 with single extern emits CSE'd:
+```
+lui  $v0, 0           ; %hi(D)
+addiu $v0, $v0, 0     ; reuse $v0 as shared base for BOTH the store and the array load
+sw   $a0, 0($v0)
+lw   ..., (a2*4)($v0)
+```
+
+### Why CSE happens
+
+Both accesses compile to the same C-level address (`&D_00000000`). IDO -O2's common-subexpression-elimination materializes the address ONCE in `$v0`+`addiu` form, then reuses across both call sites. The `volatile int*` cast does NOT defeat this CSE (it only changes load-store-elimination, not address-materialization-CSE).
+
+### Fix
+
+In the C body, declare two distinct externs:
+```c
+extern int D_2D710_store;   /* the store target */
+extern int D_2D710_load;    /* the array-load base */
+
+void gl_func_0002D710(int a0, int unused_a1, int a2) {
+    D_2D710_store = a0;
+    gl_func_00000000(0x41010000, ((int*)&D_2D710_load)[a2], a2);
+}
+```
+
+In `undefined_syms_auto.txt` (or `symbol_addrs.txt`), add aliases mapping both to the same address as the original placeholder:
+```
+D_2D710_store = 0x00000000;
+D_2D710_load  = 0x00000000;
+```
+
+The compiler sees two distinct symbols (one per `extern` declaration), so CSE doesn't fold their address loads. The linker resolves both to `0x00000000` (the cross-USO runtime-relocated placeholder), so the final ROM bytes are identical to a single-extern resolution.
+
+### Verified
+
+`gl_func_0002D710` (game_libs, 2026-05-06): single-extern wrap caps at 1/15 word match (one shared `lui+addiu` for both write and read). Splitting into `D_2D710_store` + `D_2D710_load` promoted to 14/15 — every instruction matches except the unused-arg-save residual at offset 0x4 (separate cap, see `feedback-ido-unused-arg-save`).
+
+### Naming convention
+
+Use `D_<funcaddr>_<purpose>` per existing 1080 convention (e.g., `D_44F4_iter0`, `D_44F4_typtag`). Keep names function-scoped — don't reuse a `D_2D710_*` placeholder in another function unless they truly share state, since at link-time they're distinguishable symbols.
+
+### When NOT to use
+
+Only reach for the split when the target's asm clearly uses TWO separate scratch registers for what would be the same C-level address. If the target uses a single shared base (like IDO's natural CSE'd output), forcing a split via 2 externs would REGRESS the match.
