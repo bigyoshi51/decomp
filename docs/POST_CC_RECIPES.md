@@ -6,6 +6,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 ## Index
 
+- [PROLOGUE_STEALS via splice-function-prefix.py only fires when the function's first insn is LUI — sll-led / non-LUI stolen-prologues are silently skipped](#feedback-prologue-steals-lui-only-splice-restriction) — `scripts/splice-function-prefix.py` checks `(first_word >> 26) & 0x3F == 0x0F` (LUI opcode) before splicing. If the redundant prefix to strip is `sll rN, rM, K` (opcode 0x00) — e.g. when the predecessor's tail seeded a strength-reduction step like `sll t6, a1, 2` — the script logs `splice-skip: <func> doesn't start with LUI` and leaves the bytes intact. The Makefile `PROLOGUE_STEALS := <func>=N` line silently no-ops. To unblock: extend the splice script's verify to allow opcode 0x00 (SR/SLL family), OR pick the SUFFIX_BYTES-on-predecessor path instead.
 - [Prologue-stolen successor + IDO &D-CSE: combine PROLOGUE_STEALS with a unique extern to break the CSE and reach 100 %](#feedback-combine-prologue-steals-with-unique-extern) — _When a prologue-stolen successor uses v0=&D for in-body field stores AND the target ALSO emits a fresh `lui aN; lw aN, 0(aN)` for a *D dereference at a call site (instead of reusing v0), straight C with PROLOGUE_STEALS…
 - [INSN_PATCH can rewrite a function's trailing region when IDO emits dead BB markers PLUS TRUNCATE_TEXT clips the actual epilogue — collapse the dead bytes INTO the missing epilogue](#feedback-insn-patch-collapses-dead-bb-into-truncated-tail) — _A function whose IDO-emitted body has dead 'b epilogue; nop' BB markers BEFORE the real epilogue, AND whose `.o` is TRUNCATE_TEXT'd to a size that drops the trailing jr ra + nop, looks like it has fewer insns than…
 - [Prologue-stolen-successor diagnostic: read the .s first instruction to tell whether stolen-prologue is INSIDE the symbol (no recipe) or OUTSIDE in predecessor's SUFFIX_BYTES (PROLOGUE_STEALS=8 needed)](#feedback-prologue-stolen-inside-vs-outside-symbol) — _Same chain (e.g. gl_func 0x2D838 family) can have BOTH variants: some siblings include the lui+lw stolen-prologue at offset 0 of their symbol (matches IDO's natural emit, no recipe), others have it in the predecessor's symbol's tail (PROLOGUE_STEALS+SUFFIX_BYTES needed). Diagnostic: if the .s file starts with `lui tN, 0; lw tN, 0(tN)` it's inside; if it starts with `addiu sp` it's outside._
@@ -28,6 +29,26 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [SUFFIX_BYTES + PROLOGUE_STEALS combo only matches when successor's data setup is at function start, not mid-function](#feedback-suffix-bytes-only-helps-start-of-function) — _SUFFIX_BYTES injects bytes at predecessor's tail; PROLOGUE_STEALS splices bytes from successor's start.
 - [SUFFIX_BYTES (not pad-sidecar) is the right tool for 4-byte trailing stolen-prologue from predecessor](#feedback-suffix-bytes-unblocks-4byte-stolen-prologue) — _When a predecessor function has a SINGLE trailing instruction (e.g. `lw t8, 0x23C(a0)`) that's the stolen prologue for the next function, pad-sidecar fails (asm-processor alignment shifts the successor by +4).
 
+
+---
+
+<a id="feedback-prologue-steals-lui-only-splice-restriction"></a>
+## PROLOGUE_STEALS only fires for LUI-led prefixes — sll-led prefixes are silently skipped
+
+`scripts/splice-function-prefix.py` (the post-cc tool that PROLOGUE_STEALS dispatches to) checks the function's first instruction's opcode (`(first_word >> 26) & 0x3F`). If it isn't `0x0F` (LUI), the script logs `splice-skip: <func> doesn't start with LUI` and returns without modifying the .o. The Makefile `PROLOGUE_STEALS := <func>=N` line silently no-ops.
+
+This is intentional for the case where the .o was built from `INCLUDE_ASM` (which starts with `addiu sp` not LUI) — the script becomes a safe no-op. But it ALSO blocks legitimate non-LUI stolen-prefix patterns:
+
+- **sll-led** (opcode 0x00) — happens when the predecessor's tail seeds a strength-reduction step. Example: `timproc_uso_b3_func_00002EF0` has its predecessor's trailing `sll t6, a1, 2` setting up `t6 = a1*4` before fall-through; the function's body does the remaining `sub + sll, t6, t6, 3` to reach `a1*24`. C-emit naturally reproduces all three (`sll + sub + sll`); only the first 4 bytes need stripping. PROLOGUE_STEALS=4 silently fails because opcode 0x00 ≠ 0x0F.
+
+**Workarounds:**
+- (preferred) Use SUFFIX_BYTES on the predecessor instead — append the trailing insn to the predecessor's symbol; successor's body becomes the natural emit (no PROLOGUE_STEALS needed). Blocked when predecessor is itself unmatched (can't add SUFFIX without owning the function's bytes).
+- Extend `splice-function-prefix.py` verify-block to also accept opcode 0x00 (SLL family) — same conceptual safety as for LUI, just a different first-insn shape. Patch is ~3 lines.
+- Hand-write the per-function INSN_PATCH that replaces the redundant insns in-place (effectively zeros them via 4-byte patches at the right offsets — verbose but works for arbitrary opcode prefixes).
+
+The split-fragments.py tool faces a similar restriction in spirit: the function-boundary-detection logic assumes standard prologue patterns. When neither tool recognizes the leading bytes, the manual fallback is editing the .s file's byte boundary directly + maintaining `undefined_syms_auto.txt` to span the resulting cross-function reference.
+
+**Takeaway:** before writing `PROLOGUE_STEALS := <func>=N`, decode the function's first instruction. If it's not LUI, this recipe doesn't apply — pick a different lever.
 
 ---
 
