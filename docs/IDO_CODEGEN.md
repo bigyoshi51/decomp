@@ -85,6 +85,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
 - [IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C](#feedback-ido-o2-loop-array-strength-reduction) — When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 caches `s_reg = array + idx` and post-increments it. If target has the NON-strength-reduced form (per-iter `addu base, idx`), no C variant defeats it. Verified 2026-05-06 on gl_func_00055B44.
+- [For args-preserved-as-locals byte-copy loops, decrement the ARG directly (`count--`) — not the local copy (`cp--`)](#feedback-ido-decrement-arg-not-local-for-counter-loop) — When target preserves an arg as the loop counter (one move at entry, then `addiu argReg,argReg,-1` per iter) AND a local mirror, write the loop with `count--` (decrement the arg-named param) and use the local only as the loop-bound capture (`rem = count`). `cp--; rem = cp` regresses 22→29 diff lines on the same function; `count--; rem = count` tightens to 10 diff lines. Verified 2026-05-06 on func_80000598.
 
 ### char / int / signed / narrow
 
@@ -6837,4 +6838,60 @@ _When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 s
 - decomp-permuter (random shape variants might find a non-SR-able pattern by accident)
 - per-symbol INSN_PATCH for the SR-shifted insns (~4 insns per inner-loop iter × outer iters, but in the .o the bytes are just the static body — so 2-3 patches not Nx)
 - Defer until SR-suppression knob is added to the matching workflow (none exists today)
+
+
+---
+
+<a id="feedback-ido-decrement-arg-not-local-for-counter-loop"></a>
+## Decrement the ARG directly (`count--`) not a local copy (`cp--`) when target's loop counter lives in the arg register
+
+_When target asm has the args-preserved-as-locals shape (one `move localReg, argReg` at entry, then per-iter `addiu argReg, argReg, -1`), the C source should decrement the ARG-NAMED param (`count--`) — not introduce a local copy and decrement THAT (`cp = count; cp--`). IDO -O2 maps the explicit `count--` to per-iter `addiu argReg,argReg,-1` (matching target). When you decrement `cp` instead, IDO promotes `cp` to a free $aN/$vN scratch and decrements that, then has to MOVE `count` to a different reg too — net result is more moves, not fewer. Verified 2026-05-06 on func_80000598: `cp--; rem = cp` → 29 diff lines (15 insns); `count--; rem = count` → 10 diff lines (15 insns). Same insn count, very different reg layout._
+
+**The pattern**:
+
+Target asm:
+```
+move    localReg, argReg     # save copy at entry
+beqz    argReg, end
+addiu   argReg, argReg, -1   # decrement arg directly (delay slot)
+.loop:
+  ...
+  bnez  argReg, .loop
+  addiu argReg, argReg, -1   # decrement arg per iter
+```
+
+C source — what NOT to write:
+```c
+void f(u8* src, u8* dst, s32 count) {
+    s32 cp = count;
+    if (count == 0) return;
+    cp--;
+    do {
+        s32 rem = cp;
+        ...
+        cp--;
+    } while (rem != 0);
+}
+```
+
+C source — match the target:
+```c
+void f(u8* src, u8* dst, s32 count) {
+    s32 cp = count;          /* keep the local — its value is the saved copy */
+    if (count == 0) return;
+    count--;                  /* decrement the arg directly */
+    do {
+        s32 rem = count;      /* read live arg, not local copy */
+        ...
+        count--;
+    } while (rem != 0);
+    (void)cp;                 /* live for prologue copy emit */
+}
+```
+
+**Why**: the arg parameter has its OWN register slot (a0/a1/a2/a3) that's already live and stable. Decrementing it in-place doesn't require a separate destination register; IDO emits the natural `addiu aN,aN,-1`. Decrementing a local instead asks IDO to allocate a scratch, copy arg→scratch (or use the local copy you already made), then decrement the scratch. The arithmetic is identical but the regalloc footprint is worse.
+
+**Detection**: target's loop has `addiu aN, aN, -1` (the arg register is being modified). Built has `addiu vN, vN, -1` or similar (a scratch register is being modified).
+
+**Caveat**: this is opposite to the usual "don't mutate args" guidance. For decomp purposes, `count--` is correct when target shows arg-mutation; resist the lint instinct.
 
