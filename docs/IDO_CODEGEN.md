@@ -1390,6 +1390,7 @@ This cap may need permuter to break.
 - The goto chain is more verbose than `switch`. Worth it for matching, not for greenfield code.
 - Doesn't apply to dense switches that target jump tables (Glover and other GCC projects DO use jumptables; only IDO + .rodata-discarded segments need this).
 - ~~For `switch` with small case counts (≤2), IDO emits if-else-if too — no goto chain needed.~~ **Refuted 2026-05-02 (n64proc_uso_func_00000268, 2-case v==0/v==1 dispatcher):** if-else-if form caps at 85.25%; goto-chain hits 93.57% (8.32pp jump). The pattern works even for 2-case sparse dispatch — apply it whenever target asm shows compares-grouped-at-top.
+- **Doesn't apply when the default arm is a side-effecting call + return** (e.g. `gl_func(...); return 0.0f;`). Verified 2026-05-06 on `gl_func_00052144` (float-returning state dispatcher with cross-USO call in default): switch-form hits 98.13%; goto-chain regresses to 24.62% because IDO places the default-arm body BETWEEN the dispatch-chain and the case labels (in source-order), shifting all case body offsets vs target's "case bodies first, default last" layout. For float-returning dispatchers with side-effecting defaults, use plain `switch` with overlap-fall-through cases (`case A: case B: case C: return X;`) — the default falls through naturally to the post-switch code which already lands AFTER all cases.
 
 **Related:**
 - `feedback_ido_switch_rodata_jumptable.md` — base reference; this memo extends it with the matching idiom.
