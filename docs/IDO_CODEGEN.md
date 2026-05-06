@@ -6239,6 +6239,8 @@ nop
 
 **Inverse caveat (2026-04-19 game_libs gl_func_0006270C):** if the target has `lw/use $a1` (second arg) but NO `sw a0` spill at entry AND a `jal` in the body, you CANNOT reproduce it with `void f(int a0, int *a1)` — IDO always spills unused a0 with a jal present. The target was likely either: (a) called with a non-standard convention that passes a single pointer via `$a1` instead of `$a0`, (b) had a different compiler/flags, or (c) uses some K&R declaration that IDO can't reproduce. Wrap as NON_MATCHING; don't grind. 91 % max.
 
+**`register` hint does NOT bias unused-arg-spill elision (2026-05-06, gl_func_0002D788):** when the unused arg is in $a1/$a2 (not just $a0) and target has NO spill, declaring the unused arg as `register int unused_a1` produces IDENTICAL emit to plain `int unused_a1` — IDO -O2 still spills the unused arg via `sw a1, 0x1C(sp)`. The `register` keyword is honored for live var → $s-reg promotion (per `feedback-ido-register`) but does NOT influence the dead-arg-save elision pass. Don't try `register` to elide unused-arg spills; the IDO emit is structurally locked. Same cap class as the `gl_func_0006270C` inverse caveat above, just at a different arg position.
+
 **Extension (2026-05-02, game_uso_func_0000052C, 35-insn FPU leaf):** the `sw a0, 0(sp)` shadow-slot spill of unused a0 also happens in **leaf functions (NO jal) that have a stack-passed 5th+ argument**. The spill writes to sp+0 (the caller's outgoing arg-0 shadow slot), without any prologue. Pattern:
 ```
 sw a0, 0(sp)            <- a0 spill, no prologue
