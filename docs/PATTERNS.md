@@ -151,6 +151,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [`bne $tN, $zero, epilogue` in function prologue where $tN is uninitialized = non-standard calling convention or splat cross-function sharing](#feedback-uninit-tn-branch-at-entry) — When a function's prologue reads a caller-save $tN register before writing it (e.g. `bne $t6, $zero, epilogue`), this is NOT a compiler bug — it's evidence the original source used `register int x asm("$tN")` declared…
 - [Unique extern declared AT offset address (not at 0) bakes constant into lui+addiu reloc](#feedback-unique-extern-at-offset-address-bakes-into-lui-addiu) — _When target asm has `lui rN, %hi(D); addiu rN, rN, K` (constant K baked into the reloc) and your C emits separate `lui rN, %hi(D); addiu rN, rN, 0; addiu rM, rN, K`, declare a unique extern with `D_xxx_NAME =…
 - [Unique-extern alias trick BACKFIRES when target reuses a single &D base for multiple offsets](#feedback-unique-extern-breaks-shared-base) — _feedback_combine_prologue_steals_with_unique_extern.md and feedback_usoplaceholder_unique_extern.md both push aliased-extern-at-same-address as a CSE-breaker.
+- [Unique-extern CSE-break is NEUTRAL when target's N-separate-lui-base pattern is already produced by intervening register clobbers](#feedback-unique-extern-neutral-when-clobber-forces-reload) — _If target asm has N separate `lui rN, 0` reloads but each is preceded by a `lui rN, 0xNNNN` for fp-literal/constant setup that clobbers the base register, IDO's emit from a shared-&D form will ALSO produce N separate reloads (the live range of the cached base is killed by the clobber). Adding unique externs is byte-equivalent — no improvement._
 - [When applying unique-extern CSE-defeat, count target's distinct lui/addiu base loads and use EXACTLY that many externs — sharing must match exactly which sites reuse a base](#feedback-unique-extern-must-match-target-base-sharing) — _feedback_usoplaceholder_unique_extern.md says use unique externs to defeat IDO's CSE folding of multiple &D_00000000 accesses through one cached base.
 - [2-arm USO-placeholder dispatcher needs BOTH unique-extern (3 calls) AND if-arm-swap to match target's bne direction](#feedback-unique-extern-with-if-arm-swap) — _For functions like h2hproc_uso_func_000008EC where target has `pre-call; bne; F-arm-jal; b; T-arm-jal`, applying unique-extern alone (per feedback_usoplaceholder_unique_extern.md) reaches ~70%; the second knob is…
 - [Combine unique-extern (mapped to 0x0) with `((char*)&sym + OFFSET)` cast to match D_00000000+addend reloc form WITHOUT triggering IDO &D-CSE](#feedback-unique-extern-with-offset-cast-breaks-cse) — _When target uses N separate `lui rN, 0; lw/sw rN, OFFSET(rN)` accesses with relocs to D_00000000 + different addends, declaring N unique externs all mapped to 0x0 AND writing each access as `((char*)&sym_i + OFFSET_i)`…
@@ -6127,6 +6128,25 @@ If you see `lui rA, 0` followed by 2+ `lw/sw, OFFSET(rA)` with rA constant — D
 - `feedback_combine_prologue_steals_with_unique_extern.md` — works when target genuinely uses different aliases.
 - `feedback_usoplaceholder_unique_extern.md` — for cross-USO call placeholders, not data-base CSE.
 - `feedback_ido_base_adjust_for_clustered_offsets.md` — the OTHER unreproducible base-register form.
+
+---
+
+<a id="feedback-unique-extern-neutral-when-clobber-forces-reload"></a>
+## Unique-extern CSE-break is NEUTRAL when target's N-separate-lui-base pattern is already produced by intervening register clobbers
+
+_If target asm has N separate `lui rN, 0` reloads but each is preceded by a `lui rN, 0xNNNN` for fp-literal / large-constant setup that clobbers the base register, IDO's emit from a shared-&D form will ALSO produce N separate reloads (the live range of the cached base is killed by the clobber). Adding unique externs is byte-equivalent — no improvement._
+
+**Symptom:** Target shows N separate `lui rN, 0` interleaved with `lui rN, 0xNNNN` for fp constants. You assume "target wants N distinct base reloads" and apply unique-extern recipe expecting a match-% bump. Build emits the N reloads as intended (verified via `objdump -dr` showing N separate `R_MIPS_HI16 D_unique_NN`), but `report.json` fuzzy is unchanged.
+
+**Why:** From a single shared `extern char D_00000000;`, when IDO's reg allocator sees the base reg killed mid-sequence (by the fp-literal `lui`), it auto-reloads `lui rN, %hi(D)` before the next D access. The unique-extern form just labels the same reload differently — same bytes.
+
+**Quick check before applying:** between consecutive D-access lui's in target, look for any `lui rX, 0x4XXX` / `lui rX, 0x3XXX` / `lui rX, 0xCXXX` etc. where rX is the base reg. If yes, IDO's clobber-induced reload already matches — unique-extern is unnecessary.
+
+**Concrete case (2026-05-05 negative result):** game_uso_func_000044F4 Stage 12 (~0x5658-0x56F4). 5 D-loads at offsets 0xE8/EC/F0/F4/F8, target had 5 separate `lui $at, 0` reloads. Intervening `lui $at, 0x428C/0x4366/0x4140/0x4248/0x41A0/0x4170` for fp constants (70.0f / 230.0f / 12.0f / 50.0f / 20.0f / 15.0f). Adding 5 unique externs — confirmed bytes via objdump — fuzzy stayed flat at 62.048927%.
+
+**Distinguishing from the "HURTS" case (`feedback-unique-extern-breaks-shared-base`):** that case is target uses ONE shared base + folded offsets, NO clobbers. Unique-extern there forces 2 reloads where target wants 1 → REGRESS. The case here is target uses N reloads BECAUSE OF clobbers, IDO already emits N → NEUTRAL.
+
+**Distinguishing from the "HELPS" case:** unique-extern HELPS when target's N reloads happen because the data accesses span > 64 KiB OR target uses different-named relocs (e.g. cross-USO placeholder vs in-segment data). Both are forced by the C-source extern, not a side-effect of clobbers.
 
 ---
 
