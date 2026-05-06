@@ -653,6 +653,16 @@ If `.text` is identical, the change cannot affect ROM bytes; commit safely witho
 
 **Use case:** a /decompile run that improves an NM wrap (better C body, better comments) without intending any compiled-output change. Run the verify-with-objcopy check before committing — proves the change is genuinely a docs/wrap-only delta.
 
+**USO-segment fallback when `objcopy --only-section=.text` fails:** for files in segments that reference runtime-patched placeholder symbols (e.g. `gl_func_00000000`, `bootup_uso_func_00000000`), `objcopy` errors out with `symbol 'gl_func_00000000' required but not present` because those relocations are unresolved at the .o stage. Workaround: compare disassembly hashes instead.
+
+```bash
+mips-linux-gnu-objdump -d build/src/<seg>/<file>.c.o | md5sum  # before
+# ... apply edit, force-rebuild ...
+mips-linux-gnu-objdump -d build/src/<seg>/<file>.c.o | md5sum  # after — must match
+```
+
+`objdump -d` walks `.text` opcode-by-opcode and prints relocation hints inline, so identical hashes prove identical instruction streams (including reloc targets) without needing a clean `.text` extraction. Confirmed working on 1080's `game_libs_post.c.o` where the unresolved `gl_func_00000000` placeholder blocked the standard objcopy approach.
+
 ---
 
 ---
