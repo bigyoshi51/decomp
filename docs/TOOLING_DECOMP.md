@@ -2,11 +2,12 @@
 
 > Decompilation tooling: m2c, Ghidra, the permuter, decomp.dev integration.
 
-_7 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_8 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Index
 
 - [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used code and naturally drives type discovery.
+- [m2c on .word-only USO asm — assemble + objdump round-trip to get mnemonics](#feedback-m2c-word-only-asm) — splat emits `.word 0xNNNNNNNN` for USO functions whose lui-relocations spimdisasm can't resolve; m2c then errors with "Function contains no instructions". Round-trip the bytes through `mips-linux-gnu-as` + `objdump -d -M no-aliases` to get readable mnemonics for hand-paste into a temp .s.
 - [CI / decomp.dev compares fresh build/.o vs committed expected/.o — `make expected` results MUST be git-committed for changes to show on the dashboard](#feedback-expected-must-be-committed-for-decomp-dev) — The land script and `scripts/refresh-report.sh` do NOT run `make expected`.
 - [Ghidra struct annotation does NOT auto-propagate across xrefs — each function in a family needs its own prototype set](#feedback-ghidra-struct-annotation-doesnt-auto-propagate) — _Validated 2026-05-04 on 1080's rmon family.
 - [Permuter scores ≥1000 genuinely mean "structural issue, no match possible" — stop grinding](#feedback-permuter-1000-plus-structural) — _Ran decomp-permuter random mode for ~3 minutes on `n64proc_uso_func_00000014` (12k+ iterations).
@@ -400,5 +401,46 @@ _1080 has a Ghidra project + MCP server, but reaching for Ghidra has cost (slowe
 - `feedback_ghidra_struct_annotation_doesnt_auto_propagate.md` — annotations don't propagate across xrefs; batch-script the family.
 
 ---
+
+<a id="feedback-m2c-word-only-asm"></a>
+## m2c on .word-only USO asm — assemble + objdump round-trip to get mnemonics
+
+_splat emits `.word 0xNNNNNNNN` for USO functions whose lui-relocations spimdisasm can't resolve; m2c then errors with "Function contains no instructions". Round-trip the .word values through `mips-linux-gnu-as` + `objdump -d -M no-aliases` to get readable mnemonics for hand-paste into a temp .s._
+
+**Symptom:** an asm file under `asm/nonmatchings/<uso>/<uso>/<func>.s` is all `.word 0x…` lines with no mnemonics. Running `uv run m2c --target mips-ido-c <file>.s` errors with:
+
+```
+Decompilation failure in function <func>:
+Function <func> contains no instructions. Maybe it is rodata?
+```
+
+**Why:** spimdisasm gives up on `lui $at, 0` followed by an unresolvable relocation (e.g. `lwc1 $f16, 0($at)` where `$at` should be patched by the USO loader). USO segments at synthetic VRAM=0 don't have global addresses to anchor the disasm, so the whole function falls back to `.word`. m2c only parses mnemonic instructions and treats `.word` as data.
+
+**Fix — round-trip through binutils:**
+
+```bash
+# 1. Extract the .word values:
+grep -oP '0x[0-9A-F]{8}' asm/nonmatchings/<uso>/<uso>/<func>.s > /tmp/words.txt
+
+# 2. Wrap them in an assemblable .s file:
+{ echo ".set noreorder"; echo ".text"; echo ".global _start"; echo "_start:"
+  while read w; do echo ".word $w"; done < /tmp/words.txt; } > /tmp/decode.s
+
+# 3. Assemble + disassemble to get mnemonics:
+mips-linux-gnu-as -EB -march=vr4300 -o /tmp/decode.o /tmp/decode.s
+mips-linux-gnu-objdump -d -M no-aliases /tmp/decode.o
+
+# 4. Hand-paste mnemonics into a fresh .s with proper `glabel` and `.LXXXX:` labels,
+#    then run m2c on THAT temp .s.
+```
+
+**Caveats:**
+- `lui $at, 0` will look weird in objdump output (no symbol resolution) — you'll need to leave it as a literal `lui $at, 0` in the m2c input. m2c handles this fine; it just emits `*(T*)0` accesses, which you replace with `&D_00000000 + offset` in the C body.
+- Branch targets (`bne … 0x20 <_start+0x20>`) need to be rewritten as `.LXXXX` labels matching the original ROM offsets — m2c errors with "Cannot find branch target" if the labels don't exist. Add label lines (`.LXXXX:`) at the appropriate offsets in your temp .s.
+- If you forget a label, m2c's error names exactly which one, so iterate until it parses.
+
+**When to use this:** any USO function whose .s is .word-only AND whose body is non-trivial (≥30 insns) — small functions you can decode by hand instruction-by-instruction faster than the round-trip. Used 2026-05-05 on `game_uso_func_00002744` (52 insns) — m2c produced a clean structural decode in one pass that would've taken 30+ minutes by hand.
+
+**Long-term fix:** migrate USO disasm to spimdisasm proper (per `project_1080_uso_spimdisasm_migration_todo.md`) so the .s files have mnemonics from the start. Until then, the round-trip is the cheapest workaround.
 
 ---
