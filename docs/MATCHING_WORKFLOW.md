@@ -4087,8 +4087,11 @@ Found 2026-05-05 on gui_func_00000000 (already had a working ~13-test C body tha
 _A USO function may have TWO entry points: a "main" entry that assumes some register is pre-set, and a 2-insn "fall-through stub" that initialises that register before falling through to the main entry. The stub is laid out IMMEDIATELY before the main entry (no `jr ra` of its own), but splat bundles those 2 stub insns into the **predecessor** function's symbol — past its actual `jr ra`/`nop` epilogue. This is a 5th boundary-bug variant alongside the four listed in the /decompile skill (bundled-leaf, N-function-bundle, too-small-tail, prologue-stolen-successor)._
 
 **Diagnostic:**
-1. Predecessor's `.s` file has its `jr ra` + `nop` epilogue, then 2 trailing instructions still inside the declared `nonmatching SIZE` (typically `lui $tN, 0; lw $tN, M($tN)` or `lui $tN, 0; addiu $tN, $tN, M`).
-2. The successor's `.s` (NEXT function in address order) starts with a normal `addiu $sp; sw $ra` prologue, then **immediately reads $tN** (often via `bnezl $tN, ...` or `lw X, M($tN)`) without setting it.
+1. Predecessor's `.s` file has its `jr ra` + `nop` epilogue, then 2 trailing instructions still inside the declared `nonmatching SIZE`. Variants observed:
+   - GP register init: `lui $tN, 0; lw $tN, M($tN)` — load via relocated symbol.
+   - GP register init: `lui $tN, 0; addiu $tN, $tN, M` — relocated address materialise.
+   - **FPU register init**: `lui $at, 0x3F80; mtc1 $at, $fN` — sets $fN to a literal float (e.g. 1.0f). 0x3F80 is a literal IEEE-754 high half, NOT a relocation; the stub initialises an FP register the successor reads. Verified 2026-05-06 on `game_uso_func_000105DC` — trailing `lui at, 0x3F80; mtc1 at, $f4` sets $f4=1.0f for the successor's caller-flow.
+2. The successor's `.s` (NEXT function in address order) starts with a normal `addiu $sp; sw $ra` prologue, then **immediately reads $tN/$fN** (often via `bnezl $tN, ...`, `lw X, M($tN)`, or `mfc1 X, $fN`) without setting it.
 3. The 2 trailing insns set EXACTLY the register the successor reads. ⇒ alt-entry pattern.
 
 **Distinguishing from "prologue-stolen successor"** (the variant the /decompile skill already documents):
