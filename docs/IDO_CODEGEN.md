@@ -7144,3 +7144,11 @@ void f(u8* src, u8* dst, s32 count) {
 
 **Caveat**: this is opposite to the usual "don't mutate args" guidance. For decomp purposes, `count--` is correct when target shows arg-mutation; resist the lint instinct.
 
+
+## `volatile int off = K;` to defeat constant-fold of `&D + K` produces WORSE codegen, not target's `addiu+lw0` form
+
+_When target has `lui rX, 0; addiu rX, rX, K; lw rY, 0(rX); lw rZ, 4(rX)` (offset materialized into the base register, lw uses 0/4 offset), the natural C `int *t = (int*)((char*)&D + K); v1=t[0]; v2=t[1];` triggers IDO's constant-folder and emits `lui rX, 0; addiu rX, rX, 0; lw rY, K(rX); lw rZ, K+4(rX)` (offset folded into the lw). Adding `volatile int off = K; t = &D + off;` to defeat the fold produces `addiu rT, zero, K; sw rT, OFF(sp); ... lw rB, OFF(sp); lui rA; addiu rA, rA, 0; addu rC, rB, rA; lw 0(rC); lw 4(rC)` — the volatile is preserved (immediate stored to and reloaded from stack) and the addu materializes the runtime sum, but the resulting shape is structurally different from target's literal addiu+0-offset form. Worse: frame grows for the volatile spill slot._
+
+**Rule**: don't try volatile-offset to defeat IDO's `&SYMBOL + literal` constant fold. The fold is structural for symbol-relative addresses with literal offsets, and the only escape (volatile) introduces stack spills + runtime adds. If target's emit really requires the addiu+lw0 form, the function is C-unflippable; document it as a structural cap and INCLUDE_ASM-tautology it.
+
+**Verified 2026-05-06 on game_uso_func_00010E2C** (1080 Snowboarding spine wrap family). Cap stays at 87.38% with 4 attempts (`register int *t`, `register volatile int *t`, `*t++ / *t`, block-scope `extern int(int, ...)`, and now `volatile int off`). All structural; no C-level path forward.
