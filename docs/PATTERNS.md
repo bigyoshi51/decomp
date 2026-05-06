@@ -3088,6 +3088,24 @@ was from a stale .o that survived since the variant 11 commit.
   the EXISTING `/* ... */` block (insert before its `*/`) rather than
   creating a separate one after.
 
+**Amplification — file-wide impact** (verified 2026-05-06 on
+`game_uso.c` line 1555 orphan `*/`): a single orphan close in ONE
+function's docstring fails the NM-build for the WHOLE .c file, which
+silently stalls fuzzy measurement for EVERY function in that file. The
+project-wide impact is much bigger than just the broken function:
+- `report.json` reads stale `build/non_matching/.../seg.c.o` from
+  before the orphan was introduced, so all that file's function
+  fuzzy-percentages drift away from reality.
+- After fix: project went 891 → 902 matched functions and the SPECIFIC
+  function I edited went 62.05 % → 69.80 % (no code change, just
+  comment-syntax fix).
+
+**Detection signal**: if a recent commit added/edited a docstring in
+`<seg>.c` and `report.json` shows that file's function percentages
+suspiciously stuck or drifting, run `make build/non_matching/<seg>.c.o`
+manually to surface any cfe errors. Don't trust report.json values
+when the NM-build is broken upstream of objdiff.
+
 ---
 
 ---
