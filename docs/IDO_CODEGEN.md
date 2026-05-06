@@ -3244,6 +3244,16 @@ So the full rule: `*(char**)(a0 + 0x30) + OFFSET` (inline deref + add) produces 
 
 **Origin:** 2026-04-20, agent-a, game_uso_func_000074D8 (mirror 4 floats back to table, 17 insns exact). Refined 2026-04-20 via 7448 (refused to split despite named-base pattern; cached-table was the culprit).
 
+**2026-05-06 extension (compound vs explicit op):** the same trick works
+for integer RMW. `*(int*)(*(char**)(a0 + 0xB4) + 0xA58) ^= 0x40;`
+(compound `^=`) keeps the +0xA58 folded into the sw imm. Rewriting as
+`int *p = (int*)(*(char**)(a0 + 0xB4) + 0xA58); *p = *p ^ 0x40;`
+(named pointer + explicit `= *p ^ k`) emits the addiu split. Compound-assign
+forms tend to encourage the optimizer to fuse offsets; explicit `*p = *p OP k`
+with a named base pointer keeps them split. Verified on
+game_uso_func_0000D6E4 (93.73% → 100%, the missing addiu was the only
+size delta).
+
 ---
 
 ---
