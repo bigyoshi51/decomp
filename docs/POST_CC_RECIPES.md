@@ -64,6 +64,28 @@ correctly — the gate is now `opcode1 in (0x0F, 0x23)` instead of
 common `addiu sp` (opcode 0x09) prologue. SLL (opcode 0x00) remains
 blocked; same recipe (extend the tuple) applies if needed.
 
+**Worked example (timproc_uso_b5_func_00003F5C, 70.26% → 100%):**
+3-knob promotion combining the LW-extension with two existing levers:
+```makefile
+build/.../timproc_uso_b5.c.o build/non_matching/.../timproc_uso_b5.c.o:
+    PROLOGUE_STEALS := timproc_uso_b5_func_00003F5C=4
+build/.../timproc_uso_b5.c.o:
+    SUFFIX_BYTES := timproc_uso_b5_func_00003F5C=0x03E00008,0xAFA40000
+```
+```c
+void timproc_uso_b5_func_00003F5C(int *a0) {
+    char pad[24];   /* frame 0x10 → 0x28 */
+    /* Vec3i → Vec3f type-pun copy via stack staging */
+    ...
+}
+```
+The PROLOGUE_STEALS strips the LW that lives in the predecessor (0x3F18)'s
+SUFFIX_BYTES bundle; the trailing 2-insn alt-entry stub gets re-added via
+this function's own SUFFIX_BYTES; `char pad[24]` bumps the frame to match.
+Per `feedback-byte-correct-match-via-include-asm-not-c-body`, default-build
+.o is byte-correct (19 insns, 0 diffs) while NM-build is 17 (SUFFIX is
+default-only by design). Episode logged.
+
 ---
 
 <a id="feedback-combine-prologue-steals-with-unique-extern"></a>
