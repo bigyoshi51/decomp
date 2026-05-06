@@ -2689,6 +2689,8 @@ Byte-perfect on first try at -O1.
 - Still need the right opt level — file-split if the host file is wrong (-O1 vs -O2).
 - This works because libultra and N64 OS code is dense with mirrored primitives; ROM authors rarely wrote two unrelated functions with the same shape.
 
+**Caveat — cross-segment transplant can REGRESS** (verified 2026-05-06 on h2hproc_uso_func_00001A6C, sibling of eddproc_uso_func_000003BC): "byte-identical asm" between siblings does NOT mean "same C body matches both." `eddproc_uso_func_000003BC` matches at 89.08% with a `volatile int **p_arg0 = (volatile int**)&arg0;` recipe. h2hproc has a byte-identical asm — but the same recipe ported in regressed from 48 → 58 diff lines (44.92% → ~30%). Cause: **surrounding-segment register pressure differs**. The other functions in `h2hproc_uso.c` (40+ funcs vs eddproc_uso.c's 15) change IDO's global allocator weights; same C, different register choices. Use sibling C as a STRUCTURAL hint (which fields, what flow), not as a copy-paste. Final-mile match% is segment-specific and may need its own variant.
+
 ---
 
 ---
