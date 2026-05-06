@@ -6961,6 +6961,16 @@ void <name>(short *dst) {
     gl_func_00000000(&D_00000000, buf, 2);
     *dst = buf[0];
 }
+
+// 16-byte Quad4 WRITER (size 0x4C, 19 insns — writer-direction counterpart of
+// the readers above). Verified 2026-05-05 on gl_func_00042570. The asm shape
+// is field-by-field copy from *src into stack buf, then 3-arg call:
+//   lw t6, 0(a0); sw t6, 0(a1); lw t6, 4(a0); sw t6, 4(a1); ...; jal; sw last_in_delay
+// Same C body as Quad4 reader EXCEPT the struct-assign direction is reversed.
+void <name>(Quad4 *src) {
+    Quad4 buf = *src;
+    gl_func_00000000(&D_00000000, &buf, 16);
+}
 ```
 
 **5th template — composite "int + field reader at dst+0x10" (size 0x30):**
