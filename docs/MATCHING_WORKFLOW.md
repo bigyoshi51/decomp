@@ -1933,6 +1933,8 @@ mips-linux-gnu-objdump -d -M no-aliases --disassemble=<func> build/src/<path>.o 
 
 **Generalization:** comments age, especially when multiple agents touch the same function. Treat them as hypotheses needing verification, not facts.
 
+**Companion lesson (2026-05-06, timproc_uso_b5_func_0000C978):** the NM docstring can pre-date a docs/ entry that directly solves it. C978 docstring asserted "Direct `mtc1 $a1, $f12` is unreachable from natural C — caller passes float bits in $a1 (K&R / variadic promotion) but callee can't bit-cast a register without going through memory." But `IDO_CODEGEN.md#feedback-ido-o32-mixed-mode-float-in-a1` (added 2026-05-05, after the docstring) gives the exact recipe — declare `void f(int *a0, float a1)` and o32 mixed-mode ABI emits the mtc1 itself. **Cross-check the docs/ index against any "blocker claim" in an inherited NM wrap.** A blocker claim authored before a relevant docs/ entry was written becomes obsolete the moment that entry lands. Sibling search (`grep -B2 -A8 "<offset_pattern>" src/<seg>/*.c`) often surfaces a sibling already matched via the recipe — a 5-second confirmation that the technique works on the same struct family.
+
 ---
 
 ---
