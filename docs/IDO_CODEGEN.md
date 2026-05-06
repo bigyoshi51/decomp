@@ -1910,6 +1910,8 @@ Naive C `a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + b[3]*a[3]` produces 15/16 instructi
 - `feedback_ido_v0_reuse_via_locals.md` — sibling case for integer register choice
 - `feedback_ido_arg_save_to_sreg_in_bne_delay.md` — IDO instruction-scheduler caps from C
 
+**Single-call mul.s variant (verified 2026-05-06 on `gl_func_00052104`):** for `result = jal_returns_float() * fresh_loaded_float`, IDO assigns the FRESHLY-LOADED operand to `fs` and the call-return ($f0) to `ft` regardless of C operand order. Tried 3 variants — operand swap (`x*y` vs `y*x`), inlining the call into the multiplication, and decl-first ordering — all hit the same fs=fresh / ft=$f0 emit. If target has fs=$f0 / ft=fresh (call return on the LEFT in mul.s), no C-source variant flips it. Clean promotion: INSN_PATCH at the mul.s offset with the byte-swapped operands (e.g. `0x46003202` → `0x46060202` flips fs/ft from `$f6,$f0` to `$f0,$f6`). Promoted gl_func_00052104 from 99.38 % → byte-correct via `gl_func_00052104=0x2C:0x46060202` in the per-`.o` INSN_PATCH list.
+
 ---
 
 ---
