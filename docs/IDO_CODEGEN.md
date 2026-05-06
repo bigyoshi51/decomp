@@ -4572,6 +4572,21 @@ The second form compiles to `lw $a0, 0($a0)` (offset=0) with the 0xA8 encoded in
 - Target asm has non-zero offset in the lw/sw/lwc1/swc1 instruction → use `&BASE + OFFSET` in C
 - Target asm has offset=0 in the instruction → use `extern T SYM_AT_FULL_ADDRESS` (a separate extern at the combined address)
 
+**Refinement (2026-05-06): use a fresh `int[]` alias, NOT a re-cast of an existing function symbol.** When BASE is already declared elsewhere as something else (e.g. `extern int func_00000008();`), the natural `*(int*)((char*)&func_00000008 + 0x20) = ...` fails — IDO emits `lui at, %hi(BASE); addiu at, at, %lo(BASE); sw t6, 0x20(at)` (3 insns, 2 luis + 2 addius for the base computation) instead of the compact `lui at, %hi(BASE); sw t6, %lo(BASE+0x20)(at)` (2 insns, single reloc pair).
+
+**Working pattern:** declare a NEW `int[]` extern at the same base address, index it with `[N]`:
+
+```c
+extern int D_func_00000008_struct[];   // in undefined_syms_auto.txt: D_func_00000008_struct = 0x00000008;
+D_func_00000008_struct[8] = (int)&D_other;   // [8] = byte offset 0x20
+```
+
+This emits the single-reloc-pair form with the offset folded into the addend of `%lo(D_struct + 0x20)`. Post-link bytes match target's `lui at, 0; sw t6, 0x20(at)` form (`ac2e0020`).
+
+**Why the type matters:** when BASE is typed as a function (`int f();`) and you cast `(char*)&f + N`, IDO treats the result as an arbitrary computed pointer and emits the full base-address sequence. When BASE is typed as `int[]`, IDO recognizes `BASE[N]` as direct global-array access and emits the compact form. The relocation type (and thus the .o byte pattern) follows the type at the C level — even though the linker sees the same address either way.
+
+**Observed:** func_0000E9FC bootup_uso, 2026-05-06. Promoted 75% (3 diffs) → 83.3% (2 diffs) by the alias-array trick. Remaining diff is the `sw ra; lui a0` prologue swap (unflippable, separate cap).
+
 **Relation to extern-split memo:** `feedback_ido_adjacent_store_extern_split.md` describes the INVERSE: when target emits `lui $at; sw X, 0($at); lui $at; sw Y, 0($at)` for two INDEPENDENT symbols at adjacent offsets (offset=0 in each instruction), declare two separate externs. That's the "offset-in-relocation" case. This memo is the "offset-in-instruction" case. Which to use depends on target's byte encoding.
 
 **Origin:** 2026-04-20, titproc_uso_func_00000388. First attempt used `D_000000A8` extern → wrong bytes (offset=0 instead of 0xA8). Switched to `&D_00000000 + 0xA8` → correct bytes. Promoted 90%→98.3% (remainder was register-allocation diff).
