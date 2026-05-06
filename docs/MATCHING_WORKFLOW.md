@@ -3068,6 +3068,8 @@ _Mirror of the merge-fragments case. When a leaf function has NO `addiu $sp, -N`
 - 1 insn `mtc1 $zero, $f0` or `mov.s $fX, $fY` by itself = stray scheduling leftover, don't split
 - 2+ insns including a `jr $ra` and meaningful body = genuine function, DO split
 
+**Gotcha — split-fragments.py defaults INCLUDE_ASM placement to `<seg>/<seg>.c` even when the parent lives in a sibling `.c` (e.g. `<seg>_post.c`):** if you see `warn: INCLUDE_ASM for <parent> not found in src/<seg>/<seg>.c; appending`, the script just dumped the new `INCLUDE_ASM(<new>)` lines at the end of the default `.c` instead of next to the parent's actual location. Manually move the appended INCLUDE_ASM lines to the parent's `.c` next to its existing INCLUDE_ASM (or its decompiled definition). Otherwise objdiff and the linker may still resolve OK, but the source layout is misleading and future agents grepping for the new symbols miss them. Verified 2026-05-05 splitting `gl_func_00066404` (in `game_libs_post.c`) — split appended to `game_libs.c` line 1487/1489.
+
 **Follow-up memory to write when extending:** once `generate-uso-asm.py` is patched to detect jr-ra boundaries, update or retire this memo and re-run detection. Expect the 400+ candidate count to apply to other USOs too — high leverage.
 
 ---
