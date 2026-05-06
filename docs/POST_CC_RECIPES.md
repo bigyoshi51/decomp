@@ -1489,6 +1489,8 @@ script with comma-separated hex words.
 
 **Generalization (verified 2026-05-06 on mgrproc_uso_func_0000179C):** the recipe extends to any 2-insn alt-entry stubs, not only `jr ra; nop`. For trailers like `jr ra; sw a0, 0(sp)` (alt-entry that does a single store and returns), use the actual stub bytes in the SUFFIX_BYTES list (`0x03E00008,0xAFA40000` per stub). Eligibility check: trailers must contain NO relocations (no `lui+%hi` etc.) — pure raw bytes only.
 
+**Caveat — SUFFIX_BYTES alone won't promote if F1 body has unmatched LO16 relocs vs expected/.o** (failed 2026-05-06 on arcproc_uso_func_000024C0): the recipe assumes F1's compiled bytes already match expected/.o. If F1 emits `lui rX, 0; addiu rX, rX, 0; lw rX, 0(rX) [+R_MIPS_LO16]` while expected has the resolved `lw rX, OFFSET(rX)` form (no reloc), byte_verify rejects even though SUFFIX_BYTES correctly appends. Symptom: fuzzy ~73% with 3 LO16-reloc'd lw insns differing. The sibling-functions-match-100% pattern only holds when expected/.o was regenerated from the same build (capturing the 0-offset reloc form); a function with stale expected/.o (resolved form) needs that regenerated first. If sibling-pattern-clone isn't producing matching bytes, SUFFIX_BYTES alone isn't sufficient — the F1 body must match first (try `make expected` to regenerate baseline if siblings landed but this function didn't).
+
 ---
 
 ---
