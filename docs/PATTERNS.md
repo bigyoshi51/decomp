@@ -2122,6 +2122,14 @@ If the last bullet holds, escalate rather than merging. The mystery here warrant
 
 **Origin (2026-04-20):** tried to merge `func_800073F8` into `func_800073DC` during a size-sort-source tick. Reverted after discovering the callers. No decomp progress; memo captures the lesson so next tick doesn't repeat the trap.
 
+**USO variant (2026-05-06):** the same pattern surfaces in USO orchestrators where the **loader/dispatcher pre-sets a callee-save reg** (typically `$s0`) to a per-frame state-pointer before invoking the entry. Example: `timproc_uso_b5_func_00003C8C` (147 insns) saves+restores `$s0` like a normal callee but reads `lw $tN, 0x308($s0)`, `0x320($s0)`, `0x338($s0)`, ..., on a 0x18 stride — without any `or $s0, $aN, $0` to set it up. `$s0` here is effectively a hidden 5th argument: a state-array base pointer the USO dispatch table populates before calling. Same blocker: standalone-C cannot emit `lw $sN, OFF($s0)` without first STORING to `$s0`, which IDO -O2 will then hoist back as the prologue-side init. Flavors of fixes:
+
+- **Don't:** try `register int x asm("$s0")` — IDO rejects per [feedback-ido-no-gcc-register-asm](#feedback-ido-no-gcc-register-asm).
+- **Don't:** add a synthetic param and assign `s0 = param;` at function top — IDO emits an `or $s0, $aN, $0` insn at the prologue that has no counterpart in the target.
+- **Do:** wrap as permanent NM with the structural body documented (compilable for permuter, grep-discoverable). The 0x18-stride access pattern at `$s0+0xN` typically signals "array of state records the dispatcher populates." Decode for documentation only — match-promotion is intrinsically blocked at the ABI level.
+
+The existing wrap on `kernel/func_800073F8` is the canonical kernel-side example; `timproc_uso_b5_func_00003C8C` is the USO-side example. Both belong to the broader "hidden-input-via-saved-reg" class and require an out-of-band ABI rewrite to ever match.
+
 ---
 
 ---
