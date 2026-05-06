@@ -2208,6 +2208,8 @@ Generalization: "same-type aliases" rule above only applies WITHIN a single call
 
 **Application:** when target shows separate `lui+addiu` for two uses of `&D` (one as struct-field-store, another as later call-arg), declare two `extern char D_alias_N;` aliases at 0x0 in `undefined_syms_auto.txt`. No type split required.
 
+**Caveat — does NOT help cluster-load patterns** (verified 2026-05-06 on `game_uso_func_0001001C`, regressed 84.05% → 81.26%): when target uses ONE base reg + multiple offsets (`p = &D + 0xDD0; arg1 = p[0]; arg2 = p[1]` emitting `lui+addiu p; lw 0(p); lw 4(p)`), declaring two unique externs at the offset addresses (e.g., `D_arg1 = 0xDD0; D_arg2 = 0xDD4`) FORCES two separate `lui+addiu` pairs, breaking the cluster. The unique-extern technique only helps when target ALREADY emits two separate base loads — never when target uses cluster-load. Also doesn't help precall-arg-spill caps (`sw a1, 4(sp)` in jal delay slot is structural, not symbol-CSE).
+
 ---
 
 ---
