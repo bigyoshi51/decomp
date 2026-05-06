@@ -1158,6 +1158,12 @@ int f(int *a0) {
 
 **Origin:** 2026-04-19 bootup_uso func_00013924 (`if (a0->[0x48]==1.0f) { if (a0->[0x68]==0) call(); return 1; } return 0;`). The early-return form scored 51 %; the positive form scored 100 %.
 
+**Extension to integer 2-deref null-check predicates (verified 2026-05-06 on `timproc_uso_b3_func_00000E30`):** the same arm-choice rule applies when the cond is `if (ptr == 0)` instead of `if (!float_cmp)`. For a 2-deref null-check returning 1/0:
+- **Negative early-return form** `if (v == 0) return 0; if (v->X == 0) return 0; return 1;` → IDO emits `bnezl` + duplicated body `lw`, **14 insns**.
+- **Positive nested form** `if (v != 0) { if (v->X != 0) return 1; } return 0;` → IDO emits clean `beql` with `move v0,zero` in delay-likely slot, **12 insns** = exact match.
+
+The 2-insn delta is because the negative form forces IDO to materialize the second-deref `lw` on BOTH branches of the inverted-skip, while the positive form lets IDO use beql annulled-delay to skip the second deref entirely on the null path. Same principle as the float-predicate case: target's branch-likely-with-success-fallthrough shape needs the C to express success as the inner positive arm.
+
 ---
 
 ---
