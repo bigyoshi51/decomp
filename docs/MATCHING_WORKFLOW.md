@@ -2636,6 +2636,21 @@ instead of the lw immediate**, and unlike the asymmetric case above where
 form-1 = my-form, this is form-1 = target-form, so no objdiff tolerance
 saves you.
 
+**Negative-result re-test 2026-05-06 on `func_0000E9FC` (bootup_uso):**
+the 2026-04-19 origin note said "IDO rejected cast" for
+`*(char**)((char*)func_000000F0 + 0x40)`. Re-tested today: IDO 7.1
+**accepts** the `(char*)&FUNCTION + OFFSET` cast (only a downstream
+"Incompatible pointer type assignment" warning fires elsewhere in the
+file, unrelated). However the codegen REGRESSES: `*(int*)((char*)&func_8 + 0x20) = (int)&D_arg2`
+emits 14 insns vs 12 with the flat `D_NNN` form. IDO produces TWO separate
+full lui+addiu reloc-pair sequences (one for the function symbol, one
+for the assigned data), plus an addiu to merge them, vs. the flat form's
+single lui+addiu. So even though the cast compiles, **don't reach for
+`(char*)&FUNCTION + OFFSET` to chase the symbol-form asymmetry — it
+trades 1 missing-byte for 2 extra instructions**. Stick with form-1
+(flat D-symbol) and accept the unlinked-bytes asymmetry; the linker
+resolves both forms to identical final ROM bytes.
+
 ---
 
 ---
