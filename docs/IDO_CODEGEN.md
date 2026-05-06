@@ -1407,6 +1407,8 @@ b3 = (char*)*base_pp;  *(int*)(self + 0x34) = *(int*)(b3 + 0x8C);
 
 **When NOT to use:** if the target only has ONE load of `*(SYM+N)` followed by multiple register-base offset accesses, the natural `base = *(...)` is correct — don't volatilize. This recipe is specifically for the pattern where target reloads the POINTER itself N times, not just the base register.
 
+**Precondition: needs N≥3 reads to actually reshape emit.** Verified 2026-05-06 on game_uso_func_00010DC8 (10E2C-family member at 88.60% cap, 2 adjacent loads `lw a1, 0(t8); lw a2, 4(t8)` going into one downstream call): the volatile-pp wrap was a no-op — IDO still emitted v0-base + offsets baked into lw, same as plain `int *t`. The trick only locks the base register when there are 3+ separate `*base_pp` reads forcing the compiler to materialize the pointer-load 3+ times. With 2 adjacent reads, the compiler's combine pass collapses them regardless of volatile attribution. Don't try this recipe on 2-read functions; it's strictly for 3+. The 2-read case is structurally capped per `feedback-ido-shared-base-via-deferred-assign-and-named-locals` (no further C-level lever).
+
 **Cousin recipe:** `feedback-ido-shared-base-via-deferred-assign-and-named-locals` does the OPPOSITE — forces a SHARED base register across N independent loads of `&D+N`, `&D+M` etc. Both recipes target IDO's CSE behavior; one suppresses it, the other induces it.
 
 **Related:** `feedback-ido-constant-address-load-fold-inevitable` (the "natural" load-fold this is fighting against), `feedback-ido-volatile-loop-counter-for-stack-iter` (other volatile uses).
