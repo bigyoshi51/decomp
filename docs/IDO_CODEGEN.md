@@ -1372,9 +1372,7 @@ game_uso_func_00000000(a0, v1, v2, 1);
 
 **Note:** doesn't promote the function on its own (still missing the varargs-style shadow spills) but tightens the structural shape, removing one diff source.
 
----
-
----
+**Caveat — does NOT produce `addiu base, OFFSET; lw 0(base); lw 4(base)`:** if the target uses `lui base; addiu base, base, OFFSET; lw 0(base); lw 4(base)` (offset materialized in the addiu, not the lw), this technique still emits `addiu base, base, 0; lw OFFSET(base); lw OFFSET+4(base)` — same shared base register but offset baked into each lw. The constant-fold from `&D+N` is structural per `feedback-ido-constant-address-load-fold-inevitable`. Verified 2026-05-06 on game_uso_func_00010DC8 (sibling of 10E2C, same family-cap at 88.6%).
 
 <a id="feedback-ido-volatile-pp-forces-n-fold-pointer-reload"></a>
 ## Force N-fold reload of `*(SYM+N)` via `volatile T **` + N intermediate locals (no CSE)
