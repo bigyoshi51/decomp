@@ -16,6 +16,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO bnel tail-merging routes the false-path epilogue through the true-path's register-restore tail (cosmetic, ~99 % cap)](#feedback-ido-bnel-tail-merge-register-restore) — When the function body is `if (cond) { several jal calls }` and the true path ends with reload-args-then-jal patterns like `lw a0,0x18(sp); jal; lw a1,0x1C(sp)`, IDO sets the bnel branch target to the MIDDLE of those…
 - [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
+- [Multi-case literal-dispatch bnel chain (sparse `if (c == X) c = Y` ladder) needs "modify-c-in-place + single masked return" + separate `int v` for the compare source](#feedback-ido-bnel-dispatch-modify-c-mask-return) — _`int v; c &= 0xFF; v = c; if (v == X1) c = Y1; else if (v == X2) c = Y2; ...; return c & 0xFF;` produces the bnel-chain pattern with `bne+move v0,a0` first compare and per-case `addiu a0; jr ra; andi v0,a0,0xFF` hit-handlers (matches USO entry-glyph dispatchers). Per-case `return CONST` form emits a shorter 4-insn-per-case chain without the `or v0,a0,$0` default-save. Cap ~95 % via the chain-source-register picker (a0 alias vs target's v0)._
 - [IDO -O2 sparse-case switch (case 0 + case 1) compiles to 3-arm beql dispatch with delay-slot pre-loads — unreachable from C if-else; switch is also rejected (.rodata jumptable)](#feedback-ido-sparse-switch-beql-preload-unreachable) — _When target asm shows `addiu $at,zero,1; beql v0,zero,caseA; <lw delay>; beql v0,$at,caseB; <lw delay>; b end; <lw ra delay>` (3-arm beql dispatch with each delay slot pre-loading the case body's first lw), this is a…
 - [bc1fl with target=epilogue and `lw ra,X(sp)` in delay slot is a CONDITIONAL-CALL marker, not a clamp — the if-block guards a `jal` between here and the epilogue](#feedback-ido-bc1fl-skips-jal-to-epilogue) — _Diagnostic for misreading IDO -O2 trailing FP conditionals: when target's last bc1fl jumps to the epilogue with `lw ra,X(sp)` in the delay slot, it's NOT a clamp/store guard; it's `if (!cond) jal()` where the jal sits between the bc1fl and the epilogue. Decode the C as `if (cond_complement) func();`._
 
@@ -365,6 +366,67 @@ Both `lui $at` are independent (same HI=0 at link time for USO placeholders, but
 **Related:** `feedback_uso_multi_placeholder_wrapper.md` (similar "separate extern per usage" pattern for cross-USO function-pointer calls) and `feedback_ido_v0_reuse_via_locals.md` (named locals → $v0 reuse).
 
 ---
+
+---
+
+<a id="feedback-ido-bnel-dispatch-modify-c-mask-return"></a>
+## Multi-case literal-dispatch bnel chain — "modify-c-in-place + single masked return" with separate `v` for compare source
+
+_USO entry-0 character dispatchers (e.g. `gui_func_00000000`) compile a sparse `if (c == X) c = Y` ladder into a 6-insn-per-case bnel chain. The structural recipe is `int v; c &= 0xFF; v = c; if (v == X1) c = Y1; else if (v == X2) c = Y2; ... return c & 0xFF;`. The single trailing mask + per-case modify-in-place form makes IDO schedule `move v0, a0` into the FIRST compare's bne delay slot (matches target's `or v0, a0, $0` default-save) and emits per-case `addiu a0, $0, Y; jr ra; andi v0, a0, 0xFF` hit-handlers. Caps at ~95% via the chain compare-source register picker._
+
+The pattern this matches is N sequential equality compares against a
+single masked-byte input, each producing a small constant lookup result,
+with a default fall-through equal to the input itself. Target asm shape:
+
+```
+andi a0, a0, 0xFF
+li at, X1
+bne a0, at, .next            # FIRST compare: bne, NOT bnel
+or v0, a0, $0                # delay (always exec): v0 = c (default-save)
+addiu a0, $0, Y1             # match: a0 = result
+jr ra
+andi v0, a0, 0xFF            # delay: v0 = result
+.next:
+li at, X2
+bnel a0, at, .next2          # SUBSEQUENT compares: bnel
+li at, X3                    # delay-likely: pre-load NEXT compare's `at`
+addiu a0, $0, Y2
+jr ra
+andi v0, a0, 0xFF
+.next2:
+li at, X3                    # head (dead when entered via bnel-taken path)
+...
+```
+
+The natural `if (c == X) return Y;` ladder emits a SHORTER 4-insn-per-case
+chain (`bnel; li at NEXT; jr ra; li v0, RESULT`) without the `or v0, a0, $0`
+default-save and without the `andi v0, a0, 0xFF` per-hit. To unlock the
+target's 6-insn-per-case form:
+
+1. Modify `c` in place per case (don't `return CONST`):
+   ```c
+   if (v == 0x21) c = 0x27;
+   else if (v == 0x2C) c = 0x28;
+   ...
+   ```
+2. Single trailing masked return: `return c & 0xFF;` — this is the trigger
+   for IDO to put `move v0, a0` in the FIRST compare's delay slot (saves
+   `c` into v0 as the default-return register that subsequent range checks
+   like `addiu a0, v0, -W` source from).
+3. Compare against a SEPARATE `int v` (not against `c`) so range checks
+   correctly pick v0 as the source register: `int v; v = c; if (v == X1)
+   c = Y1; ...`. Without splitting v from c, range checks emit
+   `addiu a0, a0, -W` instead of `addiu a0, v0, -W`.
+
+Cap: the bnel/slti chain compares against a0 in built (vs v0 in target).
+After `move v0, a0`, both regs alias since neither is modified between
+compares; IDO picks a0. Range-check `addiu a0, v0, -W` byte-matches
+correctly. Pure register-source picker — no semantic difference. The
+remaining 4–5% is grindable via register-allocation knobs but the
+structural shape is locked.
+
+Discovered 2026-05-06 promoting `gui_func_00000000` from 4.1% (varargs
+form) to 95.30% (this recipe).
 
 ---
 
