@@ -50,6 +50,20 @@ The split-fragments.py tool faces a similar restriction in spirit: the function-
 
 **Takeaway:** before writing `PROLOGUE_STEALS := <func>=N`, decode the function's first instruction. If it's not LUI, this recipe doesn't apply — pick a different lever.
 
+**2026-05-06 partial fix (LW now accepted, SLL still blocked):**
+splice-function-prefix.py was extended to accept opcode 0x23 (LW) as a
+valid first-insn for PROLOGUE_STEALS=4 (single-insn strip). Use case:
+`lw rN, OFF($a0)` — when the predecessor's tail loads an arg-field into
+a temp register that the successor immediately reuses (e.g. `lw t8,
+0x23C(a0)`). C-emit naturally produces this LW as the first body insn
+because it's the first arg-field access. PROLOGUE_STEALS=4 now strips it.
+
+Verified: existing PROLOGUE_STEALS=8 cases (LUI+ADDIU prefix) still fire
+correctly — the gate is now `opcode1 in (0x0F, 0x23)` instead of
+`opcode1 == 0x0F`, with INCLUDE_ASM-detection still catching the
+common `addiu sp` (opcode 0x09) prologue. SLL (opcode 0x00) remains
+blocked; same recipe (extend the tuple) applies if needed.
+
 ---
 
 <a id="feedback-combine-prologue-steals-with-unique-extern"></a>
