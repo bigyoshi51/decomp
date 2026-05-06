@@ -1287,6 +1287,22 @@ caller-flag registers (typically $v0), no PREFIX is uniform — it varies
 per caller. Document the inheritance in the comment block and keep
 INCLUDE_ASM. Verified on gl_func_0000B5AC.
 
+**GP-register variant (chained-SUFFIX-lui+addiu, 2026-05-05)**:
+Same chain pattern but predecessor's SUFFIX is `lui rN, 0; addiu rM, rN, 0`
+(loading an address) instead of div. Successor reads the inherited GP
+register directly (no mfhi/mflo). Recognition pattern: function early in
+body uses an uninitialized GP register (typically $v1 since SUFFIX often
+targets $v1 as a "second return slot") AND the predecessor's tail has
+2 trailing insns past its jr ra+nop. Same blocker logic: if the inherited
+value is uniform-per-call-site (always &SAME_GLOBAL because predecessor
+chain is unique), PREFIX_BYTES could capture it; if variable per-caller,
+stays INCLUDE_ASM. Watch for the "constant-true if-test" tell — when the
+inherited value is a static address, `if (inherited_reg == 0)` is dead
+code, suggesting the asm has unreachable defensive logic OR the
+inherited register holds a loaded VALUE rather than an address (which
+would need PREFIX recipe `lui rN, 0; lw rM, 0(rN)` instead of pointer
+form). Verified on gl_func_0005165C inheriting from gl_func_000515FC.
+
 ---
 
 ---
