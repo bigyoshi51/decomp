@@ -6555,6 +6555,23 @@ When NM diff shows ONE wrong store of an arg ($a0/$a1/$a2/$a3) at the caller's o
 
 **Anti-pattern:** Don't `int *p = &saved_a1;` — taking the address grows the frame by 8 bytes (alters slot offsets for all downstream locals). Keep it as a plain `volatile int`.
 
+**Pointer-typed volatile DOES NOT work — use int cast instead** (added 2026-05-06 from func_0000553C work):
+
+When the arg you're trying to spill is a POINTER (`int *arg0`), the obvious form is broken:
+```c
+volatile int *arg0_save = arg0;  // NO-OP — IDO drops the read
+```
+IDO -O2 sees that `*arg0_save` is the same as `arg0` (both live in $a0), proves the spill is dead, and drops it. The `volatile` doesn't save it because the compiler can elide the volatile READ when the value is already in a register (the volatile rule technically only protects against re-ordering, not against this kind of CSE-from-arg-reg).
+
+Use int-cast volatile instead:
+```c
+volatile int saved_a0 = (int)arg0;            // OK — forces local-slot sw
+... func(..., (int*)saved_a0, ...);           // OK — keeps the use site
+```
+The int-cast severs the relationship between `saved_a0` and `arg0` from the compiler's perspective; it can't prove the spill is dead because the cast might be observable. Verified: forces `sw a0, 0x1c(sp)` per the int's stack offset (88.40% → 89.80% on func_0000553C).
+
+**One more caveat from the same work:** Don't separate the cast into an intermediate `reloaded` local — that REGRESSES (89.80% → 84.20% in the test case). The `(int*)saved_a0` cast must stay inline at the use site for the reload to schedule correctly.
+
 **Related:** `feedback_ido_unused_arg_save.md` (unused arg gets caller-slot spill), `feedback_ido_volatile_buf_pointer_indirect.md` (volatile buf forces pointer-indirect addressing).
 
 ---
