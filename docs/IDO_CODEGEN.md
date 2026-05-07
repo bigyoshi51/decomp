@@ -7318,3 +7318,49 @@ _When the target ROM has a constant pointer materialised via `lui rX, HI16; addi
 **Related:**
 - `feedback-game-libs-jal-targets` (in N64_FORENSICS.md) — the gl_ref recipe for absolute-symbol externs.
 - `feedback-ido-type-split-unique-extern-breaks-cse` — doesn't help here; CSE isn't the issue.
+
+---
+
+<a id="feedback-ido-lui-lw-hoisted-above-prologue"></a>
+## IDO -O2 may emit a leading `lui Tn, 0; lw Tn, K(Tn)` global-pointer load BEFORE the sp-adjust prologue — C source that triggers this isn't reachable from straightforward `extern *p = &D[K];` patterns
+
+_When target asm shows the function starting with 2 instructions that load a global pointer (lui+lw with a relocation against the data segment) and ONLY THEN does the prologue (`addiu $sp, -N; sw $ra, K($sp)`), IDO has hoisted the global-load above the stack-adjust. Standard C bodies always produce prologue-first emit, so this manifests as a 2-insn schedule difference that doesn't byte-match._
+
+**Symptom:**
+
+Target:
+```
+lui $t6, 0
+lw  $t6, 0x548($t6)    ; reloc → &D + 0x548
+addiu $sp, $sp, -0x40
+sw  $ra, 0x14($sp)
+lw  $a1, 0($t6)         ; first body load
+... function body ...
+```
+
+Your build (any straightforward C):
+```
+addiu $sp, $sp, -0x40
+sw  $ra, 0x14($sp)
+lui $t6, 0
+lw  $t6, 0x548($t6)
+lw  $a1, 0($t6)
+... function body ...
+```
+
+Same instructions, different order. Your output is +0 bytes (same total) but words 0/1 swap with words 2/3, so byte-exact fails.
+
+**Why this happens:** IDO -O2's instruction scheduler can hoist a register-temp-load (using only caller-save $t-regs) above the prologue when:
+- The load result is used immediately after the prologue.
+- The hoisted insns don't depend on $sp.
+- Putting them before the prologue avoids a pipeline stall on the first body instruction.
+
+This is an aggressive scheduling pass that runs after the normal codegen — the C source determines what insns exist, not their relative order vs the prologue.
+
+**Why C can't reach it:** The compiler's prologue-emission pass produces stack-adjust + saves first, and the scheduler operates on the post-prologue insn stream. There's no C-level trigger that says "schedule this global-load before the prologue." `register T *p asm("$t6") = ...;` isn't supported by IDO 7.1 (per `feedback_ido_no_gcc_register_asm.md`).
+
+**Verified case (2026-05-07):** `game_uso_func_00006F38` in 1080. Target leads with `lui $t6, 0; lw $t6, 0x548($t6)` before the prologue. Standalone IDO -O2 of the equivalent C body emits prologue first, lui+lw second — same insn count (28 → 30 if I added the dead spills, but the schedule itself is unflippable). Documented as NM-cap.
+
+**How to apply:** when target shows lui+lw before prologue with the lui's hi16 reloc-resolved against `&D_<seg>` and the body uses the loaded register immediately, this is the unflippable-schedule cap. Wrap NM with the structural decode; don't grind register-allocation knobs (the cap is scheduler-level, not regalloc-level). If post-cc-recipe promotion becomes possible (e.g., via a 2-insn-swap script that doesn't disturb relocations), this is a candidate.
+
+**Companion:** `docs/POST_CC_RECIPES.md` — the existing PROLOGUE_STEALS recipe handles the OPPOSITE case (predecessor's tail bleeds INTO this function's prologue) but doesn't apply here (the lui+lw is logically OUR function's, just scheduled differently).
