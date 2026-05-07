@@ -1705,3 +1705,47 @@ The build .o is unchanged in this case. Once the C body actually compiles to the
 
 **Note on opcode allowlist:** `inject-prefix-bytes.py`'s `VALID_ENTRY_OPCODES` set includes `0x0C` (`andi`), `0x09` (`addiu`), `0x0F` (`lui`), `0x23` (`lw`), and SPECIAL/0 (register-only ops). If your function's first body insn (post-trampoline) uses an opcode NOT in the list, the script refuses with "first insn is 0xNNNNNNNN; not on the recognized entry-insn list. Refusing to patch." Add the opcode to `VALID_ENTRY_OPCODES` if it's a legitimate leaf-function entry shape (not data-as-code).
 
+
+---
+
+<a id="feedback-prologue-stolen-double-register-inheritance"></a>
+## Prologue-stolen successor with TWO inherited registers ($at + $v0) is unreachable from C
+
+_The standard prologue-stolen-successor pattern (per `feedback-prologue-stolen-successor-no-recipe`) inherits ONE register from the predecessor's tail (typically `$t6` = global pointer base via `lui+lw`). PROLOGUE_STEALS=8 splices the redundant 2-insn prefix IDO emits at the successor's entry. But some functions inherit BOTH `$at` AND `$v0` from a more elaborate predecessor-tail alt-entry — and C cannot model the `$at` carryover even with PROLOGUE_STEALS, because IDO never uses `$at` for user data._
+
+**Pattern:**
+
+Predecessor `gl_func_0002D788` ends with a 4-insn alt-entry stub at its tail (after its `jr ra; nop` epilogue):
+```
+addiu  v0, zero, 8        ; $v0 = 8
+lui    at, 0x0             ; $at = high(D)
+sw     v0, 0(at)           ; *(int*)D = 8 (uses $at)
+lui    at, 0x0             ; $at = high(D2) — PERSISTS into successor
+```
+
+Successor `gl_func_0002D7D0` immediately uses `$at` for its first store:
+```
+addiu  sp, sp, -0x18
+sw     v0, 0(at)           ; uses BOTH $at (from predecessor) AND $v0 (still 8)
+sw     ra, 0x14(sp)
+lui    at, 0x0              ; second lui at (fresh, for next store)
+...
+sw     v0, 0(at)            ; second store via fresh $at, with $v0 still 8
+```
+
+**Why C can't reach this:** IDO never picks `$at` for any user variable — it's reserved for the assembler's pseudo-instruction expansion (e.g. `li` decompositions). C-level `*(int*)&D = some_var` always emits its own `lui $tN; sw $vM, 0($tN)` rather than reusing `$at` from a predecessor. PROLOGUE_STEALS only splices a fixed prefix; it can't substitute `$at` references in the function body.
+
+**Practical rule:**
+- When you see `sw $rN, 0($at)` BEFORE any `lui $at, ...` in a function's body, that's an inherited `$at` from the predecessor's tail. Stop trying to write a C body — it's structurally unreachable.
+- These functions stay as `INCLUDE_ASM` permanently. Default build is byte-correct via the asm splice.
+- Document the pattern in the source so future agents don't re-attempt. Wrap with NM `#ifdef NON_MATCHING` for the body decode (semantic value) but leave the byte-correct match to INCLUDE_ASM.
+
+**Verified 2026-05-07 on `gl_func_0002D7D0`** (1080 game_libs, sibling of 0x2D6C8 cluster): 24-insn 4-call float-arg wrapper. C body decodes the 4-call shape but caps at 8% byte-exact (built 21 insns vs expected 26) because the leading 2 stores via inherited `$at` cannot be reproduced.
+
+**Distinction from single-register prologue-stolen successor:**
+- _Single-register inheritance_ (the documented case): predecessor's tail does `lui $tN, 0; lw $tN, M($tN)` setting `$tN` = some value. Successor reads `$tN` immediately. PROLOGUE_STEALS=8 splices the redundant 2-insn prefix IDO duplicates at the successor's start. **C-reachable**: the successor's body is normal C with field accesses; the prologue is the only artifact.
+- _Double-register inheritance via $at_ (this case): predecessor's tail uses `$at` (assembler-temp register) for stores. Successor inherits `$at` AND uses it BEFORE setting it itself. **NOT C-reachable** — C never assigns `$at`, so the inherited-`$at` first store cannot be emitted.
+
+**Related:**
+- `feedback-prologue-stolen-successor-no-recipe` — single-register `$t` inheritance (decompilable with PROLOGUE_STEALS=8).
+- `feedback-fall-through-prologue-stub` (in MATCHING_WORKFLOW.md) — predecessor's tail-after-epilogue alt-entry (decompilable with split-fragments.py if no `$at`).
