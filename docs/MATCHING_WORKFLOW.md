@@ -4373,3 +4373,30 @@ IDO -O2 emits ~95 insns (vs target's 150). Loop body becomes a flag-counting ske
 **Verified case (2026-05-07):** `gl_func_0000CE38` (1080 game_libs, 150-insn list-iter dispatcher). Initial wrap with empty inner arms scored 0%. After adding three `gl_func_00000000(...)` calls inside the dispatcher arm, fuzzy% improved (still partial because the bit-0x2 sub-path is TODO).
 
 **Companion entries:** `feedback-cross-function-inheritance-placeholder-extern-wrap` (same "fill stub arms" principle for register-inherited fragments).
+
+### feedback-split-fragments-over-extracts-on-internal-bcfl-landing-zone
+
+`scripts/split-fragments.py` recursively splits a multi-jr-ra .s file at every `jr ra` instance, producing N separate functions. This is correct for true N-function bundles, but FAILS when the parent has an internal `bc1fl`/forward-branch landing zone PAST its main `jr ra` epilogue. The "split-off" function is actually a branch landing zone of the parent's control flow.
+
+**Signature:** parent's tail looks like
+```
+bc1fl  $f6, +N        ; PC + 4 + N*4 lands inside the "split-off" function
+sb     $tN, X(...)    ; delay-likely slot
+jr     ra              ; parent's main return
+nop                    ; (or another store) delay slot
+```
+Then the `bc1fl` target is at offset PC+4+N*4, which (after split-fragments runs) lives in a separate .s file. The fragment is typically 2-4 insns: a store + jr ra + nop. No prologue, uses caller-set $tN/$aN.
+
+**Verified case (2026-05-07):** `gl_func_0003A9E8` (Quad4 reader) split into a 4-function bundle. Recursive split extracted `game_libs_func_0003AC50` as a 3-insn `sb t2, 3(a0); jr ra; nop` fragment. The parent `game_libs_func_0003AA5C`'s `bc1fl $f6, 4` at offset 0x3AC40 targets 0x3AC54 (= INSIDE the 0x3AC50 fragment) — so the split is wrong.
+
+**Detection during recursive split:** before `split-fragments.py` extracts the next chunk, check whether the parent has a `bc1fl`/`bc1tl`/`beql`/`bnel` whose computed target lies past the parent's `jr ra` but inside the would-be-split-off function. If yes, that's an internal branch landing zone, not a separate function — STOP splitting.
+
+**Recovery:** use the merge-fragments skill to merge the wrongly-extracted fragment back. Steps:
+1. Append fragment's instructions to parent's .s tail.
+2. Increase parent's `nonmatching <name>, <SIZE>` by the fragment's bytes.
+3. Delete fragment's .s file.
+4. Remove fragment's `INCLUDE_ASM` line from .c.
+5. Add `<fragment_name> = 0x<addr>;` to `undefined_syms_auto.txt` for any cross-function callers.
+6. Track in `DECOMPILED_FUNCTIONS.md`'s "Fragment Merges Performed" section.
+
+**Future-proofing:** `split-fragments.py` should be enhanced to detect this case automatically — e.g., before splitting at insn N, check all branch instructions in the to-be-parent for targets ≥ N. If any target is in the to-be-fragment's range, refuse to split. Until then, the recursive call MUST inspect each split for the internal-landing-zone signature.
