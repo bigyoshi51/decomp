@@ -4495,3 +4495,30 @@ _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule (pe
 - Inside loop/conditional body that IDO might collapse → keep
 - At function tail before `}` → remove (document in block comment instead)
 - If unsure, try removing one, rebuild, check fuzzy%. If unchanged or worse, restore.
+
+### feedback-split-fragments-over-extracts-on-suffix-stub-alt-entries
+
+Companion case to `feedback-split-fragments-over-extracts-on-internal-bcfl-landing-zone`. The recursive `scripts/split-fragments.py` ALSO over-extracts when a parent function has trailing 2-insn alt-entry stubs of the form `jr ra; sw a0, 0(sp)` (the SUFFIX_BYTES-absorption pattern documented in `docs/POST_CC_RECIPES.md` for `gl_func_000070A0` etc).
+
+**Signature:** parent function ends at `jr ra` + delay slot, then immediately followed by N copies of the 2-word stub:
+```
+03E00008 jr ra
+AFA40000 sw a0, 0(sp)        ; "delay slot" of next stub's jr ra
+```
+Each stub satisfies `grep -c 03E00008` "this counts as a function boundary" but they're NOT separate functions — they're alt-entry trampolines absorbed into the parent's symbol via post-cc SUFFIX_BYTES.
+
+**Difference from bc1fl-landing-zone case:** the bc1fl version has the parent's branch INTO the fragment's body. The SUFFIX-stub version has NO branch — the stubs are tail-glued to absorb extra symbol bytes. Detection is by INSPECTION of the stubs (2-insn `jr ra; sw a0, 0(sp)` repeating pattern) rather than by control-flow.
+
+**Verified case (2026-05-07):** `gl_func_000070FC` (146 insns / 0x248) had 4 such stubs at 0x228/0x230/0x238/0x240. Recursive split-fragments produced 4 spurious `game_libs_func_00007324`/`732C`/`7334`/`733C` files; manually reverted via `git checkout asm/.../gl_func_000070FC.s` + `rm` of the 4 spurious files + `git checkout` of the .c file's auto-appended INCLUDE_ASM lines.
+
+**Recovery same as bc1fl case:** undo splits via `git checkout` (since splits were just-introduced) or via merge-fragments skill (if commits already landed).
+
+**Recognition recipe before splitting:** look at the candidate's last 8 bytes BEFORE running split-fragments:
+```
+last_2_words=$(tail -3 asm/.../<func>.s | head -2 | grep -oE '0x[0-9A-F]{8}' | tr -d '\n')
+# If $last_2_words == "0x03E000080xAFA40000", the function ends with a SUFFIX stub.
+# Multiple of these in a row (every 8 bytes) = SUFFIX-absorbed alt-entries.
+# Use SUFFIX_BYTES recipe instead of split-fragments.
+```
+
+**Future-proofing:** `split-fragments.py` should auto-detect this pattern and refuse to split. Until then, ALWAYS check for the `03E00008/AFA40000` repeating tail before recursive splits, especially in game_libs / mgrproc_uso / timproc_uso (where SUFFIX_BYTES recipes have already been applied to similar functions).
