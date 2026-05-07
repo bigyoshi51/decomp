@@ -6435,9 +6435,14 @@ All-4-spills + jr ra + no-body = varargs.
 | Spills | Target bytes                                | C                               |
 |--------|---------------------------------------------|---------------------------------|
 | 2      | `sw a0, 0(sp); jr ra; sw a1, 4(sp)` (3 instr, size 0xC) | `void f(int a0, int a1) {}` |
-| (more args — extrapolate: 3-arg would spill a0,a1,a2) |
+| 3      | `sw a0, 0(sp); sw a1, 4(sp); jr ra; sw a2, 8(sp)` (4 instr, size 0x10) | `void f(int a0, int a1, int a2) {}` |
+| (4-arg — extrapolate: 5 insns, all-arg-spills + jr ra with last-spill in delay) |
 
-The 2-spill case is clearly distinct from varargs: no `addiu sp, -8`, only 2 stores to caller arg slots, scheduler fills jr-ra delay slot with one of the sw instructions. Confirmed on `bootup_uso/func_0000EDC0` (2-arg empty).
+The 2-spill and 3-spill cases are clearly distinct from varargs: no `addiu sp, -8`, n stores to caller arg slots, scheduler fills jr-ra delay slot with the LAST store. Confirmed on `bootup_uso/func_0000EDC0` (2-arg) and `game_libs/game_libs_func_00044DC4` (3-arg, exact match 2026-05-07).
+
+**Critical: NO varargs (no `...`) for the no-frame variants.** Adding `...` to the 3-arg signature regresses to the 7-insn 0x1C-frame variant (the documented varargs form above). Counter-intuitive — the section title says "varargs empty body" but the no-frame pattern is for plain n-arg empty bodies, not varargs. Decision rule:
+- 7-insn / 0x1C frame, 4 spills + addiu-sp pair → `void f(int a0, ...) {}` (varargs)
+- 3 or 4 insn / no frame, 2-3 spills → `void f(int a0, int a1[, int a2]) {}` (plain n-arg)
 
 **How to apply:**
 
