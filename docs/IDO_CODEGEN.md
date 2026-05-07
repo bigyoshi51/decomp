@@ -3663,6 +3663,21 @@ cfe: Error: src/<file>.c, line N: Syntax Error
 
 **Origin:** 2026-04-19 game_libs gl_func_000671E4. 92 % with plain C; tried `register asm("$7")` and the tool cache lied about a 100 % match. Real behavior is compile error. Reverted to NON_MATCHING wrap.
 
+**Extension (2026-05-07, func_00005068 dead-spill cap):** IDO 7.1's CFE
+also rejects PLAIN inline-asm blocks (`__asm__ volatile("sw $a1, 0x4($sp)")`)
+— not just the `register asm("$N")` decl form. Same `cfe: Error: Syntax Error`
+at the `__asm__` keyword. The full GCC inline-asm extension is unavailable
+in IDO. If you need to inject a single instruction (e.g., an outgoing-arg
+spill IDO's scheduler refuses to emit), the only paths are:
+  - INSN_PATCH at a fixed offset (post-cc bytes-overwrite)
+  - SUFFIX_BYTES / PREFIX_BYTES at function head/tail
+  - asm-processor GLOBAL_ASM partial fragment (heavyweight)
+
+Do not waste time trying `__asm__("nop")` as a scheduling barrier or
+`__asm__ volatile(...)` for forced emit — the parser stops at the keyword.
+GCC scheduling-barrier idioms borrowed from Glover/decompile-skill notes
+do not apply.
+
 ---
 
 ---
