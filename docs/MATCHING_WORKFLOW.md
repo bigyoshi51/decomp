@@ -4292,3 +4292,23 @@ So 2-insn `jr ra; nop` empty stubs are fine in -O2 / -g3 files but BLOCKED in -O
 **Verified case (2026-05-07):** attempted to extend `bootup_uso_o0_11D40.c` to absorb the 0x11D40..0x11DF8 sub-cluster including 11D78/11DBC (NM, want -O0) and 11D70/11DB4/11DF8 (empty stubs, 2 insns each). Build failed with `too short .text block within asm/nonmatchings/bootup_uso/func_00011D70.s`. Reverted; 11D78/11DBC stay NM-wrapped in `bootup_uso_tail3a_bot.c` (-O2 -g3) and grinding for them happens against -O2 emit.
 
 **Companion to:** `docs/MATCHING_WORKFLOW.md#feedback-o0-cluster-include-asm-sandwich` — the sandwich recipe; this section documents its limit.
+
+---
+
+<a id="feedback-file-split-may-unblock-rmips26-truncation"></a>
+## File-splitting a giant .c can unblock pre-existing R_MIPS_26 truncation errors as a side-benefit
+
+_When `mips-linux-gnu-ld` reports `relocation truncated to fit: R_MIPS_26 against gl_func_<TARGET>` in a multi-MB .o, splitting that .c into smaller .o files (per the o0-cluster file-split recipe) often resolves the error transparently — even though the split was motivated by per-file -O0 override, not by the link error._
+
+**Why:** R_MIPS_26 is a 26-bit relative offset (max ±0x1FFFFFFC, ~32 MB) used by `jal` instructions. Truncation fires when the .text section grows large enough that the jal destination falls outside the reachable range from the call site. Reducing the .o's .text size by splitting brings call sites closer to their targets in linker layout, often within range again.
+
+**Verified case (2026-05-07):** `bigyoshi51/1080-decomp` had a persistent build-link error blocking full-ROM byte-verify for many sessions: `build/src/game_libs/game_libs_post.c.o: in function gl_func_00055B44: (.text+0x391d8): relocation truncated to fit: R_MIPS_26 against gl_func_00000000`. Split `game_libs.c` (0xEC00 .text) into 3 files (game_libs.c shrunk to 0x949C, game_libs_o0_949C.c at 0x100 -O0, game_libs_tail.c at 0x5664). After the split, link succeeded with no R_MIPS_26 errors anywhere — both the original error AND a previously-masked `func_800021D0` undefined-reference (now fixed via undefined_syms_auto.txt addition).
+
+**How to apply:** if your build is link-blocked by R_MIPS_26 truncation in a multi-MB .o, and you have an o0-cluster file-split queued for that file (or even just an arbitrary internal boundary you can split on), do the split — it may unblock the link as a free win. The split-then-test workflow:
+
+1. Pick a natural split boundary (function-aligned, ideally where an NM-cluster lives that wants -O0 anyway).
+2. Execute the standard 5-step file-split recipe.
+3. Build. If the R_MIPS_26 was the only thing blocking, link will now succeed.
+4. Refresh expected/ baselines per `feedback_after_file_split_refresh_both_expected_objs`.
+
+**Note on undefined-reference cascades:** when the link error progresses past R_MIPS_26, it may surface previously-masked undefined references (e.g. an alabel in a fragment-merged function that callers reference but undefined_syms_auto.txt doesn't map). Add those one-by-one as they show; each clears another link blocker. The split typically reveals a chain of 1-3 such issues that were always lurking but invisible behind the first-failing R_MIPS_26.
