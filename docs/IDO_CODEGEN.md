@@ -137,6 +137,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### other
 
+- [Asm epilogue with no `move v0, ...` before `jr ra` indicates void return — match the C signature](#feedback-ido-epilogue-no-move-v0-implies-void-return) — _When the target's epilogue is `lw ra, X(sp); addiu sp, sp, +N; jr ra; nop` with NO `move v0, ...` (or `or v0, ..., zero`) immediately before `jr ra`, the function returns `void`. C bodies declared as `T *fn(...)` with `return X;` will emit a spurious `move v0, X` that doesn't appear in target. Fix: declare as `void fn(...)`, drop the `return X;`. Verified 2026-05-07 on `game_uso_func_00001DDC`: 19.64% → 19.90% just from the signature change._
 - [IDO `addu` operand order depends on whether expression is split into a named local](#feedback-ido-addu-operand-order) — For `v1 = A + B` in C, IDO picks `addu $rd, $rs, $rt` with `$rs = first-computed operand` and `$rt = second-computed operand`.
 - [IDO doesn't share `lui $at` across stores to adjacent externs — struct retype DOESN'T fix it at -O1](#feedback-ido-adjacent-extern-shared-at) — _IDO -O1 (and possibly -O2) emits a fresh `lui $at` before EACH store to an external symbol, even when the symbols are adjacent bytes AND are declared as fields of a single struct.
 - [Two adjacent-offset global stores — split into per-store extern symbols to force `lui $at` per store](#feedback-ido-adjacent-store-extern-split) — _When target emits `lui $at, HI; sw X, 0($at); lui $at, HI; sw Y, 4($at)` (two independent `lui $at` per store, no cached base pointer), writing the obvious C `*(int*)&SYM = X; *((int*)&SYM + 1) = Y;` makes IDO cache…
@@ -7558,3 +7559,45 @@ Result: even when the div sequence itself is byte-correct, the surrounding code 
 4. If after both fixes the $s-reg slot is still wrong, the gap is likely deeper register-pressure analysis (use `cc1 -dg` to inspect the .greg dump per the skill's "Debugging register allocation" notes).
 
 **Don't do it the other direction:** don't substitute literal `1024` for `(x<<10)/x` when target uses the literal — IDO will emit `li t, 0x400` and the div sequence won't appear. The div pattern signals the substitution is needed; the literal pattern signals it isn't.
+
+---
+
+<a id="feedback-ido-epilogue-no-move-v0-implies-void-return"></a>
+## Asm epilogue with no `move v0, ...` before `jr ra` indicates void return — match the C signature
+
+_When the target's epilogue is `lw ra, X(sp); addiu sp, sp, +N; jr ra; nop` with NO `move v0, ...` (or `or v0, ..., zero`) immediately before `jr ra`, the function returns `void`. C bodies declared as `T *fn(...)` with `return X;` will emit a spurious `move v0, X` that doesn't appear in target._
+
+**The diagnostic — look at the last 4 insns before `jr ra`:**
+
+| Asm tail | Inferred return type |
+|----------|---------------------|
+| `lw ra, X(sp); addiu sp, +N; jr ra; nop` | `void` |
+| `lw ra, X(sp); addiu sp, +N; jr ra; <reg-set>` (delay-slot fill) | `void` (delay-slot is incidental) |
+| `... move v0, X; lw ra, ...; addiu sp, +N; jr ra; nop` | non-void (returns whatever's in X) |
+| `lw ra, X(sp); addiu sp, +N; jr ra; or v0, X, $0` (delay) | non-void (returns X via delay-slot move) |
+
+The key signal is whether `$v0` (or `$f0` for float-returning fns) is explicitly set in or near the epilogue. If not, the function returns void and any prior $v0 value just leaks out.
+
+**Why this matters for fuzzy%:** declaring `void *fn()` with `return X;` emits `move v0, X` (or `or v0, X, $0`) before the epilogue. If the target's tail doesn't have that instruction, you've added a spurious insn. Each spurious instruction misaligns surrounding asm, cascading into ~0.2-0.5pp fuzzy loss per spurious insn at this scale.
+
+**The C-source fix:**
+```c
+/* Before: */
+void *fn(int *a0) {
+    /* ... body ... */
+    return a0;
+}
+/* After: */
+void fn(int *a0) {
+    /* ... body ... */
+    /* no return statement */
+}
+```
+
+If the function had multiple `return X;` paths (e.g. early-exit "return 0" branches), all of them need to drop the value. Use `goto end;` and `(void)var;` at the end if the variable was load-bearing for documentation purposes.
+
+**Caveat — function MIGHT actually return something via $v0 leaking from prior computation.** Some functions have NO explicit `move v0` in the epilogue but DO return a value — whatever happened to be computed last. This is hard to distinguish from "returns void" without seeing call sites. If the function has internal callers that USE the return value, the C signature is non-void; if no callers exist (USO loader-called) or callers ignore the return, void is safe.
+
+**Verified case (2026-05-07):** `game_uso_func_00001DDC` (1080 game_uso). 383-insn function with 19.64% NM-wrap. Asm epilogue is `swc1 f8, 52(a2); lw ra, 20(sp); addiu sp, +384; jr ra; nop` — no `move v0`. Built with `void *fn(...)` + `return a0` was emitting `move v0, a1`. Changed to `void fn(...)` and dropped the return: 19.64% → 19.90% (+0.26pp). No internal callers, so signature change is safe.
+
+**How to apply:** when grinding an NM-wrap that's been stuck at low fuzzy%, compare the epilogue tail. If the build has `move v0` and expected doesn't, drop the return value.
