@@ -2030,10 +2030,16 @@ The pipeline order is `PROLOGUE_STEALS → PREFIX_BYTES → SUFFIX_BYTES → INS
 
 1. **Pick a different SUFFIX payload** — only viable if target's actual tail isn't `jr ra; nop`. (For the 24-insn family at offsets `0x10E2C/11368/113C8` etc, the body emits 22 insns ending in `lw ra; addiu sp; jr ra; nop` and SUFFIX adds `0,0` which extends to 24 insns of `... jr ra; nop; nop; nop`. The skip-path-2 check sees `lw ra; addiu sp` at offsets 80-87 — NOT matching `0x00, 0x00` — so no false positive.)
 
-2. **Add `--no-skip-tail` flag to inject-suffix-bytes.py** — preferred long-term fix. Lets the Makefile per-function override the skip-path-2 check when the user knows INSN_PATCH will overwrite the natural epilogue.
+2. **Use `SUFFIX_BYTES_FORCE` Makefile variable** (IMPLEMENTED 2026-05-07) — passes `--allow-natural-epilogue` to `inject-suffix-bytes.py`, bypassing skip-path-2. Identical syntax to `SUFFIX_BYTES`:
+   ```make
+   build/src/<seg>/<file>.c.o: SUFFIX_BYTES_FORCE := <func>=<words>
+   ```
+   Use this only when you've confirmed the natural-epilogue match is a false positive — i.e., INSN_PATCH overrides the body's last 2 insns and the SUFFIX appends new tail bytes that target wants. Otherwise prefer `SUFFIX_BYTES` (the safer default that catches genuine INCLUDE_ASM-build cases).
 
 3. **Reorder pipeline** to run INSN_PATCH BEFORE SUFFIX_BYTES — risky, affects all functions; cross-effects unverified.
 
 The skip-path-2 detection logic was designed for INCLUDE_ASM-built objects (where the .s file's `nonmatching SIZE` declaration covers the suffix bytes that target's symbol layout expects). For C-emit builds with INSN_PATCH that overwrites the natural epilogue, the check is a false positive.
 
-Documented as a multi-pass blocker on `game_uso_func_00010FB8` (NM wrap header lists the issue with the 27-insn body needing 2 trailing insns from SUFFIX). The 24-insn family worked because their bodies emit 22 insns (not 25), so the natural epilogue lands at offsets 80-87, not at the SUFFIX-payload-match position.
+**Verified case (2026-05-07):** `game_uso_func_00010FB8` — 27-insn 2-call sibling of the 24-insn 0x10E2C/11368/113C8 family. Body emits 25 insns at -O2; recipe uses `SUFFIX_BYTES_FORCE := game_uso_func_00010FB8=0x03E00008,0x00000000` (8-byte jr ra+nop append, extends to 27) + INSN_PATCH 10 insns at offsets 0x30-0x60 (target's t0-base form + varargs spills a1@sp+0x4, a2@sp+0x8 before 2nd jal). Without the FORCE variant, the body's natural last 2 insns (`jr ra; nop` at offsets 0x5C-0x60) match the suffix payload byte-for-byte, triggering skip-path-2. INSN_PATCH then overrode 0x5C/0x60 with `lw ra; addiu sp` and the function ended up with no jr ra anywhere. Build linked but function would not return. With `SUFFIX_BYTES_FORCE`, the suffix injection bypasses skip-path-2 and the function matches byte-exact.
+
+The 24-insn family escapes this because their bodies emit 22 insns ending in `lw ra; addiu sp; jr ra; nop` and SUFFIX adds `0x00, 0x00` (2 nops) — the last 8 bytes of st_size are `lw ra; addiu sp` (NOT `0x00, 0x00`), so no false positive.
