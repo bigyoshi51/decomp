@@ -4694,6 +4694,29 @@ optimizer. Instead document the cap and move on.
 already documenting 4 prior variants as failed; the 5th confirms the
 loop-optimizer-pass nature of the cap.
 
+**2026-05-07 UPDATE — `while(1) { body; if (cond) break; }` DEFEATS the cap.**
+
+The 7th variant on func_80001184 was a structural reshape from `do-while` to:
+
+```c
+while (1) {
+    ptr += 4;
+    ptr[-4] = 0; ptr[-3] = 0; ptr[-2] = 0; ptr[-1] = 0;
+    if (ptr == end) break;
+}
+```
+
+This produces target's SINGLE-LOOP shape (no duplicate, no `subu/andi` guard). Confirmed via standalone IDO -O2 build. The auto-unroll trigger is keyed on detecting a count-bounded `do-while`/`for` shape that the loop optimizer can prove has a constant trip count from bound expressions. `while(1) { ...; if (...) break; }` looks like an unbounded loop with an early-exit to the optimizer, so the unroll pass doesn't kick in.
+
+**Why this works where 5 prior variants didn't:** the prior variants all kept the `do-while` or `for` keyword as the loop construct. IDO's loop optimizer recognizes those as count-bounded by walking the condition expression. `while (1)` with internal `break` is parsed as an infinite loop and the optimizer skips it.
+
+**Apply this whenever:**
+- Target has a single-iter loop body of zeroing/copying stores
+- Your IDO -O2 emit duplicates the body with a `subu/andi 0x3F` alignment guard prefix
+- Bound is an extern address or same-array offset
+
+Switch the `do-while` to `while(1) { body; if (cond) break; }`. Verified on func_80001184 (kernel_000.c).
+
 ---
 
 ---
