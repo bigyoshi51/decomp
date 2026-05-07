@@ -102,6 +102,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Splat mis-boundary direction 4 — successor's prologue stolen by predecessor (reverse merge)](#feedback-splat-prologue-stolen-by-predecessor) — When a function's prologue is `lui $reg, 0; addiu $reg, $reg, 0` loading a base pointer BEFORE the `addiu $sp, $sp, -N` stack adjust, splat can't see those 2 insns as part of the function and appends them to the…
 - [Re-running splat clobbers tenshoe.ld and include_asm.h](#feedback-splat-rerun-gotchas) — _splat regenerates tenshoe.ld and include/include_asm.h from scratch every run, destroying hand-tuned per-file ordering and asm-processor macros.
 - [A 1-word "function" (size 0x4) containing a single arg-load is the stolen HEAD of the next function](#feedback-splat-size4-arg-load-is-next-func-head) — _Splat sometimes peels the first 1-2 instructions (pre-prologue arg loads or USO-placeholder loads) off a function into their own tiny symbol (size 0x4 or 0x8).
+- [game_uso name-vs-VRAM skew: many `game_uso_func_<NAME>` symbols sit at a different address than their numeric name suggests (mostly +4, some -36)](#feedback-game-uso-name-vs-address-skew) — Cross-checking splat .s files against `expected/.o` objdump shows widespread skew. Treat splat .s as the byte-truth and objdump as the mnemonic-truth; ignore the splat-claimed address column when comparing.
 - [scripts/truncate-elf-text.py must shrink trailing symbols past sh_size, not just .text section size](#feedback-truncate-elf-text-must-shrink-symbols) — _When TRUNCATE_TEXT shrinks .text below where the last function symbol ends, objdiff rejects the .o with `Symbol data out of bounds: 0xN..0xM`.
 - [TRUNCATE_TEXT blocks C conversion of asm-padded functions in bootup_uso](#feedback-truncate-text-blocks-c-conversion) — _In 1080's bootup_uso.c (and its tail[1-4].c splits), converting an `INCLUDE_ASM` to C can fail with "`.text is already smaller (0xNNNN < 0xMMMM)`" when the original asm has trailing alignment nops that IDO doesn't…
 - [TRUNCATE_TEXT must run AFTER SUFFIX_BYTES in the Makefile build rule, not before](#feedback-truncate-text-must-run-after-suffix-bytes) — _TRUNCATE_TEXT errors with `.text is already smaller` if a function's C body emit is shorter than its INCLUDE_ASM bytes AND SUFFIX_BYTES is meant to restore the trailing bytes.
@@ -3273,6 +3274,25 @@ _Mirror of the merge-fragments case. When a leaf function has NO `addiu $sp, -N`
 Earlier note from 2026-05-05 splitting `gl_func_00066404` (in `game_libs_post.c`) saw the same misroute to `game_libs.c` line 1487/1489.
 
 **Follow-up memory to write when extending:** once `generate-uso-asm.py` is patched to detect jr-ra boundaries, update or retire this memo and re-run detection. Expect the 400+ candidate count to apply to other USOs too — high leverage.
+
+<a id="feedback-game-uso-name-vs-address-skew"></a>
+**Widespread name-vs-address skew in `expected/src/game_uso/game_uso.c.o`** (verified 2026-05-07): many `game_uso_func_<NAME>` symbols sit at a different VRAM than their numeric name suggests. The shift is sometimes +4 (function actually starts 4 bytes EARLIER than its name claims, because a small leading insn — usually a stray `nop` or a hoisted `lui`/`lwc1` — was attributed to the previous function in the splat config), and sometimes -36 / other offsets where multiple functions are misaligned in a row. Examples seen on a single audit: `game_uso_func_000003F8` lives at 0x3FC, `game_uso_func_0000052C` at 0x530, `game_uso_func_00000B3C` at 0xB18 (-36), `game_uso_func_00001644` at 0x1620 (-36). Audit script:
+
+```bash
+mips-linux-gnu-objdump -t expected/src/game_uso/game_uso.c.o \
+  | awk '/F .text/ && /game_uso_func_/ {print $1, $NF}' \
+  | python3 -c "
+import sys
+for line in sys.stdin:
+    a,n = line.split()
+    if '.NON_MATCHING' in n: continue
+    addr = int(a, 16); named = int(n.replace('game_uso_func_',''), 16)
+    if addr != named: print(f'{n}: actual=0x{addr:x} named=0x{named:x} diff={addr-named}')"
+```
+
+**Why this matters:** when you read `asm/nonmatchings/game_uso/game_uso/game_uso_func_<NAME>.s` and cross-check with `mips-linux-gnu-objdump -d --disassemble=<NAME> expected/src/game_uso/game_uso.c.o`, the addresses in the two listings differ by the skew. The first .word in the splat .s file (e.g. `0x27BDFFE8 = addiu sp,-0x18`) typically appears in the objdump listing at `<named>-4` (or wherever the symbol actually starts). The function bytes are still the same; only the label-to-address mapping is off. **Don't try to "fix" this by editing the splat YAML during a /decompile run** — the build is calibrated against the current naming, and shifting a name shifts every downstream `undefined_syms_auto.txt` entry.
+
+**How to apply:** when decompiling a `game_uso_func_*`, treat the splat .s file as the byte-truth (the .word stream is what you must reproduce) and the objdump listing of `expected/.o` as the mnemonic-truth (clearer for reading). Ignore the `<address> <insn>` column in the splat .s file when comparing to objdump — it's the splat-claimed address, not the linker address. The skew also makes the "prologue-stolen successor" detection (skill 1a) noisier in `game_uso`: a 4-byte mismatch may be cosmetic naming-skew, not a real prologue-steal.
 
 ---
 
