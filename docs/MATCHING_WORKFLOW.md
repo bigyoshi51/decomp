@@ -14,6 +14,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — _Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined NULL, stray apostrophes) compile fine by default but break the moment anyone…
 - [Partial NM-wrap with empty/stub inner arms can score 0% — IDO over-optimizes a loop body that has no observable side effects](#feedback-nm-partial-body-empty-arms-zero-percent) — _When a first-pass NM-wrap stubs out conditional arms with `(void)var;` instead of writing real call sequences, IDO -O2 sees the loop body as side-effect-free and unrolls/folds it into a much smaller emit (e.g. 95 insns vs target's 150). objdiff reports 0% match. Fill stub arms with at least one `gl_func_00000000(...)` per arm — the call's opaque side-effect prevents the unroll._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
+- [Re-verify "USO bundle blocked" claims in NM-wrap comments — the cited blocker may not currently apply](#feedback-reverify-bundle-blocked-claims) — _When an NM-wrap comment says "Bundle stays INCLUDE_ASM (per `feedback_uso_split_fragments_breaks_expected_match.md`)" or similar, mechanically check the BLOCKER CONDITION before accepting it. The blocker only applies when the predecessor has an existing SUFFIX_BYTES/PREFIX_BYTES/PROLOGUE_STEALS recipe in the Makefile (per the conditional in `feedback-uso-split-fragments-breaks-expected-match-conditional`). Run `grep <predecessor> Makefile` on the immediate predecessor and successor — if neither appears, the case is "genuinely fresh" and split-fragments.py is the right tool. Two recent verifications: `gl_func_000682F8` (2026-05-07, 5-function bundle, no Makefile recipes on neighbors → 3 exact matches) and `timproc_uso_b3_func_00000DE4` (2026-05-07, 3-function bundle, no recipes → 3 exact matches). The "blocked" comments were written before the doc rule clarified the conditional nature. Don't defer to in-source blocker citations without re-checking the actual condition._
 - [-DNON_MATCHING build of multi-function -O0 file corrupts the byte alignment of NM-wrapped neighbors](#feedback-nm-build-corrupts-neighbors-in-multi-func-o0-file) — _When you have multiple functions in a `<seg>_o0_NNN.c` file (each NM-wrapped) and build with `-DNON_MATCHING`, function N's wrong-size emit (e.g. extra `b +1; nop`) shifts function N+1's start offset, which the…
 - [`expected/.o` can carry prior -DNON_MATCHING build bytes; always refresh baseline before trusting a "matches" signal](#feedback-nm-build-expected-contamination) — _The existing `feedback_make_expected_contamination.md` covers `make expected` accidentally copying YOUR C build as the baseline.
 - [Build incantation for testing a NON_MATCHING C body in 1080](#feedback-nm-build-incantation) — _The working way to compile the #ifdef NON_MATCHING path against the real toolchain is `make <.o> CPPFLAGS="-I include -I src -DNON_MATCHING"`.
@@ -4522,3 +4523,31 @@ last_2_words=$(tail -3 asm/.../<func>.s | head -2 | grep -oE '0x[0-9A-F]{8}' | t
 ```
 
 **Future-proofing:** `split-fragments.py` should auto-detect this pattern and refuse to split. Until then, ALWAYS check for the `03E00008/AFA40000` repeating tail before recursive splits, especially in game_libs / mgrproc_uso / timproc_uso (where SUFFIX_BYTES recipes have already been applied to similar functions).
+
+---
+
+<a id="feedback-reverify-bundle-blocked-claims"></a>
+## Re-verify "USO bundle blocked" claims in NM-wrap comments — the cited blocker may not currently apply
+
+_When an NM-wrap comment says "Bundle stays INCLUDE_ASM (per feedback_uso_split_fragments_breaks_expected_match.md)" or similar, mechanically check the BLOCKER CONDITION before accepting it. The blocker only applies when the predecessor has an existing SUFFIX_BYTES/PREFIX_BYTES/PROLOGUE_STEALS recipe in the Makefile. If the immediate predecessor and successor have NO Makefile recipes, the case is "genuinely fresh" and split-fragments.py is the right tool._
+
+**The check:**
+```bash
+# For a function `<func_name>`, look at its immediate predecessor and successor
+ls asm/nonmatchings/<seg>/<seg>/ | sort | grep -B1 -A1 "<func_name>"
+# Then for each neighbor, check the Makefile
+grep "<predecessor>\|<successor>" Makefile
+```
+If neither appears in `SUFFIX_BYTES :=`, `PREFIX_BYTES :=`, or `PROLOGUE_STEALS :=` lines, the bundle is fresh. Run `split-fragments.py` recursively until no more splits, write C bodies for each sub-function, refresh `expected/<seg>/<file>.c.o` from `build/src/<seg>/<file>.c.o`, and verify byte-exact via `objdump -M no-aliases`.
+
+**Why these claims persist as stale:** the in-source comment was likely added before the doc rule at `MATCHING_WORKFLOW.md:4193` clarified the conditional nature ("Only run split-fragments.py when the boundary case is genuinely fresh — no pre-existing SUFFIX/PREFIX recipe on predecessor or successor"). The original `feedback_uso_split_fragments_breaks_expected_match` memo described the unconditional bug; the conditional refinement came later.
+
+**Two recent verifications (both produced 3 exact matches each):**
+- `gl_func_000682F8` (2026-05-07): 5-function bundle (1 main + 4 trailing 2-insn save-arg sentinels). Neighbors had no Makefile recipes. Split + decompiled the 3 sentinels (the 4th was alignment padding). Per `docs/IDO_CODEGEN.md#feedback-ido-save-arg-sentinel-empty-body`.
+- `timproc_uso_b3_func_00000DE4` (2026-05-07): 3-function bundle (5-call wrapper + 9-insn ptr-chase + 3-insn return-0 stub). Predecessor `_00000D60` and successor `_00000E60` had no recipes. Each sub-function decompiled cleanly.
+
+**Diagnostic phrases to look for:** "Bundle stays INCLUDE_ASM", "splat couldn't separate", "USO bundle splits break expected/.o byte layout per <feedback memo>". Treat all of these as candidates for re-verification, not settled blockers.
+
+**When the blocker DOES apply:** the predecessor or successor IS in a Makefile recipe. The recipe + the splat boundary together form a valid byte layout; splitting the asm AGAIN would double-emit the inserted bytes (per the original blocker case in the doc). In that case, keep the bundle as-is.
+
+**How to apply:** add this check as step 0 when picking up any NM-wrap that cites the bundle-blocked claim. Total time-cost: ~30 seconds (two greps). Reward: potentially 3+ exact matches per bundle.
