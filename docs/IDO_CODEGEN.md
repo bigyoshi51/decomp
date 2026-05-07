@@ -2885,7 +2885,30 @@ mov.s $f14, $f12       # delay slot (pass single float to both f12 and f14)
 
 **Origin:** 2026-04-19 game_libs gl_func_00067AC8. Tried 3 variants; all failed for the reasons above. Reverted to INCLUDE_ASM.
 
-**Stack-arg variant (2026-05-02, game_uso_func_00000858, 8-arg constructor):**
+**Float-RETURN inverse case (2026-05-07, mgrproc_uso_func_000005D0):**
+
+The float-arg case above is "C wants to pass float, K&R extern doesn't allow it." There's an inverse case: "C wants to USE the return value as float, but K&R extern says it returns int." This *is* solvable via function-pointer cast, even though the float-ARG case isn't.
+
+Shape: caller does `jal gl_func` then `mul.s f0, f0, f4` on the FPU return register `$f0`. From C, `((int)gl_func_00000000() * something_float)` doesn't work — IDO promotes through int math.
+
+**Workaround that works:**
+
+```c
+extern int gl_func_00000000();   // K&R, file-wide
+typedef float (*FloatFn)(void);  // local typedef
+...
+val = ((FloatFn)gl_func_00000000)() * scale_float;
+```
+
+The cast doesn't change the call shape — it's still `jal gl_func_00000000` with no arg setup (matches asm). It just lets C treat the return as float. IDO emits the post-call `mul.s f6, f0, f4` chain correctly.
+
+**Why this works when the float-ARG case doesn't:**
+- For ARGS: K&R promotion happens at the call site BEFORE the jal — the prologue-stage arg setup goes through `$f12 → $f12,$f13` (double) instead of `$f12` alone. The cast can't undo this because the K&R declaration is consulted for promotion, not the cast.
+- For RETURN: K&R declaration affects how the COMPILER interprets `$v0` (or `$f0`) after the jal. A function-pointer cast IS the type at the call site, so the compiler treats `$f0` as the float return. The asm shape (jal address + delay slot) is identical between the int-typed and float-typed variants.
+
+**How to detect this case:** asm has `jal gl_func_00000000` (no arg setup, void→float) followed by an FPU instruction (`mul.s`, `add.s`, `swc1`, `mfc1 $tN, $f0`, etc.) that consumes `$f0`. C code needs to feed the return into a float operation.
+
+
 
 The same K&R-promotion issue affects **stack-passed float args** (5th+ position in O32). Target asm:
 ```
