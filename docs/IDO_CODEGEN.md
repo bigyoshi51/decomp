@@ -164,6 +164,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [bootup_uso void setters use unfilled delay slot (sw; jr; nop) — not matchable from C](#feedback-ido-unfilled-store-return) — _Some bootup_uso tiny void setters produce `sw; jr $ra; nop` instead of `jr $ra; sw` (delay slot).
 - [Splat synthetic stubs — INCLUDE_ASM + file-scope `extern int f()` (K&R, int return)](#feedback-ido-unspecified-args) — _For stubs like bootup_uso's func_00000000 that callers use with varying arg counts and sometimes want a return value: INCLUDE_ASM the body, and file-scope declare `extern int f();`.
 - [IDO $v0 vs $t-regs — named locals get $v0, inlined expressions get $t6/$t7/$t8](#feedback-ido-v0-reuse-via-locals) — IDO assigns $v0 to named locals (esp. short-lived ones) and $t-regs to intermediate expression temps.
+- [Brace-block scope for short-lived named locals keeps stack frame at natural size](#feedback-ido-brace-block-scope-saves-stack-frame-bytes) — When you introduce named locals to flip IDO's reg pick, declaring at function scope grows the frame by 8 bytes; wrapping in `{ }` keeps the frame natural while preserving the reg-pick win. Verified +0.21pp on mgrproc_uso_func_00001AD0.
 - [`void f(int a0, ...)` with empty body spills all 4 arg regs to caller slots](#feedback-ido-varargs-empty-body) — When target asm is `addiu sp, -8; sw a0, 8(sp); sw a1, 12(sp); sw a2, 16(sp); sw a3, 20(sp); jr ra; addiu sp, 8` — 4 consecutive spills of a0..a3 to caller's arg area, no jal, no other body — the original C was a…
 - [Typed-varargs extern (`int f(int,int,...)`) does NOT force IDO -O2 caller-side stack-arg spills (sw a1,4(sp); sw a2,8(sp))](#feedback-ido-varargs-extern-doesnt-force-caller-spill) — _When target asm shows defensive `sw a1,4(sp); sw a2,8(sp)` spills around a jal but mine doesn't, the natural fix-attempt is to declare a unique-aliased extern with explicit varargs sig.
 - [Use `void` return when target doesn't restore $v0 — int return forces IDO to spill v0 across calls](#feedback-ido-void-return-avoids-v0-spill) — When the asm doesn't have an explicit final `or v0, ...` epilogue insn AND v0 is consumed by an intermediate call (e.g. as $a2 arg in delay slot), the C should be `void` return, not `int`.
@@ -7444,3 +7445,39 @@ _When you need IDO to emit a dead-store at a SPECIFIC low frame offset (e.g., sp
 **Verified case (2026-05-07):** `func_00005068` in 1080-bootup_uso. 14-insn 2-call helper with target dead-store at sp+0x4 in jal delay slot. 6 documented variant attempts; volatile + buf-cast both produce the right insn count but wrong offset/frame. Cap confirmed.
 
 **How to apply:** when target has a "dead store at low frame offset within minimal frame," skip the volatile-local approach. Either accept the cap (NM-wrap at insn-count parity) or use post-cc INSN_PATCH if the build is in shift-tolerant byte-replacement scope (per `docs/POST_CC_RECIPES.md`).
+
+---
+
+<a id="feedback-ido-brace-block-scope-saves-stack-frame-bytes"></a>
+## Brace-block scope for short-lived named locals keeps stack frame at the natural size; function-scope declaration grows it by 8 bytes
+
+_When you introduce named locals to flip IDO's register pick (the `feedback-ido-v0-reuse-via-locals` / `feedback-ido-inline-keeps-t-regs` lever), declaring them at FUNCTION scope tells IDO's allocator to reserve dedicated stack slots even if those slots are never written. Wrapping the declaration in a brace-block `{ int *p_a = ...; ... }` keeps the frame at its natural size — IDO reuses existing slots once the brace-block exits._
+
+**Setup:** target function has frame 0x28 with intermediate `lw v1, X(v0); lw a2, Y(v0); lw a0, 0x800(v1); lw t6, 0x800(a2)` pattern (uses $v1/$a2 for the intermediate ptr loads). Naive C with inline expressions emits $t6/$t7 for the intermediates — wrong regs.
+
+**The lever (well-documented):** introduce named local pointers `int *p_a = (int*)v0[X/4]; int *p_b = (int*)v0[Y/4];` to make IDO pick $v1/$a2.
+
+**The trap:** declaring them at function scope grows the frame from 0x28 to 0x30 — 8 bytes too many. IDO reserves slots for the named locals even though the values only live within a few insns.
+
+**The fix:** wrap the named locals in a brace-block:
+```c
+v0 = ...;
+{
+    int *p_a = (int*)v0[X/4];
+    int *p_b = (int*)v0[Y/4];
+    n0 = p_a[0x800/4];
+    n1 = p_b[0x800/4];
+}
+gl_func(n0, ...);
+```
+
+The brace-block tells IDO the locals' lifetime ends at the closing brace, so the slots can be reused for other spills (or not allocated at all if the values fit in registers). Frame stays at 0x28.
+
+**Verified case (2026-05-07):** `mgrproc_uso_func_00001AD0` (1080 mgrproc_uso). Function-scope `int *p_a, *p_b` → frame 0x30, match 98.88%. Brace-block-scope same locals → frame 0x28, match 99.09%. Same register-pick win in both variants ($v1/$a2 for intermediates), only the frame size differs.
+
+**Caveat — does NOT shorten RTL live range:** an entry in `feedback-ido-block-reorder-not-source-flippable` notes "block-scope of locals does NOT shorten RTL live range" — that's about REGISTER pressure (the named local still gets a dedicated $s register as if it lived the whole function). The brace-block lever applies SPECIFICALLY to STACK frame sizing, not register liveness. Both findings can be true simultaneously.
+
+**How to apply:** when introducing named locals to flip IDO's register pick AND the target's frame size is smaller than your build's:
+1. First check whether the diff is +8 bytes of frame (look at `addiu sp, sp, -SIZE` immediates).
+2. If yes, wrap the locals in a brace-block. Often gets the last 0.2-0.5pp.
+3. If the frame size is correct but reg pick is still wrong, the issue isn't the brace-block — it's the named-local form itself (try `register int *p_a = ...` per `feedback-ido-register.md`, or revert to inline form).
