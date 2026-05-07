@@ -7379,3 +7379,24 @@ This is an aggressive scheduling pass that runs after the normal codegen — the
 **How to apply:** when target shows lui+lw before prologue with the lui's hi16 reloc-resolved against `&D_<seg>` and the body uses the loaded register immediately, this is the unflippable-schedule cap. Wrap NM with the structural decode; don't grind register-allocation knobs (the cap is scheduler-level, not regalloc-level). If post-cc-recipe promotion becomes possible (e.g., via a 2-insn-swap script that doesn't disturb relocations), this is a candidate.
 
 **Companion:** `docs/POST_CC_RECIPES.md` — the existing PROLOGUE_STEALS recipe handles the OPPOSITE case (predecessor's tail bleeds INTO this function's prologue) but doesn't apply here (the lui+lw is logically OUR function's, just scheduled differently).
+
+---
+
+<a id="feedback-ido-block-reorder-not-source-flippable"></a>
+## Confirmed-not-a-lever: swapping if-then-else (or goto) BLOCK ORDER in C source does NOT flip IDO -O2's emit order — the reorder is destination-shape-driven, not source-flippable
+
+_When two basic blocks of similar size dispatch via `if (key == K0) goto k0; if (key == K1) goto k1;` and IDO emits them in non-source order in the .o, swapping source order is a no-op: IDO consistently picks the same emit order based on RTL-level shape heuristics, regardless of which arm is written first._
+
+**Setup:** function with `goto k0` and `goto k1` arms in source order k0 → k1. IDO emits k1 first (offset 0x39C) and k0 second (0x3D8). Source clearly has k0 first; emit clearly has k1 first.
+
+**Hypothesis tested:** swap source order to k1 → k0. If IDO's reorder is "always-flip-source-order," the swapped source should produce k0-first emit. If reorder is "always-emit-k1-first" (intrinsic to the blocks themselves), swapping source has no effect.
+
+**Result (verified 2026-05-07 on `n64proc_uso_func_0000035C`):** IDO emits k1 first regardless of source order. Both source orderings produce structurally-identical .o output with k1 emitted first. Confirms the reorder operates on RTL post-front-end and is independent of C's textual block order.
+
+**How to apply:** when target's k0/k1 blocks are emitted in non-source order and your build emits them in the OPPOSITE-of-target order, do NOT spend cycles on source-block-swap variants. The cap is at IDO's RTL reorder pass (analogous to GCC's `reorg.c`), not reachable from C-source-form variation. Move on to other levers (per-call unique externs, INSN_PATCH for byte-replacement, or accept the cap as documented).
+
+**Companion confirmed-not-a-lever entries (this function class):**
+- decl-source-order is decoupled from `$s` pseudo-numbering (variant 6 of same function)
+- block-scope of locals does NOT shorten RTL live range (variant 23)
+- type narrowing (`short` vs `int`) is a no-op for `$s` priority when value used as int downstream (variant 25)
+- `-g0`/`-g2`/`-g3` flags don't shift `$s` allocation in IDO -O2 (variant 26)
