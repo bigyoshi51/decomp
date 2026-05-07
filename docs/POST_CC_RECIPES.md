@@ -24,6 +24,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [PREFIX_BYTES + INSN_PATCH combo can break "permanently locked" caps when C-emit shape differs from target by N leading + 1 trailing insn](#feedback-prefix-bytes-plus-insn-patch-breaks-documented-caps) — _A documented "permanently locked" NM cap (e.g. cross-function tail-share, IDO scheduling unflippables) can sometimes be broken by combining PREFIX_BYTES (inject N leading bytes that C can't produce) + INSN_PATCH…
 - [inject-prefix-bytes.py whitelist broadened 2026-05-04 — leaf-arithmetic entries now accepted](#feedback-prefix-bytes-refuses-leaf-functions) — _HISTORICAL — inject-prefix-bytes.py used to refuse functions whose first insn wasn't addiu sp / jr ra / opcode 0x09.
 - [PROLOGUE_STEALS belongs on the non_matching Makefile rule too — it's not metric-cheating like other post-cc recipes](#feedback-prologue-steals-belongs-on-non-matching-too) — _The non_matching build rule (`build/non_matching/src/%.c.o`) was originally written to skip ALL post-cc recipes (PROLOGUE_STEALS / PREFIX_BYTES / SUFFIX_BYTES / INSN_PATCH / TRUNCATE_TEXT) under the rationale "those…
+- [PROLOGUE_STEALS strips setup insns but cannot rename registers in the BODY — when the body references different regs than predecessor's stolen tail conventions, the splice produces a binary that reads uninitialized regs at runtime](#feedback-prologue-steals-cant-fix-register-name-mismatch-in-body) — _When predecessor's stolen tail sets convention regs (e.g. $v0=8, $at=&D) but C-emit's body picks IDO -O2's natural choices (e.g. $v1 for value, $v0 for address), splicing setup leaves body insns referencing uninitialized regs. C-level register-pin is blocked (IDO rejects register-T-x-asm). Cap stays NM with INCLUDE_ASM. Verified 2026-05-07 on `gl_func_0002D7D0`._
 - [PROLOGUE_STEALS and INSN_PATCH compose cleanly on the same function — strip prefix bytes first, then patch mid-function caps](#feedback-prologue-steals-plus-insn-patch-compose) — _Both recipes operate post-cc on the .o file.
 - [PROLOGUE_STEALS works even when the rest of the body has dangling-register uses — write C with non-char extern + PROLOGUE_STEALS=8 to splice the load](#feedback-prologue-steals-with-dangling-register-use) — _Standard prologue-stolen-successor recipe (PROLOGUE_STEALS=8 + extern char D_X cast) works fine when the C body only uses the address (`&D_X + offset`).
 - [SUFFIX_BYTES Makefile entry must be REMOVED if the function is NM-wrapped (not always-C)](#feedback-suffix-bytes-breaks-include-asm-build) — _Unlike PROLOGUE_STEALS (which silently skips when the function's first insn isn't a recognized prologue), SUFFIX_BYTES injection trips its verify check on the INCLUDE_ASM build path because the trailing dead bytes are…
@@ -1419,6 +1420,31 @@ Land script rejects: `not an exact match (fuzzy_match_percent=97.10)`.
 - `feedback_prologue_stolen_successor_no_recipe.md` (the original PROLOGUE_STEALS recipe spec)
 - `feedback_prologue_steals_plus_insn_patch_compose.md` (composition with INSN_PATCH)
 - `feedback_predicted_insn_patch_offsets_drift.md` (offsets drift after C body changes)
+
+---
+
+<a id="feedback-prologue-steals-cant-fix-register-name-mismatch-in-body"></a>
+## PROLOGUE_STEALS strips setup insns but cannot rename registers in the BODY — when the body references different regs than predecessor's stolen tail conventions, the splice produces a binary that reads uninitialized regs at runtime
+
+_The simple PROLOGUE_STEALS case works when C-emit's setup AND body both use the same register names the predecessor's stolen tail set up. When C-emit picks different register names for the body (because IDO -O2 chose its own preferences), splicing the setup bytes leaves the body's references pointing at uninitialized registers. The recipe doesn't help and the cap is fundamental._
+
+**Diagnostic — when does this fail?** Look at the predecessor's stolen tail to see WHICH registers it sets, and compare to the body the C produces:
+- Stolen tail sets `$v0=8; $at=&D` (e.g., `addiu $v0, $0, 8; lui $at, 0`).
+- Target body's first store: `sw $v0, 0($at)` — uses both stolen regs.
+- C-emit's first store: `sw $v1, 0($v0)` — IDO -O2 chose $v1 for the value local and $v0 for the address. Without the stolen prologue, IDO sets up $v1 (li $v1, 8) and $v0 (lui $v0, 0; addiu $v0, $v0, 0) at function start.
+- After PROLOGUE_STEALS=12 (= 3-insn strip): the `li $v1, 8`, `lui $v0, 0`, `addiu $v0, $v0, 0` are removed. The remaining body still emits `sw $v1, 0($v0)`. At runtime, predecessor only set $v0/$at — $v1 is uninitialized.
+
+**Why register-pinning is blocked:** IDO 7.1 rejects GCC-style `register T x asm("$N")` (per `feedback_ido_no_gcc_register_asm`). Inline asm `__asm__ volatile("addu $v0, ...")` is also rejected. So there's no C-level mechanism to force IDO to emit the body using specific register names matching predecessor's stolen tail.
+
+**Cap class:** structural — neither PROLOGUE_STEALS nor INSN_PATCH can rewrite mid-function register names. The function stays NM with the cap documented.
+
+**Distinguishing safe vs unsafe stolen-prologue cases at a glance:**
+- *Safe* (matches): predecessor's stolen tail loads the SAME registers the C body uses naturally. E.g., `lui $t6, 0; lw $t6, 0($t6)` setting $t6 — and IDO emits its own `lui $t6, 0; lw $t6, 0($t6)` at function start to access the same global. PROLOGUE_STEALS=8 splices off the redundant pair; both versions used $t6 in the body.
+- *Unsafe* (cap holds): predecessor's stolen tail loads "convention" registers ($v0 for value, $at for address) that IDO won't naturally pick from the C body. PROLOGUE_STEALS would splice but body still has wrong reg names.
+
+**Verified 2026-05-07** on `gl_func_0002D7D0` — predecessor's stolen tail sets $v0=8 and $at=&D_target. Target's body uses these directly. C body `volatile int *p = &D; *p = 8; *p = 8;` emits two stores correctly (volatile defeats dead-store elim) but uses `sw $v1, 0($v0)` — IDO -O2's natural register choice. Reverted attempt; cap stands.
+
+**Workaround if the function is ROM-critical:** the only path is full INCLUDE_ASM via NM-wrap (default build path), with the C body for permuter/reference. No episode (fuzzy<100). This preserves byte-exactness via the asm splice.
 
 ---
 
