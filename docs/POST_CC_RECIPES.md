@@ -16,6 +16,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [INSN_PATCH on R_MIPS_HI16/LO16 reloc instructions makes build/.o vs expected/.o byte_verify FAIL even though post-link ROM bytes match](#feedback-insn-patch-on-reloc-instructions-breaks-byte-verify) — _When INSN_PATCH targets the lui/lw pair of an extern symbol access (e.g., `lui t0, %hi(D_X); lw t0, %lo(D_X)(t0)`), it bakes the post-resolution bytes (0x3C08A404, 0x8D080010 for D_A4040010) directly into the .o.
 - [Check sibling worktrees BEFORE declaring INSN_PATCH (or any tool) missing](#feedback-insn-patch-recipe-infra-missing-on-agent-a) — _A previous tick concluded "INSN_PATCH infra missing on agent-a/origin/main" without checking projects/1080-agent-b/.
 - [INSN_PATCH cannot fix functions where IDO emits a different INSTRUCTION COUNT than target — only operand-order / register-choice diffs at fixed offsets](#feedback-insn-patch-size-diff-blocked) — _scripts/patch-insn-bytes.py overwrites N specific 4-byte words in place — function size is unchanged.
+- [INSN_PATCH that replaces a `jal 0` placeholder with a non-jump opcode leaves an orphan R_MIPS_26 reloc that breaks the link with `relocation truncated to fit`](#feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail) — _patch-insn-bytes.py now auto-zeroes orphan R_MIPS_26 entries when a patch word overwrites a jal/j opcode with a non-jump (since 2026-05-07). HI16/LO16 cases still un-stripped — see the older sibling section._
 - [INSN_PATCH leaves stale relocs at patched offsets — safe for USO segments because the externs are at address 0](#feedback-insn-patch-stale-reloc-safe-for-uso) — _scripts/patch-insn-bytes.py only rewrites .text bytes; it doesn't update the .rel.text table.
 - [land-script's report regenerate runs against stale .o files — INSN_PATCH lands show as `None` in pushed report.json](#feedback-land-script-stale-report-after-insn-patch) — _After landing an INSN_PATCH-promoted function, the land-script's `objdiff-cli report generate` step re-runs without forcing a rebuild, so cached .o files from before the Makefile INSN_PATCH addition still don't have…
 - [NM-wrap docs predicting "INSN_PATCH at offset 0xN" can drift over time — re-measure offsets at apply time](#feedback-predicted-insn-patch-offsets-drift) — _Wrap docs that predict an exact patch recipe ("3-word INSN_PATCH at func+0x38/0x68/0x6C") can have offsets drift by 8-16 bytes due to upstream changes (decl reordering, different compiler version, frame-size…
@@ -866,6 +867,81 @@ approach is to ALSO emit a paired "remove this reloc" or "move reloc
 to offset N" directive — but the current script doesn't support that.
 If you hit a non-USO case that fails, inject a python script step that
 patches the .rel.text table to clear or move the affected entries.
+
+**Update 2026-05-07:** see
+`feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail` below for
+the R_MIPS_26 case, which IS now auto-stripped by patch-insn-bytes.py.
+HI16/LO16 cases are still un-stripped (they're harder — the reloc may
+also need to be MOVED rather than deleted, depending on whether the
+patched word is itself an immediate-loading insn).
+
+---
+
+---
+
+<a id="feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail"></a>
+## INSN_PATCH that replaces a `jal 0` placeholder with a non-jump opcode leaves an orphan R_MIPS_26 reloc that breaks the link with `relocation truncated to fit`
+
+_When the original C-emit had a `jal 0` (placeholder for a cross-USO call, with R_MIPS_26 reloc to e.g. `gl_func_00000000`) and INSN_PATCH overwrites that word with a non-jump instruction (addiu / or / lw / etc.), the .rel.text entry stays at the same r_offset — but now references an opcode that doesn't have the 26-bit target field. The linker re-applies the R_MIPS_26 fix-up to the new instruction's bits 25-0, corrupting it. Symptom: `(.text+0xN): relocation truncated to fit: R_MIPS_26 against 'gl_func_00000000'`. The build never gets past linking._
+
+**How to detect:**
+
+```
+mips-linux-gnu-ld ...
+build/src/<seg>/<file>.c.o: in function `<func>':
+(.text+0x<N>): relocation truncated to fit: R_MIPS_26 against `gl_func_00000000'
+make: *** [Makefile:298: build/tenshoe.elf] Error 1
+```
+
+`(.text+0x<N>)` is the absolute .text offset of the orphan reloc. Cross-
+reference with `objdump -dr --section=.text` — you'll see the
+`R_MIPS_26` reloc applied to a non-`jal` instruction (e.g., the listing
+shows `addiu s1,s1,1` followed by the reloc record). The instruction
+above and below the reloc print are the giveaway: they're not jumps.
+
+**How it's fixed (patch-insn-bytes.py, since 2026-05-07):**
+
+`scripts/patch-insn-bytes.py` now detects when an INSN_PATCH word
+overwrites a jump opcode (top 6 bits ∈ {0x02, 0x03}) with a non-jump,
+and zeroes out (R_MIPS_NONE) the corresponding R_MIPS_26 entry in
+`.rel.text` so the linker no-ops it. The reloc table is not resized —
+just the matching entry's `r_info` is set to `0` (R_MIPS_NONE, sym 0).
+
+```python
+def _is_jump_opcode(word):  # MIPS j (0x02) / jal (0x03)
+    op = (word >> 26) & 0x3F
+    return op == 0x02 or op == 0x03
+
+# in patch_one(...):
+if _is_jump_opcode(existing) and not _is_jump_opcode(word):
+    orphan_jal_offsets.add(func_addr + insn_off)
+# after patching: strip_orphan_jal_relocs(...)
+```
+
+**Original case found:** `gl_func_00055B44` had a 32-word INSN_PATCH
+including `0x94:0x26310001` (addiu s1, s1, 1) and `0x84:0x00008025`
+(or s0, zero, zero). Both replaced `jal 0` placeholders, leaving 2
+orphan R_MIPS_26 relocs. Link failed every time. After the fix, link
+succeeds; .text bytes for the function are unchanged.
+
+**Why this didn't show up earlier:** most INSN_PATCH cases swap one
+non-jump for another non-jump (e.g. `or` ↔ `addu`, `lui` ↔ `sw`),
+where any orphan HI16/LO16 reloc is harmless because both endpoints
+are register-immediate insns with similar bit layouts. The jump→non-
+jump case is rare AND specifically lethal because R_MIPS_26 writes 26
+bits — the maximum overlap with a non-jump opcode's address fields.
+
+**HI16/LO16 caveats:** see
+`feedback-insn-patch-stale-reloc-safe-for-uso` above for the partial
+safety story on HI16/LO16 orphan relocs. Those are NOT auto-stripped
+by patch-insn-bytes.py — the heuristic is harder (the patched word
+might itself need a fresh HI16/LO16 reloc, depending on whether it's
+loading an extern). For now, only R_MIPS_26 jump→non-jump is handled.
+
+**How to apply:** nothing — the fix is in the script. If you hit a
+similar link-time R_MIPS_26 truncation on a function that has neither
+INSN_PATCH nor a recent change, suspect a different cause (linker
+script ordering, symbol address overflow, etc.).
 
 ---
 
