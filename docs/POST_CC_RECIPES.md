@@ -1968,3 +1968,32 @@ _A function may read a caller-save register ($t6, $t7, etc.) without setting it 
 - `feedback-prologue-stolen-double-register-inheritance` (this file) — predecessor-tail $at + $v0 carryover, distinct from caller-context.
 - `feedback-prologue-stolen-successor-no-recipe` — single-register $t inheritance from predecessor (decompilable with PROLOGUE_STEALS=8).
 - `feedback-fall-through-prologue-stub` (in MATCHING_WORKFLOW.md) — predecessor's tail-after-epilogue alt-entry (decompilable with split-fragments.py).
+
+---
+
+<a id="feedback-jal-insn-patch-to-match-include-asm-derived-expected"></a>
+## INSN_PATCH on jal opcodes (baking resolved 26-bit targets) makes a C body byte-equal an INCLUDE_ASM-derived expected/.o
+
+_When `expected/.o` was generated via `scripts/refresh-expected-baseline.py` (which substitutes every C body with its INCLUDE_ASM equivalent and rebuilds), the .o has pre-resolved jal opcodes (`0x0C00<target/4>`) baked in — because the .s files themselves are pasted-in as resolved bytes. A decompiled C body, in contrast, produces `jal 0` placeholder opcodes plus R_MIPS_26 relocations that the linker fixes up later. The .o-level bytes differ even though post-link ROM bytes match._
+
+**Recipe:** add `INSN_PATCH := <func_name>=<offset>:0x0C00<TARGET/4>,...` for each jal in the function. The patched bytes overwrite the placeholder, baking the same resolved opcode that expected/.o has. The .rel.text reloc entry remains but is harmless: it would re-write the same target at link, so no net change.
+
+**Targets are computed:** `0x0C00 + (callee_address / 4)`. For game_libs callees, the address IS the symbol value in undefined_syms_auto.txt. E.g.:
+- `gl_ref_0001CFB0 = 0x0001CFB0` → `0x1CFB0/4 = 0x73EC` → opcode `0x0C0073EC`
+- `gl_ref_0001CFFC = 0x0001CFFC` → `0x73FF` → `0x0C0073FF`
+- `gl_ref_0001D060` → `0x7418` → `0x0C007418`
+
+**Verified case (2026-05-07):** `gl_func_0000949C/94DC/951C/955C` (game_libs 4-fn -O0 cluster). After file-split into `game_libs_o0_949C.c`, build/.o had unresolved-jal placeholders. Adding `INSN_PATCH := gl_func_0000949C=0x10:0x0C0073EC,0x20:0x0C0073FF gl_func_000094DC=0x10:0x0C0073EC,0x20:0x0C0073EC ...` brought build/.o into byte-equality with expected/.o. All 4 report fuzzy=100.0.
+
+**When this recipe applies:**
+- Function compiles cleanly at the right opt level (no IDO codegen mismatches besides the jal-resolution one).
+- Expected/.o was generated via the INCLUDE_ASM-substitute refresh path (most segments in 1080).
+- USO segments: stale relocs are safe because the `gl_ref_*` externs are at runtime-patched addresses, so the link-time reloc value is 0 — no conflict with the patched opcode.
+
+**When this recipe does NOT apply:**
+- Non-USO segments where the extern resolves to a non-zero address at link: stale reloc would write a non-zero offset over the patched opcode, breaking the bytes.
+- Functions where the expected/.o was generated WITHOUT the INCLUDE_ASM substitute (rare in 1080).
+
+**Companion recipes:**
+- `feedback_insn_patch_stale_reloc_safe_for_uso` (above): the underlying mechanism for why stale reloc + patched opcode coexist.
+- `feedback_after_file_split_refresh_both_expected_objs`: the file-split flow that creates new .o files needing baseline refresh.
