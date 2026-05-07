@@ -1749,3 +1749,41 @@ sw     v0, 0(at)            ; second store via fresh $at, with $v0 still 8
 **Related:**
 - `feedback-prologue-stolen-successor-no-recipe` — single-register `$t` inheritance (decompilable with PROLOGUE_STEALS=8).
 - `feedback-fall-through-prologue-stub` (in MATCHING_WORKFLOW.md) — predecessor's tail-after-epilogue alt-entry (decompilable with split-fragments.py if no `$at`).
+
+---
+
+<a id="feedback-caller-context-register-inheritance"></a>
+## Caller-context register inheritance ($t6 set by direct caller, not predecessor) — NOT C-modelable
+
+_A function may read a caller-save register ($t6, $t7, etc.) without setting it itself, where the value comes from the IMMEDIATE CALLER's context (i.e., the caller had that register live with a useful value when it issued the `jal` to this function). This is non-standard MIPS O32 ABI — caller-save registers should be considered clobbered across `jal`. But hand-coded N64 game segments sometimes use this pattern for tight DList builders, RDP word packers, and similar inline-flow code._
+
+**Diagnostic:**
+1. Function reads register `$tN` (caller-save, NOT $a0-$a3 args, NOT $s0-$s7 callee-save).
+2. NO instruction in the function sets `$tN` before the read.
+3. NO `lui $tN`/`addiu $tN`/`lw $tN` etc. in the predecessor's tail (rules out prologue-stolen-successor and fall-through-stub patterns).
+4. The function is short (typically <20 insns) and looks like an inline helper for a calling sequence (e.g. dlist-word builder).
+
+**Distinction from prologue-stolen-successor:**
+- _Prologue-stolen successor_: the inherited register is set in the **immediately preceding function's symbol** (predecessor at addr-1). PROLOGUE_STEALS=8 splices the redundant duplicated insns.
+- _Caller-context inheritance_: the inherited register is set by **whoever issued the `jal` to this function** — could be ANY caller in the callgraph. There's no fixed "predecessor" to steal a prologue from. PROLOGUE_STEALS doesn't apply.
+
+**Why C can't model this:** C's calling convention treats caller-save registers as clobbered across `jal`. There's no language-level way to say "this function takes an implicit 4th arg in $t6". GCC's `register T x asm("$t6")` could in principle mark a parameter binding, but:
+- IDO rejects the GCC `register T x asm()` syntax (per `feedback_ido_no_gcc_register_asm.md`).
+- Even with GCC, the binding is at variable-declaration scope, not function-parameter scope — passing-via-$t6 isn't expressible.
+
+**Practical rule:**
+- When you see `<op> $tN, ...` at offset ≤ 0x10 of a function with no prior write to $tN AND the predecessor doesn't set $tN, it's caller-context inheritance.
+- Wrap in `#ifdef NON_MATCHING` only if you can write a C body that pretends $tN is an extra arg (purely for documentation — the wrap won't byte-match).
+- Otherwise stay as `INCLUDE_ASM` permanently; ROM is byte-correct via the asm splice.
+
+**Verified 2026-05-07 on `gl_func_00027548`** (1080 game_libs, 17-insn F3DEX2 dlist-word builder): reads `$t6` at offset 0x4 (`sll $t7, $t6, 0x10`) and combines with 0xFA000000 + (a1 byte) + (a2 byte) into a packed dlist word. Predecessor `gl_func_000274D8` doesn't set $t6 in its tail. Pattern: caller had $t6 = some loop counter or context value when it `jal`'d here.
+
+**Distinguishing from cases that CAN be C-modeled:**
+- If the function's first read is an LW/LBU through a caller-save register (e.g. `lw $t9, 0x0($a0)`), $t9 is being WRITTEN, not read. That's normal.
+- If the function reads a callee-save register `$sN` without saving it first, that's wrong — could be a fragment that needs merging.
+- True caller-context inheritance: caller-save reg ($t0-$t9, $a0-$a3) used in a non-write operand BEFORE any write in this function.
+
+**Related:**
+- `feedback-prologue-stolen-double-register-inheritance` (this file) — predecessor-tail $at + $v0 carryover, distinct from caller-context.
+- `feedback-prologue-stolen-successor-no-recipe` — single-register $t inheritance from predecessor (decompilable with PROLOGUE_STEALS=8).
+- `feedback-fall-through-prologue-stub` (in MATCHING_WORKFLOW.md) — predecessor's tail-after-epilogue alt-entry (decompilable with split-fragments.py).
