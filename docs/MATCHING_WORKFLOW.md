@@ -3393,6 +3393,23 @@ ADCD0028   sw    t5, 0x28(t6)     ; uses t5 and t6 from parent!
 
 **Origin:** 2026-04-20, kernel/func_80004E50 (-O1, kernel_003) absorbing func_80004EC0 (-O2, kernel_004). merge-fragments skill's `.L`-ref detector would have missed this — no cross-function labels exist between them.
 
+**Variant for raw `.word` USO asm (no `.L` labels emitted):**
+
+For USO segments that disassemble to raw `.word` directives (per `reference_uso_splat_setup.md`), the merge-fragments `.L`-ref detector can't fire — there are no labels at all, just hex bytes. The branch-target check still works but must be done by hand-decoding the conditional-branch instruction:
+
+- For each `bc1f` / `bc1t` / `bc1fl` / `bc1tl` / `beq` / `bne` / `bnez` / `beqz` / `bgtz` / `bltz` instruction in the parent's tail, decode the 16-bit signed offset and compute target = `pc + 4 + (offset << 2)`.
+- If target lies past the parent's `jr ra` but inside the would-be-fragment's range, that's a cross-fragment branch — the two `.s` files are ONE function mis-split.
+
+Quick decode lookup (instruction word `0xOOOOIIII` where `IIII` is the 16-bit offset):
+- `0x10000NNN` = `b PC+4+N*4` (unconditional)
+- `0x14YYNNNN` = `bne` (signed)
+- `0x10YYNNNN` = `beq` (signed)
+- `0x4500NNNN` = `bc1f cc=0`
+- `0x4501NNNN` = `bc1t cc=0`
+- `0x4502NNNN` = `bc1fl cc=0`
+
+**Verified case (2026-05-07):** `timproc_uso_b5_func_0000CB40` (0x90) + suspected fragment `0000CBD0` (0x34) — both raw `.word` USO. Parent's `bc1f $f, 0xE` at 0xCBC0 decodes to target `0xCBC0 + 4 + 0xE*4 = 0xCBFC`, which lies inside the 0xCBD0..0xCC04 fragment range — proof of cross-fragment branch. Also `bc1f $f, 0x10` at 0xCB90 → target 0xCBD4 (also inside fragment). Merged into 0xC4 unified function; build/.o byte-equal expected/.o (modulo pre-existing upstream 12-byte drift).
+
 ---
 
 ---
