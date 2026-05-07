@@ -6531,6 +6531,8 @@ Don't reflexively write `int` when the function appears to "compute and return a
 
 **Generalizes:** Any IDO function where v0's final value is "incidental" (whatever was last in $v0 from a tail call). Common in error-handling wrappers and event-dispatch helpers.
 
+**Converse — `void → int` does NOT shift first-pseudo allocation off $v0.** Tempting hypothesis when you have a "$v0 vs $v1 first-register cascade" cap: change the function to `int` and `return last_call()`, expecting IDO to reserve $v0 for the return and push the first general pseudo to $v1. Verified 2026-05-07 on `timproc_uso_b5_func_0000C8AC` (86.37% cap with 19-of-51 reg-rename diffs): switching to `int` + `return gl_func_00000000()` produced **NO change** in the .o emit. IDO's pseudo→hardware register allocator is locality-driven; the $v0-as-return use is at jr-ra delay-slot time (after all other pseudos are settled), so it doesn't pre-empt the first-pseudo allocation. Don't try this lever for the $v0/$v1 first-register cap — it's purely permuter / INSN_PATCH territory.
+
 ---
 
 ---
