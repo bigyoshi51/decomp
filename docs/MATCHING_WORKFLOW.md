@@ -1879,6 +1879,8 @@ Both hid for days because the default build path never reaches them.
 
 3. ~~**Use `0` not `NULL`** for null-pointer comparisons~~ — UPDATED 2026-05-02: `common.h` now defines `NULL ((void*)0)` (committed in b24423e), so NM bodies can use NULL freely. Default build is unaffected because NM-body NULL references are CPP-stripped. If you see a fresh `'NULL' undefined` error in a *different* per-project repo, port the same one-line common.h define rather than rewriting the wrap.
 
+3a. **K&R implicit-int forward-call collision** (verified 2026-05-07 in `h2hproc_uso.c`): if the NM wrap of function A calls function B that is **defined later in the same .c file** without a forward declaration, IDO's K&R rules synthesize an implicit `int B()` at the call site. When the actual `void B(...)` definition follows, IDO errors `Incompatible function return type for this function`. Default build doesn't trip because the wrap is CPP-stripped. Fix: add `void B(args);` forward declaration just before A's wrap. This is a one-line cleanup and qualifies as a valid `/decompile` drive-by fix when you encounter it (per rule 1's "fix the bug BEFORE touching your target function").
+
 4. **Periodic sweep**: when touching multiple NM wraps, a whole-tree `make CPPFLAGS=...-DNON_MATCHING` validates all files at once (many will fail; look for regressions).
 
 **Why this matters:** `-DNON_MATCHING` is the primary test channel for NM iteration (per `feedback_nm_build_incantation.md`). If the file won't even compile under NM, no one can grind that function forward. Every silent CPP error is a functional gate on the NM path for a whole file.
