@@ -80,6 +80,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
 - [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
 - [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C.
+- [Replacing literal `1024` with `(x<<10)/x` DOES emit the sll+div+mflo sequence at IDO -O2 (memory-load operand defeats SR), but added locals can shift register allocation enough to net-zero fuzzy%](#feedback-ido-div-substitution-necessary-but-regalloc-shifts) — _When target asm has `sll tN, sM, 10; div 0, tN, sM; mflo sP; bnez sM, +2; nop; break 7` (a self-canceling `(x<<10)/x = 1024` sequence with div-by-zero trap), replacing the literal `1024` in the C body with the equivalent `(x<<10)/x` expression IS recognized — IDO -O2 doesn't strength-reduce when the operand comes from a memory load (no compile-time visibility). However, declaring the result as a new local (or substituting inline) introduces extra register pressure: frame size can grow (e.g., 0x58→0x60), and $s-reg assignments shift across the function. The div pattern alone is "necessary-but-not-sufficient" — to land net-positive fuzzy%, the divided value must also be assigned the same $s-reg slot as the target. Verified 2026-05-07 on `gui_func_00000B58` (substitution emitted matching div, fuzzy unchanged at 36.12% due to $s0/$s1/$s4/$s5 reshuffling)._
 
 ### loop / unroll
 
@@ -7502,3 +7503,34 @@ The brace-block tells IDO the locals' lifetime ends at the closing brace, so the
 3. If the frame size is correct but reg pick is still wrong, the issue isn't the brace-block — it's the named-local form itself (try `register int *p_a = ...` per `feedback-ido-register.md`, or revert to inline form).
 
 **Does NOT generalize to volatile-spill locals** (verified 2026-05-07 on `func_0000553C`): the brace-block trick is scope-specific. For register-flip locals (this entry), the value's lifetime ends at the assignment to the consumer (`n0 = p_a[...]`) so the brace-block is safe. For volatile-spill locals (`feedback-ido-volatile-unused-local-forces-local-slot-spill`), the spill must remain LIVE across the subsequent call — wrapping in a brace-block kills the spill at the closing brace and IDO drops the `sw aN, local_slot(sp)` store. Net: brace-block-saves-frame applies to "named local that gets dereferenced before the next jal," NOT to "volatile that triggers a defensive caller-spill across a jal." The two mechanisms have opposite scope requirements.
+
+---
+
+<a id="feedback-ido-div-substitution-necessary-but-regalloc-shifts"></a>
+## Replacing literal `1024` with `(x<<10)/x` DOES emit the sll+div+mflo sequence at IDO -O2 (memory-load operand defeats SR), but added locals can shift register allocation enough to net-zero fuzzy%
+
+_When target asm has `sll tN, sM, 10; div 0, tN, sM; mflo sP; bnez sM, +2; nop; break 7` (a self-canceling `(x<<10)/x = 1024` sequence with div-by-zero trap), replacing the literal `1024` in the C body with the equivalent `(x<<10)/x` expression IS recognized — IDO -O2 doesn't strength-reduce when the operand comes from a memory load (no compile-time visibility). However, declaring the result as a new local (or substituting inline) introduces extra register pressure: frame size can grow (e.g., 0x58→0x60), and $s-reg assignments shift across the function. The div pattern alone is "necessary-but-not-sufficient" — to land net-positive fuzzy%, the divided value must also be assigned the same $s-reg slot as the target._
+
+**Why the div is preserved:** IDO's strength reduction needs to see both operands at compile time to fold `(x<<10)/x → 1024`. When `x` is a value loaded from memory (`lw t6, off(sN)` then `t6<<10/t6`), the optimizer can't statically prove `t6 != 0` — so it preserves the full `sll+div+mflo+break-on-zero` sequence including the div-by-zero trap. This is identical reasoning to `feedback-ido-o2-loop-array-strength-reduction`: SR needs DFG-level visibility.
+
+**Why fuzzy% can stay flat or regress:** the substitution adds 1-2 intermediate locals. Even if you don't declare them as named C variables, IDO's register allocator sees the new `mflo sP` result as a value that must live until consumed by the next instruction. Three things shift:
+1. **Frame size** — if the function was at the boundary of needing one more $s-reg saved, the new live range pushes it over (8-byte frame growth).
+2. **$s-reg pick** — IDO's allocator reassigns $s0/$s1/...$s8 to balance the new live range. Even if total $s-regs unchanged, the slot-to-variable mapping flips.
+3. **Multu/multiply downstream** — if the divided value is consumed by `multu v0, sN`, the `sN` choice depends on which $s-reg the mflo landed in.
+
+Result: even when the div sequence itself is byte-correct, the surrounding code has 4-8 lines of register-name diff (s0 vs s1, s4 vs s3, etc.). Net fuzzy% delta = 0.
+
+**Verified case (2026-05-07):** `gui_func_00000B58` (1080 gui_uso). Replacing literal `1024` in two `gl_func_00000000` arg slots with `(s3<<10)/s3` and `(g2<<10)/g2`:
+- Built emit: full `sll+div+mflo+break` sequence in both spots (matches asm shape).
+- Frame: 0x58 → 0x60 (+8 bytes).
+- Reg shifts: $s0↔$s1, $s3↔$s4, $s5↔$s8 in built vs expected.
+- Diff lines: ~80 → ~80 (no improvement).
+- Fuzzy: 36.12% → 36.12%.
+
+**How to apply:** when target has a `(x<<N)/x = 2^N` div sequence and your build emits the literal:
+1. The substitution is a NECESSARY ingredient — write it.
+2. But check the frame size and $s-reg assignments BEFORE concluding the change helps. If frame grew or $s-regs shifted, the substitution won't land fuzzy% gains alone.
+3. Pair with explicit local-variable scoping (brace-block per `feedback-ido-brace-block-scope-saves-stack-frame-bytes`) to keep the frame size constant.
+4. If after both fixes the $s-reg slot is still wrong, the gap is likely deeper register-pressure analysis (use `cc1 -dg` to inspect the .greg dump per the skill's "Debugging register allocation" notes).
+
+**Don't do it the other direction:** don't substitute literal `1024` for `(x<<10)/x` when target uses the literal — IDO will emit `li t, 0x400` and the div sequence won't appear. The div pattern signals the substitution is needed; the literal pattern signals it isn't.
