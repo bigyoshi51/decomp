@@ -2069,6 +2069,14 @@ The reason: most of the 7 pre-matched functions were either empty (`void f() {}`
 
 **Origin:** 2026-04-20 agent-a, user pushback "a lot of giving up" on an NM wrap of func_00012BF8. Grind uncovered `-g3` as the previously-unknown matching knob. Commit ee1085f landed at 100 % after the Makefile override.
 
+**What `-g3` does NOT change** (negative results to save future-me from re-running):
+
+- **Integer constant CSE.** Distinct named locals all set to the same int value (`s32 c1=1, c2=1, c3=1, c4=1`) STILL get CSE'd into a single `li $v1, 1` reload. -g3's debug-friendliness preserves *names in symbols*, not the underlying allocator's CSE pass. If target asm has `addiu rN, $zero, 1` × 4 with each `1` in a fresh register, that's NOT reachable from naming-tricks at -O2 -g3. Verified on bootup_uso/func_00012188 2026-05-07.
+- **Loop-invariant constant hoisting.** A constant used only inside a loop body (`s32 c2a = 0x2A; sb c2a, ...`) STILL gets hoisted before the loop. -g3 does not disable LICM.
+- **Constant folding through named locals.** `register int one = 1; ... = one;` folds to literal `1`; `register` doesn't prevent the fold. (See also feedback-ido-v0-reuse-via-locals — that's about address-of-symbol, not int constants.)
+
+`-g3` ONLY affects the reorg pass (delay-slot filling). Other -O2 passes (CSE, LICM, constant folding, register allocation) operate identically at -g0..-g3.
+
 ---
 
 ---
