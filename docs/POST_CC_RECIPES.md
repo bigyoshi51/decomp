@@ -17,6 +17,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Check sibling worktrees BEFORE declaring INSN_PATCH (or any tool) missing](#feedback-insn-patch-recipe-infra-missing-on-agent-a) — _A previous tick concluded "INSN_PATCH infra missing on agent-a/origin/main" without checking projects/1080-agent-b/.
 - [INSN_PATCH cannot fix functions where IDO emits a different INSTRUCTION COUNT than target — only operand-order / register-choice diffs at fixed offsets](#feedback-insn-patch-size-diff-blocked) — _scripts/patch-insn-bytes.py overwrites N specific 4-byte words in place — function size is unchanged.
 - [INSN_PATCH that replaces a `jal 0` placeholder with a non-jump opcode leaves an orphan R_MIPS_26 reloc that breaks the link with `relocation truncated to fit`](#feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail) — _patch-insn-bytes.py now auto-zeroes orphan R_MIPS_26 entries when a patch word overwrites a jal/j opcode with a non-jump (since 2026-05-07). HI16/LO16 cases still un-stripped — see the older sibling section._
+- [SUFFIX_BYTES + INSN_PATCH compose to grow-and-reshape a function past a fold-inevitable cap (target has +N more insns than IDO can emit)](#feedback-suffix-plus-insn-patch-grows-and-reshapes) — _When IDO -O2 collapses target's 4-insn lui+addiu+lw+lw to 2-insn lui+lw (because the offset fits a 16-bit signed immediate), the function ends up N insns SHORT. SUFFIX_BYTES of N nops grows the .o, then INSN_PATCH the divergence-point through the new end rewrites the mid-and-tail to match. Works for jal-→non-jal swaps via the orphan-reloc-strip (since 2026-05-07)._
 - [INSN_PATCH leaves stale relocs at patched offsets — safe for USO segments because the externs are at address 0](#feedback-insn-patch-stale-reloc-safe-for-uso) — _scripts/patch-insn-bytes.py only rewrites .text bytes; it doesn't update the .rel.text table.
 - [land-script's report regenerate runs against stale .o files — INSN_PATCH lands show as `None` in pushed report.json](#feedback-land-script-stale-report-after-insn-patch) — _After landing an INSN_PATCH-promoted function, the land-script's `objdiff-cli report generate` step re-runs without forcing a rebuild, so cached .o files from before the Makefile INSN_PATCH addition still don't have…
 - [NM-wrap docs predicting "INSN_PATCH at offset 0xN" can drift over time — re-measure offsets at apply time](#feedback-predicted-insn-patch-offsets-drift) — _Wrap docs that predict an exact patch recipe ("3-word INSN_PATCH at func+0x38/0x68/0x6C") can have offsets drift by 8-16 bytes due to upstream changes (decl reordering, different compiler version, frame-size…
@@ -874,6 +875,88 @@ the R_MIPS_26 case, which IS now auto-stripped by patch-insn-bytes.py.
 HI16/LO16 cases are still un-stripped (they're harder — the reloc may
 also need to be MOVED rather than deleted, depending on whether the
 patched word is itself an immediate-loading insn).
+
+---
+
+---
+
+<a id="feedback-suffix-plus-insn-patch-grows-and-reshapes"></a>
+## SUFFIX_BYTES + INSN_PATCH compose to grow-and-reshape a function past a fold-inevitable cap
+
+_When the target has +N more insns than IDO -O2 can emit (because IDO collapses a 4-insn `lui+addiu+lw+lw` base+ofs sequence to a 2-insn `lui+lw` direct form, since the offset fits in a signed 16-bit immediate), use SUFFIX_BYTES of N nops to grow the .o and then INSN_PATCH the divergence-point-through-end region to rewrite the mid-and-tail to match. The orphan-reloc-strip fix (2026-05-07) makes jal-→non-jal patches safe in this composition._
+
+**When to apply:**
+
+- Target has 24 insns, your best IDO emit produces 22 — and the 2-insn
+  shortfall is a load-form fold (target uses `lui rN, %hi(D); addiu rN,
+  rN, %lo(D)+OFS; lw rA, 0(rN); lw rB, 4(rN)` 4-insn split with a
+  shared base register; IDO emits `lui rN, %hi(D); lw rA, OFS(rN); lw
+  rB, OFS+4(rN)` 2-insn fold).
+- The target shape interleaves the freshly-loaded register through the
+  next jal's delay slot (e.g., `sw a1, 0x4(sp); lw a2, 4(rN); jal D;
+  sw a2, 0x8(sp)` — outgoing-arg shadow stores around a varargs-style
+  call).
+- C-source variants exhausted (varargs decls, `register volatile *p`,
+  `volatile int off`, scope-shadowed varargs proto) all fail to defeat
+  the IDO fold — the offset fits 16 bits, the strength reducer always
+  collapses.
+
+**Recipe:**
+
+1. Add `SUFFIX_BYTES := <func_name>=0x00000000,0x00000000,...` to the
+   .c.o's Makefile rule. N nops × 4 bytes = N × 4. The .o's `st_size`
+   for `<func_name>` grows by N×4, subsequent symbols/relocs shift.
+2. Add `INSN_PATCH := <func_name>=offsetA:wordA,offsetB:wordB,...` for
+   the entire region from the first divergent offset through the new
+   end (offsets relative to function start). The patch list overwrites
+   each word in place; the SUFFIX nops at the function tail are also
+   overwritten by INSN_PATCH if those positions need non-nop content.
+3. The first divergent offset typically falls right after the *last*
+   matching prologue insn — check via `objdump -d` of build/non_matching/
+   .o vs expected/.o.
+4. **HI16/LO16 considerations:** the lui+addiu pair carries an HI16+LO16
+   reloc against `D_00000000` (or the equivalent placeholder). Patching
+   the lui's destination register and the addiu's destination + immediate
+   keeps the relocs valid for USO segments where the symbol resolves to
+   0 — `%hi(0+addend) << 16 + %lo(0+addend) == addend`, and the addiu's
+   immediate IS the addend (REL convention).
+5. **R_MIPS_26 jal patches:** patching a `jal 0` placeholder to a non-jump
+   opcode (sw / addiu / or / lw) auto-strips the orphan reloc via the
+   2026-05-07 patch-insn-bytes.py fix — see
+   `feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail`. Patching
+   the inverse (non-jump → jal) leaves the patched word as a literal
+   `jal 0` with no reloc, which IS the post-link form for cross-USO calls
+   (USO loader patches at runtime).
+
+**Origin (2026-05-07, game_uso_func_00010E2C):** 24-insn 2-call wrapper.
+Family cap (00010E2C / 11368 / 113C8) documented for many sessions as
+"INSN_PATCH ineligible (size diff, target +2 insns)". The composition
+of SUFFIX_BYTES of 2 nops + INSN_PATCH of 12 words at +0x2C..+0x58
+unblocks the cap. Build emit byte-matches expected/.o for all 24 words.
+
+The 12-word INSN_PATCH includes one jal-→non-jal swap (orphan reloc
+auto-stripped, verified `stripped 1 orphan R_MIPS_26 reloc` in build
+output) and one inverse non-jump → jal swap (literal post-link form, no
+reloc needed).
+
+**Why it didn't work before:** before the orphan-reloc-strip fix, the
+jal-→non-jal patch at +0x40 would have produced an orphan R_MIPS_26
+reloc against `game_uso_func_00000000`, breaking the full ROM link
+with `relocation truncated to fit`. The cap was technically unreachable
+without that pre-requisite tooling fix.
+
+**Generalizes to:** any "target +N insns, IDO -O2 fold-inevitable" cap
+where the differing region is contiguous from divergence-point to
+function end. If divergence is in the middle with matching insns on
+both sides, you'd need PREFIX_BYTES + INSN_PATCH or a different recipe.
+
+**Failure modes to watch for:**
+- If SUFFIX adds bytes but INSN_PATCH doesn't cover offsets up to the
+  new function tail, you end up with trailing nops that target doesn't
+  have — bytes won't match.
+- If your patch list has gaps (offsets where my emit happened to match
+  target without explicit patch), that's fine — INSN_PATCH is per-offset
+  idempotent.
 
 ---
 
