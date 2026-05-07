@@ -1997,3 +1997,18 @@ _When `expected/.o` was generated via `scripts/refresh-expected-baseline.py` (wh
 **Companion recipes:**
 - `feedback_insn_patch_stale_reloc_safe_for_uso` (above): the underlying mechanism for why stale reloc + patched opcode coexist.
 - `feedback_after_file_split_refresh_both_expected_objs`: the file-split flow that creates new .o files needing baseline refresh.
+
+---
+
+<a id="feedback-jal-zero-callee-no-insn-patch-needed"></a>
+## When the cluster's callee is `gl_func_00000000` (extern at addr 0), no jal-INSN_PATCH is needed — the placeholder opcode 0x0C000000 matches both paths
+
+_Complement to `feedback-jal-insn-patch-to-match-include-asm-derived-expected`. When a cluster's only callee is the cross-USO placeholder `gl_func_00000000` (which resolves to address 0 at link), the resolved jal opcode IS `0x0C000000` — exactly the placeholder that a C body's unresolved `jal 0` produces. Both the C-emit (`jal 0` + R_MIPS_26 reloc) and the INCLUDE_ASM-derived expected/.o (resolved-jal-target=0) end up with byte-identical opcodes. Save the INSN_PATCH overhead._
+
+**Detection:** check the .s file's jal targets. If they're all `0C000000`, the callee resolves to 0. If they're `0C00<NNNN>` for non-zero NNNN, you need the INSN_PATCH recipe.
+
+**Verified case (2026-05-07):** `gl_func_00008944` + `gl_func_000089F4` (game_libs reader templates). Both call only `gl_func_00000000(&D_00000000, buf, 4)`. After file-split into `game_libs_o0_8944.c`, build/.o was byte-equal expected/.o WITHOUT any INSN_PATCH entries — `cmp /tmp/build_text.bin /tmp/expected_text.bin` exited 0 immediately.
+
+**Compare to the 949C cluster** which needed INSN_PATCH for jal targets `0x0C0073EC`/`0x0C0073FF`/`0x0C007418`/`0x0C00742B` (callees `gl_ref_0001CFB0`/`gl_ref_0001CFFC`/`gl_ref_0001D060`/`gl_ref_0001D0AC` at non-zero addresses).
+
+**Rule of thumb:** for a USO segment file split, always-callee-=-0 clusters are simpler — only the 949C-style "named gl_ref" clusters need the jal-bake patch.
