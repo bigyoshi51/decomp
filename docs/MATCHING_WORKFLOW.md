@@ -4168,3 +4168,34 @@ _When a function previously matched via `INCLUDE_ASM` and you replace it with a 
 **Verified case (2026-05-06):** `gl_func_00021E58` (game_libs alloc-via-callee + 3-field-set + return v0[8]). Standalone IDO emits all 20 insns byte-identical to target, including correct `lb 0x27(sp)` for the `signed char a3` low-byte read. Only diff is the `jal` at offset 0x10: built `0x0C000000` vs expected `0x0C00DA92`. objdiff scores 65.65%. Wrap kept NM with the goto-form C body and this cap citation.
 
 **Catching it during /decompile picking:** if you pick a tiny function (50-80 bytes, ~70-90% match, no episode) and the only diffs are `jal` opcodes in expected vs `jal 0` + reloc in your build, this is the encoding pin — don't grind register allocation, write the wrap as documented above.
+
+---
+
+<a id="feedback-fuzzy-vs-byte-exact-can-disagree"></a>
+## Fuzzy match % and byte-exact match % can disagree on which C variant is best — measure both before declaring a "baseline form"
+
+_Two C variants of the same function can flip relative ranking depending on whether you measure mnemonic-equivalent fuzzy % (objdiff's default) or byte-exact word match against expected/.o. A C body with higher fuzzy % can produce LOWER byte-exact match, and vice versa. This is non-obvious because most caps are mnemonic-driven (register numbering, scheduling), but post-cc-recipe-promotable caps are byte-driven (specific ENCODING differences with relocs)._
+
+**Verified case (2026-05-07, func_0000F2EC, bootup_uso -O0 Vec3 reader):**
+
+- **Variant A** (4 register-vars + pad_top[1] + pad_mid[2] + pad_bot[3], inits AT decl): **84.61% fuzzy**, but only **41.5% byte-exact** (17/41 words match).
+- **Variant B** (3 register-vars no init + pad_mid[2] only, inits AFTER jal): **only 68.3% fuzzy**, but **78.0% byte-exact** (32/41 words match).
+
+Variant A's fuzzy was higher because mnemonic-equiv pairs of insns (`lw s0; move s1, s0` vs target's `lw s1; move s2, s1`) score as "operands match" mnemonically. Variant B's structurally simpler emit produces actual matching byte-level instructions for the post-jal copy region, even though its mnemonic-fuzzy looks worse.
+
+**Rule:** when grinding a wrap above ~75% fuzzy, also measure byte-exact word match against expected/.o. Variants with lower fuzzy but higher byte-exact are STRICTLY better for INSN_PATCH/SUFFIX_BYTES promotion paths. The fuzzy-only metric is a lossy guide; byte-exact tells you which actual bytes the build produces.
+
+**How to measure byte-exact:**
+```python
+def get_func_bytes(obj, sym):
+    out = subprocess.check_output(['mips-linux-gnu-readelf', '-s', '-W', obj]).decode()
+    # ... parse symbol table to get addr/size, then read raw bytes from .text
+e = get_func_bytes('expected/src/.../foo.c.o', 'func_X')
+b = get_func_bytes('build/non_matching/src/.../foo.c.o', 'func_X')
+match_words = sum(1 for i in range(0, min(len(e),len(b)), 4) if e[i:i+4]==b[i:i+4])
+print(f'{match_words}/{len(e)//4} = {100*match_words/(len(e)//4):.1f}% byte-exact')
+```
+
+**How to apply:** when an in-source NM-wrap docstring claims "X% match" without specifying which metric, re-measure both before grinding. Adopt whichever variant has higher byte-exact (even if fuzzy is lower) since byte-exact is what INSN_PATCH/SUFFIX_BYTES recipes can promote to 100%.
+
+**Origin:** discovered 2026-05-07 on bootup_uso/func_0000F2EC. The pre-existing wrap claimed 84.61% (fuzzy) as the "tightest reachable"; replacing with the post-jal-init form jumped byte-exact from 41.5% to 78.0% despite fuzzy dropping. Closes the gap toward INSN_PATCH-eligible territory.
