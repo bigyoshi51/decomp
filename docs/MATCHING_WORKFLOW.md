@@ -1113,6 +1113,8 @@ Something in the pipeline changed between when (1)-(6) were measured and now —
 
 **Context lever:** The reference memo `feedback_ido_sreg_order_not_decl_driven.md` is still correct (decl reorder is a no-op); what changed is which specific $s-regs IDO picks for which locals.
 
+**Asm-decode claims rot too — not just match-%:** the same caution applies to asm-decode annotations inside long NM-wrap comments. A wrap may state e.g. `abs.s f0 (idiom for fabs())` at offset 0xN, and a future agent writing more C bases logic on that claim. But the claim might just be wrong — the prior decoder may have misread the funct field. Verified 2026-05-07 on `game_uso_func_00001DDC`: a long-standing comment claimed `abs.s f0` at 0x21AC, but a `grep -oE "0x[0-9A-F]{4}0[57]"` against the function's raw `.word` stream finds NO funct=0x05 (abs) or 0x07 (neg) opcodes anywhere in the 1528-byte body. The two suspects were funct=0x06 (mov.s) preserving values across an annulled bc1fl delay slot. Cheap verification: when a wrap comment cites a specific FPU opcode (`abs.s`/`neg.s`/`sqrt.s`/`mov.s`), grep the funct nibble in the raw asm before adding C that depends on it being there.
+
 ---
 
 ---
