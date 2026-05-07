@@ -7400,3 +7400,24 @@ _When two basic blocks of similar size dispatch via `if (key == K0) goto k0; if 
 - block-scope of locals does NOT shorten RTL live range (variant 23)
 - type narrowing (`short` vs `int`) is a no-op for `$s` priority when value used as int downstream (variant 25)
 - `-g0`/`-g2`/`-g3` flags don't shift `$s` allocation in IDO -O2 (variant 26)
+
+---
+
+<a id="feedback-ido-volatile-local-frame-placement"></a>
+## `volatile int x;` in IDO -O2 lands at TOP of stack frame (sp+frame_size-4), not bottom — using it to force a dead-store at sp+0x4 grows the frame by 8 bytes
+
+_When you need IDO to emit a dead-store at a SPECIFIC low frame offset (e.g., sp+0x4) to match a target's IDO -O2 emit, declaring `volatile int x; x = val;` does NOT place x there. IDO's local-allocator puts volatile locals at the high end of the frame (sp+frame_size-4), forcing the frame to grow by 8 bytes (16-byte alignment)._
+
+**Symptom:** target has frame 0x18 with a dead `sw a1, 0x4(sp)` in a delay slot (~14 insns). C body with `volatile int x; x = arg0;` reproduces the dead-store and the right insn count (14) but lands x at sp+0x1C with frame 0x20 — same shape, wrong offset, +8 bytes too big.
+
+**Why:** IDO's stack allocator processes locals top-down (from sp+frame_size-4 toward sp). The first volatile gets the highest slot. To force x to sp+0x4 you'd need to allocate other locals ABOVE it, but those locals would themselves consume the high slots, leaving x at the bottom only after the frame is enlarged enough.
+
+**What also doesn't work:**
+- `char buf[8]; *(volatile int*)(buf+4) = val;` — the volatile-cast forces IDO to compute the base register via `addiu tN, sp, frame_offset`, adding an extra insn before the store. Wrong shape.
+- Reordering decls — IDO's allocator priority is data-flow-derived, not source-order.
+
+**Net:** if target's dead-store lives at a low offset (sp+0x4..0x10) inside an existing-frame's local space WITHOUT growing the frame, that combination is unreachable from C. The store can be reproduced (right shape, right count), but only at TOP-of-frame slots which add 8 bytes.
+
+**Verified case (2026-05-07):** `func_00005068` in 1080-bootup_uso. 14-insn 2-call helper with target dead-store at sp+0x4 in jal delay slot. 6 documented variant attempts; volatile + buf-cast both produce the right insn count but wrong offset/frame. Cap confirmed.
+
+**How to apply:** when target has a "dead store at low frame offset within minimal frame," skip the volatile-local approach. Either accept the cap (NM-wrap at insn-count parity) or use post-cc INSN_PATCH if the build is in shift-tolerant byte-replacement scope (per `docs/POST_CC_RECIPES.md`).
