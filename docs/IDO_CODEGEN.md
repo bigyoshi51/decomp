@@ -4763,6 +4763,18 @@ All emit the same 15-insn layout without the pre-call spills. Callee is declared
 
 Trying to declare the callee varargs via a LOCAL `extern int gl_func_00000000(int, ...);` inside the caller function FAILS with cfe error: `"prototype and non-prototype declaration found for gl_func_00000000, ellipsis terminator not allowed"`. IDO's cfe won't tolerate file-scope K&R + function-scope varargs for the same symbol. Workarounds: use a distinct alias name (unique-extern pattern), but IDO still doesn't emit the pre-call spills for the aliased varargs call.
 
+**Cross-family extent (2026-05-07 audit):** in 1080's game_uso this cap applies family-wide to a 7+ function cluster sharing the same "alloc + 2-call + null-init + table-lookup-then-call" shape:
+- `game_uso_func_0000A374` (86.7%)
+- `game_uso_func_0000D8A8` (74.6%)
+- `game_uso_func_00010DC8` (88.6%)
+- `game_uso_func_00010E2C` (88.6%)
+- `game_uso_func_00011124` (~88%)
+- `game_uso_func_00011368` (87.4%)
+- `game_uso_func_000113C8` (86.9%)
+- `game_uso_func_000114FC` (~88%)
+
+When you encounter a new game_uso function that grinds to 86-89% with the same structure (table at `&D_00000000+OFFSET`, two `lw` reads adjacent, single downstream call after the table reads), don't re-test the entire knob set — confirm this pattern by checking the 2nd jal's delay slot for `sw a1/a2, N(sp)` precall spills and wrap NM directly. Future cluster-wide promotion would need INSN_PATCH per call site (not C-level levers).
+
 Bottom line: this cap is not fixable from any C-level declaration variation we've tested. Permuter-grinding is the only remaining recourse.
 
 **2026-05-02 expansion (game_uso_func_0000FABC, 18-insn 3-call wrapper):**
