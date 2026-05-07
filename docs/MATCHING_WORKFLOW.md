@@ -12,6 +12,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [redeclaring `extern char D_00000000` in NM wrap blocks NM-build when file already has it as `extern int`](#feedback-extern-redeclaration-blocks-nm-build) — _IDO cfe rejects extern redeclarations with conflicting types.
 - [Inline NM-wrap match-percent comments rot — re-measure before trusting](#feedback-inline-nm-percentages-rot) — _Old match % claims in #ifdef NON_MATCHING comment blocks can silently go stale when the toolchain changes.
 - [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — _Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined NULL, stray apostrophes) compile fine by default but break the moment anyone…
+- [Partial NM-wrap with empty/stub inner arms can score 0% — IDO over-optimizes a loop body that has no observable side effects](#feedback-nm-partial-body-empty-arms-zero-percent) — _When a first-pass NM-wrap stubs out conditional arms with `(void)var;` instead of writing real call sequences, IDO -O2 sees the loop body as side-effect-free and unrolls/folds it into a much smaller emit (e.g. 95 insns vs target's 150). objdiff reports 0% match. Fill stub arms with at least one `gl_func_00000000(...)` per arm — the call's opaque side-effect prevents the unroll._
 - [-DNON_MATCHING build of multi-function -O0 file corrupts the byte alignment of NM-wrapped neighbors](#feedback-nm-build-corrupts-neighbors-in-multi-func-o0-file) — _When you have multiple functions in a `<seg>_o0_NNN.c` file (each NM-wrapped) and build with `-DNON_MATCHING`, function N's wrong-size emit (e.g. extra `b +1; nop`) shifts function N+1's start offset, which the…
 - [`expected/.o` can carry prior -DNON_MATCHING build bytes; always refresh baseline before trusting a "matches" signal](#feedback-nm-build-expected-contamination) — _The existing `feedback_make_expected_contamination.md` covers `make expected` accidentally copying YOUR C build as the baseline.
 - [Build incantation for testing a NON_MATCHING C body in 1080](#feedback-nm-build-incantation) — _The working way to compile the #ifdef NON_MATCHING path against the real toolchain is `make <.o> CPPFLAGS="-I include -I src -DNON_MATCHING"`.
@@ -4343,3 +4344,32 @@ The .o-with-empty-.text approach is preferable to renaming the file (e.g., `.c.t
 **Verified case (2026-05-07):** `game_libs_o0_8944.c` staged with `#if 0`/`#endif` brackets while `gl_func_00008944` etc. remain wrapped in `game_libs.c`. Build succeeds; .o has no .text section. Compare to the last successful migration of `game_libs_o0_949C.c` which executed all 5 steps in one shot — that worked because the wraps in `game_libs.c` were stripped in the same commit.
 
 **Anti-pattern:** committing the stage-0 file WITHOUT `#if 0` bracketing on the assumption that "future passes will fix it" — the immediate build break blocks every other agent's iteration until the migration completes. Either complete all steps in one commit, or use the `#if 0` neutralization.
+
+---
+
+<a id="feedback-nm-partial-body-empty-arms-zero-percent"></a>
+## Partial NM-wrap with empty/stub inner arms can score 0% — IDO over-optimizes a loop body that has no observable side effects
+
+_When a first-pass NM-wrap on a list-iteration / multi-stage-dispatch function stubs out the conditional arms with `(void)var;` casts instead of writing real call sequences, IDO -O2 detects the loop body has no observable side effects and unrolls / folds it into a fraction of the target's instruction count. objdiff reports 0% match — strictly worse than INCLUDE_ASM-only (no progress signal at all)._
+
+**Symptom:** target is e.g. 150 insns in a loop with multiple `jal` calls per iteration. First-pass NM-wrap captures the structure but leaves callback arms empty:
+```c
+for (i = 0; i < count; i++) {
+    if (node[X] != 0) {
+        int *target = ...;
+        (void)target;  /* TODO: 3 callbacks here */
+    }
+}
+```
+IDO -O2 emits ~95 insns (vs target's 150). Loop body becomes a flag-counting skeleton with no `jal`s. objdiff: 0%.
+
+**Why:** without observable side effects (memory writes, function calls), IDO's optimizer collapses the inner conditional, treats the loop as count-only, and emits a much shorter form. The mismatch isn't in instruction selection — it's in instruction count, which kills fuzzy matching.
+
+**How to apply:**
+1. **Don't ship a 0% wrap.** A 0% wrap is grep-discoverable but provides no progress signal vs INCLUDE_ASM. Either fill enough body to score 20%+ or leave bare INCLUDE_ASM with the structural decode in a comment block.
+2. **Fill stub arms with at least one `gl_func_00000000(...)` per arm.** The opaque cross-USO call has unknown side effects, so IDO can't optimize the surrounding body away. Even if your call args are wrong, the arm-presence prevents over-optimization and gets you 30-50% structural match.
+3. **Verify match% before committing.** If `match_percent: 0.0`, your body is structurally too thin — extend it before committing or revert to bare INCLUDE_ASM with a comment-only structural seed.
+
+**Verified case (2026-05-07):** `gl_func_0000CE38` (1080 game_libs, 150-insn list-iter dispatcher). Initial wrap with empty inner arms scored 0%. After adding three `gl_func_00000000(...)` calls inside the dispatcher arm, fuzzy% improved (still partial because the bit-0x2 sub-path is TODO).
+
+**Companion entries:** `feedback-cross-function-inheritance-placeholder-extern-wrap` (same "fill stub arms" principle for register-inherited fragments).
