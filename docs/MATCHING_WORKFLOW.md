@@ -4229,3 +4229,42 @@ _When carving a verified-O0 function out of an -O2 file, and the verified functi
 When 11CA4 / 11CD8 get individually verified at -O0 in future passes, the only change needed is replacing their `INCLUDE_ASM(...)` line with a verified C body in the same `o0_11C70.c` file.
 
 **Anti-pattern:** Don't create `bootup_uso_o0_11CA4.c` and `bootup_uso_o0_11CD8.c` as separate files just because the bodies aren't verified yet — that adds 4 lines of Makefile + 2 lines of linker per still-NM neighbour. Sandwich-stubs absorb them at zero infra cost.
+
+---
+
+<a id="feedback-asmproc-o0-min-insn-count-blocks-2insn-include-asm"></a>
+## asm-processor at -O0 requires `min_instr_count=4` — 2-insn INCLUDE_ASM blocks (like empty `void f(){}` stubs) are unrepresentable in -O0 files
+
+_The sandwich-INCLUDE_ASM recipe (above) doesn't extend to all opt-level boundaries: at -O0, asm-processor's `min_instr_count` is 4 (without `-fframepointer`) or 8 (with), so any INCLUDE_ASM whose .s has fewer than 4 instructions (e.g. an empty `void f(void){}` stub at 2 insns / 8 bytes) fails with `too short .text block`._
+
+**Symptom:**
+
+```
+$ make
+python3 tools/asm-processor/asm_processor.py -O0 src/.../o0_X.c
+Error: too short .text block
+within asm/nonmatchings/.../func_NNNNNNNN.s
+make: *** [Makefile:308: build/src/.../o0_X.c.o] Error 1
+```
+
+The named `.s` file has fewer instructions than asm-processor's `min_instr_count` for the file's opt level. Per `tools/asm-processor/asm_processor.py:907-927`:
+- `-O1` / `-O2`: `min_instr_count = 1` (no fp) / `6` (with fp)
+- `-O0`: `min_instr_count = 4` (no fp) / `8` (with fp)
+- `-g`: `min_instr_count = 4` / `7`
+- `-g3`: `min_instr_count = 1` / `4`
+
+So 2-insn `jr ra; nop` empty stubs are fine in -O2 / -g3 files but BLOCKED in -O0 files.
+
+**Why this matters for the sandwich recipe:** when an -O0 cluster has empty `void f(void){}` stubs interleaved with NM-wrapped functions (typical for the bootup_uso 11C70..11DF8 -O0 cluster), the empties can't sandwich-INCLUDE_ASM into the -O0 file. They have to either:
+
+1. **Stay as C bodies in an adjacent -O2 file** — but at -O0 IDO emits `void f(){}` as **4 insns / 0x10** (jr-ra-nop pair × 2), NOT target's 2 insns / 0x8. So putting them in the -O0 file as C bodies also breaks byte-match.
+
+2. **Stay as INCLUDE_ASM in the -O2 file** — works fine since -O2's `min_instr_count=1` accepts 2-insn blocks.
+
+**The boundary that emerges:** a two-half cluster with empty stubs on the boundary CANNOT migrate to -O0 in one file; it requires interleaved file splits (one -O0 .c per pair of NM-non-empties), which multiplies the linker complexity. For now, accept that some -O0 cluster siblings sandwiched around empties cannot be promoted via the sandwich recipe and remain wrapped in their original -O2 file.
+
+**How to apply:** when planning an o0-cluster file split, check the asm sizes of the cluster's empty-stub neighbours first. If any are 2-insn (8 bytes), they form a hard boundary — split the cluster on those boundaries and accept that empties can't move.
+
+**Verified case (2026-05-07):** attempted to extend `bootup_uso_o0_11D40.c` to absorb the 0x11D40..0x11DF8 sub-cluster including 11D78/11DBC (NM, want -O0) and 11D70/11DB4/11DF8 (empty stubs, 2 insns each). Build failed with `too short .text block within asm/nonmatchings/bootup_uso/func_00011D70.s`. Reverted; 11D78/11DBC stay NM-wrapped in `bootup_uso_tail3a_bot.c` (-O2 -g3) and grinding for them happens against -O2 emit.
+
+**Companion to:** `docs/MATCHING_WORKFLOW.md#feedback-o0-cluster-include-asm-sandwich` — the sandwich recipe; this section documents its limit.
