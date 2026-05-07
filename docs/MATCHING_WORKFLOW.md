@@ -49,7 +49,8 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 - [expected/ baseline can silently capture wrong-size decompiles; check ROM size periodically](#feedback-expected-baseline-can-capture-bloat) — When a function decompiles to wrong-size C, `make expected` snapshots the bloat into the baseline. objdiff then reports the function as 100% match (wrong against wrong).
 - [After fragment merge that deletes .s files, the standard `stash→build→cp expected` recipe fails — the stashed .c still references the deleted .s](#feedback-expected-baseline-refresh-after-asm-delete) — _Refreshing expected/.o by stashing your decomp C and rebuilding INCLUDE_ASM-only assumes the stashed .c can build.
-- [After file-split (one .c into two), refresh BOTH expected/<orig>.c.o (remove moved function) AND create expected/<new>.c.o (with the moved function) — byte_verify uses path-matched expected/.o lookups](#feedback-file-split-needs-paired-expected-o-refresh) — _When splitting a function from kernel_NNN.c into kernel_NNNb.c (e.g. for OPT_FLAGS difference), the build/.o pair updates automatically but expected/.o doesn't.
+- [Layout-orphan candidate: discover yields a "[has source]" function whose VRAM lies past its parent .c.o's TRUNCATE_TEXT cap AND no sibling .c file declares it](#feedback-layout-orphan-candidate-discover-yields-has-source-but-decoding-is-dead-storage) — _Partial file-split leaves INCLUDE_ASM declarations stranded past TRUNCATE_TEXT in the parent .c, AND the successor .c hasn't re-declared them. Decoded C body builds in NM but is dead in default build until gap-filling boundary commit lands. Verified on `game_libs_func_00037F40` (vram 0x37F40 past `game_libs.c` TRUNCATE_TEXT=0x8944, gap of 0x118 bytes in `game_libs_post.c` between 37E40 and 37F58). Diagnostic: `objdump -t build/.../<file>.c.o | grep <func>` shows symbol size 0 + value > .text section size._
+- [After file-split (one .c into two), refresh BOTH expected/<orig>.c.o (remove moved function) AND create expected/<new>.c.o (with the moved function) — byte_verify uses path-matched expected/.o lookups](#feedback-after-file-split-refresh-both-expected-paths) — _When splitting a function from kernel_NNN.c into kernel_NNNb.c (e.g. for OPT_FLAGS difference), the build/.o pair updates automatically but expected/.o doesn't.
 - [Don't run `make expected` while your decomp C is in place — it copies your build AS the baseline](#feedback-make-expected-contamination) — _`make expected` copies `build/*.o` → `expected/*.o`.
 - [`make expected RUN_CC_CHECK=0` blindly overwrites ALL expected/.c.o — corrupts baselines for unrelated files](#feedback-make-expected-overwrites-unrelated) — Running `make expected` after touching one .c file copies the CURRENT build/.c.o for EVERY unit to expected/, including files where current build is wrong/partial.
 - [`make expected` rewrites ALL segments' .o files (~30+), not just yours — selectively `git checkout HEAD --` the unrelated ones before commit to avoid parallel-agent merge conflicts](#feedback-make-expected-touches-all-segments) — _`make expected` runs `cp build/src/<d>/*.o expected/src/<d>/` for every segment directory.
@@ -1002,6 +1003,53 @@ redundant extern — the file-top declaration is in scope for the whole TU.
 ---
 
 <a id="feedback-file-split-needs-paired-expected-o-refresh"></a>
+<a id="feedback-layout-orphan-candidate-discover-yields-has-source-but-decoding-is-dead-storage"></a>
+## Layout-orphan candidate: discover yields a "[has source]" function whose VRAM lies past its parent .c.o's TRUNCATE_TEXT cap AND no sibling .c file declares it — the INCLUDE_ASM is dead, decoded C body in the parent .c is also dead
+
+_When a file-split (e.g. `game_libs.c` → `game_libs_post.c` migration) is partial, some INCLUDE_ASM declarations get stranded: they're still in the parent .c but past the parent's `TRUNCATE_TEXT` cap, AND haven't been re-declared in the successor .c. The function's bytes don't appear in any .o file but the discover tool still reports it as "[has source]" because the .s file exists — leading to wasted decode work._
+
+**Diagnostic:**
+
+1. discover output: `<func> N instructions [has source]` — looks like a normal small candidate.
+2. Function's VRAM offset (from the symbol name) is past its parent .c.o's `TRUNCATE_TEXT` cap. E.g. `game_libs_func_00037F40` at vram 0x37F40 — but `game_libs.c.o: TRUNCATE_TEXT := 0x8944` (the file-offset 0x920c for 37F40 in the un-truncated .o would be > 0x8944, so it's stripped).
+3. `grep -rn '<func_name>' src/` finds it ONLY in the parent .c (with INCLUDE_ASM), not in the post-split sibling.
+4. `objdump -t build/src/<seg>/<parent>.c.o | grep <func>` shows symbol size 0 (truncated away).
+5. `objdump -t build/src/<seg>/<successor>.c.o | grep <func>` shows the symbol is missing entirely.
+6. The successor's .text has a layout HOLE: predecessor function ends at offset N, next function starts at offset N+gap, where `gap` covers the missing functions' bytes.
+
+**Why writing the C body is dead-storage:** the parent's TRUNCATE_TEXT strips the function from build/.o, so the `#else INCLUDE_ASM` path produces no bytes. The C body in `#ifdef NON_MATCHING` builds correctly (NM build skips the truncate) but it's never linked. The successor doesn't import the function either. Net result: the bytes for this function come from the linker filling the gap with raw .s bytes via... actually, they DON'T, in many cases — the gap is just unfilled and may not even matter at runtime if no caller invokes the function.
+
+**Fix path (multi-tick boundary work):**
+
+1. Add INCLUDE_ASM declarations for ALL the missing functions in the gap to the successor .c (e.g. `game_libs_post.c`) BETWEEN the surrounding declared functions. Order MUST match VRAM order, e.g.:
+   ```c
+   void gl_func_00037E40(Quad4 *dst) { ... }
+   /* ADD HERE: */
+   INCLUDE_ASM("...", game_libs_func_00037E98);
+   INCLUDE_ASM("...", game_libs_func_00037F10);
+   /* + the C body for 37F40 */
+   /* THEN: */
+   INCLUDE_ASM("...", gl_func_00037F58);
+   ```
+2. Refresh `expected/<successor>.c.o` to include the gap-filling functions.
+3. Verify the gap is closed (`objdump -t` on successor .o shows continuous offsets).
+
+Until the gap is filled, decoded C bodies for any function in the gap are dead-storage — the `#ifdef NON_MATCHING` wrap preserves the decode for future migration but the default build path produces nothing.
+
+**Catching this during /decompile picking:**
+- Before grinding, check `objdump -t build/src/<seg>/<file>.c.o | grep <func>`. If symbol size is 0 AND symbol value > .text section size (per `objdump -h`), it's layout-orphan — decoding work won't promote until the gap-filling boundary commit lands. Document the cap, defer to multi-tick.
+
+**Verified 2026-05-07** on `game_libs_func_00037F40`: 6-insn pointer-bump int reader decoded byte-exact at -O2 NM, but blocked by game_libs.c TRUNCATE_TEXT=0x8944 + game_libs_post.c missing entries for 37E98/37F10/37F40 in the 0x37E98..0x37F58 range.
+
+**Companion:**
+- `feedback_nm_build_truncate_breaks_per_file` — TRUNCATE_TEXT shrinks .text and breaks NM-build for entire file
+- `feedback_truncate_elf_text_must_shrink_symbols` — symbol-shrinking past sh_size
+
+---
+
+---
+
+<a id="feedback-after-file-split-refresh-both-expected-paths"></a>
 ## After file-split (one .c into two), refresh BOTH expected/<orig>.c.o (remove moved function) AND create expected/<new>.c.o (with the moved function) — byte_verify uses path-matched expected/.o lookups
 
 _When splitting a function from kernel_NNN.c into kernel_NNNb.c (e.g. for OPT_FLAGS difference), the build/.o pair updates automatically but expected/.o doesn't. Land-script byte_verify pairs build/<path>.c.o ↔ expected/<path>.c.o by exact relative path; a missing expected/<new>.c.o causes byte_verify to skip and fall through to "byte-verify failed."_
