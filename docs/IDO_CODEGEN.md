@@ -4216,6 +4216,14 @@ Tested partial-removal of `register` qualifiers — only the bifurcation works a
 
 There is no middle ground: register-qualified locals at -O0 are all-or-nothing for the +N*4 backup overhead (where N = register-decl count >= 1). Either commit to register (correct s-reg usage, +16 frame) or no-register (correct frame, no s-regs). Neither byte-matches; the cap is structural.
 
+**2026-05-07 — analogous behavior at -O2 for non-register named pointer locals (different mechanism):**
+
+At -O2, IDO reserves stack slots for named-local pointer variables based on the COUNT OF DECL'D POINTERS at function entry, even when the allocator subsequently keeps them all in registers. Verified on `game_uso_func_0000C12C` (16-int copy with unroll-by-3): adding 3 named ptrs (`int *src; int *end; int *dst;`) bloats frame from target's 88 bytes to 104 bytes (+16 = 12 bytes for 3 ptrs + 4 alignment). Output asm confirms src/end/dst all live in $v0/$a0/$v1 registers — never spilled — but the 16-byte gap between buf and ra reservation persists.
+
+Distinct from the -O0 case (which is about `register` keyword backup slots): at -O2 the slots are reserved for ANY named pointer local, regardless of `register` hint, and remain dead even when the allocator keeps the value in a $-reg.
+
+**How to apply:** if your -O2 build has frame = target_frame + 4*N where N = named pointer locals, AND those locals all show up in registers (no `lw/sw` to their slots in the body), the cap is the same dead-slot reservation. INSN_PATCH on the prologue's `addiu sp` immediate is technically possible but the offset cascade through the rest of the function makes it impractical — accept the structural cap.
+
 ---
 
 ---
