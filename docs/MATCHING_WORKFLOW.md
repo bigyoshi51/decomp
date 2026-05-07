@@ -4448,3 +4448,23 @@ Then the `bc1fl` target is at offset PC+4+N*4, which (after split-fragments runs
 6. Track in `DECOMPILED_FUNCTIONS.md`'s "Fragment Merges Performed" section.
 
 **Future-proofing:** `split-fragments.py` should be enhanced to detect this case automatically — e.g., before splitting at insn N, check all branch instructions in the to-be-parent for targets ≥ N. If any target is in the to-be-fragment's range, refuse to split. Until then, the recursive call MUST inspect each split for the internal-landing-zone signature.
+
+### feedback-nm-body-in-wrong-vram-range-c-silently-truncated
+
+When a segment is split across multiple `.c` files via per-file `TRUNCATE_TEXT` overrides (e.g. game_libs split as `game_libs.c` covering 0x0000..0x8944, `game_libs_mid.c` covering 0x8A40..0x949C, `game_libs_post.c` covering 0x1CA10+), an NM-wrapped C body written in the WRONG `.c` file is silently TRUNCATEd off the final `.o` and never lands.
+
+**Symptom:** the NM body verifies byte-exact in standalone `cc -c` tests, but `expected/.o` has wrong/missing bytes for that function. Easy to miss because the build succeeds, the C compiles, and the `.NON_MATCHING` build path runs — but `truncate-elf-text.py` strips everything past the file's `TRUNCATE_TEXT`. The function's VRAM falls past the cap, so its bytes are deleted from the `.text` section before linking.
+
+**Detection:** when wrapping a new function in a split-segment `.c` file, check the function's VRAM (from the `.s` filename or `nonmatching` header) against the file's `TRUNCATE_TEXT` value AND the `tenshoe.ld` layout. The function's VRAM must lie within that file's `[start, start + TRUNCATE_TEXT)` range.
+
+**Verified case (2026-05-07):** `game_libs_func_00037F40` (VRAM 0x37F40) was NM-wrapped in `game_libs.c` (TRUNCATE_TEXT=0x8944). Body verified byte-exact standalone but never landed. Documented in-source as `BLOCKED IN DEFAULT BUILD`. Promoted by relocating the C body (and sibling INCLUDE_ASMs `00037E98` + `00037F10`) from `game_libs.c` to `game_libs_post.c` (covers VRAM 0x1CA10+), placed between `gl_func_00037E40` and `gl_func_00037F58` to maintain offset order. After the move + `refresh-expected-baseline.py`, byte-exact 6/6.
+
+**Recipe:**
+
+1. Find the function's VRAM from `asm/nonmatchings/<seg>/<func>.s` filename or header.
+2. List all `TRUNCATE_TEXT` overrides for the segment (`grep TRUNCATE_TEXT Makefile`).
+3. Cross-reference with `tenshoe.ld`'s segment layout to find which `.c.o` covers the function's VRAM.
+4. Move the C body (and any preceding INCLUDE_ASMs that should be in the same range) to the correct `.c`. Maintain offset order — predecessors before, successors after.
+5. Run `scripts/refresh-expected-baseline.py` post-move (the relocation may shift `expected/.o`'s symbol layout).
+
+**Anti-pattern:** writing an NM body in the chronologically-first segment `.c` file ("just add it where similar functions are") without verifying the file's TRUNCATE_TEXT covers the VRAM. The CC flags don't error or warn.
