@@ -13,6 +13,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Inline NM-wrap match-percent comments rot — re-measure before trusting](#feedback-inline-nm-percentages-rot) — _Old match % claims in #ifdef NON_MATCHING comment blocks can silently go stale when the toolchain changes.
 - [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — _Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined NULL, stray apostrophes) compile fine by default but break the moment anyone…
 - [Partial NM-wrap with empty/stub inner arms can score 0% — IDO over-optimizes a loop body that has no observable side effects](#feedback-nm-partial-body-empty-arms-zero-percent) — _When a first-pass NM-wrap stubs out conditional arms with `(void)var;` instead of writing real call sequences, IDO -O2 sees the loop body as side-effect-free and unrolls/folds it into a much smaller emit (e.g. 95 insns vs target's 150). objdiff reports 0% match. Fill stub arms with at least one `gl_func_00000000(...)` per arm — the call's opaque side-effect prevents the unroll._
+- [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [-DNON_MATCHING build of multi-function -O0 file corrupts the byte alignment of NM-wrapped neighbors](#feedback-nm-build-corrupts-neighbors-in-multi-func-o0-file) — _When you have multiple functions in a `<seg>_o0_NNN.c` file (each NM-wrapped) and build with `-DNON_MATCHING`, function N's wrong-size emit (e.g. extra `b +1; nop`) shifts function N+1's start offset, which the…
 - [`expected/.o` can carry prior -DNON_MATCHING build bytes; always refresh baseline before trusting a "matches" signal](#feedback-nm-build-expected-contamination) — _The existing `feedback_make_expected_contamination.md` covers `make expected` accidentally copying YOUR C build as the baseline.
 - [Build incantation for testing a NON_MATCHING C body in 1080](#feedback-nm-build-incantation) — _The working way to compile the #ifdef NON_MATCHING path against the real toolchain is `make <.o> CPPFLAGS="-I include -I src -DNON_MATCHING"`.
@@ -4468,3 +4469,29 @@ When a segment is split across multiple `.c` files via per-file `TRUNCATE_TEXT` 
 5. Run `scripts/refresh-expected-baseline.py` post-move (the relocation may shift `expected/.o`'s symbol layout).
 
 **Anti-pattern:** writing an NM body in the chronologically-first segment `.c` file ("just add it where similar functions are") without verifying the file's TRUNCATE_TEXT covers the VRAM. The CC flags don't error or warn.
+
+---
+
+<a id="feedback-nm-trailing-todo-placeholder-hurts-not-helps"></a>
+## Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs
+
+_The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule (per `feedback-nm-partial-body-empty-arms-zero-percent`) is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap, a placeholder call emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site._
+
+**Setup:** a partially-decoded NM-wrap covers the first 50% of body but ~200 insns at the tail are still unwritten. Natural instinct: add `(void)gl_func_TODO_X((int*)scratch, a0);` as a "documentation scaffold" so future agents see where the unwritten body would go.
+
+**The trap:** that placeholder call ISN'T a no-op. IDO emits a real `jal 0` for it (since `gl_func_TODO_X` is K&R-declared and resolves to address 0). That phantom `jal` lands at some offset in the emitted .text, where the target asm has DIFFERENT instructions — usually the function's own body code. Result: a 1-2 insn shift cascade that tanks fuzzy% below where it would have been with the body simply truncated.
+
+**The fix:** remove the placeholder. Document the unwritten region in BLOCK COMMENTS (which don't emit) — `/* TODO: ~200 insns of body 0x21F4-0x23D0, see asm */` — not in compiled-out call sites.
+
+**Why this differs from the inner-arm rule:**
+- Inner-arm stub: fills a body that IDO would otherwise see as side-effect-free and collapse (e.g., `if (cond) { (void)var; }` becomes `nop`). The stub call's opaque side-effect prevents collapse, KEEPING the asm structure intact.
+- Trailing-tail stub: ADDS a phantom call where the asm has body code. There's no collapse risk to prevent — there's just an extra jal that doesn't match anything.
+
+**Diagnostic:** if the placeholder is INSIDE a conditional/loop body that would otherwise be empty, KEEP it. If it's at the TAIL of the function (just before the closing brace), REMOVE it.
+
+**Verified case (2026-05-07):** `game_uso_func_00001DDC` (1080 game_uso). 383-insn NM-wrap with ~200 trailing insns stubbed. Removing the trailing `(void)gl_func_TODO_00001DDC((int*)scratch, a0);` placeholder: fuzzy 15.14% → 18.59% (+3.45pp). The `gl_func_TODO_00001DDC` extern declaration was also removed since it had no other users.
+
+**How to apply:** when a multi-pass decomp uses TODO placeholders to mark partial decode, audit them periodically:
+- Inside loop/conditional body that IDO might collapse → keep
+- At function tail before `}` → remove (document in block comment instead)
+- If unsure, try removing one, rebuild, check fuzzy%. If unchanged or worse, restore.
