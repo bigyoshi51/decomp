@@ -2012,3 +2012,28 @@ _Complement to `feedback-jal-insn-patch-to-match-include-asm-derived-expected`. 
 **Compare to the 949C cluster** which needed INSN_PATCH for jal targets `0x0C0073EC`/`0x0C0073FF`/`0x0C007418`/`0x0C00742B` (callees `gl_ref_0001CFB0`/`gl_ref_0001CFFC`/`gl_ref_0001D060`/`gl_ref_0001D0AC` at non-zero addresses).
 
 **Rule of thumb:** for a USO segment file split, always-callee-=-0 clusters are simpler — only the 949C-style "named gl_ref" clusters need the jal-bake patch.
+
+### feedback-suffix-skip-path-2-false-positive-on-natural-epilogue
+
+`scripts/inject-suffix-bytes.py` has TWO skip paths for "function already has the suffix bytes":
+
+- **Skip path 1 (post-tail check):** bytes at offsets `[func_addr + func_size, func_addr + func_size + n)` already match payload. Triggers on script re-runs.
+- **Skip path 2 (in-tail check):** the LAST `n_bytes` of `st_size` already match the payload. Documented intent: handle INCLUDE_ASM-built objects whose .s file already covers the suffix bytes inside `st_size`.
+
+**The skip-path-2 false positive (verified 2026-05-07 on `game_uso_func_00010FB8`):** when the C body's natural epilogue happens to be `jr ra; nop` (= 0x03E00008, 0x00000000) AND the SUFFIX_BYTES payload is also `0x03E00008, 0x00000000` (because target wants jr ra + nop appended), skip-path-2 matches the body's natural last 2 insns against the payload and skips the injection.
+
+The pipeline order is `PROLOGUE_STEALS → PREFIX_BYTES → SUFFIX_BYTES → INSN_PATCH`. Skip-path-2 fires BEFORE INSN_PATCH overrides; if INSN_PATCH then overwrites the body's last 2 insns (with e.g. `lw ra; addiu sp` that target wants at those offsets), the function ends up with no `jr ra` anywhere. Build links cleanly but the function never returns at runtime.
+
+**Detection:** look for `inject-suffix-skip: <func> already ends with suffix bytes inside st_size (INCLUDE_ASM build path); no-op` in the build log AND a corresponding `patch-insn: <func> patched N/N insns` that includes overrides at the function's last few offsets. The pair is the smoking gun.
+
+**Workarounds:**
+
+1. **Pick a different SUFFIX payload** — only viable if target's actual tail isn't `jr ra; nop`. (For the 24-insn family at offsets `0x10E2C/11368/113C8` etc, the body emits 22 insns ending in `lw ra; addiu sp; jr ra; nop` and SUFFIX adds `0,0` which extends to 24 insns of `... jr ra; nop; nop; nop`. The skip-path-2 check sees `lw ra; addiu sp` at offsets 80-87 — NOT matching `0x00, 0x00` — so no false positive.)
+
+2. **Add `--no-skip-tail` flag to inject-suffix-bytes.py** — preferred long-term fix. Lets the Makefile per-function override the skip-path-2 check when the user knows INSN_PATCH will overwrite the natural epilogue.
+
+3. **Reorder pipeline** to run INSN_PATCH BEFORE SUFFIX_BYTES — risky, affects all functions; cross-effects unverified.
+
+The skip-path-2 detection logic was designed for INCLUDE_ASM-built objects (where the .s file's `nonmatching SIZE` declaration covers the suffix bytes that target's symbol layout expects). For C-emit builds with INSN_PATCH that overwrites the natural epilogue, the check is a false positive.
+
+Documented as a multi-pass blocker on `game_uso_func_00010FB8` (NM wrap header lists the issue with the 27-insn body needing 2 trailing insns from SUFFIX). The 24-insn family worked because their bodies emit 22 insns (not 25), so the natural epilogue lands at offsets 80-87, not at the SUFFIX-payload-match position.
