@@ -4898,6 +4898,8 @@ IDO 7.1 (and 5.3) respects the `register` storage class as a **strong hint** for
 
 **Why:** OoT and all matching N64 decomps use `register` for interrupt state variables. IDO's default heuristic at -O1/-O2 prefers stack over $s0 unless told otherwise.
 
+**Caveat — `register` is REDUNDANT when weight-based allocator already wants $s:** the keyword is a hint, not a directive. For locals with high enough refs/live_length weight (e.g. read across N≥3 jal calls), IDO promotes them to $s automatically. Removing `register` is a no-op in those cases. Verified on `n64proc_uso_func_00000014` (2026-05-07): all 5 register-typed locals (`base`, `base10`, `cur`, `flag`, `one`) produced byte-identical .o whether `register` was on all five, just one, or none. The earlier "remove register → regress to 33%" claim from that function's wrap log applied to a pre-goto-chain shape; in the current shape the allocator's weight calc already gives all 5 their $s slots. Bottom line: add `register` opportunistically (no harm), but don't pile on more variants assuming a missing `register` hint is what's blocking the match — verify with cmp on .o bytes between with-and-without-keyword forms first.
+
 **How to apply:** For ANY function that saves a call result in $s0 across subsequent calls, add `register` to the variable declaration. This applies to all disable-int/do-work/restore-int patterns in libultra.
 
 **Leaf function variant (O1):** `register` also changes register allocation in leaf functions at -O1. `register u32 status = *(volatile u32*)0xA4800018;` loads into `$a0` with no stack spill. Without `register`, IDO loads into `$t7` and spills to stack in the branch delay slot. This is the pattern for `__osSiDeviceBusy` and similar HW status checks.
