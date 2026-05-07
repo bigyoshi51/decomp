@@ -5831,6 +5831,30 @@ When does decl order matter? Likely when **two locals have EQUAL priority** unde
 
 **Bonus from same case:** changing `int i` → `unsigned int i` flipped `slt` → `sltu` (target). For loop counters compared against an unsigned-returning function (`gl_func_00000000(a1)` here returns string length), use `unsigned int` to match `sltu`.
 
+**Further refinement (2026-05-07, game_uso_func_0000BF7C, 17 → 3 diffs):**
+
+When two locals are declared *without* initializers and assigned later, the ASSIGNMENT-statement order takes the role of the tiebreaker — not the declaration order:
+
+```c
+// Both variants have the same decls:
+//   int i;
+//   char *p;
+
+// Variant A (regress): s0=p, s1=i
+p = base + 0xB8;
+i = 0;
+
+// Variant B (target):  s0=i, s1=p
+i = 0;
+p = base + 0xB8;
+```
+
+Both are equal-priority pseudos; the tiebreaker is "first pseudo to receive a definition in the RTL stream", which corresponds to first-assignment in C. Splitting decl from init (vs init-at-decl-site) creates a knob that init-at-decl-site doesn't expose.
+
+**Practical implication:** when the equal-priority decl-order trick (above) fails because both pseudos genuinely have the same priority *and* the desired order can't be expressed via decl reorder (e.g., both are function-scope and the target allocation pattern requires an order opposite to natural C placement), separate decl from init and use assignment-order to force the tiebreak.
+
+In-LOOP-BODY statement order does NOT affect allocation (verified previously on n64proc_uso). The lever is specifically PRE-LOOP INIT order — assignments that happen during the function's setup phase before the loop body's first iteration.
+
 ---
 
 ---
