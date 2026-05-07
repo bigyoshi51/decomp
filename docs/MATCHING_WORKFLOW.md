@@ -4312,3 +4312,32 @@ _When `mips-linux-gnu-ld` reports `relocation truncated to fit: R_MIPS_26 agains
 4. Refresh expected/ baselines per `feedback_after_file_split_refresh_both_expected_objs`.
 
 **Note on undefined-reference cascades:** when the link error progresses past R_MIPS_26, it may surface previously-masked undefined references (e.g. an alabel in a fragment-merged function that callers reference but undefined_syms_auto.txt doesn't map). Add those one-by-one as they show; each clears another link blocker. The split typically reveals a chain of 1-3 such issues that were always lurking but invisible behind the first-failing R_MIPS_26.
+
+---
+
+<a id="feedback-stage-0-file-needs-if-zero-bracket-to-avoid-link-conflict"></a>
+## Stage-0 prep file (created BEFORE migration completes) needs `#if 0` brackets around bodies to avoid duplicate-symbol link errors
+
+_When you create a new .c file as the first step of a multi-tick file-split migration (recipe per `feedback-o0-cluster-include-asm-sandwich`), the Makefile's `find src/...` auto-discovers it and compiles to a .o. If the .c has function bodies and the original .c file still has the same functions wrapped with `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif`, the link will fail with duplicate-symbol errors (the new file's compiled C body conflicts with the asm-derived symbol from the original)._
+
+**Symptom:** committing a "stage-0 prep" .c file (the new -O0 sub-file with verified bodies) triggers a build break — link errors like:
+```
+ld: build/src/.../new_o0_split.c.o: in `gl_func_X':
+multiple definition of `gl_func_X'; build/src/.../original.c.o: ...
+```
+
+**Why:** the auto-find pattern in Makefiles like `C_FILES := $(shell find src/<dirs> -name '*.c')` picks up every .c file regardless of whether it's wired into the linker script. The compiled .o gets all its symbols even if its `.text` isn't placed by the linker. Symbol resolution at link time finds the conflict.
+
+**Fix:** wrap the function bodies in `#if 0 ... #endif` so the .c file compiles to an empty .o (no symbols, no link conflict). Document the migration checklist in the file's header so future passes know to remove the brackets when they:
+1. Truncate the original .c to drop the cluster.
+2. Add the new file's .o to the linker script.
+3. Strip the `#ifdef NON_MATCHING / #else INCLUDE_ASM` wraps from the original.
+
+The .o-with-empty-.text approach is preferable to renaming the file (e.g., `.c.todo`) because:
+- It keeps the file diff-grep-discoverable.
+- It validates the C bodies STILL compile cleanly via `make build/<path>.c.o` — catching syntax errors before the actual migration.
+- The minimal edit to "go live" is just removing the brackets (no rename, no file move).
+
+**Verified case (2026-05-07):** `game_libs_o0_8944.c` staged with `#if 0`/`#endif` brackets while `gl_func_00008944` etc. remain wrapped in `game_libs.c`. Build succeeds; .o has no .text section. Compare to the last successful migration of `game_libs_o0_949C.c` which executed all 5 steps in one shot — that worked because the wraps in `game_libs.c` were stripped in the same commit.
+
+**Anti-pattern:** committing the stage-0 file WITHOUT `#if 0` bracketing on the assumption that "future passes will fix it" — the immediate build break blocks every other agent's iteration until the migration completes. Either complete all steps in one commit, or use the `#if 0` neutralization.
