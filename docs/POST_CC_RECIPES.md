@@ -869,12 +869,34 @@ to offset N" directive — but the current script doesn't support that.
 If you hit a non-USO case that fails, inject a python script step that
 patches the .rel.text table to clear or move the affected entries.
 
-**Update 2026-05-07:** see
-`feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail` below for
-the R_MIPS_26 case, which IS now auto-stripped by patch-insn-bytes.py.
-HI16/LO16 cases are still un-stripped (they're harder — the reloc may
-also need to be MOVED rather than deleted, depending on whether the
-patched word is itself an immediate-loading insn).
+**Update 2026-05-07 (R_MIPS_26):** see
+`feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail` below — the
+R_MIPS_26 jal-→non-jal case is now auto-stripped by patch-insn-bytes.py.
+
+**Update 2026-05-07 (HI16/LO16):** patch-insn-bytes.py now ALSO strips
+orphan R_MIPS_HI16 / R_MIPS_LO16 entries when a patch changes a lui
+(opcode 0x0F) or LO16-bearing immediate-load opcode (addiu / lw / sw /
+lhu / lh / lb / lbu / sh / sb / lwc1 / swc1 / ldc1 / sdc1) to an opcode
+outside that family. Strip is in-place (sets r_info=0 → R_MIPS_NONE);
+table layout unchanged. Triggers when:
+
+```python
+# existing was lui, new is not lui:
+if _is_lui_opcode(existing) and not _is_lui_opcode(word):
+    orphan_hi_offsets.add(rel_offset)
+# existing was an LO16-bearing immediate-load/store, new is not:
+if _is_lo16_opcode(existing) and not _is_lo16_opcode(word):
+    orphan_lo_offsets.add(rel_offset)
+```
+
+For USO context (every cross-USO symbol resolves to 0 at link time),
+post-strip bytes are link-correct provided the patch caller has baked
+the intended addend into the new instruction's immediate field — which
+is the natural representation when copying target's pre-resolved bytes.
+
+This handles the "lui ↔ addiu / lw" swap pattern that arises when IDO
+schedules `lui+addiu` differently from target — see
+`feedback-insn-patch-prologue-scheduler-shuffle` for the typical case.
 
 ---
 
