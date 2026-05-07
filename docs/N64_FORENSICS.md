@@ -447,3 +447,26 @@ None of these are CPU instructions emitted by IDO. They're RSP (Reality Signal P
 ---
 
 ---
+
+## .s file `nonmatching` parser only accepts SINGLE-LINE block comments before the directive
+
+_When adding a doc-comment to an `asm/nonmatchings/<seg>/...func_X.s` file, place a single-line `/* ... */` comment immediately before the `nonmatching FUNC, SIZE` line. Multi-line comments (with the closing `*/` on a separate line) cause the assembler/post-processor to error with `.text block without an initial glabel`._
+
+**Symptom (verified 2026-05-07 on `func_80002CD0`):**
+
+```
+Error: .text block without an initial glabel
+within asm/nonmatchings/kernel/func_80002CD0.s, at line "/* Handwritten function - libultra _bzero (libreultra src/libc/bzero.s"
+```
+
+The error fires because the parser consumes only the first line of the comment as preamble metadata, then sees the next line (`* structural match: ...`) as a non-glabel statement after the empty line that should have started a function.
+
+**Fix:** collapse the comment to a single line:
+```asm
+/* Handwritten function - libultra _bzero (libreultra bzero.s structural match) */
+nonmatching func_80002CD0, 0x9C
+```
+
+Don't rely on `*/` line wrapping — the parser is line-oriented. If you have detail that doesn't fit on one line, put the full description in the matching `src/<file>.c` wrap-comment instead and keep the `.s`-side comment minimal.
+
+**Bonus:** `.s` files reject unicode characters (em-dash `—`, smart quotes, etc.) the same way C source does (assembler pipeline uses EUC-JP encoding). Stick to ASCII.
