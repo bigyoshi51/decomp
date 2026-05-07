@@ -4199,3 +4199,33 @@ print(f'{match_words}/{len(e)//4} = {100*match_words/(len(e)//4):.1f}% byte-exac
 **How to apply:** when an in-source NM-wrap docstring claims "X% match" without specifying which metric, re-measure both before grinding. Adopt whichever variant has higher byte-exact (even if fuzzy is lower) since byte-exact is what INSN_PATCH/SUFFIX_BYTES recipes can promote to 100%.
 
 **Origin:** discovered 2026-05-07 on bootup_uso/func_0000F2EC. The pre-existing wrap claimed 84.61% (fuzzy) as the "tightest reachable"; replacing with the post-jal-init form jumped byte-exact from 41.5% to 78.0% despite fuzzy dropping. Closes the gap toward INSN_PATCH-eligible territory.
+
+---
+
+<a id="feedback-o0-cluster-include-asm-sandwich"></a>
+## -O0 cluster file-split: sandwich INCLUDE_ASM stubs in the -O0 file when only some cluster bodies are verified
+
+_When carving a verified-O0 function out of an -O2 file, and the verified function is sandwiched between OTHER NM-wrapped cluster siblings that aren't yet verified at -O0, put the still-NM neighbours into the new -O0 file as `INCLUDE_ASM(...)` lines (NOT C bodies). INCLUDE_ASM is opt-level-independent — it copies asm bytes verbatim regardless of the file's `OPT_FLAGS := -O0`. This keeps the cluster's .o region contiguous in linker order without creating one .c file per cluster function._
+
+**Rule:** When file-splitting an -O0 function out of an -O2 file:
+
+1. If the verified-O0 function is at the START or END of the cluster (no still-NM siblings on one side), the -O0 file holds just that function. Done.
+2. If the verified-O0 function is in the MIDDLE of the cluster (still-NM siblings on both sides, OR on one side that you'd otherwise have to split into two -O2 sub-files), put the still-NM neighbours in the SAME -O0 file as `INCLUDE_ASM(...)` lines. The -O0 file becomes a contiguous range of mixed C bodies + INCLUDE_ASM stubs.
+
+**Why this works:** `INCLUDE_ASM(SECTION, NAME)` in `common.h` expands to inline assembler that pastes the named .s file's bytes verbatim. The compiler (whether at -O0 or -O2) doesn't compile those bytes — they're emitted by the assembler. So the file's `OPT_FLAGS := -O0` only affects the C function bodies; INCLUDE_ASM regions emit identically across opt levels.
+
+**Why it's better than alternatives:**
+- Vs creating one -O0 .c file per verified function: each new .c file needs its own `OPT_FLAGS`, `TRUNCATE_TEXT`, and linker-script entry. With sandwich-stubs, you have ONE -O0 file per cluster instead of N.
+- Vs splitting the parent -O2 file into two halves (top half before cluster, bot half after cluster): forces the linker to interleave -O2 → -O0 → -O2 → -O0 → -O2 just to skip past one verified function. Multiplies the split count.
+- Vs leaving the verified function as NM in the -O2 file: blocks promotion. The point of the split is to enable promotion.
+
+**How to apply:** When the next /decompile pass verifies one of the still-NM stubs at -O0 (e.g., `func_00011CA4`'s C body matches at -O0), simply replace that file's `INCLUDE_ASM("...", func_00011CA4);` line with the verified C body. No Makefile or linker changes needed — the `.o` size is already accounted for, the file's OPT_FLAGS already says -O0, and the linker position is unchanged.
+
+**Verified case (2026-05-07):** bootup_uso 0x11C70..0x11D40 cluster split. `func_00011C70` had verified -O0 body; `func_00011CA4` and `func_00011CD8` were NM-wrapped (not yet verified at -O0). Layout chosen:
+- `bootup_uso_o0_11C70.c` (-O0): `func_00011C70` C body + `INCLUDE_ASM` stubs for 11CA4, 11CD8.
+- `bootup_uso_o0_11D40.c` (-O0): `func_00011D40` C body alone (sibling cluster end).
+- `bootup_uso_tail3a.c` shrunk (TRUNCATE_TEXT 0x1A1C → 0x194C), `bootup_uso_tail3a_bot.c` for everything after the cluster (-O2 -g3).
+
+When 11CA4 / 11CD8 get individually verified at -O0 in future passes, the only change needed is replacing their `INCLUDE_ASM(...)` line with a verified C body in the same `o0_11C70.c` file.
+
+**Anti-pattern:** Don't create `bootup_uso_o0_11CA4.c` and `bootup_uso_o0_11CD8.c` as separate files just because the bodies aren't verified yet — that adds 4 lines of Makefile + 2 lines of linker per still-NM neighbour. Sandwich-stubs absorb them at zero infra cost.
