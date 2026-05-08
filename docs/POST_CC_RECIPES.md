@@ -67,6 +67,23 @@ correctly — the gate is now `opcode1 in (0x0F, 0x23)` instead of
 common `addiu sp` (opcode 0x09) prologue. SLL (opcode 0x00) remains
 blocked; same recipe (extend the tuple) applies if needed.
 
+**2026-05-08 second extension (ANDI now accepted, used for byte-mask-from-arg):**
+splice-function-prefix.py was extended to also accept opcode 0x0C
+(ANDI) as a valid PROLOGUE_STEALS=4 first-insn. Use case: `andi rN,
+aN, MASK` — when the predecessor's tail does `andi t6, a0, 0xFF`
+to mask one byte from a passed-through arg, and the successor uses
+that masked byte as its first operand (e.g. shifts/packs into a Gfx
+display-list word). C-emit naturally produces the ANDI as the first
+body insn because `(a0 & 0xFF) << 16` materializes the mask first.
+Verified 2026-05-08 on `gl_func_00027548` (F3DEX-style 0xFA opcode +
+3-byte pack: `0xFA000000 | ((a0&0xFF)<<16) | ((a1&0xFF)<<8) | (a2&0xFF)`).
+Prior diagnosis on this function ("$t6 caller-context inherited,
+unfixable") was wrong — it's the standard 4-byte stolen-prologue
+pattern with ANDI rather than LUI/LW. **Re-examine documented-blocked
+functions whenever the splice-script's accepted-opcode set grows;
+some prior caps were diagnostic errors that the new recipe variant
+unblocks.** Gate is now `opcode1 in (0x0F, 0x23, 0x0C)`.
+
 **Worked example (timproc_uso_b5_func_00003F5C, 70.26% → 100%):**
 3-knob promotion combining the LW-extension with two existing levers:
 ```makefile
