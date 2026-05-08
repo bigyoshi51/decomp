@@ -47,6 +47,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [objdiff `fuzzy_match_percent: None` means size mismatch too large to align, not "function missing"](#feedback-objdiff-returns-none-on-large-size-mismatch) — _When the built .o's symbol size differs significantly from the expected .o's symbol size, objdiff sets `fuzzy_match_percent: null` (Python `None`) in report.json instead of computing a low fuzzy score.
 - [objdiff treats functions with .NON_MATCHING symbol alias as unscored (None) regardless of byte match](#feedback-objdiff-skips-nonmatching-alias) — _The `nonmatching` macro in .s files emits a `.NON_MATCHING` data alias at the same address as the function symbol. objdiff sees this alias and skips fuzzy_match scoring entirely (reports None) — even when the…
 - [Wrong-by-0x10000 lui addend can be hidden by objdiff fuzzy at 99 % — byte diff still reveals the encoding mismatch](#feedback-objdiff-fuzzy-hides-wrong-lui-addend) — _A C source with `&D_00000000 + 0x3B3C0` produced `lui 0x4 + addiu -0x4C40` (effective 0x3B3C0); expected/.o had `lui 0x3 + addiu -0x4C40` (effective 0x2B3C0). Different addends, off by 0x10000. Fuzzy reported 99.85 % anyway — objdiff's reloc-aware compare treated the lui+addiu pair as matched against the same R_MIPS_HI16/LO16 reloc symbol, masking the addend mismatch. Verify wraps stuck at 99.x % by running `mips-linux-gnu-objdump -d --disassemble=<func> build/non_matching/.../<file>.c.o` against expected/.c.o; literal lui/addiu byte differences indicate a wrong constant offset in the C source. Verified 2026-05-08 on `gl_func_000685C0` — 3 string-arg offsets corrected from 0x3B3C0/E4/04 to 0x2B3C0/E4/04, byte diff dropped from 12 to 9 instructions while fuzzy stayed at 99.85 %._
+- [Upstream byte-count mismatch in a regular-C function shifts ALL downstream symbols, manifesting as 80-99% NM caps](#feedback-upstream-byte-shift-cascade) — _Function N in a multi-function .c file emits +8 bytes vs expected (often from `if/else { ... }` with branch-around-dead-code instead of unconditional-store-then-overwrite). Every subsequent function in the same .o is shifted by that delta, and their NM-wraps report 80-99% fuzzy even though their BODIES are byte-equal — the diff is purely address-relative jumps/relocs. Verified on `titproc_uso_func_000000C0`: rewriting one if/else as `D[6C]=c; if(c>=5){...}` (8 bytes shorter, same semantics) promoted 15 downstream titproc_uso functions from NM-wraps to exact in one edit. Always strip-diff the body (`diff /tmp/b.body /tmp/e.body` after stripping the address column) BEFORE trusting an NM-cap doc-comment that claims "register cap, multi-tick deferred"._
 
 ### expected/ baseline care
 
@@ -4801,3 +4802,43 @@ The default `INCLUDE_ASM` path produces correct bytes via the asm file with no e
 - `feedback-cross-function-epilogue-entry` — the "function" is purely epilogue (sp-pop + jr ra) reused by other callers. Different shape (jr ra IS present, no fall-through).
 - `feedback-prologue-stolen-successor` — predecessor's tail OWNS the prologue insns of the next function. PROLOGUE_STEALS recipe applies. Different bytes (lui+addiu, not lui+lw).
 - `fall-through-prologue-stub--2-insn-alternate-entry-point-hidden-in-predecessors-tail-after-epilogue` — a 2-insn stub hidden AFTER predecessor's jr ra/nop. This entry is for 3-insn standalone splat-symbol with no surrounding function.
+
+---
+
+<a id="feedback-upstream-byte-shift-cascade"></a>
+## Upstream byte-count mismatch in a regular-C function shifts ALL downstream symbols, manifesting as 80-99% NM caps
+
+_When function N in a multi-function .c file has a real C body that emits the wrong byte count vs expected (typically +8 from extra branch-around dead code), every subsequent function in the same .o is shifted by that delta. Their NM-wrap reports show 80-99% fuzzy, but the BODIES are byte-equal — the diff is purely address-relative jump/reloc encoding. Fixing function N's byte count (even without exact register match) realigns everything downstream and promotes many functions to exact in one edit._
+
+**Symptom:** a file like `titproc_uso.c` shows ~15 functions all wrapped NM at 80-99% with no obvious common cause. Each NM-wrap doc claims "register-allocation cap, multi-tick deferred." Manual diffing with addresses STRIPPED shows the bodies are byte-identical between built and expected — only the absolute jump/branch targets differ.
+
+**Diagnostic:** for any non-exact function in the file, compare:
+
+```bash
+mips-linux-gnu-objdump -d build/src/<seg>/<file>.c.o | grep "^[0-9a-f]\{8\} <" | head
+mips-linux-gnu-objdump -d expected/src/<seg>/<file>.c.o | grep "^[0-9a-f]\{8\} <" | head
+```
+
+If function addresses diverge starting at a specific point and stay parallel-shifted by the same delta (e.g., +0x8) for the rest of the file, you have a cascade. Find the first divergent function — that's where the byte-count mismatch lives.
+
+**Then strip-and-diff the suspect function:**
+
+```bash
+sed 's/^[ ]*[0-9a-f]*:[ ]*[0-9a-f]*[ ]*//' /tmp/built_<func>.dis | grep -v "^$\|<" > /tmp/b.body
+sed 's/^[ ]*[0-9a-f]*:[ ]*[0-9a-f]*[ ]*//' /tmp/expected_<func>.dis | grep -v "^$\|<" > /tmp/e.body
+diff /tmp/b.body /tmp/e.body
+```
+
+Look for EXTRA instructions in built that aren't in expected (or vice versa). Common culprits:
+
+- **if/else with branch-around-dead-code** vs unconditional-store-then-overwrite. Example: `if (c<5) D[X]=c; else { D[X]=0; c=0; }` emits `beqzl + sw zero (likely-delay) + b + sw c (delay) + sw zero (dead) + move c, zero` (6 insns). Equivalent `D[X]=c; if (c>=5) { D[X]=0; c=0; }` emits `bnez + sw c (delay) + sw zero + move c, zero` (4 insns, no dead code). 8-byte savings, byte count matches expected.
+- **Tail-share into next function's epilogue** vs standalone return — adds/removes a `jr ra; nop` pair.
+- **TRUNCATE_TEXT trim** vs natural-emit — function's last 8 bytes accounted differently in two paths.
+
+**Fix:** rewrite the suspect C body to produce matching byte count, even if registers still differ. The function itself stays at <100% (register diffs persist) but EVERY downstream function snaps back to byte-correct alignment, often promoting 10+ NM wraps to exact in one commit.
+
+**Verified (2026-05-08, `titproc_uso_func_000000C0`):** the original C body had `if (counter < 5) { D[6C] = counter; } else { D[6C] = 0; counter = 0; }`. Target compiles to `D[6C] = counter; if (counter >= 5) { D[6C] = 0; counter = 0; }` — same semantics, 8 fewer bytes (no branch-around-dead-code). Rewriting C0 in this form, while leaving its own register-allocation cap at 96.96%, promoted 15 downstream titproc_uso functions from NM-wraps (51.93–86.58% fuzzy) to exact byte-match in one edit.
+
+**Diagnostic shortcut for 1080-style projects:** when source 1 (existing NM wrap 80-99%) yields several wraps in the same file/segment, ALWAYS check addresses first via the objdump `^addr <` grep. If a parallel shift pattern appears, fixing the upstream function unblocks the whole batch — much higher leverage than grinding any individual wrap.
+
+**Why future-you should know this:** documented NM-cap doc-comments may be MISDIAGNOSED. A wrap that says "frame-size diff, register-allocation cap, permuter territory" might actually be a pure address-shift artifact downstream of an upstream byte-count cascade. Always strip-diff the body before trusting the doc-comment's claim about what's wrong.
