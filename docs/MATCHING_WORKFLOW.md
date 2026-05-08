@@ -4597,3 +4597,32 @@ If neither appears in `SUFFIX_BYTES :=`, `PREFIX_BYTES :=`, or `PROLOGUE_STEALS 
 **When the blocker DOES apply:** the predecessor or successor IS in a Makefile recipe. The recipe + the splat boundary together form a valid byte layout; splitting the asm AGAIN would double-emit the inserted bytes (per the original blocker case in the doc). In that case, keep the bundle as-is.
 
 **How to apply:** add this check as step 0 when picking up any NM-wrap that cites the bundle-blocked claim. Total time-cost: ~30 seconds (two greps). Reward: potentially 3+ exact matches per bundle.
+
+## Default `make` doesn't exercise NM bodies — `-DNON_MATCHING` build is what CI runs and what catches re-declaration / type errors
+
+_When you write or modify a `#ifdef NON_MATCHING` body, `make RUN_CC_CHECK=0` (the default `make` target) compiles the `#else` arm — INCLUDE_ASM — and SKIPS the C body. So your wrap can have compile errors that pass locally and fail in CI._
+
+**Symptom:** GitHub Actions `Build & Report` fails on `Build non_matching C objects (with -DNON_MATCHING for fuzzy scoring)` step right after a commit that added or modified an NM wrap. Local `make RUN_CC_CHECK=0` was green.
+
+**Verified case (2026-05-08):** `Wrap gl_func_000685C0 NM (55-insn bounds-checked 2-level table lookup)` and the next commit failed CI with:
+```
+cfe: Error 712: src/game_libs/game_libs_post.c, line 5405:
+  redeclaration of 'D_00000000'; previous declaration at line 3
+```
+The NM wrap added `extern char D_00000000;` inside the wrap body, but the file already had `extern int D_00000000;` at file scope. Behind `#ifdef NON_MATCHING` the duplicate doesn't fire locally; CI's `-DNON_MATCHING` build always activates the wrap and trips it.
+
+**Common offenders inside NM wraps that file scope already provides (1080):**
+- `extern char D_00000000;` / `extern int D_00000000;`
+- `extern int gl_func_00000000();` (some game_libs files)
+- `typedef struct { ... } Quad4;` / `typedef struct { ... } Vec3f;`
+- `extern char gl_ref_*;`
+
+**Workflow to catch it pre-commit:** when you add or modify an NM wrap, run BOTH builds:
+```bash
+make RUN_CC_CHECK=0                                          # default (INCLUDE_ASM path)
+rm -f build/non_matching/<unit>.o
+make build/non_matching/<unit>.o RUN_CC_CHECK=0              # NM-active path (what CI runs)
+```
+The second build is what CI does. If it errors on redeclaration / unused-extern / type-mismatch inside your wrap body, fix BEFORE pushing — the broken commit will block the next agent's land script too (since report.json regen depends on the non_matching build succeeding).
+
+**Lazier check (just-in-time):** before the final commit step in /decompile, glance at the wrap body for `extern <type> D_00000000;` or `extern int gl_func_00000000();` lines that mirror existing top-level declarations. Delete them.
