@@ -3646,6 +3646,8 @@ void gl_func_000005A4(char *a0, char a1, char a2, char a3) {
 
 matches the `sw $aN, off(sp); lbu $rT, off+3(sp)` pattern for each narrow arg that's passed forward. Check the target: if you see `sw` + `lbu off+3` → narrow arg; if you see `andi $aN, 0xff` → also narrow but different codegen. If neither, use `int` + cast.
 
+**Generalizes to LOCAL counters too:** `short i; for (i=0; i!=N; i++)` produces a redundant `sll i, i, 16; sra i, i, 16` pair after EACH `i++` — IDO normalizes the value back to short width after every increment. Use `int i` + cast at any narrow-store site. Verified 2026-05-08 on `game_libs_func_00031580` (loop counter, +11.76pp from this single-line type change).
+
 ---
 
 ---
