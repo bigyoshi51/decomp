@@ -78,6 +78,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
 - [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
 - [Type-different unique externs (`int X` + `char Y`, both at addr 0) break IDO CSE between sibling lui+addiu in the same call](#feedback-ido-type-split-unique-extern-breaks-cse) — _When `func(p, *(int*)&D_X, &D_Y)` should emit TWO separate `lui+addiu` (target shape) but built emits ONE shared lui via CSE, declaring the externs with DIFFERENT types (one `int`, one `char`) prevents IDO from CSE-folding even when both link-resolve to address 0._
+- [Replace literal `0.0f * 0.0f` with `local[N] * local[N]` (where local[N] holds 0.0f) to force IDO to emit the redundant mul/add insn pair](#feedback-ido-zero-term-via-memory-load-not-literal) — _When target asm has an explicit middle 0-term in a sum (e.g. `sqrlen = a*a + 0 + c*c` with a literal mul.s on the zero), C `0.0f * 0.0f` gets constant-folded out of the expression by IDO -O2. Reference a memory-stored 0.0f local (`local_xz[1]`) instead — the lwc1 + mul.s + add.s chain emits as expected. Verified 2026-05-08 on game_uso_func_00001DDC (+0.73pp from this single line change)._
 - [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
 - [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
 - [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C.
@@ -2263,6 +2264,30 @@ sibling-memo trick finds a way to break the CSE.
 **Inverse case — when target IS hoisting and you need to match it (verified 2026-05-08, game_libs_func_00037E98):** if the target's asm has a single hoisted `lwc1 $f0, %lo(SYM)($at)` ABOVE a loop or unrolled-block of N uses, but your C emits N per-iter `lwc1` because each iteration's expression re-reads the address, hoist the load into a local FP variable: `float divisor = *(float*)((char*)&D + 0xN);` then use `divisor` inside the loop. IDO -O2 will then CSE the load to a single hoisted lwc1, matching target. This is the OPPOSITE of the 044F4 cap (where target had per-iter and my emit was hoisted) — that case can't be fixed at the C level because the lui/addiu/symbol-base CSE is non-defeatable; the scalar-FP-load-CSE here YIELDS to local introduction. Lever rule of thumb: if the target's hoist is a single FP load (lwc1/ldc1), local-introduction works; if it's a $s-reg holding a struct/array base across calls or an extern-base, CSE is non-defeatable.
 
 ---
+
+---
+
+<a id="feedback-ido-zero-term-via-memory-load-not-literal"></a>
+## Replace literal `0.0f * 0.0f` with `local[N] * local[N]` (where local[N] holds 0.0f) to force IDO to emit the redundant mul/add insn pair
+
+_When target asm has an explicit middle 0-term in a sum (e.g. `sqrlen = a*a + 0 + c*c` with a literal mul.s on the zero), C `0.0f * 0.0f` gets constant-folded out of the expression by IDO -O2 — the result is `sqrlen = a*a + c*c` with no middle term. Reference a memory-stored 0.0f local (`local_xz[1]`) instead — the lwc1 + mul.s + add.s chain emits as expected._
+
+**Verified 2026-05-08 on `game_uso_func_00001DDC`** (+0.73pp from this single line change, 17.52→18.26%):
+
+```c
+/* Wrong (17.52%): literal 0.0f*0.0f gets constant-folded */
+sqrlen = local_xz[0]*local_xz[0] + 0.0f*0.0f + local_xz[2]*local_xz[2];
+
+/* Right (18.26%): memory-loaded local_xz[1] (which IS 0.0f from line above)
+ * forces lwc1 + mul.s + add.s emission, matching target's 3-term sum-of-squares */
+local_xz[1] = 0.0f;
+sqrlen = local_xz[0]*local_xz[0] + local_xz[1]*local_xz[1] + local_xz[2]*local_xz[2];
+```
+
+**How to apply:**
+- When the asm shows `mul.s f?, f0, f0; add.s …, f?` with `f0` being a known-zero result of an earlier `mtc1 zero, f0` or `lwc1 f0, sp+N` (where sp+N was just zero-stored), the source has an explicit `0 * 0` term. Don't write `0.0f * 0.0f` literally — it folds. Read from a memory slot that's known to hold 0.0f.
+- Generalizes to other "compute X * 0 + ..." patterns where the asm has the explicit redundant operation. Constant-folder kills the term in C; memory load preserves it.
+- Companion: the `volatile T**` recipe forces re-loads of the same address; this entry forces re-emit of a constant-result mul.
 
 ---
 
