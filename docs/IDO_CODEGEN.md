@@ -154,6 +154,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [`or v0, v1, zero` after jal = wrapper returning low word of callee's 64-bit return](#feedback-ido-long-long-v1-move) — In 1080 USO wrappers, the target `or v0, v1, zero` right before `jr ra` means the callee returns a `long long` and the wrapper returns only the low 32 bits.
 - [IDO doesn't accept bare `__asm__("")` as a scheduling barrier](#feedback-ido-no-asm-barrier) — _The GCC trick of `__asm__("")` to force an instruction ordering barrier is NOT supported by IDO 7.1.
 - [`&BASE + 0xOFFSET` vs `extern SYM_AT_OFFSET` produces different .o byte patterns even when addresses are equal](#feedback-ido-offset-in-instruction-vs-reloc) — _When target asm has `lw $reg, 0xNNN($at)` (offset baked into the instruction), write `*(int*)((char*)&BASE + 0xNNN)` in C — this emits `lw $reg, 0xNNN(...)` matching the target.
+- [IDO can't fold `&SYM + 0xCONST + runtime` into 3-insn lui/addiu/addu — always factors constant onto runtime side (4 insns)](#feedback-ido-symbol-offset-runtime-cannot-fold) — Pure-address-computation analog of the load-offset-vs-reloc rule: IDO emits 4 insns (lui-D / addiu-CONST-on-runtime / addiu-D-lo / addu) where expected has 3 (lui-D-with-CONST / addiu-D-lo-with-CONST / addu). Workaround: per-offset extern + undefined_syms entry + INSN_PATCH for the linked-imm word.
 - [IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent](#feedback-ido-reg-only-store-ordering) — For 6+arg setters where stack args (sp+0x10, sp+0x14) go to struct fields, IDO's scheduler hoists cheap register-only stores (`sw aN, N(a0)`) into load-use gaps.
 - [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — _When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce this from C.
 - [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — _When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; or v1, ret_hi, zero; jr ra`), the function signature is `long long`/s64 (o32…
@@ -7659,3 +7660,55 @@ If the function had multiple `return X;` paths (e.g. early-exit "return 0" branc
 **Verified case (2026-05-07):** `game_uso_func_00001DDC` (1080 game_uso). 383-insn function with 19.64% NM-wrap. Asm epilogue is `swc1 f8, 52(a2); lw ra, 20(sp); addiu sp, +384; jr ra; nop` — no `move v0`. Built with `void *fn(...)` + `return a0` was emitting `move v0, a1`. Changed to `void fn(...)` and dropped the return: 19.64% → 19.90% (+0.26pp). No internal callers, so signature change is safe.
 
 **How to apply:** when grinding an NM-wrap that's been stuck at low fuzzy%, compare the epilogue tail. If the build has `move v0` and expected doesn't, drop the return value.
+
+
+---
+
+<a id="feedback-ido-symbol-offset-runtime-cannot-fold"></a>
+## IDO can't fold `&SYM + 0xCONST + runtime` into 3-insn lui/addiu/addu — always factors constant onto runtime side (4 insns)
+
+_Inverse of `feedback-ido-offset-in-instruction-vs-reloc`: that entry is about loads (`lw $reg, OFF($at)`) where the offset goes into the instruction. This entry is about pure address computation when both a symbol+constant AND a runtime expression are added together. IDO ALWAYS factors as `(D) + (0xCONST + runtime)` (4 insns: lui-D, addiu-of-CONST-on-runtime, addiu-D-lo16, addu) instead of expected `(D + 0xCONST) + runtime` (3 insns: lui-of-(D+CONST), addiu-of-(D+CONST), addu). No combination of paren grouping, intermediate temp, array-index expression, int-cast, or operand reordering coerces it. Confirmed across 5 expression shapes 2026-05-08 on `timproc_uso_b5_func_0000CCC8`._
+
+**Symptom:**
+```c
+gl_func(..., &D_00000000[0x1C0 + idx * 24], ...);
+// or:        (char*)&D_00000000 + 0x1C0 + idx*24
+// or:        ((int)&D_00000000 + 0x1C0) + idx*24
+// or:        char *base = &D_00000000[0x1C0]; base + idx*24
+```
+
+**Expected (3 insns for the addr calc):**
+```
+lui   $t8, hi(D + 0x1C0)         ; HI16 reloc on D, in-insn imm baked = 0
+addiu $t8, $t8, lo(D + 0x1C0)    ; LO16 reloc on D, in-insn imm baked = 0x1C0
+addu  $t9, $runtime, $t8         ; merge with runtime
+```
+
+**IDO emits (4 insns):**
+```
+lui   $t9, 0                     ; HI16 reloc on D, addend 0
+addiu $t8, $runtime, 0x1C0       ; constant 0x1C0 baked onto RUNTIME side
+addiu $t9, $t9, 0                ; LO16 reloc on D, addend 0
+addu  $t0, $t8, $t9              ; merge
+```
+
+**Workaround recipe (untried — needs link-side coordination):**
+1. Declare a per-offset extern: `extern char D_000001C0;` (or whatever offset).
+2. Add to `undefined_syms_auto.txt`: `D_000001C0 = 0x000001C0;`
+3. Use `&D_000001C0 + runtime` in C — IDO emits `lui hi(D_at_OFF); addiu lo(D_at_OFF); addu` (3 insns) with HI16/LO16 relocs against the new symbol.
+4. Add INSN_PATCH for the addiu's lo16: `funcName=0x2C:0x271801C0` (the literal post-link bytes).
+5. The post-cc patcher writes the literal bytes; OBJCOPY -O binary --only-section=.text strips relocs, exposing the patched bytes.
+
+**Why the workaround:** with the new symbol, IDO emits the lui+addiu pair against the offset symbol (HI16/LO16 = 0/0 in-instruction with relocs), then INSN_PATCH overwrites with the literal `0x271801C0` post-cc. Note: USO segments extract via `$(OBJCOPY) -O binary --only-section=.text` from the .c.o (pre-link), so .o relocs are NOT applied to the extracted bytes. Without INSN_PATCH, extracted .text would have imm=0 even though linked .text would have imm=0x1C0.
+
+**Why other obvious approaches don't work:**
+- `(char*)0x1C0 + runtime` — IDO emits no lui at all (0x1C0 fits in 16 bits as addiu imm), wrong shape.
+- `extern char D_000001C0` WITHOUT INSN_PATCH — link succeeds, but extracted .text bytes have imm=0 (relocs not applied during OBJCOPY).
+- Just adding INSN_PATCH on top of `&D + 0x1C0` C — my emit is 4 insns (one too many); INSN_PATCH replaces words but doesn't shorten the function.
+
+**Companion entries:**
+- `feedback-ido-offset-in-instruction-vs-reloc` — the load-side analog (offset goes IN-instruction for `lw $reg, OFF($at)`).
+- `feedback-ido-d-cse-deep-uses-share-base` — related D-base CSE behavior across multiple uses.
+
+**How to apply:**
+- For NM grinds where my emit is exactly 1 insn longer than expected and the diff is around `&D_00000000 + 0xN + runtime`, this is the cause. NM-wrap and document, OR apply the per-offset-extern + INSN_PATCH recipe if landing this function is high-priority.
