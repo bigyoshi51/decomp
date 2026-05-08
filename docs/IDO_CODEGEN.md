@@ -3011,6 +3011,27 @@ if (a1 != -1) {
 
 **Doesn't apply when:** the function only reads `*a0` once post-call (then there's nothing to CSE), or when target itself has the cache (one `lw t6, 0(spill)` followed by `lw tN, 0(t6)` reuses).
 
+**Single-use mirror case (2026-05-08, game_libs_func_00037F10):**
+
+The opposite-direction lesson at smaller scale. For a tiny FPU function that reads a value through one pointer and converts to float via `mtc1` in ONE use site:
+
+```c
+/* Wrong (1-insn diff, $v1): cache the value */
+int *p = (int*)a0[1];
+int val = *p;        /* IDO picks $v1 for `val` since it's caller-save and dead after mtc1 */
+*a1 = (float)val / *(float*)((char*)&D + K);
+
+/* Right (byte-equal, $t7): inline the deref */
+int *p = (int*)a0[1];
+*a1 = (float)*p / *(float*)((char*)&D + K);
+```
+
+**Why:** with `int val = *p;` the local `val` becomes a named pseudo with a (very short) live range — IDO assigns it $v1 (cheap caller-save). Inlining `*p` at the use site doesn't create a pseudo; the lw target register goes through standard temp-reg allocation, picking $t7 (next free higher-numbered $t).
+
+**Pattern recognition:** target asm has `mtc1 $tN, $f4` where N is high (e.g. $t7 = $15) and there's no separate "value" local in the natural decode. Build emits `mtc1 $v1, $f4` instead.
+
+**Use count is the discriminator** — the multi-site rule above goes the OTHER direction (inline → $v1, cache → $tN). Single-use prefers inline for $t-reg; multi-site prefers cache for $t-reg. They look inverted but both are "minimize the named-pseudo footprint at the right phase of liveness analysis."
+
 **Companion to** `feedback-ido-load-cse-swap-v0-v1` (above) — both are about controlling which register IDO assigns to a deref intermediate. That entry is for `$v0` vs `$v1` swap on chained derefs (different values); this entry is for `$v1` vs `$tN` choice on repeated derefs (same value, multiple sites).
 
 ---
