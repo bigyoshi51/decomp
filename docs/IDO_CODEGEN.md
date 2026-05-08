@@ -8236,3 +8236,29 @@ void *f_bad(struct *list_owner, int key) {
 **Verified 2026-05-08** on `gl_func_0003EA98` (same function as the volatile-pointer-to-arg trick): scoping `volatile int key = a1;` to the if-block flipped the early-exit from bnel-likely to beqz+nop, contributing to the 82.89% → 100% promotion.
 
 **Generalizes to:** any do-while/while loop with an early-exit guard that reads an own-frame spill on the first iteration. The fix is purely scope-based — no logic change needed.
+
+---
+
+<a id="feedback-ido-extern-char-vs-extern-fn-folds-lo-offset"></a>
+## `extern char SYM;` (data-decl) folds a `+const` offset into the `%lo` immediate; `extern T SYM(void);` (function-decl) forces a separate `%hi+%lo` pair
+
+_When target asm has `lui at, %hi(SYM); sw vN, 0xK(at)` (single lui + sw with the constant offset folded into the store immediate, single reloc pair), the C source's `extern` declaration of SYM matters: data-decls fold, function-decls don't._
+
+**Symptom:** target stores via `*(int*)(&SYM + 0xK) = val` should produce one `lui at` + one `sw vN, 0xK(at)` (12 insns total in a typical leaf wrapper). With `extern T SYM(void);` (function-decl), IDO emits a SEPARATE `lui+addiu` pair to materialize `&SYM` in a register, THEN computes `+0xK` via a separate `addiu+sw`, expanding the function from 12 → 13-14 insns. With `extern char SYM;` (data-decl), the constant offset is folded into the `%lo` immediate of the sw, producing the compact form that matches target.
+
+**The fix:**
+```c
+/* WRONG — produces 13-14 insns, separate %hi+%lo for &SYM, +0xK in addiu */
+extern int SYM(void);
+*(int*)((char*)&SYM + 0xK) = val;
+
+/* RIGHT — produces 12 insns, %lo(SYM+0xK) folded into sw immediate */
+extern char SYM;
+*(int*)(&SYM + 0xK) = val;
+```
+
+**Why it works:** IDO treats function symbols as "needing absolute address materialization" — the address-take of a function forces a real register-resident pointer (since calling indirectly through it would need it). Data symbols can be referenced relative to the symbol with arbitrary `%lo` immediates, so `&char_SYM + 0xK` becomes a single reloc pair `R_MIPS_HI16 SYM` + `R_MIPS_LO16 SYM` with imm=0xK on the sw.
+
+**Verified 2026-05-08** on `func_0000E9FC` (12-insn bootup_uso wrapper): the existing wrap had `extern int func_00000008(void); *(int*)((char*)&func_00000008 + 0x20) = ...` and the doc-comment claimed this was unreproducible (13-insn growth). Switching to `extern char func_00000008; *(int*)(&func_00000008 + 0x20) = ...` produced the splat-folded compact form, dropping the diff count from 3 to 2 (cap class NM-86 → NM-83). Remaining diff is the unrelated prologue lui/sw scheduling swap.
+
+**When this matters:** USO functions where the original ROM stores into a fixed offset relative to another in-segment symbol (e.g., a "function table" or "metadata block" that lives just past the function's own code). The splat-folded reloc form is the "natural" emit for the symbol+const-offset pattern; getting it requires the data-decl form even when the named symbol is logically a function.
