@@ -47,6 +47,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Inner `return X` in single-epilogue function emits extra branch — use `goto out;` to a shared tail return](#feedback-inner-return-vs-goto-single-epilogue) — _When a function's normal exit path runs `lw $ra; addiu $sp; or $v0,...; jr $ra` (single shared epilogue), an inner `return X` inside an `if` body generates an EXTRA `b epilog; <delay-slot reload>` pair vs the `goto…
 - [split-fragments.py's last-split-off fragment may be dead/unreachable code with no jr ra](#feedback-split-fragments-unreachable-tail) — _When running `scripts/split-fragments.py` recursively on a multi-jr-ra bundle, the FINAL split-off fragment may have 0 `jr ra` instructions — it's not a real function but rather dead/unreachable code that splat's…
 - [split-fragments.py wrongly splits when an internal `beql`/`beq` branches past one jr-ra into the next fragment's body](#feedback-split-fragments-cross-fragment-branch) — _The jr-ra-counting heuristic treats N jr-ra → N functions, but a single function can have an early-exit `beql` that jumps past its own jr-ra into a shared-tail block (which then has its own jr-ra). Detect by checking each fragment's branch offsets — if any branch target lands inside the next fragment, MERGE the two back into one function._
+- [split-fragments.py adds INCLUDE_ASM for symbols that already have C-body definitions, causing duplicate-symbol build errors](#feedback-split-fragments-duplicate-include-asm-when-c-body-exists) — _When the bundle's sub-functions were already decompiled as separate C bodies (blocked from matching by the bundle's parent INCLUDE_ASM), the script's auto-added INCLUDE_ASMs collide at link time. Fix: delete them manually; the pre-existing C bodies suddenly get fuzzy scores against the new per-symbol baselines._
 
 ### inline / register / locals
 
@@ -8528,3 +8529,19 @@ Or just eyeball: any branch with offset > 0x10 in a small fragment is suspect �
 
 **Origin:** 2026-05-08 gl_func_0004D354 bundle. split-fragments split the 36-insn bundle into 3 fragments; the middle and last (D39C + D3D0) were one function with cross-fragment branch. Caught by reading the asm and decoding the beql target manually. Merged back into a single 18-insn `game_libs_func_0004D39C` with shared-tail epilogue.
 
+
+<a id="feedback-split-fragments-duplicate-include-asm-when-c-body-exists"></a>
+## split-fragments.py adds INCLUDE_ASM lines for symbols that already have C-body definitions, causing duplicate-symbol build errors
+
+When a multi-fragment bundle's parent INCLUDE_ASM is in src but some sub-functions have ALREADY been decompiled as separate C bodies (this happens when the bundle's symbols were "blocked from matching" by the bundle's INCLUDE_ASM occupying the address — the C bodies define the symbol but conflict at link time, deferred until the bundle is split), running `scripts/split-fragments.py` will:
+
+1. Generate per-symbol .s files (correct, expected)
+2. Auto-add INCLUDE_ASM lines for the new split-off symbols (WRONG when those symbols already have C body definitions further down in the same .c file)
+
+The build then fails with `Error: symbol "<func>" defined twice`.
+
+**Fix:** after running split-fragments on a bundle where some sub-symbols already have C bodies, manually delete the auto-added INCLUDE_ASM lines. The pre-existing C bodies are the canonical source. The newly-generated per-symbol .s files give the diff baselines those C bodies were waiting for.
+
+**Side benefit:** symbols that were stuck as "C body but no per-symbol expected baseline" suddenly start getting fuzzy-match scores after the split. Often several jump from `None` to 90%+ instantly because the C was correct but invisible to objdiff.
+
+**Origin:** 2026-05-08 game_uso_func_0000D458 bundle. Pre-existing C bodies for D5BC/D5DC/D5F8/D634 were defined but `report.json` showed `None` for them (no per-symbol baseline). After splitting, removing the redundant INCLUDE_ASMs, and refreshing expected/.o: D634→100%, D5BC→96.88%, D5DC→94.71%, D5F8→65.20%.
