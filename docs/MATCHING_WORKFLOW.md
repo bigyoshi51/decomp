@@ -4237,6 +4237,8 @@ _When a USO function's `jal` target lands strictly inside another splat-extracte
 
 **Verified case (2026-05-06):** `gl_func_00021E08` (20-insn alloc-via-jal-alt-entry helper at game_libs offset 0x21E08) called `jal 0x365AC` which lands inside `gl_func_00036224` (declared 0x36224..0x36690). 0x365AC is mid-way through that function's body — used as an internal alt-entry by callers. No symbol entry; both fixes are blocked. Wrapped NM with `void* f(int a0, char a1, int a2, char a3) { v0 = jal(0x365AC, a0); if (v0==0) return 0; v0[2]=a1; v0[12]=a2; v0[1]=a3; return v0[8]; }` decode + cap doc. Default build remains exact via INCLUDE_ASM.
 
+**Adjacent insight — "MERGE-BLOCKED" doc-wraps may actually be SPLIT candidates:** if a wrap doc says "embedded alt-entry at offset 0xN inside bundle, MERGE-BLOCKED" AND the alt-entry's asm starts cleanly (no implicit register state from the parent's epilogue — reads only `$a0`/`$a1` like a fresh callee), the right tool is `split-fragments.py`, not "merge them into one C function." Each half decompiles independently as standard C. Verified 2026-05-08 on `gl_func_00062298` bundle (0x40 → split into 0x30 parent `if (a1!=-1) f(&D)` + 0x10 alt-entry `a0[0]=a0[1]=0; a0[2]=a1`, both byte-correct first pass). The "MERGE-BLOCKED" framing is misleading when the alt-entry doesn't depend on the parent's local state — try split-fragments before accepting the cap.
+
 **Catching it during /decompile picking:** if you pick a tiny game_libs function (50-80 bytes, 0% match, no wrap) and its first/only `jal` decodes to a non-zero target, `grep <target>` in `undefined_syms_auto.txt symbol_addrs.txt` BEFORE writing C. If unmatched, this is the alt-entry-jal cap — write the doc-wrap and move on, don't grind register allocation.
 
 ---
