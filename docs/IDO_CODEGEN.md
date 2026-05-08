@@ -67,6 +67,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 - [At IDO -O0, count target's `sw sN, ...` saves to set the EXACT number of `register T x;` declarations](#feedback-ido-o0-register-count-matches-target-s-saves-exactly) — _At -O0, IDO promotes register-typed locals to s0/s1/s2/... in declaration order.
 - [IDO -O2 global s-register allocator is NOT driven by local declaration order](#feedback-ido-sreg-order-not-decl-driven) — _`feedback_ido_local_ordering.md` covers STACK OFFSETS (first-declared → highest sp offset).
+- [Drop the `int *s2 = a0;` alias when `a0` is deeply used across calls — alias forces IDO to allocate TWO distinct $s regs](#feedback-ido-arg-alias-doubles-s-reg-when-used-across-calls) — _When `a0` is referenced both as the loop-base AND passed unchanged as an arg to inner calls, an explicit `int *s2 = a0;` alias makes IDO allocate $s2 for the alias AND $s3 for the original `a0` ($s3 = a0 spill, retained for the post-call passthrough). Drop the alias and use `a0` directly throughout — IDO collapses to a single $s register, saving 3 spill insns. Counters the older "alias is DCE'd at -O2" claim from `feedback-ido-3save-vs-2save-arg-preserve` (different live-range shape). Verified 2026-05-08 on `gl_func_00068524` (88.72% → 100% with this + entry-test type fix)._
 
 ### constant fold / immediate / CSE
 
@@ -8056,3 +8057,44 @@ When matching a function with a signed-arg-but-srl-shift idiom, try BOTH `int aN
 - Permuter run — let it find a non-obvious ordering that triggers the 2-emit.
 
 **Don't try the named-local lever again. The CSE behavior is fundamental to IDO -O2's allocator and the obvious workaround is wrong.**
+
+---
+
+<a id="feedback-ido-arg-alias-doubles-s-reg-when-used-across-calls"></a>
+## Drop the `int *s2 = a0;` alias when `a0` is deeply used across calls — alias forces IDO to allocate TWO distinct $s regs
+
+_When the function body uses `a0` BOTH as a struct-field-base across multiple jal calls AND as a passed-through arg to inner calls, an explicit `int *s2 = a0;` C-level alias makes IDO allocate one $s register for the named alias AND a second $s for `a0`'s preserved value. Result: +1 spill save, +2 setup insns (`sw $sN, OFF(sp)` + `or $sN, a0, $0` for the second copy), and a trailing reload from the wrong-name register near the loop end._
+
+**Symptom:** target spills 4 saved regs (`s0, s1, s2, ra`); built spills 5 (`s0, s1, s2, s3, ra`) with an extra `or s3, a0, $0` after the s2-alias setup. The post-loop reload at the bnel-likely's neighbor uses `s3` not `s2`.
+
+**Why it happens:** IDO's global allocator sees two distinct allocnos — one for the C-named alias `s2` and one for the function arg `a0` — and assigns different hardware registers because:
+- The alias is live across all calls (used inline in the loop body).
+- `a0` is also live across all calls (because it's passed unchanged into the inner jal — it's NOT just dataflow-equivalent to the alias; it has its own use point).
+- IDO does NOT prove these are the same value at register-allocation time (despite RTL would-canonicalize at higher opt levels in modern compilers).
+
+**Counter-example for the older "alias DCE" claim:** `feedback-ido-3save-vs-2save-arg-preserve` (line ~220 of this doc) says `int *p = a0;` is DCE'd at -O2. That claim is true ONLY when the alias is used at a single site (or its uses can be merged with a's natural uses). Once both names are referenced across multiple call sites in different argument positions, IDO keeps both as separate pseudos.
+
+**Recipe:** drop the alias and use `a0` directly throughout the function body:
+
+```c
+// BAD — IDO allocates s2 (alias) AND s3 (a0) — 5 saved regs total
+void f(int *a0, int a1) {
+    int *s2 = a0;
+    s2[X] = call(...);
+    while (...) {
+        call(s2[Y], s2);   // s2 used both as base AND as arg
+    }
+}
+
+// GOOD — IDO allocates only s2 (= a0) — 4 saved regs total
+void f(int *a0, int a1) {
+    a0[X] = call(...);
+    while (...) {
+        call(a0[Y], a0);   // a0 used both as base AND as arg
+    }
+}
+```
+
+**How to apply:** when the target shows `sw sN, OFF(sp)` count = M but your built shows M+1 saves, AND you have `int *s2 = a0;` (or similar arg-rename alias) at function start, AND the body uses both the alias name and references arg-base structures via its fields, drop the alias. The fix is one rename, no logic change.
+
+**Verified 2026-05-08** on `gl_func_00068524` (game_libs alloc-and-init constructor): 88.72% → 100% via this + the loop entry-test type fix (`if (count != 0) { do {...} while ((u32)i < (u32)count); }` instead of `for (i=0; i<count; ...)` — see `feedback-ido-...` for unsigned-loop pattern).
