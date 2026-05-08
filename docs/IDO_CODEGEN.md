@@ -2,7 +2,7 @@
 
 > IDO 7.1 codegen quirks: how the compiler emits specific patterns, and what C-source shapes do or don't match a given asm.
 
-_118 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_119 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Quick reference by sub-topic
 
@@ -72,6 +72,7 @@ _118 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [At IDO -O0, count target's `sw sN, ...` saves to set the EXACT number of `register T x;` declarations](#feedback-ido-o0-register-count-matches-target-s-saves-exactly) — _At -O0, IDO promotes register-typed locals to s0/s1/s2/... in declaration order.
 - [IDO -O2 global s-register allocator is NOT driven by local declaration order](#feedback-ido-sreg-order-not-decl-driven) — _`feedback_ido_local_ordering.md` covers STACK OFFSETS (first-declared → highest sp offset).
 - [Drop the `int *s2 = a0;` alias when `a0` is deeply used across calls — alias forces IDO to allocate TWO distinct $s regs](#feedback-ido-arg-alias-doubles-s-reg-when-used-across-calls) — _When `a0` is referenced both as the loop-base AND passed unchanged as an arg to inner calls, an explicit `int *s2 = a0;` alias makes IDO allocate $s2 for the alias AND $s3 for the original `a0` ($s3 = a0 spill, retained for the post-call passthrough). Drop the alias and use `a0` directly throughout — IDO collapses to a single $s register, saving 3 spill insns. Counters the older "alias is DCE'd at -O2" claim from `feedback-ido-3save-vs-2save-arg-preserve` (different live-range shape). Verified 2026-05-08 on `gl_func_00068524` (88.72% → 100% with this + entry-test type fix)._
+- [Identical C body in different .c files can emit DIFFERENT frame sizes — file-context affects IDO's spill-slot allocator](#feedback-ido-file-context-affects-frame-size) — _Three siblings (eddproc_uso_func_000003BC, arcproc_uso_func_00002334, mgrproc_uso_func_00003358) share IDENTICAL C body (same volatile-ptr-to-arg lever, same control flow, same cross-call shape). eddproc matches at 100 % with frame 0x28; arcproc and mgrproc both land at ~89 % with frame 0x20. Only difference is which .c file the function lives in. The 8-byte frame discrepancy can't be closed with C-level levers — OPT_FLAGS are nominally identical, and the volatile-ptr lever is already applied. Suspect file-level state (other functions' codegen perturbing IDO's allocator pseudo-numbering or live-range analysis). When you see this pattern, NM-wrap and document; don't grind. Verified 2026-05-08 across three functions._
 
 ### constant fold / immediate / CSE
 
@@ -8210,6 +8211,55 @@ void f(int *a0, int a1) {
 **How to apply:** when the target shows `sw sN, OFF(sp)` count = M but your built shows M+1 saves, AND you have `int *s2 = a0;` (or similar arg-rename alias) at function start, AND the body uses both the alias name and references arg-base structures via its fields, drop the alias. The fix is one rename, no logic change.
 
 **Verified 2026-05-08** on `gl_func_00068524` (game_libs alloc-and-init constructor): 88.72% → 100% via this + the loop entry-test type fix (`if (count != 0) { do {...} while ((u32)i < (u32)count); }` instead of `for (i=0; i<count; ...)` — see `feedback-ido-...` for unsigned-loop pattern).
+
+---
+
+<a id="feedback-ido-file-context-affects-frame-size"></a>
+## Identical C body in different .c files can emit DIFFERENT frame sizes — file-context affects IDO's spill-slot allocator
+
+_Three siblings of an alloc-and-link constructor family share IDENTICAL C source (same volatile-ptr-to-arg lever, same control flow, same cross-call shape). One matches at 100 %; the other two land at ~89 % with an 8-byte-smaller frame (0x20 vs target's 0x28). Same OPT_FLAGS, same compiler, same body — only the surrounding .c file differs._
+
+**Symptom (2026-05-08, three-function family):**
+
+| Function | File | Body | Result |
+|----------|------|------|--------|
+| `eddproc_uso_func_000003BC` | `src/eddproc_uso/eddproc_uso.c` | volatile-ptr lever | **100 %** (frame 0x28) |
+| `arcproc_uso_func_00002334` | `src/arcproc_uso/arcproc_uso_tail1.c` | volatile-ptr lever | **89.08 %** (frame 0x20) |
+| `mgrproc_uso_func_00003358` | `src/mgrproc_uso/mgrproc_uso.c` | volatile-ptr lever | **89.08 %** (frame 0x20) |
+
+The C body in all three is character-for-character identical (or comparable to within trivial whitespace):
+
+```c
+void *func(int *arg0) {
+    int *p, *head;
+    volatile int **p_arg0 = (volatile int**)&arg0;
+    p = (int*)gl_func_00000000(0x40);
+    if (p != 0) {
+        gl_func_00000000(p);
+        *(int*)((char*)p + 0x28) = (int)&D_00000000;
+        *(int*)((char*)p + 0x3C) = 0;
+    }
+    head = (int*)((int*)*p_arg0)[0x10];
+    if (head != 0) { /* link */ }
+    return p;
+}
+```
+
+eddproc emits frame 0x28; arcproc and mgrproc emit frame 0x20. Frame-size mismatch cascades into ~9-instruction byte-level diff (spill/reload offsets shifted 4 bytes lower).
+
+**Why it likely happens:** IDO's allocator uses pseudo-numbering and live-range analysis that depend on the global pseudo state in the compilation unit. When other functions in the same .c file declare locals that perturb the allocator's tiebreakers (e.g., shared-pseudo numbering, weight-priority ties), the same C body's allocation outcomes shift.
+
+eddproc_uso.c is a small file (handful of functions); arcproc_uso_tail1.c and mgrproc_uso.c are large multi-function files with many other functions (some with PROLOGUE_STEALS / INSN_PATCH / SUFFIX_BYTES post-cc patches applied). The hypothesis: more sibling functions = more pseudos in the global allocator = different ordering = different allocation.
+
+**What does NOT close the gap:**
+- Adding `int pad;` or `int pad[2];` (frame grows by 8 bytes total, not just shifts the spill area)
+- `volatile int slot18_pad;` (same; volatile occupies a slot that grows the frame)
+- Reordering local declarations
+- The volatile-ptr-to-arg lever IS already applied (without it the gap is wider)
+
+**Diagnostic:** when target shape includes a sibling matched in a DIFFERENT .c file at 100 %, copy that exact C body verbatim into the current file. If you still cap at the 8-byte frame diff, this is the file-context cap. NM-wrap and document; further C-level grinding won't close it.
+
+**Workaround (untested but plausible):** move the function to a smaller, lower-pseudo-pressure .c file, the way fragment-merge moves work cross-file. Doable via per-`.o` linker-script slot juggling but expensive (per `feedback-cross-file-fragment-unblock-via-move-then-merge`) — probably only worth it for hot functions.
 
 ---
 
