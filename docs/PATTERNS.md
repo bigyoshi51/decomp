@@ -46,6 +46,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Function can be BOTH a cross-function tail AND a standalone jal target](#feedback-dual-role-tail-and-callable) — A single labeled address can serve two roles simultaneously — fall-through tail of the previous function (predecessor lacks jr ra; its exit flows here) AND an independent jal target from an unrelated caller.
 - [Inner `return X` in single-epilogue function emits extra branch — use `goto out;` to a shared tail return](#feedback-inner-return-vs-goto-single-epilogue) — _When a function's normal exit path runs `lw $ra; addiu $sp; or $v0,...; jr $ra` (single shared epilogue), an inner `return X` inside an `if` body generates an EXTRA `b epilog; <delay-slot reload>` pair vs the `goto…
 - [split-fragments.py's last-split-off fragment may be dead/unreachable code with no jr ra](#feedback-split-fragments-unreachable-tail) — _When running `scripts/split-fragments.py` recursively on a multi-jr-ra bundle, the FINAL split-off fragment may have 0 `jr ra` instructions — it's not a real function but rather dead/unreachable code that splat's…
+- [split-fragments.py wrongly splits when an internal `beql`/`beq` branches past one jr-ra into the next fragment's body](#feedback-split-fragments-cross-fragment-branch) — _The jr-ra-counting heuristic treats N jr-ra → N functions, but a single function can have an early-exit `beql` that jumps past its own jr-ra into a shared-tail block (which then has its own jr-ra). Detect by checking each fragment's branch offsets — if any branch target lands inside the next fragment, MERGE the two back into one function._
 
 ### inline / register / locals
 
@@ -8450,3 +8451,80 @@ post_check:
 **Don't:** try to "deduplicate" the second `sw` from C. Writing as `if (X != 0) { Y = 1; X = ptr; } else { X = ptr; }` produces a different shape (separate stores in arms with explicit branch); the natural unconditional-after-if is what hits the beql idiom.
 
 Verified 2026-05-05 on game_uso_func_00003A28 (89%+ on first try; the duplicate-`sw` shape matched naturally).
+
+---
+
+<a id="feedback-split-fragments-cross-fragment-branch"></a>
+## split-fragments.py wrongly splits when an internal `beql`/`beq` branches past one jr-ra into the next fragment's body
+
+_`scripts/split-fragments.py` uses a jr-ra-counting heuristic: N jr-ra in one .s file → split into N functions. But a single function can have an early-exit branch (typically `beql`) that jumps past its own jr-ra into a shared-tail block, where the shared tail has its own jr-ra. The heuristic counts 2 jr-ra and splits, but the result is a function with a cross-fragment branch — the "first" fragment's branch target lands inside the "second" fragment._
+
+**Detection signal (run BEFORE accepting the split):**
+
+For each split-off fragment with internal branches, compute the branch target byte address from the branch-and-delay-slot PC: `target = (branch_PC + 4) + (offset * 4)`. If `target` falls in the address range of a SUBSEQUENT split-off fragment, the split is wrong.
+
+Example (from gl_func_0004D354 bundle, 2026-05-08):
+
+Fragment "D39C" body (13 insns, 0x4D39C..0x4D3CC):
+```
+0x4D39C  8CA20000  lw v0, 0(a1)
+0x4D3A0  5040000C  beql v0, zero, +0x0C
+0x4D3A4  AC840050  (delay-likely store)
+...
+0x4D3C8  03E00008  jr ra
+0x4D3CC  AD040054  (delay)
+```
+
+Fragment "D3D0" body (5 insns, 0x4D3D0..0x4D3E0):
+```
+0x4D3D0  AC840050  sw a0, 0x50(a0)
+0x4D3D4  AC840054  sw a0, 0x54(a0)  ← BRANCH TARGET LANDS HERE
+0x4D3D8  ACA40000  sw a0, 0(a1)
+0x4D3DC  03E00008  jr ra
+0x4D3E0  00000000  nop
+```
+
+Compute beql target at 0x4D3A0: `(0x4D3A0+4) + (0x0C*4) = 0x4D3D4` — inside D3D0's body. Smoking gun: D39C and D3D0 are ONE function with shared epilogue (`if v0==0: goto SHARED_TAIL`).
+
+**Fix:**
+
+1. Concatenate the two fragments back: copy the second fragment's `.word` lines into the first fragment's `.s`, update the size header (`nonmatching <name>, 0xN` to the combined byte length), delete the second `.s` file.
+2. Remove the second fragment's `INCLUDE_ASM` from the source `.c`.
+3. Resume decompile of the merged single function.
+
+**How to apply (workflow):**
+
+After running `split-fragments.py` recursively, do this verification pass:
+
+```bash
+# Decode each fragment's branches and check targets
+for f in $(ls asm/.../bundle_*.s); do
+  python3 -c "
+  import re
+  base = int(re.search(r'(\\d{8})', open('$f').readline()).group(0), 16)  # parse from filename
+  for line in open('$f'):
+    m = re.search(r'/\\* \\S+ ([0-9A-F]{8}) ([0-9A-F]{8}) \\*/', line)
+    if not m: continue
+    pc, word = int(m.group(1), 16), int(m.group(2), 16)
+    op = (word >> 26) & 0x3F
+    if op in (4,5,6,7, 20,21,22,23):  # beq/bne/blez/bgtz + likely variants
+      offset = word & 0xFFFF
+      if offset & 0x8000: offset -= 0x10000
+      target = pc + 4 + offset*4
+      if target < base or target >= base + os.path.getsize('$f'):  # crude
+        print(f'{f}: branch at {pc:08X} targets {target:08X} (out of fragment)')
+  "
+done
+```
+
+Or just eyeball: any branch with offset > 0x10 in a small fragment is suspect — verify the target.
+
+**Heuristic upgrade for split-fragments.py (TODO):** before declaring a split candidate, scan its branches and forbid the split if any target lands past the proposed split point.
+
+**Related:**
+- `feedback-split-fragments-includes-leading-nops` (different bug — leading nops in split-off symbol).
+- `feedback-split-fragments-unreachable-tail` (different bug — final fragment is dead code with no jr-ra).
+- `feedback-split-fragments-inserts-into-wrong-c-file` (different bug — INCLUDE_ASM placement).
+
+**Origin:** 2026-05-08 gl_func_0004D354 bundle. split-fragments split the 36-insn bundle into 3 fragments; the middle and last (D39C + D3D0) were one function with cross-fragment branch. Caught by reading the asm and decoding the beql target manually. Merged back into a single 18-insn `game_libs_func_0004D39C` with shared-tail epilogue.
+
