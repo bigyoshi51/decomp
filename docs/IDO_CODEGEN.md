@@ -155,6 +155,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO doesn't accept bare `__asm__("")` as a scheduling barrier](#feedback-ido-no-asm-barrier) — _The GCC trick of `__asm__("")` to force an instruction ordering barrier is NOT supported by IDO 7.1.
 - [`&BASE + 0xOFFSET` vs `extern SYM_AT_OFFSET` produces different .o byte patterns even when addresses are equal](#feedback-ido-offset-in-instruction-vs-reloc) — _When target asm has `lw $reg, 0xNNN($at)` (offset baked into the instruction), write `*(int*)((char*)&BASE + 0xNNN)` in C — this emits `lw $reg, 0xNNN(...)` matching the target.
 - [IDO can't fold `&SYM + 0xCONST + runtime` into 3-insn lui/addiu/addu — always factors constant onto runtime side (4 insns)](#feedback-ido-symbol-offset-runtime-cannot-fold) — Pure-address-computation analog of the load-offset-vs-reloc rule: IDO emits 4 insns (lui-D / addiu-CONST-on-runtime / addiu-D-lo / addu) where expected has 3 (lui-D-with-CONST / addiu-D-lo-with-CONST / addu). Workaround: per-offset extern + undefined_syms entry + INSN_PATCH for the linked-imm word.
+- [Force IDO to materialize `&D` in `$v1` (lui+addiu pair) by combining named-local-for-first-deref with inline-second-deref of same offset](#feedback-ido-v1-base-materialization-via-second-inline-deref) — When target reloads `lw $aN, OFF($v1)` after a store via `lw $v0, OFF($v1); sw _, _($v0)`, name the first deref as a local (locks $v0) and INLINE the second deref inside the call arg expression (triggers base sharing in $v1).
 - [IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent](#feedback-ido-reg-only-store-ordering) — For 6+arg setters where stack args (sp+0x10, sp+0x14) go to struct fields, IDO's scheduler hoists cheap register-only stores (`sw aN, N(a0)`) into load-use gaps.
 - [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — _When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce this from C.
 - [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — _When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; or v1, ret_hi, zero; jr ra`), the function signature is `long long`/s64 (o32…
@@ -7712,3 +7713,47 @@ addu  $t0, $t8, $t9              ; merge
 
 **How to apply:**
 - For NM grinds where my emit is exactly 1 insn longer than expected and the diff is around `&D_00000000 + 0xN + runtime`, this is the cause. NM-wrap and document, OR apply the per-offset-extern + INSN_PATCH recipe if landing this function is high-priority.
+
+
+---
+
+<a id="feedback-ido-v1-base-materialization-via-second-inline-deref"></a>
+## Force IDO to materialize `&D` in `$v1` (lui+addiu pair) by combining named-local-for-first-deref with inline-second-deref of same offset
+
+_When target asm shows `lui $v1, hi(D); addiu $v1, $v1, 0; lw $v0, OFF($v1); ...; lw $a0, OFF($v1)` — i.e. shared base-register `$v1` reused across two loads of D[OFF] separated by intervening insns/calls — the C shape that produces this is: assign the FIRST deref to a named local (forces $v0 for the loaded value), then INLINE the SECOND deref inside a function-argument expression (forces base reuse rather than re-luiing). Combines `feedback-ido-v0-reuse-via-locals` and `feedback-ido-offset-in-instruction-vs-reloc` patterns._
+
+**Recipe (gl_func_00006E78, 1080 Snowboarding, 2026-05-08, 26-insn exact match):**
+```c
+int *p;
+p = *(int**)((char*)&D_00000000 + 0x138);   // first deref → named local p (gets $v0)
+p[0xB4/4] = 0;                              // store via $v0
+gl_func_00000000(*(int*)((char*)&D_00000000 + 0x138), 0);  // second deref INLINE inside arg
+```
+
+Produces:
+```
+lui   $v1, 0
+addiu $v1, $v1, 0           ; $v1 = &D_00000000 (materialized base)
+lw    $v0, 0x138($v1)        ; $v0 = D[0x138] (named local 'p')
+move  $a1, $zero
+sw    $zero, 0xB4($v0)       ; store via $v0
+jal   gl_func_00000000
+lw    $a0, 0x138($v1)        ; (delay slot) reload via shared $v1
+```
+
+**Why both knobs are needed:**
+- Named local `p` alone: IDO would still pick lui+lw (collapsed, offset baked into lw) because `&D` is only visible as a one-shot reference in the assignment.
+- Inline second deref alone: IDO would emit a fresh lui+lw for the second access (no base sharing).
+- COMBINED: IDO sees `&D + 0x138` referenced TWICE (first via the named-local assignment, second inside the call arg). To efficiently emit both, it materializes `&D` in `$v1` (lui+addiu) and reuses the base for both offset-loads. Named local locks $v0 for the first lw's destination; the second lw goes to $a0 (the call's arg slot) via the same base register.
+
+**Anti-pattern (does NOT work):**
+```c
+int *p = *(int**)((char*)&D_00000000 + 0x138);
+p[0xB4/4] = 0;
+gl_func_00000000(p, 0);                     // ← passes p (already loaded), not D[0x138] reload
+```
+This would emit only ONE load of D[0x138], so no base sharing pattern. The call passes $v0 (= p) directly. Wrong shape if target reloads.
+
+**How to apply:**
+- When target asm shows TWO lw instructions of `OFF($base)` with the SAME offset and same base register, separated by a call/store, the source code accesses `D[OFF]` twice. Use the named-local-for-first-deref + inline-second-deref shape.
+- The second lw being in a `jal` delay slot is normal — IDO's scheduler hoists the reload there since the call needs $a0 set.
