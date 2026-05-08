@@ -2295,6 +2295,8 @@ sqrlen = local_xz[0]*local_xz[0] + local_xz[1]*local_xz[1] + local_xz[2]*local_x
 - Generalizes to other "compute X * 0 + ..." patterns where the asm has the explicit redundant operation. Constant-folder kills the term in C; memory load preserves it.
 - Companion: the `volatile T**` recipe forces re-loads of the same address; this entry forces re-emit of a constant-result mul.
 
+**Scope limit (verified 2026-05-08 on game_uso_func_00001DDC's scaled_y block):** the memory-loaded zero must be *close in dataflow* to the use site. Reusing `local_xz[1] = 0.0f` from earlier in the function across an intervening `sqrt() + normalize3()` call sequence + `{}` scope boundary doesn't work — IDO's optimizer still folds the mul to zero. Worked +0.73pp on the FIRST sum-of-squares (right after the local_xz[1]=0.0f init), 0pp when applied to a y-axis scale 50+ insns later. If the asm's zero comes from `mtc1 zero, fX` (a register-source zero, not memory), the recipe is fundamentally inapplicable — declare a CLOSER-in-scope `float zero_f = something_zero;` if you need to force the mul there.
+
 ---
 
 <a id="feedback-ido-type-split-unique-extern-breaks-cse"></a>
