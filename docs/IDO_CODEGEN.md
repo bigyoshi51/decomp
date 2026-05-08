@@ -81,6 +81,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
 - [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
 - [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C.
+- [IDO -O2 folds `&extern == 0` to FALSE — defeats null-check arms in C bodies that mirror cross-USO unbound-symbol asm](#feedback-ido-extern-addr-non-null-fold-defeats-runtime-null-check) — When target asm checks `if (v1 == 0) alloc(...); else *v1 = 0;` and v1 originates from a stolen-prologue `lui v0, 0; addiu v1, v0, 0` (i.e. `v1 = &D_00000000` after relocation), the natural C `int *v1 = (int*)&D_00000000; if (v1 == 0) { ... }` doesn't match — IDO -O2 sees `&D_00000000` as compile-time non-null, folds the null-check branch, and elides the entire alloc arm (e.g. 14 target insns → 7 emitted). Cross-USO unbound symbols CAN be 0 at runtime, but IDO has no way to know. Lever to defeat the fold: load v1 via a `volatile T *` indirection from a separate `int *D_globalptr` global so the value isn't a compile-time symbol. Verified 2026-05-08 on `gl_func_0005165C` (kept as NM wrap — the lever fix wasn't tried).
 - [Pass magic-numeric arg via `&gl_ref_<addr>` symbol — IDO emits `lui+addiu` only for symbol refs, not raw int literals (which emit `lui+ori`)](#feedback-ido-magic-arg-via-symbol-not-literal) — When target asm has `lui aN, HI; addiu aN, aN, LO` materializing some magic constant 0xNNNNNNNN passed as a call arg, the C source must use `&gl_ref_0xNNNNNNNN` (a declared linker-symbol reference) — passing the raw int 0xNNNNNNNN emits `lui+ori` instead. Add `gl_ref_0xNNNNNNNN = 0x0NNNNNNN;` to `undefined_syms_auto.txt`. Linker fills in the resolved bytes; build/.o has unresolved R_MIPS_HI16/LO16 relocs which look like `lui 0; addiu 0` to naive objdump-of-.o compare BUT byte-match expected/.o once linked. Verified 2026-05-08 on `gl_func_000682F8` (3-arg call with magic 0x2B3B8 base — exact at link time).
 - [Replacing literal `1024` with `(x<<10)/x` DOES emit the sll+div+mflo sequence at IDO -O2 (memory-load operand defeats SR), but added locals can shift register allocation enough to net-zero fuzzy%](#feedback-ido-div-substitution-necessary-but-regalloc-shifts) — _When target asm has `sll tN, sM, 10; div 0, tN, sM; mflo sP; bnez sM, +2; nop; break 7` (a self-canceling `(x<<10)/x = 1024` sequence with div-by-zero trap), replacing the literal `1024` in the C body with the equivalent `(x<<10)/x` expression IS recognized — IDO -O2 doesn't strength-reduce when the operand comes from a memory load (no compile-time visibility). However, declaring the result as a new local (or substituting inline) introduces extra register pressure: frame size can grow (e.g., 0x58→0x60), and $s-reg assignments shift across the function. The div pattern alone is "necessary-but-not-sufficient" — to land net-positive fuzzy%, the divided value must also be assigned the same $s-reg slot as the target. Verified 2026-05-07 on `gui_func_00000B58` (substitution emitted matching div, fuzzy unchanged at 36.12% due to $s0/$s1/$s4/$s5 reshuffling)._
 
@@ -7595,6 +7596,29 @@ The brace-block tells IDO the locals' lifetime ends at the closing brace, so the
 3. If the frame size is correct but reg pick is still wrong, the issue isn't the brace-block — it's the named-local form itself (try `register int *p_a = ...` per `feedback-ido-register.md`, or revert to inline form).
 
 **Does NOT generalize to volatile-spill locals** (verified 2026-05-07 on `func_0000553C`): the brace-block trick is scope-specific. For register-flip locals (this entry), the value's lifetime ends at the assignment to the consumer (`n0 = p_a[...]`) so the brace-block is safe. For volatile-spill locals (`feedback-ido-volatile-unused-local-forces-local-slot-spill`), the spill must remain LIVE across the subsequent call — wrapping in a brace-block kills the spill at the closing brace and IDO drops the `sw aN, local_slot(sp)` store. Net: brace-block-saves-frame applies to "named local that gets dereferenced before the next jal," NOT to "volatile that triggers a defensive caller-spill across a jal." The two mechanisms have opposite scope requirements.
+
+---
+
+<a id="feedback-ido-extern-addr-non-null-fold-defeats-runtime-null-check"></a>
+## IDO -O2 folds `&extern == 0` to FALSE — defeats null-check arms in C bodies that mirror cross-USO unbound-symbol asm
+
+_When the target asm has a runtime null-check like `bnez v1, target` where v1 was set up via `lui rX, 0; addiu v1, rX, 0` (cross-USO data placeholder), the natural C body `int *v1 = (int*)&D_00000000; if (v1 == 0) { alloc(...); } else { ... }` doesn't reproduce — IDO -O2 sees `&D_00000000` as a compile-time non-null symbol address and folds the null-check, eliding the entire alloc arm._
+
+**Why this happens:** `&SYM` for any extern is a fixed address from the compiler's view. Even if the linker eventually resolves SYM to 0 (cross-USO unbound symbol, or a deliberately-zeroed alias in `undefined_syms_auto.txt`), the compiler doesn't know that — it treats `&SYM` as "some non-null pointer" and constant-folds `&SYM == 0` to FALSE. The taken-arm code is dead from IDO's perspective.
+
+**Symptom:** standalone IDO emit is N insns shorter than target. Inspecting the diff shows the conditional alloc/init branch is entirely missing; only the always-executed tail (the post-merge zero-stores) remains.
+
+**Levers to defeat the fold:**
+
+1. **Load v1 via a runtime indirection**: declare a separate `extern int *D_globalptr;` and load `v1 = D_globalptr;`. Now v1 is a value loaded from memory at runtime, not an address-of symbol — IDO can't fold the null-check.
+2. **`volatile` indirection**: `volatile int **pp = (volatile int**)&D_PTR_HOLDER; v1 = *pp;` — the volatile read is unfoldable. Useful when the target asm has both `lui+lw` (load via pointer) and the conditional check.
+3. **Function call to obscure the value**: if there's any plausible accessor in the codebase (`get_X_ptr()`), use it — function returns are opaque to constant folding.
+
+**Common case where this matters:** lazy-init / memoized allocators. The asm has `if (g_cached == 0) { g_cached = alloc(N); } use(g_cached);` patterns where `g_cached` is a global pointer placeholder. The natural `g_cached = &D_PTR_NULL;` C form gets folded; needs to come through a `volatile int *` indirection.
+
+**Verified 2026-05-08** on `gl_func_0005165C` (1080-agent-e). Predecessor's stolen-prologue tail set `v1 = &SOME_GLOBAL`, and the body had `if (v1 == 0) alloc(4); *v1 = 0; D[0]=0; D[4]=0;`. Standalone -O2 of the natural C body collapsed to 7 insns (only the trailing zero-stores), vs target's 14. NM-wrap kept the partial — lever fix not pursued; documented for future tightening.
+
+**Companion:** `feedback-ido-cse-bust-via-distinct-externs` (different problem: defeating CSE between two `&D_00000000` accesses by declaring distinct externs).
 
 ---
 
