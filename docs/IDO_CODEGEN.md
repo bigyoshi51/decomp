@@ -8520,3 +8520,38 @@ When NM diff shows TARGET spills 2+ incoming args to the caller's outgoing-arg-s
 
 **Related:** `feedback_ido_volatile_unused_local_forces_local_slot_spill.md` (single-arg local-slot spill via `volatile int saved`). `feedback_ido_unused_arg_save.md` (background on caller-shadow vs local-slot spill).
 
+
+---
+
+<a id="feedback-ido-inline-deref-doesnt-transfer-zero-vs-offset"></a>
+## Inline-deref CSE-defeat recipe does NOT transfer from zero-deref (`*a1`) to offset-deref (`orig->field_40`) patterns
+
+_When the inline-`*a1`-at-every-site recipe (`feedback-ido-inline-deref-vs-cache-flips-vN-tN`) lands exact-match on a function with `*(int**)a1` zero-deref pattern, the obvious move is to apply it to a sibling function with `orig->field_40` (= offset-deref) shape. **It regresses badly** — IDO emits MORE instructions, not fewer, and the regalloc cascade is unchanged._
+
+**Origin:** 2026-05-08, after `game_libs_func_0004D39C` (DLL-insert with `*a1` zero-deref) landed via the inline form (cached `int *head = *a1` → 17 insns, 3/17 match; inline `*a1` everywhere → 18 insns, 18/18 byte-exact). Tried the same recipe on `gl_func_000088B4`, which is structurally identical (alloc-init + DLL-insert) but the head pointer is at `orig->field_40` (offset 0x40 from `orig`, not zero). Result: cached form 14/36, inline form 3/38 (regressed by 11 matches AND added 2 instructions). Reverted.
+
+**Why the recipes diverge:**
+
+The zero-deref `*a1` reads through register `$a1` directly: `lw $tN, 0($a1)`. Each inline use is a self-contained 1-insn load with $a1 as the base. IDO's CSE elimination is opportunistic — when the value of `*a1` is needed in 4 sites, the cached form makes IDO retain `$tN` across the function (1 reload), the inline form makes IDO emit 4 fresh `lw $tN, 0($a1)` (because $a1 is a parameter, naturally lives in $a1 the whole function). The fresh-load form forces a particular regalloc shape for the EARLIER pseudos, which happens to match target.
+
+The offset-deref `orig->field_40` requires `lw $tN, 0x40($orig)` for the BASE load (to get the head ptr), THEN `lw $tM, OFF($tN)` to access fields. Each inline use becomes 2 insns (re-deref the base + access field) — DOUBLES the load count vs the cached `existing = orig->field_40` form. IDO's regalloc cascades through these extra loads in a way that NO LONGER matches target. The "fresh-load" trick that helped the zero-deref case is the OPPOSITE of helpful here — target's pattern uses the CACHED base ptr (in $tN holding `orig->field_40`), and inline-deref makes that holder live longer than IDO's allocator wants.
+
+**Diagnostic — when the recipe is at risk of NOT transferring:**
+
+1. Inspect the deref offset. If the target's first deref is at offset 0 (zero-deref via `*ptr`), the inline recipe usually transfers across siblings.
+2. If the target's first deref is at non-zero offset (`ptr->field_N`, where N > 0 in the originating struct), the cached form is more likely to match — DON'T inline-eliminate the cached local.
+3. Asm signal: target's first BASE-load is `lw $tN, OFF($a0)` where OFF != 0 → cached form. Target's first BASE-load is `lw $tN, 0($a0)` → either form may apply, try inline first.
+
+**How to apply (when porting a recipe between siblings):**
+
+Before applying the inline recipe to a new function, check the asm:
+- Target uses `lw $tN, 0($a0)` then `lw $tM, OFF($tN)` chain → inline-deref of `*a0` likely works.
+- Target uses `lw $tN, OFF($a0)` (single load, base-with-offset) then `lw $tM, OFF2($tN)` → cached form (`existing = arg->field`) likely required. Inline-deref will regress.
+
+**Sibling-port doctrine update:** `feedback-port-matched-sibling-c-before-trusting-frame-regalloc-cap-claim` (in MATCHING_WORKFLOW.md) says "try the matched sibling's C body verbatim before believing a cap claim." This entry is the corollary: **the sibling's C body is conditional on the access pattern being zero-deref vs offset-deref**. Verify by inspecting the target's first base-load offset before porting. If they differ, the port WILL fail in the way described.
+
+**Related:**
+- `feedback-ido-inline-deref-vs-cache-flips-vN-tN` (the original recipe, zero-deref case).
+- `feedback-ido-inline-deref-v0` (single-use inline-deref for $v0 vs $tN).
+- `feedback-port-matched-sibling-c-before-trusting-frame-regalloc-cap-claim` (sibling-port doctrine).
+
