@@ -3865,6 +3865,26 @@ Confirmed by testing all 4 opt levels on `void f(int a0) {}`:
 
 ---
 
+<a id="feedback-ido-o2-empty-void-emits-jr-ra-plus-nop"></a>
+## `void f(void) {}` at IDO -O2 emits `jr ra; nop` (2 insns, 8 bytes) — matches alt-entry-stub bundles
+
+_CLAUDE.md says "Empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop". That's WRONG for `void f(void) {}` at IDO -O2: the emit is exactly 2 insns (`jr ra; nop`), 8 bytes, with the nop preserved in the delay slot. Match-rule: any 8-byte alt-entry stub whose .s contains only `jr ra; nop` decompiles directly to `void f(void) {}`._
+
+**Verified 2026-05-08** on `game_libs_func_00024B8C` — a 2-insn alt-entry stub split off from `gl_func_00024B28`'s bundle. Empty `void` body produces exactly the target's 8 bytes.
+
+**Distinction from feedback-ido-o0-empty-stub above:**
+- `void f(int a0) {}` at -O0 → 5 insns (sw a0; b+1; nop; jr ra; nop) for the arg-spill version
+- `void f(int a0) {}` at -O2 → 2 insns (`jr ra; sw a0, 0(sp)` with sw in delay slot) — collapsed
+- `void f(void) {}` at -O2 → 2 insns (`jr ra; nop`) — no arg, so the delay slot stays nop
+
+**When CLAUDE.md's "compiler omits the nop" claim applies:** non-`void` arg lists. For `void f(int)` the spill fills the delay slot, so the emit is 2 insns *with content*. For `void f(void)` there's nothing to spill, so the emit is `jr ra; nop`.
+
+**Caveat:** the asm-processor wrapper sometimes adds a #pragma GLOBAL_ASM(_pad.s) after the function (when its size doesn't 16-byte-align with the next function's start). When present, that's separate alignment padding — not part of the 2-insn function body. Don't count `_pad.s` insns when matching.
+
+**Related:** `feedback-ido-o0-empty-stub` (-O0 variant), `feedback_ido_unfilled_store_return.md` (sw-jr-nop leaf setters).
+
+---
+
 ---
 
 <a id="feedback-ido-o0-eq-operand-swap-for-load-order"></a>
