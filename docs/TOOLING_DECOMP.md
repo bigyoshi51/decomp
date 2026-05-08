@@ -62,6 +62,14 @@ for root, _, files in os.walk('asm/nonmatchings'):
 - The sub-filter is also useful for source-4 (untouched USOs): scan an entire USO segment in one pass for INCLUDE_ASM-only entries before deciding it's "exhausted" of small targets.
 - Discover's tag remains correct for filtering parallel-agent-collisions (don't pick a function someone else is mid-decomp on) — the tag covers more, not less, than true "has body".
 
+**Two further false-positive classes the sub-filter still misses (verified 2026-05-08 on 1080 kernel):**
+
+1. **Symbol absorbed by larger-predecessor INCLUDE_ASM.** When splat emits multiple `.s` files for what's actually one function (e.g. `func_80008E08.s`, `func_80008E38.s` — both inside the predecessor `func_80008DF0`'s 0xA8-byte symbol that ends at 0x80008E98), only the LARGEST .s gets an INCLUDE_ASM line; the absorbed siblings have NO mention in `src/` at all. The sub-filter's `grep -rln name src/` returns empty, flagging them as "TRULY-UNSTARTED" — but their bytes are emitted via the predecessor's INCLUDE_ASM, and there's no work to do. To detect: check `undefined_syms_auto.txt` for an entry like `func_X = 0xX;` AND grep for the function in NEARBY `.s` files for the size-larger predecessor whose declared `nonmatching SIZE` covers the absorbed offset. If covered, skip — splat cruft, not work.
+
+2. **Cap-doc'd structurally-uncapable functions wrapped under `_unreachable` stub names.** Functions documented as standalone-uncompilable (chained-suffix register inheritance, prologue-stolen-successor with too-deep predecessor tail, etc.) are sometimes wrapped as `extern void <func>_unreachable(...)` inside `#if 0 ... #endif` instead of the standard `#ifdef NON_MATCHING / #else INCLUDE_ASM`. The sub-filter's regex `(void|int|...) name(...)` doesn't match `name_unreachable(...)`, so these flag as INCLUDE_ASM-only. To detect: also grep for `<funcname>_unreachable` (or `<funcname>_alt`, etc.) and any `#if 0` block referencing the function name in its trailing comment. If present, skip — already cap-doc'd.
+
+Both classes consume tick budget if not pre-filtered. Adding `'has_unreachable_stub'` and `'absorbed_by_predecessor'` checks to the Python sub-filter would surface only fresh candidates. Untracked TODO; for now, when source-3 yields a fishy candidate (4-insn shared-tail epilogue, fragment lacking jr ra, `lui+addiu+...` setup-only body), skim adjacent `.s` files and `src/`'s nearby comments before grinding.
+
 ---
 
 <a id="feedback-decomp-call-graph-priority"></a>
