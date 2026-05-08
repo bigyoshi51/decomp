@@ -101,6 +101,25 @@ This was the previously-documented "SLL-led, blocked" case from the
 top of this section — explicitly closed via the same "extend the
 tuple" recipe predicted there.
 
+**2026-05-08 fourth finding (PROLOGUE_STEALS=12 works for 3-insn lui+addiu+lw prefix):**
+The `n_bytes` argument to `splice-function-prefix.py` is arbitrary — there is no `{4, 8}` restriction. Earlier wraps citing "splice script only supports n={4,8}" were wrong; the verify gate fires on the FIRST insn's opcode (LUI/LW/ANDI/R-type), and once it passes, the script removes whatever N bytes you ask for. PROLOGUE_STEALS=12 strips the canonical 3-insn `lui rN, 0; addiu rN, rN, 0; lw rM, 0xK(rN)` prefix where the predecessor's tail materialized `&D` AND pre-loaded a value from `D[0xK]` for the successor.
+
+Use case: `gl_func_00023598` — predecessor `gl_func_00023548`'s tail emits `lui v0, 0; addiu v0, v0, 0; lw t6, 0x215C(v0)`, leaving `v0 = &D` AND `t6 = D[0x215C]` (gate flag) for the successor's body. Combined with the `extern char` data-decl recipe (docs/IDO_CODEGEN.md#feedback-ido-extern-char-vs-extern-fn-folds-lo-offset), C-emit produces exactly that 12-byte prefix at the start of the function body, then PROLOGUE_STEALS=12 strips it.
+
+```c
+extern char D_segment_char;     /* char-decl alias of D_00000000 */
+int func(int a0, ...) {
+    if (*(int*)(&D_segment_char + 0xK) != 0) return 0;
+    *(int*)(&D_segment_char + 0xK2 + a0 * 0xN) = ...;
+    ...
+}
+```
+```makefile
+build/src/<seg>/<file>.c.o ... : PROLOGUE_STEALS := <func>=12
+```
+
+The char-decl is essential — `extern int D_00000000` produces a 2-insn `lui+lw` collapsed addressing form (no addiu), which doesn't match the 3-insn predecessor tail. The data-decl (char or any non-function type) keeps the 3-insn form AND lets IDO reuse `v0=&D` later in the body without re-materialization.
+
 **Worked example (timproc_uso_b5_func_00003F5C, 70.26% → 100%):**
 3-knob promotion combining the LW-extension with two existing levers:
 ```makefile
