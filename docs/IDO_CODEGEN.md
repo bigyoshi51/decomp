@@ -61,6 +61,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O1 target `lw $sN, spill(sp)` in jal delay slot — can't force via explicit C assignment](#feedback-ido-o1-delay-slot-s-reload) — rmon-style -O1 funcs spill arg `a0` to caller slot, then fill the first jal's delay slot with `lw $s0, SPILL(sp)` to promote msg into a callee-saved reg for later use.
 - [Swap source order of two stores to let IDO's scheduler fill a jal delay slot with the SECOND-listed store](#feedback-ido-swap-stores-for-jal-delay-fill) — _When target asm has `sw $tA, OFFSET_X(a0); jal func; sw $tB, OFFSET_Y(a0)` (two consecutive stores with the second in the delay slot), write the C with the OTHER order: put the X-offset store SECOND in source.
 - [IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces andi-pre-jal pattern](#feedback-ido-o1-andi-pre-jal-via-register-u32-mask) — _When target has `andi tN,X,MASK; jal; or argReg,tN,zero` (3-insn mask-pre-jal vs natural delay-slot fold), use `register u32 v = expr & MASK; func(..., v);` block-local. The `& MASK` on the initializer (not the use) commits IDO to emitting the and pre-jal._
+- [Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot](#lift-unconditional-loop-counter-init-out-of-the-if-body-to-claim-the-branchs-delay-slot--leaves-the-result-init-before-the-branch) — _When target has `or v1, a0, 0` (result=sum) BEFORE `beq len, 0` and `or v0, 0, 0` (i=0) IN the delay slot, but built emits `result=sum` in delay slot, lift `unsigned int i = 0;` OUT of the if-body. Both inits become unconditional and IDO picks i=0 for the slot. Generalizes the cap-class previously labeled "no C-level lever"._
 
 ### $s register allocation
 
@@ -7760,3 +7761,55 @@ This would emit only ONE load of D[0x138], so no base sharing pattern. The call 
 **How to apply:**
 - When target asm shows TWO lw instructions of `OFF($base)` with the SAME offset and same base register, separated by a call/store, the source code accesses `D[OFF]` twice. Use the named-local-for-first-deref + inline-second-deref shape.
 - The second lw being in a `jal` delay slot is normal — IDO's scheduler hoists the reload there since the call needs $a0 set.
+
+## Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot — leaves the result-init before the branch
+
+**Why this matters:** When you have `result = sum;` followed by `if (len) { i = 0; loop; }`, IDO's reorg.c will fill the `beq len, 0` delay slot with the immediately-preceding `or v1, a0, 0` (= result = sum), placing the result-copy AFTER the branch. If target asm shows `or v1, a0, 0` BEFORE the branch and `or v0, 0, 0` (= i = 0) IN the delay slot, the lever is to lift `i = 0` OUT of the if-body so it sits unconditionally before the branch. With both `result = sum` and `i = 0` available as delay-slot candidates, IDO picks the loop counter (semantically free since `i` is unused when `len == 0`) and leaves `result = sum` exactly where target wants it.
+
+**Asm pattern that prompts this rewrite:**
+```
+or v1, a0, 0       ; result = sum (BEFORE branch)
+beq a2, 0, +N      ; if (len == 0)
+or v0, 0, 0        ; delay slot: i = 0
+or a0, a1, 0       ; bufptr = buf
+.loop:
+lbu t6, 0(a0)
+addiu v0, v0, 1
+sltu at, v0, a2
+addiu a0, a0, 1
+bne  at, 0, .loop
+addu v1, v1, t6
+```
+
+**Wrong C (cap at 81-90% — produces `beq` first, `or v1` in delay slot):**
+```c
+int f(int sum, unsigned char *buf, unsigned int len) {
+    int result = sum;
+    int i;
+    if (len != 0) {
+        i = 0;            // i declared here but only init'd inside if
+        do { result += buf[i]; i++; } while (i < len);
+    }
+    return result;
+}
+```
+
+**Right C (matches exact — `or v1` before `beq`, `or v0=0` in delay slot):**
+```c
+int f(int sum, unsigned char *buf, unsigned int len) {
+    int result = sum;
+    unsigned int i = 0;   // <-- unconditional init
+    if (len != 0) {
+        do { result += buf[i]; i++; } while (i < len);
+    }
+    return result;
+}
+```
+
+**The mechanism:** IDO's delay-slot filler (reorg.c) scans both the immediately-preceding instruction and unconditional fall-through path candidates. With `i = 0` lifted to before the branch, both `or v1, a0, 0` (preceding) and `or v0, 0, 0` (also preceding now, since both inits are unconditional) are candidates. Reorg picks `or v0` for the slot — likely because moving `or v0` is cheaper (it's a constant-source, no register-dependency on `a0` being preserved across the branch). The result is `or v1` stays put and `or v0` enters the delay slot.
+
+**When this lever applies:** any `result = X; if (cond) { i = 0; loop; }` pattern where target shows the result-init BEFORE the branch but built emits it IN the delay slot. The fix is mechanical: move ALL inits that survive both branches OUT of the conditional, declaring them unconditionally at the function's top.
+
+**When it doesn't apply:** if `i = 0` semantically MUST be inside the if (e.g., `i` reads a different value when `len == 0`), or if the unconditional init introduces extra clean-up insns elsewhere, this rewrite won't work.
+
+**Generalizes the prior "no C-level lever" cap-confirmation pattern.** Many NM-wrap caps from earlier 1080 work labeled "delay slot scheduler put X first, can't force Y" can potentially be broken by moving the second-candidate's init out of its guard scope. Check before declaring a function "cap-confirmed" — try lifting one init.
