@@ -4433,6 +4433,14 @@ The .o-with-empty-.text approach is preferable to renaming the file (e.g., `.c.t
 
 **Anti-pattern:** committing the stage-0 file WITHOUT `#if 0` bracketing on the assumption that "future passes will fix it" — the immediate build break blocks every other agent's iteration until the migration completes. Either complete all steps in one commit, or use the `#if 0` neutralization.
 
+**Second use of `#if 0` bracketing — chained-SUFFIX-inheritance fragments** (verified 2026-05-08 on `gl_func_00054228`): the standard "preserve partial C" recipe (#ifdef NON_MATCHING ... #else INCLUDE_ASM ... #endif) compiles the C body in the non_matching build for permuter/reference. For functions reachable ONLY via predecessor-fallthrough (not as a callable jal target), the body references INHERITED REGISTERS ($t1, $t9, etc.) that don't exist as C-level inputs — the function isn't standalone-callable. Three options:
+
+1. **Bare INCLUDE_ASM with paragraph comment** — what most chained-SUFFIX entries currently look like (gl_func_0005165C, gl_func_00054228 pre-2026-05-08). Loses grep-discoverability of the decoded body.
+2. **`#ifdef NON_MATCHING` with the body** — compiles, but the C references uninitialized state; permuter would optimize against semantic-wrong baseline. Misleading.
+3. **`#if 0` brackets around the body** — captures decoded structure for grep + future-permuter reference but doesn't compile. The right choice when the function is structurally uncompilable from standalone C. The body should be a comment-style decode, not actual C statements that mention undefined identifiers.
+
+When wrapping a stolen-prologue / chained-SUFFIX fragment whose decode is known but standalone-uncompilable, prefer `#if 0` over `#ifdef NON_MATCHING` — and put the decode in commented-out C (or pseudo-C) inside an `extern` stub so the symbol is grep-findable but the C won't be linked. Document the inherited-register dependency in the wrap comment.
+
 ---
 
 <a id="feedback-nm-partial-body-empty-arms-zero-percent"></a>
