@@ -64,8 +64,8 @@ because it's the first arg-field access. PROLOGUE_STEALS=4 now strips it.
 Verified: existing PROLOGUE_STEALS=8 cases (LUI+ADDIU prefix) still fire
 correctly — the gate is now `opcode1 in (0x0F, 0x23)` instead of
 `opcode1 == 0x0F`, with INCLUDE_ASM-detection still catching the
-common `addiu sp` (opcode 0x09) prologue. SLL (opcode 0x00) remains
-blocked; same recipe (extend the tuple) applies if needed.
+common `addiu sp` (opcode 0x09) prologue. (SLL/R-type opcode 0x00
+also accepted as of 2026-05-08 — see "third extension" below.)
 
 **2026-05-08 second extension (ANDI now accepted, used for byte-mask-from-arg):**
 splice-function-prefix.py was extended to also accept opcode 0x0C
@@ -83,6 +83,23 @@ pattern with ANDI rather than LUI/LW. **Re-examine documented-blocked
 functions whenever the splice-script's accepted-opcode set grows;
 some prior caps were diagnostic errors that the new recipe variant
 unblocks.** Gate is now `opcode1 in (0x0F, 0x23, 0x0C)`.
+
+**2026-05-08 third extension (R-type strength-reduction now accepted):**
+splice-function-prefix.py was extended to accept opcode 0x00 (R-type,
+includes SLL/SUBU/ADDU) as a PROLOGUE_STEALS=8 first-insn, gated by
+the second-insn opcode also being R-type (opcode 0x00). Use case: the
+strength-reduction stolen-prologue pattern `sll rN, aN, K; subu rN,
+rN, aN` (= `aN * (2^K - 1)`) — when the predecessor's tail computes a
+multiply-by-odd-number setup that the successor extends to the full
+record-stride product. C-emit naturally produces the same SR sequence
+because IDO -O2 strength-reduces `aN * <const>` to `sll + subu/addu +
+sll`. Verified 2026-05-08 on `gl_func_000315C4` (predecessor sets
+`t7 = a0 * 3`, successor extends to `t7 = a0 * 100` and indexes into
+&gl_ref_00000368 array). Gate is now `opcode1 in (0x0F, 0x23, 0x0C, 0x00)`.
+
+This was the previously-documented "SLL-led, blocked" case from the
+top of this section — explicitly closed via the same "extend the
+tuple" recipe predicted there.
 
 **Worked example (timproc_uso_b5_func_00003F5C, 70.26% → 100%):**
 3-knob promotion combining the LW-extension with two existing levers:
