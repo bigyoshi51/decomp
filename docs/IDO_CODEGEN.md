@@ -52,6 +52,8 @@ _118 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 empty `void f(int a0) {}` produces exactly `jr ra; sw a0, 0(sp)` — save-arg sentinels ARE matchable from C](#feedback-ido-save-arg-sentinel-empty-body) — _The 2-insn "save-arg-to-caller-shadow-space" sentinel (`jr ra; sw a0, 0(sp)`) — previously documented as non-C-expressible — IS matchable from IDO -O2 with the trivial C body `void f(int a0) { }`.
 - [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a1's register assignment, IDO spills a0 to the caller's arg-save slot (extra `sw…
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
+- [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
+- [Place `volatile int local = arg;` INSIDE the if-non-zero block to flip early-exit from `bnel-likely+delay-load` to `beqz+nop`](#feedback-ido-volatile-local-scoped-to-if-block-flips-early-exit-shape) — _Declaring a volatile-spilled local at function top emits the spill BEFORE the early-exit branch, letting IDO's scheduler hoist the first-iter loop-load into the branch's likely-delay slot (mismatching target's `beqz+nop` pattern). Scoping the volatile decl INSIDE the if-non-zero block pushes the spill AFTER the branch, removing IDO's hoist opportunity. Verified 2026-05-08 on `gl_func_0003EA98` — same-tick fix as the volatile-pointer caller-slot trick._
 
 ### scheduling / delay slot
 
@@ -8141,3 +8143,86 @@ void f(int *a0, int a1) {
 **How to apply:** when the target shows `sw sN, OFF(sp)` count = M but your built shows M+1 saves, AND you have `int *s2 = a0;` (or similar arg-rename alias) at function start, AND the body uses both the alias name and references arg-base structures via its fields, drop the alias. The fix is one rename, no logic change.
 
 **Verified 2026-05-08** on `gl_func_00068524` (game_libs alloc-and-init constructor): 88.72% → 100% via this + the loop entry-test type fix (`if (count != 0) { do {...} while ((u32)i < (u32)count); }` instead of `for (i=0; i<count; ...)` — see `feedback-ido-...` for unsigned-loop pattern).
+
+---
+
+<a id="feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill"></a>
+## Force caller-slot spill of a USED arg via `volatile T *p = &argN;`
+
+_When target has a leading `sw aN, frame_size+offsetN(sp)` writing an arg into ITS caller-slot for an arg that's actively USED in the body — so the unused-arg-save pattern (`feedback-ido-unused-arg-save`) doesn't apply — declare `volatile T *p = &argN;` (or `volatile T *const p = &argN;`) at the top of the function. IDO -O2 must materialize argN to its caller-slot at sp+frame_size+offsetN, since the address escapes through a volatile-qualified pointer and DCE can't prove the spill is dead._
+
+**Why it works:** plain `int *p = &a1;` followed by an unused `p` is DCE'd by IDO -O2 — the address-take is elided and no spill happens. With `volatile`, IDO conservatively assumes the pointer's value may be observed externally (volatile acts as an opaque barrier in IDO's optimizer), so the address-take must be honored, which forces the spill of argN to its addressable home (the caller-slot at sp+frame_size+offsetN).
+
+**The required boilerplate:**
+```c
+void *func(int *a0, int a1) {
+    volatile int *p = &a1;   /* forces sw a1, 0x14(sp) — the caller-slot spill */
+    /* ... function body uses a1 normally ... */
+    (void)p;                  /* suppress unused-warning; p is otherwise unread */
+    return ...;
+}
+```
+
+The `volatile` qualifier is on the POINTEE type, not on `p`. The cast tells IDO "the value at *p may be observed by external code" — but since p itself is never written through, the only effect is that &a1 must produce a real address.
+
+**When the target shape this fixes appears:**
+- A leading `sw aN, frame_size+offsetN(sp)` (caller's slot for argN) where:
+  - frame_size is the function's own stack adjust
+  - offsetN = 4*N (a0=0, a1=4, a2=8, a3=0xC)
+- The arg IS used in the body (so `feedback-ido-unused-arg-save` doesn't apply)
+- No other obvious reason for the spill (no varargs, no struct-by-value)
+
+**Verified 2026-05-08** on `gl_func_0003EA98` (linked-list lookup-by-key, 18 insns):
+- target: `sw a1, 0x14(sp)` at offset 0x04 (frame=0x10, a1's caller-slot at sp+0x14)
+- before: built had no equivalent emit; wrap capped at 82.89% fuzzy
+- after: `volatile int *p = &a1;` produces the exact `sw a1, 0x14(sp)`; promoted to 100%
+
+**Compatible with:** the volatile-local trick for spilling values onto the OWN-FRAME stack (`volatile int key = a1;` inside scope) — both can coexist in the same function. The volatile-pointer-to-arg controls the CALLER-SLOT spill; the volatile-local controls the OWN-FRAME spill.
+
+**Don't use this** when the target's spill is at a DIFFERENT offset than the arg's natural caller-slot — that means a different mechanism is producing it (e.g., `feedback-ido-precall-arg-spill-unreachable` for outgoing-arg defensive spills). This recipe specifically generates "the arg's own caller-slot."
+
+---
+
+<a id="feedback-ido-volatile-local-scoped-to-if-block-flips-early-exit-shape"></a>
+## Place `volatile int local = arg;` INSIDE the if-non-zero block to flip early-exit from `bnel-likely+delay-load` to `beqz+nop`
+
+_Common shape: the function does an early-exit `if (cond) return X;`, then a do-while loop reading some stack-spilled local. When the volatile spill of the loop-local is declared at FUNCTION TOP (before the early-exit), IDO -O2's scheduler hoists the first-iter `lw local, OFFSET(sp)` into the early-exit branch's delay slot, emitting `bnel cond, $0, +N` (branch-likely with delay-load) instead of the target's `beqz cond, +N; nop`. Scoping the volatile decl INSIDE the if-non-zero block pushes the spill AFTER the branch, removing IDO's hoist opportunity and producing the target shape._
+
+**The pattern:**
+```c
+/* GOOD — volatile decl is scoped INSIDE the if-non-zero block.
+ * IDO can't hoist the spill or its reload into the branch delay. */
+void *f(struct *list_owner, int key) {
+    volatile int *p = &key;            /* caller-slot spill (separate trick) */
+    int *node = list_owner->head;
+    if (node != 0) {
+        volatile int kspill = key;     /* OWN-FRAME spill — scoped HERE */
+        do {
+            if (node->key == kspill) return node;
+            node = node->next;
+        } while (node != 0);
+    }
+    (void)p;
+    return 0;
+}
+
+/* BAD — volatile decl at function top.
+ * IDO hoists the first-iter `lw t6, kspill_offset(sp)` into the
+ * `if (node != 0)` branch's delay slot, emitting bnel-likely. */
+void *f_bad(struct *list_owner, int key) {
+    volatile int kspill = key;          /* spill happens before branch — hoistable */
+    int *node = list_owner->head;
+    if (node != 0) {
+        do { ... } while (node != 0);
+    }
+    return 0;
+}
+```
+
+**Why this matters:** for early-exit + loop patterns, IDO's `reorg.c` looks at the instruction immediately after the branch (in the fall-through path) and tries to fill the delay slot with it as a likely-delay candidate. If that instruction is `lw` from a stack slot that was just-spilled, it's a perfect candidate — IDO converts the branch to branch-likely + uses the lw as the delay slot. The result mismatches target.
+
+**Diagnostic:** target shows `beqz/bnez Reg, +N; nop` (regular branch with explicit nop), built shows `bnel/beql Reg, $0, +N; lw/something(delay-likely)` for the same control transfer. The instruction count is the same; only the branch type and delay-slot occupancy differ.
+
+**Verified 2026-05-08** on `gl_func_0003EA98` (same function as the volatile-pointer-to-arg trick): scoping `volatile int key = a1;` to the if-block flipped the early-exit from bnel-likely to beqz+nop, contributing to the 82.89% → 100% promotion.
+
+**Generalizes to:** any do-while/while loop with an early-exit guard that reads an own-frame spill on the first iteration. The fix is purely scope-based — no logic change needed.
