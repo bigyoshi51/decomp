@@ -157,6 +157,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [`&BASE + 0xOFFSET` vs `extern SYM_AT_OFFSET` produces different .o byte patterns even when addresses are equal](#feedback-ido-offset-in-instruction-vs-reloc) — _When target asm has `lw $reg, 0xNNN($at)` (offset baked into the instruction), write `*(int*)((char*)&BASE + 0xNNN)` in C — this emits `lw $reg, 0xNNN(...)` matching the target.
 - [IDO can't fold `&SYM + 0xCONST + runtime` into 3-insn lui/addiu/addu — always factors constant onto runtime side (4 insns)](#feedback-ido-symbol-offset-runtime-cannot-fold) — Pure-address-computation analog of the load-offset-vs-reloc rule: IDO emits 4 insns (lui-D / addiu-CONST-on-runtime / addiu-D-lo / addu) where expected has 3 (lui-D-with-CONST / addiu-D-lo-with-CONST / addu). Workaround: per-offset extern + undefined_syms entry + INSN_PATCH for the linked-imm word.
 - [Force IDO to materialize `&D` in `$v1` (lui+addiu pair) by combining named-local-for-first-deref with inline-second-deref of same offset](#feedback-ido-v1-base-materialization-via-second-inline-deref) — When target reloads `lw $aN, OFF($v1)` after a store via `lw $v0, OFF($v1); sw _, _($v0)`, name the first deref as a local (locks $v0) and INLINE the second deref inside the call arg expression (triggers base sharing in $v1).
+- [Standard accessor templates at -O0 produce 3 extra insns (`b +1; nop` dead tail jump) vs the -O2 form](#feedback-ido-o0-accessor-template-extra-b1-nop-tail) — Asm with the Quad4/Vec3/int-reader shape PLUS a dead `b +1; nop` between the last copy-store and the epilogue → function lives in an -O0 file. Same C body matches at both opt levels; the dead tail jump is a natural -O0 scheduling artifact.
 - [IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent](#feedback-ido-reg-only-store-ordering) — For 6+arg setters where stack args (sp+0x10, sp+0x14) go to struct fields, IDO's scheduler hoists cheap register-only stores (`sw aN, N(a0)`) into load-use gaps.
 - [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — _When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce this from C.
 - [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — _When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; or v1, ret_hi, zero; jr ra`), the function signature is `long long`/s64 (o32…
@@ -7830,3 +7831,60 @@ int f(int sum, unsigned char *buf, unsigned int len) {
 3. Don't expect dramatic gains (this is sub-1pp); use it as a "free pre-grind cleanup" not a primary lever.
 
 **Doesn't apply when:** the extern is referenced by ANY active C code (even if the call site is in a different function within the same file). It only nudges codegen when the symbol is genuinely dead in the TU.
+
+
+---
+
+<a id="feedback-ido-o0-accessor-template-extra-b1-nop-tail"></a>
+## Standard accessor templates at -O0 produce 3 extra insns (`b +1; nop` dead tail jump) vs the -O2 form
+
+_When you see what LOOKS like the standard Quad4/Vec3/int/float-reader template (`Quad4 buf; gl_func_0(&D, &buf, N); *dst = buf;`) in asm but the function has 3 EXTRA insns (`b +1; nop` between the last copy-store and the epilogue), the function is compiled at -O0, not -O2. The same C body matches at both opt levels — pick the right OPT_FLAGS for the file._
+
+**Symptom (verified 2026-05-08, gl_func_00008990 in game_libs_o0_8944.c):**
+
+Asm has standard Quad4-reader shape:
+```
+addiu sp, -0x28; sw ra; sw a0, 0x28(sp)
+lui+addiu a0, &D; addiu a1, sp, 0x18; li a2, 0x10
+jal gl_func_0; nop                       ; (jal+nop instead of jal+li)
+lw t6, 0x28(sp); addiu t7, sp, 0x18
+[4 lw/sw pairs copying 16 bytes]
+b +1; nop                                ; ← these 3 extra insns
+lw ra; addiu sp; jr ra; nop
+```
+
+vs the -O2 form (gl_func_0000975C):
+```
+addiu sp, -0x28; sw a0, 0x28(sp); sw ra
+lui+addiu a0, &D; addiu a1, sp, 0x18; jal; li a2, 0x10  ; jal+li in delay
+addiu t7, sp, 0x18; [4 lw/sw pairs interleaved with t6 reload]
+lw ra; addiu sp; jr ra; nop                 ; no b +1; nop tail
+```
+
+**Identifying -O0 vs -O2 placement in the .o:**
+
+Check the symbol's expected/.o location:
+```bash
+for u in expected/src/SEG/*.c.o; do
+    sym=$(mips-linux-gnu-objdump -t "$u" 2>/dev/null | grep "FUNC_NAME ")
+    [ -n "$sym" ] && echo "=== $u ===" && echo "$sym"
+done
+```
+
+If `expected/.../SEG_o0_NNNN.c.o` is the host (not just `SEG.c.o`), the function is in an -O0 file.
+
+**Recipe:**
+
+1. Identify whether the function is in an -O0 file via `objdump -t` on expected/.o.
+2. Write the standard accessor template body unchanged.
+3. Place the void func in the SAME -O0 file (the file's Makefile rule has `OPT_FLAGS := -O0`, so building the new void body uses -O0 automatically).
+4. The `b +1; nop` tail emerges from -O0's conservative scheduling — DON'T try to add manual `__asm__` to inject it; it's a natural artifact.
+
+**How to apply:**
+
+- For game_libs accessor templates near offsets 0x8944, 0x949C, etc. (1080's known -O0 cluster files), automatically use -O0 and the standard template.
+- For OTHER segments where you see the `b +1; nop` tail in asm, check the Makefile for an existing -O0 file in that segment; if one exists, the function probably belongs there.
+
+**Companion:**
+- `feedback-ido-o0-cluster-split-with-layout-shim.md` — file-split workflow when -O0 cluster is needed but doesn't yet exist.
+- `feedback-uso-accessor-template-reuse.md` — same templates work across all USOs at -O2.
