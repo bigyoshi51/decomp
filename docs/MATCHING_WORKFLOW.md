@@ -46,6 +46,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [objdiff report.json caches per-function state — `rm -f report.json` before regen if a function "stays unmatched" after expected/.o refresh](#feedback-objdiff-report-caches-stale-per-function-state) — _After cp'ing build/.o to expected/.o (per-file refresh), `objdiff-cli report generate` keeps the prior report.json's per-function fuzzy_match_percent values for affected symbols.
 - [objdiff `fuzzy_match_percent: None` means size mismatch too large to align, not "function missing"](#feedback-objdiff-returns-none-on-large-size-mismatch) — _When the built .o's symbol size differs significantly from the expected .o's symbol size, objdiff sets `fuzzy_match_percent: null` (Python `None`) in report.json instead of computing a low fuzzy score.
 - [objdiff treats functions with .NON_MATCHING symbol alias as unscored (None) regardless of byte match](#feedback-objdiff-skips-nonmatching-alias) — _The `nonmatching` macro in .s files emits a `.NON_MATCHING` data alias at the same address as the function symbol. objdiff sees this alias and skips fuzzy_match scoring entirely (reports None) — even when the…
+- [Wrong-by-0x10000 lui addend can be hidden by objdiff fuzzy at 99 % — byte diff still reveals the encoding mismatch](#feedback-objdiff-fuzzy-hides-wrong-lui-addend) — _A C source with `&D_00000000 + 0x3B3C0` produced `lui 0x4 + addiu -0x4C40` (effective 0x3B3C0); expected/.o had `lui 0x3 + addiu -0x4C40` (effective 0x2B3C0). Different addends, off by 0x10000. Fuzzy reported 99.85 % anyway — objdiff's reloc-aware compare treated the lui+addiu pair as matched against the same R_MIPS_HI16/LO16 reloc symbol, masking the addend mismatch. Verify wraps stuck at 99.x % by running `mips-linux-gnu-objdump -d --disassemble=<func> build/non_matching/.../<file>.c.o` against expected/.c.o; literal lui/addiu byte differences indicate a wrong constant offset in the C source. Verified 2026-05-08 on `gl_func_000685C0` — 3 string-arg offsets corrected from 0x3B3C0/E4/04 to 0x2B3C0/E4/04, byte diff dropped from 12 to 9 instructions while fuzzy stayed at 99.85 %._
 
 ### expected/ baseline care
 
@@ -113,6 +114,40 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [TRUNCATE_TEXT must match natural compiled size, not the clean ROM boundary — drift cuts real code](#feedback-truncate-text-preserve-drift) — _When splitting a .c file with TRUNCATE_TEXT, set the target to the natural compiled size (including asm-processor drift), not the expected clean boundary.
 - [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — _For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC), DO NOT try fixing it by adding the symbol to undefined_syms_auto.txt.
 
+
+---
+
+<a id="feedback-objdiff-fuzzy-hides-wrong-lui-addend"></a>
+## Wrong-by-0x10000 lui addend can be hidden by objdiff fuzzy at 99 % — byte diff still reveals the encoding mismatch
+
+_A C source with `&D_00000000 + 0x3B3C0` produced `lui 0x4 + addiu -0x4C40` (effective addend 0x3B3C0); expected/.o had `lui 0x3 + addiu -0x4C40` (effective addend 0x2B3C0) — off by 0x10000. Fuzzy reported 99.85 % anyway because objdiff's reloc-aware compare treated the lui+addiu pair as matched against the same R_MIPS_HI16/LO16 reloc symbol, masking the addend mismatch._
+
+**Symptom (2026-05-08, `gl_func_000685C0`):** an NM wrap was stuck at 99.85 % fuzzy after multiple tightening passes. Visual diff of objdump output looked almost-identical, but `mips-linux-gnu-objdump -d --disassemble=gl_func_000685C0` revealed three pairs of differing lui+addiu instructions:
+
+```
+expected:  3c040003 lui $a0, 0x3   2484b3c0 addiu $a0, $a0, -19520   # → 0x2B3C0
+built:     3c040004 lui $a0, 0x4   2484b3c0 addiu $a0, $a0, -19520   # → 0x3B3C0
+```
+
+The C source was using `(char*)&D_00000000 + 0x3B3C0` for assertion-string addresses; expected encoded the addend as 0x2B3C0. Off by exactly 0x10000.
+
+**Why fuzzy didn't catch it:** objdiff's reloc-aware scoring treats a `lui+addiu` pair tied to the same R_MIPS_HI16/LO16 reloc symbol (`D_00000000` here) as semantically equivalent regardless of the addend. The *encoded bytes* differ, but the symbolic reference is the same — so fuzzy gives partial credit and the addend-mismatch hides under the 99 % score. Distinct from the `.NON_MATCHING` alias artifact (`feedback-objdiff-skips-nonmatching-alias` above): this is a real source bug, not a scoring quirk.
+
+**Diagnostic:** for any wrap stuck at 99.x % fuzzy, run:
+
+```bash
+mips-linux-gnu-objdump -d -M no-aliases --disassemble=<func> \
+    build/non_matching/src/<seg>/<file>.c.o > /tmp/built.s
+mips-linux-gnu-objdump -d -M no-aliases --disassemble=<func> \
+    expected/src/<seg>/<file>.c.o > /tmp/expected.s
+diff /tmp/expected.s /tmp/built.s
+```
+
+If literal lui/addiu byte values differ, the C source has a wrong constant offset. Fix the addend in C; rebuild; the bytes line up. Fuzzy may not move because objdiff already counted them as matched, but the actual `.o` is byte-closer to expected.
+
+**Verified 2026-05-08 on `gl_func_000685C0`:** 3 sites fixed (0x3B3C0/E4/04 → 0x2B3C0/E4/04), byte diff dropped from 12 to 9 differing instructions, fuzzy stayed at 99.85 %.
+
+**Companion to** `feedback-objdiff-include-asm-only-file-bogus-100pct` and the `.NON_MATCHING` alias entry: both describe ways objdiff fuzzy disagrees with byte-level truth. This one is the *source has wrong literal* case; those are *scoring quirks*. When in doubt, byte-diff against expected/.o.
 
 ---
 
