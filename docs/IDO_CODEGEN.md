@@ -187,6 +187,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Use `void` return when target doesn't restore $v0 — int return forces IDO to spill v0 across calls](#feedback-ido-void-return-avoids-v0-spill) — When the asm doesn't have an explicit final `or v0, ...` epilogue insn AND v0 is consumed by an intermediate call (e.g. as $a2 arg in delay slot), the C should be `void` return, not `int`.
 - [Use `volatile T *arg` to prevent IDO from fusing two `sb`/`sw` stores to the same address](#feedback-ido-volatile-preserve-redundant-io) — When the target asm has two distinct stores to the same address (e.g. `sb $t9, 0(a0); sb $t0, 0(a0)` where the second value is derived from the first), plain C emits ONE store because IDO fuses `*a0 = val; *a0 = val |…
 - [`volatile int saved_arg = aN;` forces IDO to spill aN to a LOCAL stack slot instead of the caller's outgoing-arg slot](#feedback-ido-volatile-unused-local-forces-local-slot-spill) — _When target has `sw $aN, 0x24(sp)` (local-slot offset) but your IDO build emits `sw $aN, 0xBC(sp)` (caller's outgoing-arg slot at sp+frame_size+slot), the difference is whether IDO treats the saved arg as "live local"…
+- [`(void)a; (void)b; (void)c;` after the call forces IDO to spill ALL incoming args to caller's outgoing-arg-shadow](#feedback-ido-void-cast-arg-spill) — _Multi-arg forwarder pattern: `f(a, b, c) { callee(&D); (void)a; (void)b; (void)c; }` emits `sw $a0,0x18(sp); sw $a1,0x1c(sp); sw $a2,0x20(sp)` (varargs-prologue-style) instead of register-shifting args. Sister technique to `volatile int saved` but for many args._
 
 
 ---
@@ -8457,3 +8458,65 @@ The issue isn't just the 3 added insns — it's that volatile-spill creates a st
 **Mirror anti-pattern — REMOVING a local to shrink frame size (verified 2026-05-08 on `titproc_uso_func_00000C54`):** the inverse lever — dropping a working `int count;` local to free its 8-byte slot and shrink frame from 0x48 to 0x40 to match target — also cascades catastrophically. Removed `int count;` and inlined the volatile read into the if-body: frame DID shrink to 0x40 (matches target), but fuzzy regressed 89.32% → 5.02% (-84pp). Freeing the slot caused IDO to reshuffle $s-reg assignments across the whole function (~208 insn diffs from the original ~24). Same root cause as the additive case: any change to a long-lived stack-resident value shifts every other allocno's priority. **General rule for late-tier (>80% fuzzy) matching:** don't add or remove $s-resident locals to fix frame-size deltas; use INSN_PATCH or pad-array-of-correct-size (`feedback-ido-buf-array-alignment`) instead — both keep $s allocation stable.
 
 **When this matters:** USO functions where the original ROM stores into a fixed offset relative to another in-segment symbol (e.g., a "function table" or "metadata block" that lives just past the function's own code). The splat-folded reloc form is the "natural" emit for the symbol+const-offset pattern; getting it requires the data-decl form even when the named symbol is logically a function.
+
+---
+
+<a id="feedback-ido-void-cast-arg-spill"></a>
+## `(void)a; (void)b; (void)c;` after the call forces IDO to spill ALL incoming args to caller's outgoing-arg-shadow
+
+_For a forwarder shape where the called function takes ONE arg (a single computed pointer/symbol-offset) but the function still needs to spill its own incoming `$a0/$a1/$a2` to the caller's outgoing-arg-shadow (sp+0x18 / 0x1C / 0x20 in a -0x18 frame), `(void)a; (void)b; (void)c;` after the call is the smallest C lever that makes IDO -O2 emit those stores. It does NOT register-shift them as call args, and it does NOT add register copies — just the three stores in the natural order._
+
+**Origin:** 2026-05-08, `gl_func_0004D224` (game_libs USO). Target asm:
+
+```
+27BDFFE8  addiu $sp, $sp, -0x18
+AFA40018  sw    $a0, 0x18($sp)   ; spill incoming $a0 to caller's arg0 slot
+AFBF0014  sw    $ra, 0x14($sp)
+3C040002  lui   $a0, 0x0002      ; HI=0x2 (reloc HI16, &D + 0x201D8)
+AFA5001C  sw    $a1, 0x1C($sp)   ; spill incoming $a1 to caller's arg1 slot
+AFA60020  sw    $a2, 0x20($sp)   ; spill incoming $a2 to caller's arg2 slot
+0C000000  jal   gl_func_00000000
+248401D8  addiu $a0, $a0, 0x01D8 ; LO=0x1D8 (reloc LO16)
+8FBF0014  lw    $ra, 0x14($sp)
+27BD0018  addiu $sp, $sp, 0x18
+03E00008  jr    $ra
+00000000   nop
+```
+
+The natural-shape attempts each fail differently:
+
+1. `f(a,b,c) { callee(&D, a, b, c); }` — IDO marshals as 4-arg call: `or $a3,$a2,$0; or $a2,$a1,$0; or $a1,$a0,$0; lui $a0`. No stack spill. Diff: 4 wrong moves vs 3 wrong stores in expected.
+2. `f(a,b,c) { callee(&D); }` — args a/b/c are dead, IDO drops the spills. Diff: 3 missing stores.
+3. `f(int a, ...) { callee(&D); }` — varargs prologue spills $a1, $a2, $a3 (NOT $a0). Wrong slots.
+4. `f(int a, int b, int c, ...) { callee(&D); }` — varargs spills only $a3 from named-arg position 3. Wrong slot count.
+5. `(void)a; (void)b; (void)c;` AFTER the call — exact match.
+
+**Why this works:**
+
+`(void)x` is a no-op cast that the C front-end accepts as "x has been read". IDO -O2's emit treats the read as caller-side ABI-observable: the arg must be reachable from the caller's frame for any down-call hypothetically reading it. Because the function ALSO calls `gl_func_00000000` between the prologue and the casts, IDO conservatively spills `$a0/$a1/$a2` to the caller's outgoing-arg-shadow slots BEFORE the call — which is exactly the varargs-prologue layout.
+
+The casts after the call are key. Putting them BEFORE the call collapses to "args dead before call" and IDO drops the spills. The order is:
+
+```c
+void gl_func_0004D224(int a, int b, int c) {
+    gl_func_00000000((char*)&D_00000000 + 0x201D8);  // call FIRST
+    (void)a; (void)b; (void)c;                       // marker AFTER
+}
+```
+
+**How to apply:**
+
+When NM diff shows TARGET spills 2+ incoming args to the caller's outgoing-arg-shadow (offsets at frame_size, frame_size+4, frame_size+8 — i.e. `0x18, 0x1C, 0x20` for a `-0x18` frame), and the called function takes a different/single arg:
+
+1. Write the call as the natural single-arg shape: `callee(&D + offset)`.
+2. After the call, append `(void)a; (void)b; ...` for each incoming arg you want spilled.
+3. The spills emit in the order of the casts and at the natural caller-shadow offsets.
+
+**Generalizes:** any forwarder where target preserves incoming arg-regs across a call to a downstream callee with a different arg count. Sister to `feedback_ido_volatile_unused_local_forces_local_slot_spill.md` but for the caller's-shadow slots, and cleaner when you need 2+ spills (one `(void)x` per arg vs one `volatile int saved_x = x` per arg).
+
+**Anti-pattern:** Don't combine with `volatile int` — that lands one in a local slot, conflicting with the caller-shadow target. Use ONE technique consistently.
+
+**Anti-pattern 2:** Don't put the casts BEFORE the call — `(void)a; gl_func_0(&D); (void)b;` won't emit `$b`'s spill before the call either; both must come after. (Verified during the gl_func_0004D224 grind: tried before-call, the spill collapsed.)
+
+**Related:** `feedback_ido_volatile_unused_local_forces_local_slot_spill.md` (single-arg local-slot spill via `volatile int saved`). `feedback_ido_unused_arg_save.md` (background on caller-shadow vs local-slot spill).
+
