@@ -8014,3 +8014,20 @@ When matching a function with a signed-arg-but-srl-shift idiom, try BOTH `int aN
 **Companion:**
 - `feedback-ido-narrow-arg-promotion.md` — `short`/`u8` arg signatures changing emit shape (different mechanism, same flavor of "param type matters more than you'd expect").
 - `feedback-ido-v0-reuse-via-locals.md` — named locals shifting register picks toward $v0.
+
+## Anti-lever: untyped-path re-fetch via named local does NOT defeat IDO -O2 struct-field CSE — it regresses regalloc
+
+**Why this matters:** When target asm has TWO `lw OFFSET(base)` loads of the same struct field into DIFFERENT scratch registers (e.g., dlp loaded twice as $v1 and $t7), and your struct-typed C body emits ONE load (CSE'd by IDO), the natural lever is to introduce a second access via an untyped path: `T *p2 = *(T**)((char*)X + N); use(p2);`. **This regresses fuzzy% in practice.**
+
+**Tested twice (both regressed):**
+- `gui_uso_func_00003B14` (2026-05-08, gui_uso DL builder): 98.89% → 96.11% (-2.78pp).
+- `gl_func_00010068` (2026-05-08, game_uso 6-call dispatcher): 79.13% → 74.17% (-5.0pp).
+
+**Why it fails:** Adding a named-local pointer (`T *p2 = ...`) promotes the local to $s through IDO's global allocator. The expected 2-emit `lw` pattern doesn't materialize because IDO sees two distinct access paths but allocates one as $s (longer live range), shifting other regalloc decisions across the entire function body. Net: worse than the original CSE'd version.
+
+**What does work for "force re-load" patterns (per other entries):** Don't introduce a new named local. Either:
+- Inline the second access at the use site without a binding (`((T*)*(int*)((char*)X + N))->field`).
+- Use `volatile` qualifier on the source pointer (forces re-load semantically, but changes types).
+- Permuter run — let it find a non-obvious ordering that triggers the 2-emit.
+
+**Don't try the named-local lever again. The CSE behavior is fundamental to IDO -O2's allocator and the obvious workaround is wrong.**
