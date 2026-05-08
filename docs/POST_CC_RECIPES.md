@@ -1648,6 +1648,32 @@ inherited register holds a loaded VALUE rather than an address (which
 would need PREFIX recipe `lui rN, 0; lw rM, 0(rN)` instead of pointer
 form). Verified on gl_func_0005165C inheriting from gl_func_000515FC.
 
+**FPU-register variant (inherited-$f4 cap, 2026-05-08)**: Same shape, FPU
+flavor. Function's first body insn after `addiu sp / sw ra` reads an FPU
+register that's NOT a standard MIPS O32 float-arg slot (only $f12 and
+$f14 are standard float-arg regs). Example seen on `gl_func_0005DB0C`:
+first body insn is `div.s $f12, $f14, $f4` — $f4 is uninitialized at
+function entry, must be inherited from the caller's FPU state.
+
+Recognition pattern: any FPU op (`div.s`, `mul.s`, `add.s`, `cvt.*`)
+that reads `$f4`, `$f6`, `$f8`, `$f10`, `$f16`, etc. (anything other
+than the inputs $f12/$f14 and outputs $f0/$f2) within the FIRST 1-3
+body instructions. Cross-check: scan the function for any preceding
+`mtc1`, `lwc1`, or arithmetic op writing to that FPU reg — if none,
+it's inherited.
+
+Promotion blocker: identical to the GP-variant — IDO -O2's C frontend
+rejects `register float x asm("$f4")` (per `feedback_ido_no_gcc_register_asm`).
+Inline asm `__asm__ volatile("mov.s $f4, ...")` is also rejected. So
+there's no C-level mechanism to pin an FPU register to an inherited
+value. Stays INCLUDE_ASM; NM-wrap with the inheritance-source documented.
+
+Distinguishing detail vs the GP-variant: FPU inheritance can also stem
+from a non-standard float-arg-passing convention (e.g. cross-USO
+trampoline that passes a third float in $f4 deliberately). Either way,
+the C body can't reproduce it without inline asm. Verified 2026-05-08
+on `gl_func_0005DB0C`.
+
 ---
 
 ---
