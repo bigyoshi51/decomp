@@ -2,7 +2,7 @@
 
 > IDO 7.1 codegen quirks: how the compiler emits specific patterns, and what C-source shapes do or don't match a given asm.
 
-_117 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_118 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Quick reference by sub-topic
 
@@ -62,6 +62,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Swap source order of two stores to let IDO's scheduler fill a jal delay slot with the SECOND-listed store](#feedback-ido-swap-stores-for-jal-delay-fill) — _When target asm has `sw $tA, OFFSET_X(a0); jal func; sw $tB, OFFSET_Y(a0)` (two consecutive stores with the second in the delay slot), write the C with the OTHER order: put the X-offset store SECOND in source.
 - [IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces andi-pre-jal pattern](#feedback-ido-o1-andi-pre-jal-via-register-u32-mask) — _When target has `andi tN,X,MASK; jal; or argReg,tN,zero` (3-insn mask-pre-jal vs natural delay-slot fold), use `register u32 v = expr & MASK; func(..., v);` block-local. The `& MASK` on the initializer (not the use) commits IDO to emitting the and pre-jal._
 - [Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot](#lift-unconditional-loop-counter-init-out-of-the-if-body-to-claim-the-branchs-delay-slot--leaves-the-result-init-before-the-branch) — _When target has `or v1, a0, 0` (result=sum) BEFORE `beq len, 0` and `or v0, 0, 0` (i=0) IN the delay slot, but built emits `result=sum` in delay slot, lift `unsigned int i = 0;` OUT of the if-body. Both inits become unconditional and IDO picks i=0 for the slot. Generalizes the cap-class previously labeled "no C-level lever"._
+- [When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C](#feedback-ido-target-larger-preemptive-set-nop-delay) — _Diagnostic for the inverse-of-bloat cap: when built `.o` is SHORTER than target by exactly 1 insn (a preemptive `or v0, v1, 0` BEFORE a sltu/bnez that the natural emit folds INTO the branch's delay slot), suspect this scheduling cap. IDO never picks the longer "preemptive + nop" form. Tested early-exit, goto-out, and early-set-clear variants all produce the same shorter natural emit. NM-wrap. Verified 2026-05-08 on kernel/func_800000B0 (91.15% fuzzy)._
 
 ### $s register allocation
 
@@ -6098,6 +6099,46 @@ The KEY difference between forms 2 and 3: in form 2, the `& MASK` is on the *ini
 **Companion to** `feedback-ido-swap-stores-for-jal-delay-fill` (above): same domain (controlling what lands in the delay slot vs pre-jal) but applies to mask/arithmetic-into-arg-reg patterns specifically, not store-into-struct patterns.
 
 ---
+
+<a id="feedback-ido-target-larger-preemptive-set-nop-delay"></a>
+## When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C
+
+_Diagnostic for the inverse of the usual cap (built-bigger-than-target). When your built `.o` is SHORTER than target by exactly 1 insn AND the missing insn is `or v0, v1, 0` (a preemptive return-value set BEFORE the bounds-check branch), the target's pattern is "preemptive set + NOP in branch delay slot + clear-on-failure-fallthrough." IDO's scheduler always folds the result-assignment INTO the branch's delay slot, producing the shorter equivalent — it never picks the longer "preemptive + nop" form._
+
+**Symptom (2026-05-08, kernel/func_800000B0):**
+
+Target final block (8 insns):
+```
+or   $v0, $v1, $0          # PREEMPTIVE result = orig_top
+sltu $at, $t9, $t3
+bnez $at, .L_success
+nop                        # delay: nothing useful
+jr   $ra                   # fall-through: failure
+or   $v0, $0, $0           # delay: clear v0
+.L_success:
+jr   $ra
+nop
+```
+
+IDO's natural emit (7 insns):
+```
+sltu $at, $v0, $t1
+bnez $at, +3
+or   $v0, $v1, $0          # delay: result = orig (only on branch-taken)
+jr   $ra                   # fall-through: failure
+or   $v0, $0, $0           # delay: clear v0
+jr   $ra
+nop
+```
+
+**Tested C variants that all produce the shorter natural emit:**
+- `if (oom) return 0; return result;` (early-exit form)
+- `if (!oom) goto out; result = 0; out: return result;` (goto-out)
+- `result = orig; if (oom) result = 0; return result;` (early-set + clear)
+
+All three let IDO pick `$v0` for `new_top` (the bounds-check operand), then put `or $v0, $v1, 0` in the bnez's delay slot when branching to success. None force the +1-insn longer "preemptive + nop" form.
+
+**Diagnostic value:** When built is SHORTER than target by 1 insn, suspect this cap class — the issue isn't missing logic, it's IDO's scheduler being too efficient. Distinguish from the usual cap (built bigger than target = IDO over-emitting). NM-wrap with the natural shorter form; document the size delta.
 
 ---
 
