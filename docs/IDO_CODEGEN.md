@@ -1228,6 +1228,12 @@ int f(int *a0) {
 
 The 2-insn delta is because the negative form forces IDO to materialize the second-deref `lw` on BOTH branches of the inverted-skip, while the positive form lets IDO use beql annulled-delay to skip the second deref entirely on the null path. Same principle as the float-predicate case: target's branch-likely-with-success-fallthrough shape needs the C to express success as the inner positive arm.
 
+**Extension to tail-call wrappers (verified 2026-05-08 on `gl_func_00067510`):** the same arm-choice rule applies when the success arm is a `return tail_call(...)` (not just `return 1`). 16-insn early-return + tail-call wrapper:
+- **Negative early-return form** `if (v == 0) return 0; return call(&D, v - 1);` → IDO emits `bnez + nop + b + move v0,zero`, 15 insns, **does not match** (target is 16 insns).
+- **Positive in-arm form** `if (v != 0) { return call(&D, v - 1); } return 0;` → IDO emits `beqzl + move v0,zero (delay-likely) + jal + addiu a1,v0,-1 (delay) + b + lw ra (delay) + move v0,zero (dead) + lw ra + addiu sp + jr ra`, 16 insns = exact match. Note the duplicated `lw ra` and apparently-dead second `move v0,zero` are tail-merge artifacts that the positive-arm form preserves but the negative-arm form optimizes away.
+
+Lesson: this rule isn't limited to predicate functions returning literal 0/1 — any `early-return-zero + return-non-zero-result` pattern where the non-zero result is a function call (or any non-trivial expression) is subject to the same arm-choice flip.
+
 **Extension to plain int if-else dispatch (verified 2026-05-06 on `timproc_uso_b1_func_00000E40`):** when target uses plain `bnez` to JUMP TO the call-arm (vs target using `beql` to SKIP-OVER it), the arm-choice direction is OPPOSITE. For dispatch shape `bnez cond, call_label; nop; b end_label; sw store(in delay); call_label: jal; or a2,$0(in delay); end_label:`:
 - **Positive call-arm form** `if (cond != 0) call(); else store;` → IDO picks `beql` skip-on-zero (10 diffs).
 - **Negative store-arm form** `if (cond == 0) store; else call();` → IDO picks plain `bnez` jump-to-call (0 diffs = exact match).
