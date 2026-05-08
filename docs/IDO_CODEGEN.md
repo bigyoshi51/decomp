@@ -7813,3 +7813,20 @@ int f(int sum, unsigned char *buf, unsigned int len) {
 **When it doesn't apply:** if `i = 0` semantically MUST be inside the if (e.g., `i` reads a different value when `len == 0`), or if the unconditional init introduces extra clean-up insns elsewhere, this rewrite won't work.
 
 **Generalizes the prior "no C-level lever" cap-confirmation pattern.** Many NM-wrap caps from earlier 1080 work labeled "delay slot scheduler put X first, can't force Y" can potentially be broken by moving the second-candidate's init out of its guard scope. Check before declaring a function "cap-confirmed" — try lifting one init.
+
+## Dead `extern` declarations (uncalled, only-referenced-in-comments) CAN shift IDO -O2 register allocation
+
+**Why this matters:** A truly-uncalled `extern void func();` at file scope contributes a symbol to IDO's translation-unit symbol table even when no C statement references it. Removing such a dead decl can shift register allocation in nearby functions enough to bump fuzzy%, even though the function being graded never had a reference to the dead symbol.
+
+**Diagnostic signal:** A function's NM-wrap has been stable at the same fuzzy% across multiple iterations, AND the source file contains `extern` declarations whose only references are in `/* ... */` comments (e.g., a removed stub call's leftover decl).
+
+**Verified case (2026-05-08):** `game_uso_func_00001DDC` (1528-byte spine function, NM-wrap at 17.16%). Source had `extern void *gl_func_TODO_00001DDC(int *scratch, int *a2);` left over from a 2026-05-07 stub-call removal. The decl was not referenced by any C statement (only in comments). Removing the line bumped fuzzy% to 17.52% (+0.36pp = ~5 insns shifted). The function being graded does NOT call `gl_func_TODO_00001DDC`; the change was via IDO's global register allocator's symbol-table accounting.
+
+**Why IDO behaves this way (speculation, unverified):** IDO -O2's register allocator reads the full TU symbol table at compile time. Dead externs contribute to allocno enumeration ordering or cost computation. Removing them shifts the global register-priority calculation enough to nudge a few `lw`/`sw` allocations onto different `$t`/`$s` registers. The effect is small (sub-1pp) but real.
+
+**How to apply:**
+1. After a stub-call removal, ALWAYS audit and remove the corresponding `extern` decl too.
+2. Before grinding fine-grained register-allocation knobs on a stuck NM-wrap, grep the source file for `extern` decls that are referenced only in comments — remove them as a free baseline-improvement.
+3. Don't expect dramatic gains (this is sub-1pp); use it as a "free pre-grind cleanup" not a primary lever.
+
+**Doesn't apply when:** the extern is referenced by ANY active C code (even if the call site is in a different function within the same file). It only nudges codegen when the symbol is genuinely dead in the TU.
