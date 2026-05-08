@@ -3741,9 +3741,11 @@ The compile step (cfe) silently accepts it as a function call; the linker then f
 - Never copy a `__asm__("")` barrier from a GCC/Glover solution into an IDO project.
 - If you see `undefined reference to __asm__` at link time, grep for `__asm__` in the .c and remove.
 
+**Worse failure mode under asm-processor (1080 pipeline)**: with asm-processor enabled (1080 kernel/game_libs/all USOs), `__asm__("");` does NOT trigger a link error. asm-processor silently treats `__asm__` as a real function symbol, emits a `jal 0 <__asm__>` (relocation against an undefined target), grows the frame ~0x30 bytes for prologue/epilogue, and pivots register allocation through a save/restore. The build SUCCEEDS but produces a function-call wrapping the barrier. Symptoms in the .c.o: function starts with `addiu sp,sp,-0x30` (or similar enlarged frame) instead of the natural prologue, plus a `jal 0` to symbol `__asm__` somewhere in the body. **If you see this after inserting `__asm__("")`, remove it immediately** — there's no asm-processor-safe barrier equivalent in IDO. Confirmed 2026-05-08 on `func_800000B0` retest.
+
 **Related:** `feedback_ido_no_gcc_register_asm.md` (IDO rejects `register T var asm("$N")`). `feedback_ido_register.md` (plain `register` keyword IS respected as an allocation hint). These three cover the main GCC-style pinning/barrier tricks that don't work in IDO.
 
-**Origin:** 2026-04-19 game_libs gl_func_00026C6C. Tried `__asm__("")` to force a register copy for the `or a2, a1, zero` pattern — got `undefined reference to __asm__` at link time. Wrapped as NON_MATCHING (91 %).
+**Origin:** 2026-04-19 game_libs gl_func_00026C6C. Tried `__asm__("")` to force a register copy for the `or a2, a1, zero` pattern — got `undefined reference to __asm__` at link time. Wrapped as NON_MATCHING (91 %). Updated 2026-05-08 with asm-processor silent-failure mode discovered during func_800000B0 cap retest.
 
 ---
 
