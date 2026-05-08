@@ -4265,7 +4265,11 @@ _When a function previously matched via `INCLUDE_ASM` and you replace it with a 
 
 **Verified case (2026-05-06):** `gl_func_00021E58` (game_libs alloc-via-callee + 3-field-set + return v0[8]). Standalone IDO emits all 20 insns byte-identical to target, including correct `lb 0x27(sp)` for the `signed char a3` low-byte read. Only diff is the `jal` at offset 0x10: built `0x0C000000` vs expected `0x0C00DA92`. objdiff scores 65.65%. Wrap kept NM with the goto-form C body and this cap citation.
 
-**Catching it during /decompile picking:** if you pick a tiny function (50-80 bytes, ~70-90% match, no episode) and the only diffs are `jal` opcodes in expected vs `jal 0` + reloc in your build, this is the encoding pin — don't grind register allocation, write the wrap as documented above.
+**REVISED 2026-05-08:** the 2026-05-06 cap was wrong. objdiff IS reloc-aware: it compares `jal SYMBOL + R_MIPS_26 reloc` against `jal pre-baked-addr-to-same-symbol` and scores them as **equivalent (100% match)** when the reloc target equals the pre-baked address. Re-tested `gl_func_00021E58` on 2026-05-08: removed the NM-wrap, rebuilt non_matching/.o, and `report.json` shows `fuzzy_match_percent: 100.0`. The `.o` files DO differ at byte level (the jal-encoding diff is real), but objdiff's symbolic comparison treats them as equivalent. Promoted to a logged episode.
+
+**Updated catching rule:** when a function shows fuzzy=100 but no episode AND the source has an `#ifdef NON_MATCHING` wrap citing "jal reloc encoding cap" — DON'T accept the cap claim. Remove the wrap, rebuild non_matching/.o, regenerate report.json, and verify. If fuzzy stays at 100, the function is matched and just needs an episode logged. The encoding-cap entry above was overly pessimistic for the in-segment jal case where the reloc target IS a clean splat symbol; objdiff resolves these symbolically.
+
+**When the cap IS real:** the encoding cap remains valid for `jal` targets that are NOT clean splat symbols — e.g., alt-entry-jal where the call target lands inside another function's body and there's no symbol for the entry point. In that case, the C cannot produce a reloc against an unnamed location, and the .o-level bytes diverge in a way objdiff CAN'T resolve symbolically. See `## Alt-entry-jal: in-segment jal lands inside another function with no clean symbol` for that scenario.
 
 ---
 
