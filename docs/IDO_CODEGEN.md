@@ -8555,3 +8555,24 @@ Before applying the inline recipe to a new function, check the asm:
 - `feedback-ido-inline-deref-v0` (single-use inline-deref for $v0 vs $tN).
 - `feedback-port-matched-sibling-c-before-trusting-frame-regalloc-cap-claim` (sibling-port doctrine).
 
+
+<a id="feedback-ido-o0-return-cond-emits-sltu-xori-not-beq"></a>
+## At IDO -O0, `return cond;` emits sltu+xori coercion — `if (cond) return 1; return 0;` emits the canonical beq-conditional shape
+
+_Boolean-coerced single-return forms regress significantly at -O0 vs the explicit if-then-else early-return. Matching code that uses `beq + 1/0 immediates` won't reach via `return *a0 == 0;` because IDO -O0 always emits the boolean-cast sequence (sltu+xori or sltiu+xori) instead of pulling the comparison up into the branch._
+
+**Symptom (verified 2026-05-08, `arcproc_uso_func_0000012C`):** existing 92.86% NM-wrap with `if (*a0 == 0) return 1; return 0;` was tightened to `return *a0 == 0;` hoping a single-return shape would eliminate the trailing dead `b +1; nop`. Instead fuzzy regressed to 77.68% (-15pp). Inspecting the .o:
+
+- **`if (cond) return 1; return 0;`** (target shape) → `lw v0, 0(s0); beq v0, zero, .L1; nop; addiu v0, zero, 1; b .end; nop; .L1: addiu v0, zero, 0; b .end; nop`
+- **`return cond;`** → `lw v0, 0(s0); sltu v0, zero, v0; xori v0, v0, 1` (no branch — pure dataflow)
+
+At -O0, IDO doesn't do branch-folding optimization. The single-return form materializes a 0/1 boolean via sltu+xori and writes it to $v0; the explicit-branch form keeps a branch + immediate-load shape. Both produce same observable result, but only the explicit form matches asm that uses beq.
+
+**Why future-you should know this:** the natural cleanup instinct ("rewrite `if (X) return 1; return 0;` as `return X;`") is correct at -O2 but **catastrophically wrong at -O0**. When grinding a -O0 file:
+
+- If target asm has `beq <var>, $zero, .L; ...; addiu $v0, $zero, 1; b .end; ...; addiu $v0, $zero, 0` — keep the if-then-else early-return shape.
+- Don't reach for the boolean-coerced `return cond;` form unless the target shows `sltu/sltiu + xori` directly.
+
+**Distinct from `feedback-ido-o0-load-order-not-expression-driven`:** that entry covers field-load order at -O0; this one is about return-statement shape lowering at -O0. Both reflect IDO -O0's lack of dataflow normalization, but the levers are different.
+
+**How to apply:** when picking a -O0 NM-wrap to grind, BEFORE rewriting any `if/return` chain into a single-return: check whether target asm has `beq` or `sltu` for the comparison. If `beq`, keep the explicit-branch form; if `sltu`, the single-return form may be needed.
