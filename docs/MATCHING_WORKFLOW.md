@@ -79,6 +79,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Fall-through prologue stub — 2-insn alternate entry point hidden in predecessor's tail-after-epilogue](#fall-through-prologue-stub--2-insn-alternate-entry-point-hidden-in-predecessors-tail-after-epilogue) — _A USO function may have TWO entry points: a "main" entry that assumes some register is pre-set, and a 2-insn fall-through stub that sets it up before falling through. Splat bundles the stub into the predecessor's symbol past its `jr ra`/`nop`. 5th boundary-bug variant — distinct from prologue-stolen-successor._
 - [Alt-entry-jal: in-segment jal lands inside another function with no clean symbol](#alt-entry-jal-in-segment-jal-lands-inside-another-function-with-no-clean-symbol) — _A USO function's `jal X` lands strictly inside another splat-extracted function with no symbol_addrs/undefined_syms entry at X. C emit can't reproduce. 6th boundary-bug variant. Verified on `gl_func_00021E08` calling `jal 0x365AC` (inside `gl_func_00036224`)._
 - [Reloc encoding pinning: structurally-identical C body still scores ~65% because expected pre-bakes `jal target` while C emits `jal 0 + R_MIPS_26`](#reloc-encoding-pinning-structurally-identical-c-body-still-scores-65-because-expected-pre-bakes-jal-target-while-c-emits-jal-0--r_mips_26) — _When replacing INCLUDE_ASM with byte-equivalent C, the .o-level `jal` encoding differs (pre-baked target vs reloc-pending) even though linked ROM is identical. objdiff scores 50–80%. Wrap NM with structural decode; ROM-level still exact. Verified on `gl_func_00021E58`._
+- [Tail-fall-through alt-entry preamble — 3-insn fragment with no jr_ra that loads an arg-reg then falls through to the next function](#feedback-tail-fall-through-alt-entry-preamble) — _Splat sometimes extracts a 3-insn block (e.g., `nop; lui $tN, HI; lw $aN, LO($tN)`) as its own symbol when it has no predecessor that owns it. The block has no prologue, no jr_ra — it loads a value into an arg-register and falls through to the next function. Standard C `return *p;` emits 3 insns but with $v0 (return reg) and a `jr ra` in the middle — wrong shape. Cap class: matchable only via inline asm at the call site, or TRUNCATE_TEXT + INSN_PATCH writing the 3 insn words manually. Default INCLUDE_ASM path is byte-correct. Verified on `game_libs_func_0006F3B0` (loads SI_STATUS into $a0, falls through to gl_func_0006F3BC)._
 
 ### alias handling
 
@@ -4753,3 +4754,50 @@ This is the inverse of the usual "look at sibling for shape hints" — it's "use
 Both failures show the same divergence: target uses frame=0x28 + `$v1` for ptr + beq-early-exit; ported C produces frame=0x20 + `$a2` for ptr + bne-goto-init. File function-count alone doesn't predict the regression — h2hproc_uso.c is the same size as the matching siblings. The current best hypothesis is that some other file-level state (typed-struct definitions, prior functions' types/calling conventions, USO segment vs main segment) perturbs IDO's allocator differently. Insufficient data to characterize precisely.
 
 **Practical filter (revised):** the sibling-port test is a HIGH-EXPECTED-VALUE first-attempt — about 50% of cases match instantly (3 sibling-ports landed in this 36-insn family so far). When it regresses (fuzzy DROPS from the prior wrap %), revert immediately and treat the cap as needing per-file investigation (frame-pad tricks, `_pad[8]` arrays, return-type adjustments — see h2hproc 1A6C's wrap doc for known-working levers in the alloc-and-link family). The port either works fast or doesn't work at all; don't grind a regressed port further.
+
+<a id="feedback-tail-fall-through-alt-entry-preamble"></a>
+## Tail-fall-through alt-entry preamble — 3-insn fragment with no jr_ra that loads an arg-reg then falls through to the next function
+
+_Splat sometimes extracts a 3-insn block (e.g., `nop; lui $tN, HI; lw $aN, LO($tN)`) as its own symbol when no predecessor function owns it. The block has no prologue, no jr_ra — it loads a value into an **arg-register** (not the return register $v0) and falls through to the next function. The next function's $ra survives from the original caller, so the next function's epilogue returns to the right place._
+
+**Recognition signal:**
+
+```
+glabel game_libs_func_NNNNNNNN
+    nop                          ; alignment / pad
+    lui $tN, HI                  ; load HW reg or symbol high
+    lw  $aN, LO($tN)             ; load into arg-reg (NOT $v0!)
+endlabel game_libs_func_NNNNNNNN
+glabel <next_function>
+    addiu $sp, -N                ; next function's normal prologue
+    ...
+```
+
+The dead giveaway is the **arg-register destination** of the load — if it were a real C function returning an int, it would load into $v0. $aN destination means this loads an argument for a tail-fall-through into the next function.
+
+**Why standard C can't match it:**
+
+Plain `return *(volatile int*)CONST;` emits 3 insns at IDO -O2:
+
+```
+lui $v0, HI
+jr  $ra
+lw  $v0, LO($v0)            ; in jr's delay slot
+```
+
+Same instruction count but: (a) destination is $v0 not $aN, (b) `jr ra` appears in the middle (built has no jr ra at all), (c) no leading nop. IDO doesn't accept GCC's `register T x asm("$aN")` (per docs/IDO_CODEGEN.md `feedback_ido_no_gcc_register_asm`), so you can't force the destination register from C either.
+
+**Cap class — matching paths:**
+
+1. **TRUNCATE_TEXT + INSN_PATCH** writing the 3 insn words manually. Stub C produces SOME bytes (probably 4 insns with jr ra); TRUNCATE_TEXT shrinks the symbol back to 12 bytes (3 insns); INSN_PATCH overwrites them with `0x00000000, 0x3c0eHHHH, 0x8dc4LLLL` (substitute correct register/immediate).
+2. **Inline asm at the call site** that triggers this preamble — only works if you control the caller's source.
+3. **merge-fragments back into the next function** — would change that function's offset, breaking its standalone matching.
+
+The default `INCLUDE_ASM` path produces correct bytes via the asm file with no extra work. NM-wrap with documentation is enough; don't grind beyond that without one of the three matching paths above.
+
+**Verified:** `game_libs_func_0006F3B0` (game_libs USO, 2026-05-08) — loads SI_STATUS (`0xA4800018`) into $a0, falls through to gl_func_0006F3BC. NM wrap committed at 31.67% fuzzy as documentation; INCLUDE_ASM path is byte-correct.
+
+**Distinct from sibling cap classes:**
+- `feedback-cross-function-epilogue-entry` — the "function" is purely epilogue (sp-pop + jr ra) reused by other callers. Different shape (jr ra IS present, no fall-through).
+- `feedback-prologue-stolen-successor` — predecessor's tail OWNS the prologue insns of the next function. PROLOGUE_STEALS recipe applies. Different bytes (lui+addiu, not lui+lw).
+- `fall-through-prologue-stub--2-insn-alternate-entry-point-hidden-in-predecessors-tail-after-epilogue` — a 2-insn stub hidden AFTER predecessor's jr ra/nop. This entry is for 3-insn standalone splat-symbol with no surrounding function.
