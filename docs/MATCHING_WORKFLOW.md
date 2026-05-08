@@ -4699,3 +4699,24 @@ The C source's `extern int func_7C860();` declares the symbol; the linker still 
 2. Verify `make RUN_CC_CHECK=0` still produces an ELF (link succeeds).
 3. Verify objdiff fuzzy stays the same on the affected functions (reloc-awareness covers the diff).
 4. **Leave `undefined_syms_auto.txt` alone.**
+
+---
+
+<a id="feedback-pad-sidecar-handles-trailing-dead-code-not-just-nops"></a>
+## `_pad.s` GLOBAL_ASM sidecars handle ARBITRARY trailing dead-code, not just alignment nops — siblings without a sidecar may stay capped while sibling-with-sidecar matches
+
+_The trailing pad sidecar (`_pad.s` GLOBAL_ASM) isn't restricted to nop padding — it can carry alt-entry stubs, jump tables, dead jr-ra blocks, or any bytes that appear at the END of the function's declared symbol range but aren't reachable from the C body. Two siblings with the SAME logical body can have very different match outcomes: the one with a sidecar carrying its trailing dead-code matches first, while the one without stays capped on the body's frame/regalloc differences._
+
+**Verified 2026-05-08** — sibling pair:
+- `mgrproc_uso_func_00003358` (39-insn alloc-and-link, no `_pad.s`): NM 89.22% with documented frame/regalloc cap (frame=0x20 vs target 0x28; built uses $a2 for p-result vs target's $v1).
+- `titproc_uso_func_00002980` (43-insn version with 6 trailing dead-code words: `jr ra; sw a0, 0(sp); nop; nop; .word 0x1; .word 0x7F8; j 0x19420`, has `_pad.s` sidecar): MATCHED first try with the same C body shape that fails on the mgrproc sibling.
+
+**Why the difference:** the titproc variant's trailing 6 words are reproduced by the `_pad.s` GLOBAL_ASM include (`#pragma GLOBAL_ASM("..._pad.s")` after the function), so they appear in build/.o at the right offsets without any C-emit involvement. The mgrproc sibling has the same logical body (43→39 insns excluding the dead-code) but no sidecar, so its frame/regalloc decisions DO matter for matching — and those decisions differ from target.
+
+**Practical upshot:** when picking a candidate, prefer functions where:
+1. The asm has trailing "dead-code-looking" content (jr ra after a previous epilogue, .word data, redundant nops past the size boundary).
+2. A `_pad.s` sidecar already exists in `asm/nonmatchings/<seg>/<seg>/<func>_pad.s`.
+
+These are MORE LIKELY to match cleanly than a sibling without sidecar — even if the sibling looks "simpler" at a structural level. The sidecar absorbs the byte-level oddities that would otherwise force INSN_PATCH or block the match.
+
+**Diagnostic:** if your decomp of FUNC matches a sibling FUNC2 byte-for-byte in the visible body but `report.json` shows FUNC2 still capped at <100%, check `ls asm/.../*_pad.s` — the difference might be that FUNC has a sidecar covering its dead-code while FUNC2 doesn't.
