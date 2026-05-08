@@ -3978,6 +3978,50 @@ Flipping to `if (a0[2] == a0[1] + 1)` — SAME output (same wrong order). The -O
 
 ---
 
+<a id="feedback-ido-o0-each-arg-use-emits-fresh-reload"></a>
+## IDO -O0 emits a fresh reload for EACH source-level use of an arg — no peephole-combining of adjacent uses
+
+_At -O0, every C-level reference to a function arg (via its name in the C source) produces an independent `lw rN, frame_offset(sp)` from the arg's caller-slot — even when two adjacent statements use the SAME arg with no intervening writes. IDO -O0 doesn't peephole-combine consecutive reloads of an unchanged stack value. Target asm that reuses an already-loaded arg-register across uses is NOT reachable from natural -O0 C — there's always a +1-insn gap from the extra reload._
+
+**Symptom (func_0000FEA0, 2026-05-08):**
+
+Target at -O0 (18 insns):
+```
+lw t6, 0x28(sp)        ; FIRST reload of a0
+lw s0, 0x28(t6)         ; uses t6 to fetch *(a0 + 0x28)
+lh t7, 0x60(s0)
+addu a0, t7, t6         ; REUSES t6 (still holds a0)  -- NO second reload
+```
+
+C-emit at -O0 (19 insns) — every variant tested (4 forms: register-p, register-a0, register-p+register-off, typed-struct):
+```
+lw t6, 0x28(sp)         ; FIRST reload
+lw s0, 0x28(t6)
+lh t7, 0x60(s0)
+lw t8, 0x28(sp)         ; SECOND reload  ← +1 insn vs target
+addu a0, t7, t8
+```
+
+The C source has TWO uses of `a0`: once in `*(char**)(a0 + 0x28)` and once in `a0 + offset`. Each emits a separate `lw rN, 0x28(sp)`. Target's emit only has ONE — implying either the original source had a single-use form OR IDO had a peephole pass that's not active in our build.
+
+**Workarounds tested:**
+- `register char *self = a0;` — adds an $s0/$s1 spill, frame grows, doesn't merge reloads.
+- `register char *a0` parameter — emits cleanest 19-insn form but still has the extra reload.
+- Single combined expression `((void(*)(char*))*(int*)(*(char**)(a0+0x28)+0x64))(a0+*(short*)(*(char**)(a0+0x28)+0x60))` — IDO -O0 evaluates both `*(char**)(a0+0x28)` accesses independently (no CSE).
+- Typed-struct accessor `a0->p28; a0->p28->fn(...)` — same shape as named-local form.
+
+None close the gap. The +1-insn cap is structural to IDO -O0's "no peephole" emit model.
+
+**Implication:** -O0 file-split candidates with target asm that reuses a register across multiple arg-uses cannot byte-match from C alone. They need either:
+- 2-insn INSN_PATCH to collapse `lw tN, off(sp); addu` into `nop; addu rD, rA, t6` (using the earlier reload's register), plus TRUNCATE_TEXT to absorb the size delta.
+- Permuter find that produces some non-natural C shape avoiding the second arg-reference.
+
+**Generalizes to:** any -O0 function whose target asm shows N uses of an arg but only K reloads where K < N. The natural C will produce N reloads. The K-vs-N gap is the cap.
+
+**Verified 2026-05-08** on `func_0000FEA0` (18-insn target, 19-insn C cap across 4 variants). Documents a +1-insn cap that can be RECEIVED post-cc via INSN_PATCH but NEVER reached via C source rewriting.
+
+---
+
 ---
 
 <a id="feedback-ido-o0-lui-lw-reuse"></a>
