@@ -81,6 +81,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
 - [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
 - [Split `x | 0x06000001` into `x |= 0x06000000; x |= 1;` to match `lui+or+ori` sequence](#feedback-ido-split-or-constant) — When the target asm has `lui at, HI; or a0, a0, at; ori a0, a0, LO` (three insts), don't combine the constant in C.
+- [Pass magic-numeric arg via `&gl_ref_<addr>` symbol — IDO emits `lui+addiu` only for symbol refs, not raw int literals (which emit `lui+ori`)](#feedback-ido-magic-arg-via-symbol-not-literal) — When target asm has `lui aN, HI; addiu aN, aN, LO` materializing some magic constant 0xNNNNNNNN passed as a call arg, the C source must use `&gl_ref_0xNNNNNNNN` (a declared linker-symbol reference) — passing the raw int 0xNNNNNNNN emits `lui+ori` instead. Add `gl_ref_0xNNNNNNNN = 0x0NNNNNNN;` to `undefined_syms_auto.txt`. Linker fills in the resolved bytes; build/.o has unresolved R_MIPS_HI16/LO16 relocs which look like `lui 0; addiu 0` to naive objdump-of-.o compare BUT byte-match expected/.o once linked. Verified 2026-05-08 on `gl_func_000682F8` (3-arg call with magic 0x2B3B8 base — exact at link time).
 - [Replacing literal `1024` with `(x<<10)/x` DOES emit the sll+div+mflo sequence at IDO -O2 (memory-load operand defeats SR), but added locals can shift register allocation enough to net-zero fuzzy%](#feedback-ido-div-substitution-necessary-but-regalloc-shifts) — _When target asm has `sll tN, sM, 10; div 0, tN, sM; mflo sP; bnez sM, +2; nop; break 7` (a self-canceling `(x<<10)/x = 1024` sequence with div-by-zero trap), replacing the literal `1024` in the C body with the equivalent `(x<<10)/x` expression IS recognized — IDO -O2 doesn't strength-reduce when the operand comes from a memory load (no compile-time visibility). However, declaring the result as a new local (or substituting inline) introduces extra register pressure: frame size can grow (e.g., 0x58→0x60), and $s-reg assignments shift across the function. The div pattern alone is "necessary-but-not-sufficient" — to land net-positive fuzzy%, the divided value must also be assigned the same $s-reg slot as the target. Verified 2026-05-07 on `gui_func_00000B58` (substitution emitted matching div, fuzzy unchanged at 36.12% due to $s0/$s1/$s4/$s5 reshuffling)._
 
 ### loop / unroll
@@ -7594,6 +7595,41 @@ The brace-block tells IDO the locals' lifetime ends at the closing brace, so the
 3. If the frame size is correct but reg pick is still wrong, the issue isn't the brace-block — it's the named-local form itself (try `register int *p_a = ...` per `feedback-ido-register.md`, or revert to inline form).
 
 **Does NOT generalize to volatile-spill locals** (verified 2026-05-07 on `func_0000553C`): the brace-block trick is scope-specific. For register-flip locals (this entry), the value's lifetime ends at the assignment to the consumer (`n0 = p_a[...]`) so the brace-block is safe. For volatile-spill locals (`feedback-ido-volatile-unused-local-forces-local-slot-spill`), the spill must remain LIVE across the subsequent call — wrapping in a brace-block kills the spill at the closing brace and IDO drops the `sw aN, local_slot(sp)` store. Net: brace-block-saves-frame applies to "named local that gets dereferenced before the next jal," NOT to "volatile that triggers a defensive caller-spill across a jal." The two mechanisms have opposite scope requirements.
+
+---
+
+<a id="feedback-ido-magic-arg-via-symbol-not-literal"></a>
+## Pass magic-numeric arg via `&gl_ref_<addr>` symbol — IDO emits `lui+addiu` only for symbol refs, not raw int literals (which emit `lui+ori`)
+
+_When the target asm has `lui aN, HI; addiu aN, aN, LO` materializing a magic 32-bit constant 0xNNNNNNNN as a call argument, the C source MUST use a symbol reference (`&gl_ref_<addr>`), NOT the raw integer literal._
+
+**Why:** IDO 7.1 picks the lui-pair shape based on the operand's nature, not its numeric value:
+
+- Raw int literal (`0x2B3B8`): emitted as `lui aN, 0x2; ori aN, aN, 0xB3B8` (literal high half, no sign-extension).
+- Symbol address (`&gl_ref_0002B3B8`): emitted as `lui aN, %hi; addiu aN, aN, %lo` (relocations the linker fills with sign-corrected halves: HI = (addr+0x8000)>>16, LO = signed 16-bit).
+
+Both compute the same final address, but the BYTE PATTERN differs (`0x34a5...` ori vs `0x24a5...` addiu).
+
+**Recipe:**
+
+```c
+extern char gl_ref_0002B3B8;   /* declare as char to avoid type collisions */
+gl_func_X(arg, &gl_ref_0002B3B8, ...);
+```
+
+In `undefined_syms_auto.txt`:
+
+```
+gl_ref_0002B3B8 = 0x0002B3B8;
+```
+
+The linker resolves the R_MIPS_HI16/LO16 relocations to address 0x0002B3B8, producing `lui aN, 0x3; addiu aN, aN, -19528` (`= +0xB3B8` as signed) → bytes `0x3c050003 0x24a5b3b8`. Byte-exact match against expected/.o.
+
+**Naive byte-compare gotcha:** `mips-linux-gnu-objdump -d build/<file>.c.o` shows the unresolved relocation slots as `lui 0; addiu 0` (bytes `0x3c050000 0x24a50000`), making the function look 2-insn off vs expected/.o. This is normal — expected/.o is built from `.s` files with hardcoded resolved bytes (no relocations). Verify against `build/tenshoe.elf` (linked output, post-relocation) instead, OR rely on objdiff (which is reloc-aware).
+
+**Verified 2026-05-08** on `gl_func_000682F8` — 3-arg helper call `gl_func_0001CA10(self+0x14, &gl_ref_0002B3B8, self)` matches byte-exact in linked ELF; `build/<file>.c.o` shows the expected reloc-stub mismatch in raw `objdump -d`.
+
+**Companion:** `feedback-ido-split-or-constant` covers the inverse case (forcing `lui+or+ori` via a split-OR shape when the target asm has `or` operations on the constant).
 
 ---
 
