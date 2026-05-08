@@ -3093,6 +3093,8 @@ void gl_func_XXXXXXXX(int *dst) {
 
 **When it does NOT apply:** stack-frame size mismatches (target 0x20, build 0x18) aren't fixed by adding locals — IDO may optimize away unused locals and keep the frame small. For those, try varying arg counts, adding `int pad[2]` for 8-byte alignment, or reviewing the function's calling pattern. The pad trick only reshuffles slots WITHIN an already-correct frame.
 
+**Counter-example for "IDO may optimize away unused locals" (2026-05-08, game_uso_func_00001DDC):** the "may" caveat above is real but not deterministic — a `char frame_pad[184];` declared at function scope, address never taken, never read or written, and NOT marked `volatile`, *did* allocate its full 184 bytes of stack space. Built frame grew exactly from 0xC8 to 0x180, matching target. So for LARGE byte-exact frame deltas on functions where you've decoded the structural layout but not the body details (typical mid-grind constructor / spine function), a non-volatile `char N[exact_byte_delta];` is worth trying — it's lighter than `volatile char N[]; N[0]=0;` (which adds extra reads and was documented as regressing on `game_uso_func_000044F4` in the long-extern-CSE entry above). Picking 184 vs 200 may matter (IDO's allocator alignment + free-slot reuse interact with the size); use the EXACT byte gap from `addiu sp,sp,-N` diff. Frame size correction alone won't shift fuzzy% if the body is dominated by other diffs, but it unblocks future grinding that depends on correct stack offsets.
+
 **Origin:** 2026-04-18 game_libs batch. 24 size-0x3C "external call + store result" wrappers — a bare `int scratch` put the local at sp+0x1C; single `int pad` declared before scratch fixed all 24 at once.
 
 ---
