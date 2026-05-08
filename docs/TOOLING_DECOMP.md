@@ -2,10 +2,11 @@
 
 > Decompilation tooling: m2c, Ghidra, the permuter, decomp.dev integration.
 
-_8 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_9 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Index
 
+- [`discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates](#feedback-discover-has-source-misleading) — Discover treats any mention of a symbol in `src/` as "has source", including bare `INCLUDE_ASM(...)` lines. For source-3 picks (small unstarted), use a Python filter that checks for an actual C function definition (`(void|int|...) name(...)` syntax), not just the symbol name.
 - [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used code and naturally drives type discovery.
 - [m2c on .word-only USO asm — assemble + objdump round-trip to get mnemonics](#feedback-m2c-word-only-asm) — splat emits `.word 0xNNNNNNNN` for USO functions whose lui-relocations spimdisasm can't resolve; m2c then errors with "Function contains no instructions". Round-trip the bytes through `mips-linux-gnu-as` + `objdump -d -M no-aliases` to get readable mnemonics for hand-paste into a temp .s.
 - [CI / decomp.dev compares fresh build/.o vs committed expected/.o — `make expected` results MUST be git-committed for changes to show on the dashboard](#feedback-expected-must-be-committed-for-decomp-dev) — The land script and `scripts/refresh-report.sh` do NOT run `make expected`.
@@ -15,6 +16,51 @@ _8 entries. Auto-generated from per-memo notes; content may be rough on first pa
 - [report.json was overstating because land script used `make expected` — RESOLVED 2026-05-04](#feedback-report-json-vs-decomp-dev-diverge) — _HISTORICAL — the land script's `make expected` blanket-cp build/→expected/ used to pollute expected/ with decomp-bodies build, inflating matched_code_percent by ~1pp (8.84% reported vs 7.68% truth).
 - [When to consult Ghidra during /decompile (trigger list — m2c remains the default)](#feedback-when-to-consult-ghidra-during-decomp) — _1080 has a Ghidra project + MCP server, but reaching for Ghidra has cost (slower than m2c, GCC-flavored not IDO-flavored).
 
+
+---
+
+<a id="feedback-discover-has-source-misleading"></a>
+## `discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates
+
+_Discover treats any mention of a symbol in `src/` as "has source", including bare `INCLUDE_ASM(...)` lines. For source-3 picks (small unstarted), use a Python filter that checks for an actual C function definition (`(void|int|...) name(...)` syntax), not just the symbol name._
+
+**Symptom (verified 2026-05-08 on 1080):** Running `uv run decomp discover --sort-by size` and walking the head of the list — `__osSetFpcCsr` (libreultra `.s`, skip), `func_80009EA0` (`.rodata`, skip), `func_800073DC` (cap-confirmed fragment), `func_0000E9FC` (NM-86 cap-confirmed), `mgrproc_uso_func_000032F8` (reloc-encoding cap-confirmed) — produces zero genuinely-fresh candidates among the smallest 9 entries even though all are tagged `[has source]`. The "[has source]" tag is true (each appears in `src/`), but the content is just `INCLUDE_ASM("...", funcname);`, not a decompiled body.
+
+**Sub-filter recipe:**
+```python
+# In project root. Walks asm/nonmatchings/, filters out functions whose
+# only mention in src/ is an INCLUDE_ASM line. Keeps small candidates.
+import os, re, subprocess
+for root, _, files in os.walk('asm/nonmatchings'):
+    for f in files:
+        if not f.endswith('.s'): continue
+        with open(os.path.join(root, f)) as fp:
+            line1 = fp.readline()
+        m = re.match(r'nonmatching\s+(\S+),\s+0x([0-9A-Fa-f]+)', line1)
+        if not m: continue
+        name, size = m.group(1), int(m.group(2), 16)
+        if size > 0x60: continue
+        r = subprocess.run(['grep', '-rln', name, 'src/'],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f'TRULY-UNSTARTED size={size} {name}'); continue
+        # Has source — but is it a real C body?
+        has_body = False
+        for src in r.stdout.strip().split('\n'):
+            with open(src) as sf: txt = sf.read()
+            if re.search(r'\b(void|int|char|float|s32|u32|s8|u8|short)\s*\*?\s*'
+                         + re.escape(name) + r'\s*\(', txt):
+                has_body = True; break
+        if not has_body:
+            print(f'INCLUDE_ASM-only size={size} {name}')
+```
+
+**Why the gap:** Splat emits `INCLUDE_ASM(...)` lines for every disassembled function in the parent `.c` file at project setup, so EVERY function reads as `[has source]` from day 0. Discover's `[has source]` flag was designed to suppress trivial duplicates, not to mean "decompiled C exists" — but read naively it suggests prior work has already happened and biases away from these candidates.
+
+**How to apply:**
+- For source-3 picks (random-roll): run the sub-filter to find genuinely-unstarted small candidates (e.g. 8-byte save-arg sentinels, save-arg-+-return-1 stubs, `func_00000000` 1-call wrappers).
+- The sub-filter is also useful for source-4 (untouched USOs): scan an entire USO segment in one pass for INCLUDE_ASM-only entries before deciding it's "exhausted" of small targets.
+- Discover's tag remains correct for filtering parallel-agent-collisions (don't pick a function someone else is mid-decomp on) — the tag covers more, not less, than true "has body".
 
 ---
 
