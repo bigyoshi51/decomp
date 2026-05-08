@@ -3095,6 +3095,14 @@ void gl_func_XXXXXXXX(int *dst) {
 
 **Counter-example for "IDO may optimize away unused locals" (2026-05-08, game_uso_func_00001DDC):** the "may" caveat above is real but not deterministic — a `char frame_pad[184];` declared at function scope, address never taken, never read or written, and NOT marked `volatile`, *did* allocate its full 184 bytes of stack space. Built frame grew exactly from 0xC8 to 0x180, matching target. So for LARGE byte-exact frame deltas on functions where you've decoded the structural layout but not the body details (typical mid-grind constructor / spine function), a non-volatile `char N[exact_byte_delta];` is worth trying — it's lighter than `volatile char N[]; N[0]=0;` (which adds extra reads and was documented as regressing on `game_uso_func_000044F4` in the long-extern-CSE entry above). Picking 184 vs 200 may matter (IDO's allocator alignment + free-slot reuse interact with the size); use the EXACT byte gap from `addiu sp,sp,-N` diff. Frame size correction alone won't shift fuzzy% if the body is dominated by other diffs, but it unblocks future grinding that depends on correct stack offsets.
 
+**Limit-case (2026-05-08, gl_func_000088B4):** the bare-char-array trick above does NOT work for SMALL gaps. `gl_func_000088B4` had an 8-byte frame gap (0x20 vs target 0x28). Tested:
+  - `char pad[8];` — elided.
+  - `volatile char pad[8];` (no access) — elided.
+  - `char pad[16];` — elided.
+  - `volatile int pad; pad = 0;` — frame grew to 0x28 but added a `sw zero, N(sp)` insn that target doesn't have, so net fuzzy% unchanged.
+
+Hypothesis: IDO -O2 only honors a non-accessed unused array for frame-rounding when the function ALREADY has enough register-pressure spill traffic that the slot can be coalesced into a "real" spill plot (the 1DDC case had 0x180 of spill-heavy traffic). Small wrappers with low spill traffic — like the 36-insn `gl_func_000088B4` — get the unused array elided. **Practical rule:** the bare-char-array pad reliably works only when the gap is large (≥0x40-ish) AND the function already has multiple spill slots. For small (8-byte) gaps in low-spill functions, no clean C lever for frame growth has been found; the path forward is regalloc grinding (to flip ptr-holding register from `a2` to `v1` in 88B4's case) or post-cc INSN_PATCH.
+
 **Origin:** 2026-04-18 game_libs batch. 24 size-0x3C "external call + store result" wrappers — a bare `int scratch` put the local at sp+0x1C; single `int pad` declared before scratch fixed all 24 at once.
 
 ---
