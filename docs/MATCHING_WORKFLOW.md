@@ -113,6 +113,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [TRUNCATE_TEXT must run AFTER SUFFIX_BYTES in the Makefile build rule, not before](#feedback-truncate-text-must-run-after-suffix-bytes) — _TRUNCATE_TEXT errors with `.text is already smaller` if a function's C body emit is shorter than its INCLUDE_ASM bytes AND SUFFIX_BYTES is meant to restore the trailing bytes.
 - [TRUNCATE_TEXT must match natural compiled size, not the clean ROM boundary — drift cuts real code](#feedback-truncate-text-preserve-drift) — _When splitting a .c file with TRUNCATE_TEXT, set the target to the natural compiled size (including asm-processor drift), not the expected clean boundary.
 - [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — _For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC), DO NOT try fixing it by adding the symbol to undefined_syms_auto.txt.
+- [objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup](#feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware) — _objdiff's reloc-aware scoring (treats `jal SYMBOL + R_MIPS_26 reloc` as equivalent to `jal pre-baked-addr-to-same-symbol`) lets you remove redundant INSN_PATCH-for-jal recipes. But the LINKER still needs the symbol resolved — `func_7C860 = 0x7C860;` in `undefined_syms_auto.txt` is the linker-side resolution, not a matching artifact. Removing it as "redundant" breaks the build with `undefined reference to func_7C860`. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory)._
 
 
 ---
@@ -4665,3 +4666,36 @@ make build/non_matching/<unit>.o RUN_CC_CHECK=0              # NM-active path (w
 The second build is what CI does. If it errors on redeclaration / unused-extern / type-mismatch inside your wrap body, fix BEFORE pushing — the broken commit will block the next agent's land script too (since report.json regen depends on the non_matching build succeeding).
 
 **Lazier check (just-in-time):** before the final commit step in /decompile, glance at the wrap body for `extern <type> D_00000000;` or `extern int gl_func_00000000();` lines that mirror existing top-level declarations. Delete them.
+
+---
+
+<a id="feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware"></a>
+## objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup
+
+_objdiff's reloc-aware scoring (which lets you remove redundant INSN_PATCH-for-jal recipes) is NOT a substitute for the linker's symbol resolution. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory). Removing `func_X = 0xADDR;` from `undefined_syms_auto.txt` because "objdiff handles relocs" breaks the linker._
+
+**Symptom (2026-05-08):** main worktree built fine for some commits, then broke with:
+
+```
+mips-linux-gnu-ld: build/src/game_libs/game_libs_post.c.o: in function `c349':
+libs/game_libs_post.c:1900575:(.text+0x4bb58): undefined reference to `func_7C860'
+make: *** [Makefile:345: build/tenshoe.elf] Error 1
+```
+
+This persisted for multiple `/decompile` runs — every agent that pulled main got a broken build until the symbol was restored.
+
+**Root cause:** `gl_func_00068524` makes an in-segment absolute jal to `0x7C860`. The original decomp episode added `func_7C860 = 0x7C860;` to `undefined_syms_auto.txt` so the linker could resolve the call. A later "cleanup" commit removed that line as redundant, citing the (correct) observation that objdiff is reloc-aware and so the prior INSN_PATCH-for-jal recipe could be dropped without losing the match.
+
+The cleanup confused two distinct things:
+- **objdiff scoring**: compares `jal SYMBOL + R_MIPS_26 reloc` against `jal pre-baked-addr-to-same-symbol` and treats them as equivalent (per `feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes`). This means the INSN_PATCH was indeed redundant for *matching*.
+- **linker symbol resolution**: needs `func_7C860` to resolve to a concrete address at link time, otherwise the `.o` won't link into the final ELF. This is what `undefined_syms_auto.txt` provides.
+
+The C source's `extern int func_7C860();` declares the symbol; the linker still has to *find* it. For in-segment-absolute jals to addresses inside our own code (not cross-USO patched at runtime), `undefined_syms_auto.txt = 0xADDR` is the resolution.
+
+**Rule of thumb:** before deleting a `func_X = 0xADDR;` or `D_X = 0xADDR;` line from `undefined_syms_auto.txt`, grep `src/` for `\<func_X\>` / `\<D_X\>`. If any source file references the symbol (whether as `extern` or via a call), keep the entry. INSN_PATCH cleanup commits should ONLY remove Makefile recipes, never linker-side resolutions.
+
+**Safe cleanup recipe (when you do want to remove an INSN_PATCH but the symbol stays referenced):**
+1. Remove `<file>.c.o: INSN_PATCH := <func>=...` from `Makefile`.
+2. Verify `make RUN_CC_CHECK=0` still produces an ELF (link succeeds).
+3. Verify objdiff fuzzy stays the same on the affected functions (reloc-awareness covers the diff).
+4. **Leave `undefined_syms_auto.txt` alone.**
