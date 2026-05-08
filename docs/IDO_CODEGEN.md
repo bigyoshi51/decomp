@@ -158,6 +158,7 @@ _117 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO can't fold `&SYM + 0xCONST + runtime` into 3-insn lui/addiu/addu — always factors constant onto runtime side (4 insns)](#feedback-ido-symbol-offset-runtime-cannot-fold) — Pure-address-computation analog of the load-offset-vs-reloc rule: IDO emits 4 insns (lui-D / addiu-CONST-on-runtime / addiu-D-lo / addu) where expected has 3 (lui-D-with-CONST / addiu-D-lo-with-CONST / addu). Workaround: per-offset extern + undefined_syms entry + INSN_PATCH for the linked-imm word.
 - [Force IDO to materialize `&D` in `$v1` (lui+addiu pair) by combining named-local-for-first-deref with inline-second-deref of same offset](#feedback-ido-v1-base-materialization-via-second-inline-deref) — When target reloads `lw $aN, OFF($v1)` after a store via `lw $v0, OFF($v1); sw _, _($v0)`, name the first deref as a local (locks $v0) and INLINE the second deref inside the call arg expression (triggers base sharing in $v1).
 - [Standard accessor templates at -O0 produce 3 extra insns (`b +1; nop` dead tail jump) vs the -O2 form](#feedback-ido-o0-accessor-template-extra-b1-nop-tail) — Asm with the Quad4/Vec3/int-reader shape PLUS a dead `b +1; nop` between the last copy-store and the epilogue → function lives in an -O0 file. Same C body matches at both opt levels; the dead tail jump is a natural -O0 scheduling artifact.
+- [Parameter type signedness shifts allocno priority — `int` vs `unsigned int` changes downstream register-name chain](#feedback-ido-arg-type-signedness-shifts-allocno-order) — Same C body, same insn count, same shift opcode — but `int a1` vs `unsigned int a1` flips the surrounding register names by one position. The cast-to-unsigned inside the shift expression is enough for srl; the signature type independently controls allocno ordering. Try both when register names are 1 off.
 - [IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent](#feedback-ido-reg-only-store-ordering) — For 6+arg setters where stack args (sp+0x10, sp+0x14) go to struct fields, IDO's scheduler hoists cheap register-only stores (`sw aN, N(a0)`) into load-use gaps.
 - [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — _When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce this from C.
 - [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — _When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; or v1, ret_hi, zero; jr ra`), the function signature is `long long`/s64 (o32…
@@ -7888,3 +7889,60 @@ If `expected/.../SEG_o0_NNNN.c.o` is the host (not just `SEG.c.o`), the function
 **Companion:**
 - `feedback-ido-o0-cluster-split-with-layout-shim.md` — file-split workflow when -O0 cluster is needed but doesn't yet exist.
 - `feedback-uso-accessor-template-reuse.md` — same templates work across all USOs at -O2.
+
+
+---
+
+<a id="feedback-ido-arg-type-signedness-shifts-allocno-order"></a>
+## Parameter type signedness affects allocno priority — `int` vs `unsigned int` shifts register-allocation order downstream
+
+_When the function signature has `int aN` vs `unsigned int aN`, IDO -O2's allocator assigns DIFFERENT register names to downstream temps even when the inner expression CASTS the value to unsigned (e.g. `(unsigned int)a1 >> 16`). Both produce identical instruction count and shift opcode (srl), but the register-name chain shifts by one position. Use whichever type makes the chain align with target asm's register names — the cast-to-unsigned-inside-the-expression is enough to get the desired srl encoding regardless of the signature type._
+
+**Symptom (verified 2026-05-08, gl_func_00068730 exact match):**
+
+C with `unsigned int a1` parameter:
+```c
+int gl_func_00068730(int *a0, unsigned int a1) {
+    gl_func_00000000(a0, a1);
+    int *row = (int*)((char*)a0[0x30/4] + ((a1 >> 16) << 4));
+    int *subtable = (int*)row[1];
+    return subtable[a1 & 0xFFFF];
+}
+```
+Emits:
+```
+lw a0, 4(v1)        ← uses a0
+andi t0, a1
+sll  t1, t0, 2
+addu t2, a0, t1
+lw   v0, 0(t2)
+```
+
+Same code with `int a1` parameter (and explicit cast on the shift):
+```c
+int gl_func_00068730(int *a0, int a1) {
+    gl_func_00000000(a0, a1);
+    int *row = (int*)((char*)a0[0x30/4] + (((unsigned int)a1 >> 16) << 4));
+    return ((int*)row[1])[a1 & 0xFFFF];
+}
+```
+Emits:
+```
+lw   t0, 4(v1)        ← uses t0 (NOT a0)
+andi t1, a1
+sll  t2, t1, 2
+addu t3, t0, t2
+lw   v0, 0(t3)
+```
+
+**Why:** IDO's allocno priority calculation treats `int` and `unsigned int` parameters as distinct pseudo classes even when the dataflow is identical. The post-call lookup chain's allocno-numbering shifts by one when a1's signature type changes, which cascades through every subsequent register assignment.
+
+The shift instruction itself is unaffected — `(unsigned int)a1 >> 16` produces `srl` regardless of a1's declared type, because the cast forces unsigned shift semantics at the expression level.
+
+**How to apply:**
+
+When matching a function with a signed-arg-but-srl-shift idiom, try BOTH `int aN` and `unsigned int aN` for the parameter type. The shift will still be `srl` thanks to the inline cast, but the surrounding register names may flip into alignment with target asm.
+
+**Companion:**
+- `feedback-ido-narrow-arg-promotion.md` — `short`/`u8` arg signatures changing emit shape (different mechanism, same flavor of "param type matters more than you'd expect").
+- `feedback-ido-v0-reuse-via-locals.md` — named locals shifting register picks toward $v0.
