@@ -271,6 +271,8 @@ Naming `offset` changes the scheduling: `$v0` (the call result `r`) is held as f
 
 **Addendum (2026-04-19, bootup_uso/func_00002774):** Array-indexing form `((T*)base)[i + offset]` gives `addu rd, base, idx` (BASE first), while the arithmetic form `*(T*)(base + i*sizeof(T) + offset*sizeof(T))` gives `addu rd, idx, base` (OFFSET first). Same semantic access, different operand order at the byte level.
 
+**Addendum (2026-05-08, game_libs_func_00031580):** Indexing-form `base + i*N + offset` repeated at every loop body store (vs advancing-pointer `p += N; *(p-N+offset)`) RAISES i's ref count above base's ref count. When i and base compete for $v0/$v1, the higher-ref-count variable wins $v0. So switching to the indexed form flips i→$v0, base→$v1 (matching loops where target asm has `or v0, zero, zero` for the counter init and `lui v1, ...` for the base). Net effect on game_libs_func_00031580: 83.52% → 88.23% (regalloc gap closed; remainder is reloc-pre-resolution alias scoring artifact, byte-exact post-link).
+
 ```c
 /* WRONG: addu t9, t8, a0  (offset-first) */
 *(int*)(a0 + a1 * 4 + 0x30)
