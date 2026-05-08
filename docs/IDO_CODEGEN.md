@@ -3458,6 +3458,8 @@ Related knobs from the same function grind (gui_func_00001514):
 
 **Origin:** 2026-04-20 agent-a, gui_func_00001514 (text-width accumulator). Went from NM wrap → 89% → 81% → 19% → 0% diffs via this 4-step sequence in one tick. Commit ff54d31.
 
+**Generalization (2026-05-08):** the same `inline-vs-named` flip applies to INT counts/limits, not just char/byte loads. When a target's loop has `lw vN, OFF(base)` for the FIRST load of a count/limit at function entry AND that count is ALSO the loop-bound comparison RHS, naming the count as a local (`int n = base[N]; if (n == 0) return; ... while (j < n)`) forces IDO to allocate `$v0` for the named local — pushing all subsequent loads up by one register. Inlining the count access at each comparison (`if (base[N] == 0) return; ... while (j < base[N])`) frees `$v0` for the natural first load and unblocks the next register downstream. Verified 2026-05-08 on `gl_func_000687B8` (51-insn nested-loop vtable dispatch): inlining `n_outer`/`n_inner` named locals + `unsigned` for loop counters lifted NM 88.82% → 97.06%. Both flavors of this knob (char + int) come down to the same rule: for loads that feed directly into a compare/branch with no algebraic transformation, inline the deref.
+
 ---
 
 ---
