@@ -8300,6 +8300,17 @@ The `volatile` qualifier is on the POINTEE type, not on `p`. The cast tells IDO 
 
 **Anti-pattern — volatile-arg can't reach frame=0x20 via volatile-int-spill alone.** When target has BOTH `sw aN, 0x20(sp)` (caller-slot at frame=0x20) AND `sw vM, 0x18(sp)` (mid-function spill at sp+0x18), and the function has no other locals, the natural attempt is `volatile int *vparg = &aN; volatile int spill;` to grow frame for both reservations. This fails: the volatile-int-spill grows frame too aggressively (commonly 0x28 or 0x30 instead of 0x20), and re-ordering the two declarations doesn't get the spill to land at sp+0x18. Verified 2026-05-08 on `gl_func_000688F8` (3 ordering variants tested, all overshoot or land spill at sp+0x1C). The volatile-arg recipe requires frame to grow via NON-volatile locals (e.g. an addressed `int tmp;`, a typed-struct stack local) — the volatile-int-spill is too coarse a frame-growth lever to coexist with it.
 
+**Multi-arg variant (composes cleanly):** when target spills MULTIPLE args to their caller slots (`sw a0, frame_size+0(sp); sw a1, frame_size+4(sp); ...`), apply the recipe once per arg with distinct local pointer names. They compose without interference — both vp0/vp1 are DCE'd as locals; only the &arg-take effects survive, so frame stays minimum:
+```c
+void func(int *a0, int a1) {
+    volatile int **vp0 = (volatile int **)&a0;   /* sw a0, frame_size+0 */
+    volatile int  *vp1 = (volatile int  *)&a1;   /* sw a1, frame_size+4 */
+    /* body uses a0/a1 normally; reloads happen via lw rN, frame_size+offset(sp) */
+    (void)vp0; (void)vp1;
+}
+```
+Verified 2026-05-08 on `gl_func_00028FCC` (13-insn 1-call function): both `sw a0, 0x18(sp)` and `sw a1, 0x1C(sp)` produced from natural C body once both volatile-pointer-decls are in place. Frame stays at 0x18 (minimum for ra-save).
+
 **Don't use this** when the target's spill is at a DIFFERENT offset than the arg's natural caller-slot — that means a different mechanism is producing it (e.g., `feedback-ido-precall-arg-spill-unreachable` for outgoing-arg defensive spills). This recipe specifically generates "the arg's own caller-slot."
 
 **Inverse non-recipe (does NOT work):** the symmetric form `volatile T *p = (volatile T *)alloc()` to spill a *return value* through a stack slot is NOT equivalent. In the arg-recipe, `&argN` is a stable lvalue that must be honored; in the return-value form, `(volatile T*)alloc()` casts a non-lvalue v0 to a volatile-pointer-typed local — the local pointer itself isn't volatile, only the pointee. IDO sees `p = (read v0); deref-of-p` as plain pointer reuse, optimizes the local away, and emits no spill. Verified 2026-05-08 on `gl_func_000688F8`: tried `volatile int *spill = (volatile int*)alloc(0x20); p = (int*)spill;` to force `sw v0, 0x18(sp); lw a1, 0x18(sp)` — produced 24-insn frame-0x18 with no spill (0pp). To force a return-value spill you need a stack-resident `volatile T slot;` lvalue and then `slot = alloc(...); p = slot;` — but the address-take grows frame past the typical target (per the existing `*(volatile int*)&q_alloc = q_alloc` case at frame 0x28).
