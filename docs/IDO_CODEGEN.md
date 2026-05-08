@@ -7816,6 +7816,14 @@ int f(int sum, unsigned char *buf, unsigned int len) {
 
 **Generalizes the prior "no C-level lever" cap-confirmation pattern.** Many NM-wrap caps from earlier 1080 work labeled "delay slot scheduler put X first, can't force Y" can potentially be broken by moving the second-candidate's init out of its guard scope. Check before declaring a function "cap-confirmed" — try lifting one init.
 
+**Counter-case (2026-05-08): the lever REGRESSES heavily on functions that don't fit the pattern.** Tested on `game_uso_func_0000F49C` (90.40% NM-wrap, 30-insn state-init): tried lifting `int *sub = a0->0xB4;` out of an if-block. Result: regressed from 90.40% to 74.53% (-15.87pp). IDO -O2 promoted `sub` to a longer-lived value and shifted register allocations across the dispatch — the lifted load wasn't placed in the delay slot the lever predicted; it was hoisted and held in a register, causing other shuffles.
+
+**Diagnostic for whether the lever applies:**
+- Loop-counter / accumulator shape where the second-candidate init (`i = 0`) is naturally USE-ONCE and can be a free delay-slot fill. → Try the lever.
+- Dispatch / state-init shape where the lifted local has multiple uses POST-conditional (e.g., `sub[0xA18] = 1` then `gl_func(...)` later). → DON'T lift; the local will get $s-promoted and regress codegen.
+
+In short: the lever works when the lifted-init's value is consumed in a delay slot and never again; it backfires when the lifted-init's value lives across a call.
+
 ## Dead `extern` declarations (uncalled, only-referenced-in-comments) CAN shift IDO -O2 register allocation
 
 **Why this matters:** A truly-uncalled `extern void func();` at file scope contributes a symbol to IDO's translation-unit symbol table even when no C statement references it. Removing such a dead decl can shift register allocation in nearby functions enough to bump fuzzy%, even though the function being graded never had a reference to the dead symbol.
