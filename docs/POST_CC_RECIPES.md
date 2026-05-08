@@ -101,6 +101,33 @@ This was the previously-documented "SLL-led, blocked" case from the
 top of this section — explicitly closed via the same "extend the
 tuple" recipe predicted there.
 
+**2026-05-08 fifth finding (chained-SUFFIX inheritance with predecessor-INCLUDE_ASM is permanently blocked at INCLUDE_ASM-only or NM-with-extended-signature; document the body via `#ifdef NON_MATCHING` not `#if 0`):**
+
+A subset of "predecessor falls through into successor with state in $tN/$vN/$fN" cases canNOT use any splice-script variant — the successor's symbol's first instruction is `addiu sp` (opcode 0x09, never accepted by the gate), and the inherited regs come from the predecessor's POST-jr-ra dead-code tail (i.e., insns inside the predecessor's symbol that the natural fall-through path executes). Three classes seen so far:
+
+- **GP-reg inheritance** (gl_func_00054228): predecessor's tail computes `t9 = a0->[0x54] + a2*60; t1 = *t9` for the successor's body. Verified 2026-05-08.
+- **FPU-reg inheritance** (gl_func_0005DB0C): predecessor's tail computes `f4 = D[0x2048]` for the successor's div.s. Verified 2026-05-08.
+- **Multiple GP-reg inheritance** (mgrproc_uso_func_00001BE4): predecessor's tail sets up `a2 = pred_a0; v1 = D[0x64]` for the successor's struct-init + counter chain. Verified 2026-05-08.
+
+Two recipes are ALL blocked when the predecessor is INCLUDE_ASM (not yet decompiled):
+1. `PROLOGUE_STEALS` — no LUI/LW/ANDI/R-type prefix on the successor's symbol; the inherited insns live in PREDECESSOR's symbol.
+2. `SUFFIX_BYTES` on predecessor — can't append bytes to a function whose source-of-truth bytes you don't own (INCLUDE_ASM).
+
+**Workaround (recipe form):** wrap the successor `#ifdef NON_MATCHING` (NOT `#if 0`) with an extended C signature that takes the inherited values as additional arguments and recomputes them from a D-aliased extern. Pattern:
+
+```c
+extern <T> D_<sym>_<offset>;     /* alias added to undefined_syms_auto.txt:
+                                    `D_<sym>_<offset> = 0x<offset>;` */
+void successor(<orig args>, <extra args for inherited regs>) {
+    <recompute inherited values from D-aliased extern + extra args>
+    <main body>
+}
+```
+
+The body compiles, becomes permuter-testable, and is grep-discoverable. It does NOT byte-match (the predecessor's tail emit is duplicated in the successor's emit prefix); fuzzy stays low. NO EPISODE — the C body's semantics diverge from the actual fall-through callee convention.
+
+When the predecessor IS later decompiled, that's when SUFFIX_BYTES becomes available — strip the predecessor's tail bytes by the inherited-insn count and the successor naturally byte-matches without the extended signature. **Defer episode-logging until that pairing is possible.**
+
 **2026-05-08 fourth finding (PROLOGUE_STEALS=12 works for 3-insn lui+addiu+lw prefix):**
 The `n_bytes` argument to `splice-function-prefix.py` is arbitrary — there is no `{4, 8}` restriction. Earlier wraps citing "splice script only supports n={4,8}" were wrong; the verify gate fires on the FIRST insn's opcode (LUI/LW/ANDI/R-type), and once it passes, the script removes whatever N bytes you ask for. PROLOGUE_STEALS=12 strips the canonical 3-insn `lui rN, 0; addiu rN, rN, 0; lw rM, 0xK(rN)` prefix where the predecessor's tail materialized `&D` AND pre-loaded a value from `D[0xK]` for the successor.
 
