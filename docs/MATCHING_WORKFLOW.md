@@ -3054,6 +3054,10 @@ Body shape varies — int/Vec3/Quad4 readers AND empty `void f(void){}` all work
 
 Add another opcode if you hit a fourth valid prologue shape.
 
+**(C) Frame-less DL builders that start with `sw aX, N(sp)`** (encountered 2026-05-08 on `gui_uso_func_00003F18`, 137-insn DL builder with 3 leading nops, no `addiu sp` prologue or epilogue, body uses caller's frame as scratch via `sw a3, 0xC(sp)` then `lw v0, 0xC(a0)` etc). The first non-nop insn is `0xAFA7000C` (opcode 0x2B = `sw`), not in the whitelist. Two unblock paths, both untested as of 2026-05-08:
+1. **Extend whitelist to `sw` (opcode 0x2B)** — `inject-prefix-bytes.py` then accepts frame-less helpers that open with arg-save to caller's frame.
+2. **SUFFIX_BYTES on predecessor** injecting 3 nops at its tail. With predecessor stretched +12 bytes and successor effectively starting 12 bytes later, C-emit can match from the first non-nop. Still requires the body to be expressible as C — the harder cap, since IDO always emits at least an empty `addiu sp,sp,0` and won't generate a function that uses the caller's stack frame as scratch.
+
 **Recipe to apply to a new USO entry-0:**
 1. Write the C body (no `#ifdef NON_MATCHING` wrap; default-compile path is now C+inject).
 2. Add `build/src/<seg>/<file>.c.o: OPT_FLAGS := -O0` (these are -O0 templates).
