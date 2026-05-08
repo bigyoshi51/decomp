@@ -4720,3 +4720,28 @@ _The trailing pad sidecar (`_pad.s` GLOBAL_ASM) isn't restricted to nop padding 
 These are MORE LIKELY to match cleanly than a sibling without sidecar — even if the sibling looks "simpler" at a structural level. The sidecar absorbs the byte-level oddities that would otherwise force INSN_PATCH or block the match.
 
 **Diagnostic:** if your decomp of FUNC matches a sibling FUNC2 byte-for-byte in the visible body but `report.json` shows FUNC2 still capped at <100%, check `ls asm/.../*_pad.s` — the difference might be that FUNC has a sidecar covering its dead-code while FUNC2 doesn't.
+
+---
+
+<a id="feedback-port-matched-sibling-c-before-trusting-frame-regalloc-cap-claim"></a>
+## Sibling-port test: when a wrap claims "frame/regalloc cap" and a sibling just matched, port the sibling's C verbatim BEFORE trusting the diagnosis
+
+_Wrap doc-comments often cite "frame size mismatch" or "register allocation differs" as cap classes. These diagnoses can be WRONG — the actual cap may be the wrong C control-flow shape. When a sibling function with the same body bytes matched, port the sibling's C verbatim to the capped function before grinding regalloc levers._
+
+**Verified 2026-05-08** sibling-pair flip:
+- Last tick: matched `titproc_uso_func_00002980` with C body `if (p == 0) return 0; init; q = ...;` (early-return form).
+- This tick: `mgrproc_uso_func_00003358` had wrap doc claiming "frame=0x20 vs target 0x28; built uses $a2 for p-result vs target's $v1; beqz vs beql cap" (NM 89.22%). The wrap C had `if (p != 0) { init; }` (init conditional on p).
+- Direct port of titproc 2980's `if (p == 0) return 0;` shape onto the mgrproc wrap → byte-identical match. The init operations must run unconditionally; the asm's branch is an EARLY EXIT, not a conditional skip of init.
+
+**The lesson:** the prior wrap-doc's frame/regalloc/beqz-vs-beql diagnosis was 100% wrong. Frame and regalloc were never the issue — the C body was structuring the conditional in the inverse way (skip init unless p exists, vs unconditionally init after early-exit). Once the control flow matches, frame/regalloc fall out automatically because the bytes are identical.
+
+**Rule of thumb:** before grinding regalloc/frame levers on a wrap that claims those caps, run the sibling-port test:
+1. Identify a sibling function (same offset family, same call shape, same approx insn count) that's already matched with an episode.
+2. Port the sibling's C body verbatim into the capped wrap.
+3. Build and check fuzzy/byte-identity.
+4. If it matches, the prior cap diagnosis was a misdiagnosis. Update the wrap and log episode.
+5. If it still differs, NOW the cap might genuinely be regalloc/frame — proceed with grinding.
+
+This is the inverse of the usual "look at sibling for shape hints" — it's "use a matched sibling as ground truth for what C SHOULD work, and trust the byte-identical signal over the doc-comment's diagnosis."
+
+**Why frame/regalloc diagnoses go wrong:** when the C control flow is in the wrong shape, IDO emits different scheduling/registers as a knock-on effect. The downstream symptoms LOOK like regalloc cap but the root cause is upstream control flow. Diagnosing the symptom and trying regalloc fixes (volatile pads, register-pinning, frame-padding) all fail because the structural shape is wrong. Fixing the shape → byte-identical match → no further work needed.
