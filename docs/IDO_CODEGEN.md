@@ -43,6 +43,7 @@ _118 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO spill a0 early and reload via a fresh temp ($t6).
 - [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes a0 as a parameter and passes it through unchanged
 - [IDO picks $a1 (not $a3) to save an arg across a jal — can't reliably flip from C](#feedback-ido-arg-save-reg-pick) — _When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; sw a1, N(sp); ...jal...; lw a1, N(sp)`.
+- [Pre-call `or aN, aM, zero` (move) plus a stack spill is 3rd-arg marshalling, not a defensive register-save](#feedback-ido-precall-move-is-arg-marshal) — When asm shows `or aN, aM, zero; sw aN, off(sp); addiu aM, aM, K; jal; sw aP, off(sp) [delay]` before a call where `aN > aM` (e.g. `or a2, a0` then `addiu a0, a0, 0x10`), the `or` is materialising a 3rd argument register, not preserving aM across the jal. Decoded C should be `f(aM+K, aP, aM)` (3 args), not `f(aM+K, aP)` (2 args). Mistaking it for a save makes you wrap NM at ~80% with no available C lever; the fix is just adding the missing argument.
 - [IDO schedules arg-save `or sN, aN, zero` into bne delay slot when an immediate `if (aN == 0)` test follows the prologue](#feedback-ido-arg-save-to-sreg-in-bne-delay) — When function body starts with `if (a0 == 0)` after prologue, IDO -O2 schedules `or s0, a0, zero` (the s-reg copy of a0) into the bne delay slot rather than into the inter-spill gap.
 - [IDO -O2 hoists `move sN, aM` above adjacent jal when no data dependency; source order `jal; p = a0;` doesn't keep them in source order](#feedback-ido-hoists-save-reg-init-above-jal) — When you write `func(...); p = a0;` in C, IDO -O2 schedules the `move sN, aM` (the p=a0 emit) BEFORE the jal because there's no data dep.
 - [Inlining intermediates into a fn-ptr call expression drops IDO's defensive arg-register spill](#feedback-ido-inline-fnptr-call-drops-arg-spill) — _When IDO -O2 spills caller-arg regs ($a1) defensively before an indirect call, factoring out the named local intermediates and inlining the deref chain INTO the call expression keeps the arg dead at the spill point —…
@@ -651,6 +652,48 @@ All produce `$a1`. 98 % match with only the register field differing.
 **Related:** `feedback_ido_o2_tiny_wrapper_unflippable.md` (similar "unflippable register allocation" blocker, different pattern — sw ra vs lui a0 ordering for wrappers).
 
 **Origin:** 2026-04-19, 1080 bootup_uso/func_00001F78.
+
+---
+
+---
+
+<a id="feedback-ido-precall-move-is-arg-marshal"></a>
+## Pre-call `or aN, aM, zero` (move) plus stack spill is 3rd-arg marshalling, not a defensive register-save
+
+_When asm shows `or aN, aM, zero; sw aN, off(sp); addiu aM, aM, K; jal; sw aP, off(sp) [delay]` (where `aN > aM`, e.g. `or a2, a0`), the `or` is materialising a 3rd argument register for the call — not preserving aM across the jal. Mistaking it as a save leads to wrapping the function NM at the `~80%` cap with no C lever; the actual fix is adding the missing argument to the call._
+
+**Why this looks like a save:**
+
+- `or a2, a0, zero` reads identically to "copy a0 to a2 to keep a0 alive across jal."
+- `sw a2, off(sp)` reinforces the read — looks like a defensive spill.
+- After the jal, `lw a2, off(sp)` reload + use of `$a2` for stores feels like "restore the saved a0."
+- IDO's actual 2-arg-call save pattern (`feedback-ido-arg-save-reg-pick`) DOES use `or a1, a0, zero; sw a1, off(sp)`. Same shape, just different register number.
+
+**Why it's actually a 3rd argument:**
+
+- `$a2` is the 3rd argument register in MIPS o32. If the call takes 3 args, `$a2` MUST be set up before the jal — the `or` is the IDO emit for "pass aM as the 3rd argument."
+- `addiu a0, a0, K` between the move and the jal mutates `a0` for arg 1 (an offset version of aM). The unmutated `aM` survives in `$a2` as arg 3.
+- The post-call use of `$a2` for stores is just IDO reusing the value still sitting in `$a2` (no separate reload needed by the compiler model — the spill was for the call frame, the post-call use comes from register state).
+
+**Diagnostic test:** count the args. The call's pre-jal arg-reg setup tells you the arity:
+
+- `addiu a0, ...` → arg 1 set
+- `sw a1, off(sp) [delay]` or pre-call mov to a1 → arg 2 set
+- `or a2, aM, zero` → arg 3 set (this is what's been mis-read)
+- `or a3, aM, zero` → arg 4 set
+
+If you see arg-3 setup and your decoded C call only has 2 args, your call is missing arg 3. Find it (often it's `aM` itself — the original a0 passed alongside its mutated version).
+
+**How to apply:**
+
+1. When you hit a documented `~80–89%` cap with notes like "extra `or aN, aM` insn" or "regalloc cap":
+2. Re-count the asm's arg-reg setups (`a0`, `a1`, `a2`, `a3` plus stack args at `sp+0x10..0x1C` for arg 5+).
+3. If $a2 or $a3 is set up via a `move` from another arg reg (or is `or aN, aM, zero` not justified by 2-arg semantics), the call has more args than your decode shows.
+4. Add the missing argument; rebuild — usually byte-exact with no other change.
+
+**Example (1080/game_libs/gl_func_0004E888):** 19-insn link-back-pointer wrapper, sat at NM 80.26% with documented "extra `or a2, a0` cap." Re-count showed `addiu a0, a0, 0x10` (arg 1) + `sw a1, sp+0x1C` delay (arg 2) + `or a2, a0, zero` (arg 3). C body had only 2 args; adding `arg0` as 3rd argument byte-matched immediately. Sibling `gl_func_0004E8D4(a0+4, a1, a0)` had been written 3-arg correctly — the 0004E888 decode just dropped it.
+
+**Origin:** 2026-05-08, 1080 game_libs/gl_func_0004E888 promotion (NM 80% → exact).
 
 ---
 
