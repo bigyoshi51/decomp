@@ -4776,7 +4776,10 @@ This produces target's SINGLE-LOOP shape (no duplicate, no `subu/andi` guard). C
 - Your IDO -O2 emit duplicates the body with a `subu/andi 0x3F` alignment guard prefix
 - Bound is an extern address or same-array offset
 
-Switch the `do-while` to `while(1) { body; if (cond) break; }`. Verified on func_80001184 (kernel_000.c).
+Switch the `do-while` to `while(1) { body; if (cond) break; }`. An explicit
+label/goto loop with the condition at the tail works for the same reason and
+is sometimes the more direct way to preserve the target back-edge shape.
+Verified on func_80001184 (kernel_000.c).
 
 ---
 
