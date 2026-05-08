@@ -4273,7 +4273,18 @@ _When a function previously matched via `INCLUDE_ASM` and you replace it with a 
 
 **When the cap IS real:** the encoding cap remains valid for `jal` targets that are NOT clean splat symbols — e.g., alt-entry-jal where the call target lands inside another function's body and there's no symbol for the entry point. In that case, the C cannot produce a reloc against an unnamed location, and the .o-level bytes diverge in a way objdiff CAN'T resolve symbolically. See `## Alt-entry-jal: in-segment jal lands inside another function with no clean symbol` for that scenario.
 
----
+**Diagnostic: the "full unwrap" test distinguishes fake caps from real caps (2026-05-08):**
+
+Given an NM-wrapped function citing a "reloc encoding" or similar `.o`-level cap, run this test:
+1. Remove the entire `#ifdef NON_MATCHING / #else INCLUDE_ASM(...) / #endif` wrap. Keep the C body active.
+2. Force-rebuild the `non_matching/.o`: `rm -f build/non_matching/<unit>.o && make build/non_matching/<unit>.o`.
+3. Regenerate `report.json` and check `fuzzy_match_percent` for the function.
+
+**Outcomes:**
+- **Fake cap (objdiff alias artifact)**: fuzzy jumps to **100%** because objdiff was reloc-aware all along — the only diff was the `.NON_MATCHING` alias artifact in the wrapped baseline. Examples: `gl_func_00021E58` (65% → 100%), `gl_func_00061E58` (~83% → 100%), `mgrproc_uso_func_000032C8` (~65% → 100%).
+- **Real cap**: fuzzy stays the same as the wrapped state (e.g., 90.40% → 90.40% for `game_uso_func_0000F49C`). The C body has a real codegen difference that objdiff is correctly flagging. Don't bother grinding levers blindly — diagnose the specific diff via `objdump -dr` and apply targeted fixes (regalloc tricks, scheduling barriers, post-cc recipes).
+
+This 30-second test should be the FIRST thing tried on any reloc-encoding-cap citation before grinding C-level levers. Saves multi-iteration thrashing on already-matched functions.
 
 <a id="feedback-fuzzy-vs-byte-exact-can-disagree"></a>
 ## Fuzzy match % and byte-exact match % can disagree on which C variant is best — measure both before declaring a "baseline form"
