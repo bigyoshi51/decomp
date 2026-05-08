@@ -2253,6 +2253,8 @@ sibling-memo trick finds a way to break the CSE.
   cap class (post-cc recipes), but conceptually similar "by-design
   fuzzy ceiling"
 
+**Inverse case — when target IS hoisting and you need to match it (verified 2026-05-08, game_libs_func_00037E98):** if the target's asm has a single hoisted `lwc1 $f0, %lo(SYM)($at)` ABOVE a loop or unrolled-block of N uses, but your C emits N per-iter `lwc1` because each iteration's expression re-reads the address, hoist the load into a local FP variable: `float divisor = *(float*)((char*)&D + 0xN);` then use `divisor` inside the loop. IDO -O2 will then CSE the load to a single hoisted lwc1, matching target. This is the OPPOSITE of the 044F4 cap (where target had per-iter and my emit was hoisted) — that case can't be fixed at the C level because the lui/addiu/symbol-base CSE is non-defeatable; the scalar-FP-load-CSE here YIELDS to local introduction. Lever rule of thumb: if the target's hoist is a single FP load (lwc1/ldc1), local-introduction works; if it's a $s-reg holding a struct/array base across calls or an extern-base, CSE is non-defeatable.
+
 ---
 
 ---
