@@ -40,6 +40,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [1080's land script now accepts byte-verify against expected/.o as an alternative to fuzzy=100.0](#feedback-land-script-accepts-byte-verify-for-post-cc-recipes) — _As of commit bbc3b6e (2026-05-04), `scripts/land-successful-decomp.sh` lands a function if EITHER `fuzzy_match_percent == 100.0` OR `mips-linux-gnu-objdump` of the function's disasm in build/<unit>.c.o equals…
 - [byte_verify against build/.o is circular for NM-wrapped functions — use build/non_matching/.o](#feedback-include-asm-tautology-trap) — _The land script's `byte_verify` globs `build/.o` and compares to `expected/.o`. For any function wrapped in `#ifdef NON_MATCHING / #else INCLUDE_ASM`, both paths contain the same ROM bytes by construction (default build takes the `#else`, expected/ is generated via INCLUDE_ASM) — the comparison is trivially true regardless of whether the C body matches. Combined with `ensure_not_include_asm` silently passing when rg isn't on PATH (Claude Code agent sessions have rg as a shell function, not a binary), false-positive episodes accumulated. Fixed 2026-05-06: byte_verify routes to build/non_matching/ when src has INCLUDE_ASM for the function; ensure_not_include_asm uses POSIX grep -r; new `scripts/validate-episodes.sh` re-runs the full gate as defense-in-depth._
 - [Land script byte_verify symbol-table parser had two latent bugs (single-letter type field + .NON_MATCHING alias collision)](#feedback-land-script-byte-verify-objdump-parse-bugs) — _scripts/land-successful-decomp.sh's byte_verify hit two parsing bugs that silently truncated extracted bytes — single-letter 'F'/'O' type field gets parsed as size=15/24 hex, AND .NON_MATCHING aliased symbols get…
+- [refresh-expected-baseline.py regex picks only the FIRST `INCLUDE_ASM` in a multi-INCLUDE_ASM `#else` block — drops the rest](#feedback-refresh-baseline-only-keeps-first-include-asm-in-else) — _When you batch N split-fragment functions into one shared #ifdef NON_MATCHING block with N C-bodies and N INCLUDE_ASMs in the #else, only the first INCLUDE_ASM survives in expected/.o. Use per-function wraps (one #ifdef per function) instead. Verified 2026-05-10 on C2D4-bundle split._
 - [objdiff reports 100% for every INCLUDE_ASM-only .c file — baseline swap is a no-op](#feedback-objdiff-include-asm-only-file-bogus-100pct) — _`refresh-expected-baseline.py` prevents build==expected contamination for files with decomp C by swapping bodies to INCLUDE_ASM before regenerating expected.
 - [`fuzzy_match_percent: null` in objdiff report does NOT mean 100 % match — it means "not in the tracked diff set"](#feedback-objdiff-null-percent-means-not-tracked) — _When `jq '.units[].functions[] | select(...) | .fuzzy_match_percent'` on report.json returns `null`, it means objdiff didn't produce a fuzzy-match entry for that function — NOT that the function is exact.
 - [objdiff tolerates different-symbol-same-target relocations (D_NNNN vs func_MMM+offset)](#feedback-objdiff-reloc-tolerance) — _If the target .o has a relocation `R_MIPS_LO16 func_NAME` with immediate 0x40, and your build has `R_MIPS_LO16 D_NNNN` with immediate 0 (both resolving to the same absolute address after link), objdiff reports these as…
@@ -2729,6 +2730,56 @@ grep -cE "^(void|int|char|float) \w+\(" src/<path>.c    # 0 = pure INCLUDE_ASM
 **Pre-commit check:**
 
 Before reporting progress numbers from `refresh-report.sh` or `objdiff-cli report generate`, sanity-check against the memo-recorded baseline. If the number jumps by >10 percentage points between consecutive refreshes with no proportional commit activity, suspect contamination — check unit-by-unit breakdown and look for a unit with `matched_functions == total_functions` where the .c file is INCLUDE_ASM-only.
+
+---
+
+---
+
+<a id="feedback-refresh-baseline-only-keeps-first-include-asm-in-else"></a>
+## refresh-expected-baseline.py regex picks only the FIRST `INCLUDE_ASM` in a multi-INCLUDE_ASM `#else` block — drops the rest
+
+_`refresh-expected-baseline.py`'s NM-wrap collapse uses `re.search(r"#else\s*\n\s*(INCLUDE_ASM\([^;]*\);)", block)` which captures a single INCLUDE_ASM line. When you write a #ifdef NON_MATCHING block containing multiple C bodies with multiple INCLUDE_ASMs in the #else, only the first INCLUDE_ASM is preserved in expected/.o — the other functions vanish from expected/, breaking objdiff for everyone except the first. Verified 2026-05-10 on the C2D4-bundle split (7 fragments in one wrap → only C344 appeared in expected/.o; C35C-C3E8 missing)._
+
+**Symptom:** Multiple split-fragment functions wrapped together in one `#ifdef NON_MATCHING ... #else INCLUDE_ASM(a); INCLUDE_ASM(b); INCLUDE_ASM(c); #endif` block. After refresh-expected-baseline, `mips-linux-gnu-objdump -t expected/<unit>.c.o` shows only function `a`; functions `b` and `c` are missing. report.json doesn't list `b` or `c` as separate entries — they appear absorbed into the preceding parent symbol's size.
+
+**Bug location:** `scripts/refresh-expected-baseline.py` lines ~122-125:
+```python
+m = re.search(r"#else\s*\n\s*(INCLUDE_ASM\([^;]*\);)", block)
+if m:
+    nm_blocks.append((start, block_end, m.group(1) + "\n"))
+```
+
+The regex `INCLUDE_ASM\([^;]*\);` matches a single statement. The captured group is what replaces the entire #ifdef block.
+
+**Workaround (verified):** When split-fragments produces N new sibling functions that share a template comment, use per-function NM wraps (one `#ifdef NON_MATCHING ... #else INCLUDE_ASM(...); #endif` block per function), not one shared #ifdef with multiple bodies + multiple INCLUDE_ASMs. Format:
+
+```c
+/* Shared template comment can stay above the first wrap. */
+#ifdef NON_MATCHING
+T func_A(...) { ... }
+#else
+INCLUDE_ASM("...", func_A);
+#endif
+
+#ifdef NON_MATCHING
+T func_B(...) { ... }
+#else
+INCLUDE_ASM("...", func_B);
+#endif
+```
+
+This matches the existing convention used by recently-landed game_uso functions (e.g., C3F8 at line 6298 of `src/game_uso/game_uso.c` is its own wrap). The pattern is one-#ifdef-per-function; bundling violates the refresh-baseline regex.
+
+**Proper fix (out of scope for a decomp tick):** Patch the regex to `re.findall(r"INCLUDE_ASM\([^;]*\);", block)` and emit all matches as the replacement. Then the bundled form would work too.
+
+**How to apply:**
+- When `split-fragments.py` adds N new INCLUDE_ASM lines, do NOT batch them into one shared #ifdef block with the C bodies. Always use one-#ifdef-per-function.
+- If you already committed a shared block and discover fragments missing from expected/.o, split the block per-function and re-run refresh-expected-baseline.py. The fragments will reappear in expected/ and report.json will list them at their true sizes.
+
+**Symptom signatures:**
+- `report.json` shows the parent function at its post-split size (correct) but no entries for sibling fragments.
+- `mips-linux-gnu-objdump -t expected/<unit>.c.o` shows the first fragment's symbol; later fragments missing.
+- `mips-linux-gnu-objdump -t build/src/<unit>.c.o` (default build, not non_matching) shows all expected symbols — this confirms the src/.c file is correct, the bug is in expected/.o generation.
 
 ---
 
