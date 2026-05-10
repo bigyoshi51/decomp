@@ -6588,6 +6588,8 @@ nop
 - `int f(int a0)` body with jal + `return 1` → spills a0 at entry + `addiu v0, zero, 1` before jr. 1 func.
 - `int f(int a0)` body with jal + `return a0` → spills a0 + `lw v0, 0x18(sp)` before jr. (Tried but ended up as 90 % — avoid this form for matching; the explicit-return adds an extra instruction.)
 
+**LEAF variant (2026-05-10, game_uso C344/C35C/C378/C394/C3B0/C3CC):** the spill also happens in pure-leaf functions (NO `jal`, NO stack prologue) when the function is declared with 2+ params and `a0` is unused but a later param IS used. Example: `int f(int a0, int a1) { return *(int*)&D_0 + (a1 << 6); }` emits `sw $a0, 0($sp)` even though there's no callee. IDO defensively spills the unused leading-param to the caller's home slot — extends the rule beyond the "function has jal" case. 6 functions matched first-pass with this signature; same body without the `int a0` would omit the spill and miss-match.
+
 **How to apply:** when the target has unexplained `sw a0, FRAME(sp)` at entry and nothing that reads it back, your C needs an unused `int a0` parameter. Don't try to make the parameter "do something" — IDO spills it regardless.
 
 **When not to apply:** if the target asm has NO `sw a0` or `sw a0` is followed by a clear `lw a0` later, then a0 genuinely IS used — write C that uses it.
