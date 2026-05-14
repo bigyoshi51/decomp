@@ -54,6 +54,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a1's register assignment, IDO spills a0 to the caller's arg-save slot (extra `sw…
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
+- [Pre-load arg field into named local to force field-load BEFORE `&D` materialization clobbers the arg-register](#feedback-ido-preload-field-into-local-forces-load-before-clobber) — _When target reads `lw aN, K(a0)` BEFORE `lui a0, %hi(D_X)` (load via original arg-pointer, then clobber it), the inline `func(&D, arg->field)` form emits clobber-then-reload-via-spill (+1 insn). Fix: `int val = arg->field; func(&D, val);` — named local creates a sequence point that forces field-load first. 2026-05-10: unlocked gl_func_00054668 (75.62% → byte-exact)._
 - [Place `volatile int local = arg;` INSIDE the if-non-zero block to flip early-exit from `bnel-likely+delay-load` to `beqz+nop`](#feedback-ido-volatile-local-scoped-to-if-block-flips-early-exit-shape) — _Declaring a volatile-spilled local at function top emits the spill BEFORE the early-exit branch, letting IDO's scheduler hoist the first-iter loop-load into the branch's likely-delay slot (mismatching target's `beqz+nop` pattern). Scoping the volatile decl INSIDE the if-non-zero block pushes the spill AFTER the branch, removing IDO's hoist opportunity. Verified 2026-05-08 on `gl_func_0003EA98` — same-tick fix as the volatile-pointer caller-slot trick._
 
 ### scheduling / delay slot
@@ -8522,6 +8523,60 @@ When NM diff shows TARGET spills 2+ incoming args to the caller's outgoing-arg-s
 
 **Related:** `feedback_ido_volatile_unused_local_forces_local_slot_spill.md` (single-arg local-slot spill via `volatile int saved`). `feedback_ido_unused_arg_save.md` (background on caller-shadow vs local-slot spill).
 
+
+---
+
+<a id="feedback-ido-preload-field-into-local-forces-load-before-clobber"></a>
+## Pre-load arg field into named local to force field-load BEFORE `&D` materialization clobbers the arg-register
+
+_When a wrapper does `func(&D_X, arg->field, ...)` and the target asm shows `lw aN, 0xK(a0)` BEFORE `lui a0, %hi(D_X)`, but the obvious C `func(&D_X, arg->field, 0)` emits the clobber-then-reload-via-spill shape (+1 insn vs target), the fix is to assign the field to a named local FIRST: `int val = arg->field; func(&D_X, val, 0);`. The sequence point forces IDO to evaluate the load before setting up the call args. **2026-05-10 verified on gl_func_00054668: 75.62 % → byte-exact, 4-call wrapper unblocked.** Prior cap doc said "no clear C-level lever to force IDO to evaluate field-load before address materialization" — the lever IS the named local._
+
+**Pattern in the target asm:**
+
+```
+sw $a0, 0x18($sp)         ; spill a0 to caller-slot (because it'll be reloaded)
+lw $a1, 0xC($a0)          ; ← load arg->field via ORIGINAL a0 (still holds arg ptr)
+lui $a0, %hi(D_X)         ; ← THEN clobber a0 with the address materialization
+addiu $a0, $a0, %lo(D_X)
+jal func
+move $a2, $zero           ; (delay slot)
+lw $a0, 0x18($sp)          ; reload a0 from spill for subsequent calls
+```
+
+The C that produces this:
+
+```c
+void wrapper(int *arg) {
+    int val = arg->field;          /* ← named local; evaluation point before call */
+    func(&D_X, val, 0);
+    func((char*)arg + 0x2C, 0);
+    func(&D_X);
+    func(arg);
+}
+```
+
+The C that does NOT produce this (and costs +1 insn):
+
+```c
+void wrapper(int *arg) {
+    func(&D_X, arg->field, 0);     /* IDO clobbers a0 first, then reloads via $t6 to do the field load */
+    ...
+}
+```
+
+**Why it works:** IDO -O2's call-arg evaluator processes args left-to-right when materializing into argument registers. With `arg->field` inline, IDO can choose to materialize the LITERAL constants (`&D_X` for $a0) first, then read the field through a spill-reload of $a0. The named-local form forces the field load BEFORE any arg-register setup begins — at the assignment statement, where IDO must commit `val` to a register or stack slot.
+
+**Diagnostic asm-shape to recognize this cap:**
+- Target asm has multiple `func()` calls passing `arg` (the function parameter) as $a0
+- ONE of the calls passes `arg->field_K` as a later argument
+- That call's prologue has `lw $a1, K($a0)` BEFORE `lui $a0, %hi(D_X)` (loads via original a0)
+- Caller-slot spill `sw $a0, frame_size+0x0($sp)` happens at function entry
+
+**When the pre-load form does NOT help:**
+- If the field load uses a register that's NOT the soon-to-be-clobbered arg register (e.g., field comes from a different struct, accessed via a different base), no clobber happens — IDO already gets the order right.
+- If there's only ONE call (no later reload of arg needed), IDO doesn't spill arg and the order doesn't matter.
+
+**Cross-reference:** `feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill` (companion recipe — also forces caller-slot use, but for the spill itself, not the load order). `feedback-ido-arg-spill-via-trailing-void-casts` (different evaluation-order recipe for unused args).
 
 ---
 
