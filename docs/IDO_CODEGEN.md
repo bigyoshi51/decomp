@@ -101,6 +101,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops between (size 0x28).
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
+- [`volatile int low_pad[N];` declared BEFORE a `float buf[M]` grows the frame by 4N bytes AND pushes buf to a higher stack offset](#feedback-ido-volatile-int-array-low-pad-grows-frame-and-pushes-buf-up) — _When buf is offset 4N bytes too low vs target, a leading `volatile int low_pad[N]; low_pad[i]=0;` grows the frame by 4N AND pushes buf up by 4N (volatile-scalars-before-array layout rule). Verified 2026-05-14 on gl_func_00039A9C: 2-element low_pad moved buf sp+0x24 → sp+0x28. Cost: N visible `sw zero` insns; net regression unless paired with INSN_PATCH to elide them._
 - [Write-only `volatile int dummy = aN;` keeps an 8-byte frame allocated WITHOUT the dead-load artifact of `(void)dummy;`](#feedback-ido-write-only-volatile-keeps-frame-without-deadload) — _When `volatile int dummy;` is the only lever to keep IDO -O2 from collapsing a small stack frame, the default `(void)dummy;` use-site emits a trailing `lw zero, OFF(sp)` dead-load. Swap it for `dummy = aN;` (volatile-WRITE, no read): slot stays anchored, no trailing load emitted. Verified 2026-05-14 on `gl_func_0006AF0C` (79.28% → 86.78%, 16→14 insns)._
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
 - [IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C](#feedback-ido-o2-loop-array-strength-reduction) — When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 caches `s_reg = array + idx` and post-increments it. If target has the NON-strength-reduced form (per-iter `addu base, idx`), no C variant defeats it. Verified 2026-05-06 on gl_func_00055B44.
@@ -7214,6 +7215,28 @@ Per C11 6.7.3, accessing a volatile object is observable. `(void)dummy` is a rea
 **Anti-pattern:** Don't initialize the volatile at decl (`volatile int dummy = 0;`) — that's a write of a constant, which IDO might emit as `sw zero, OFF(sp)` (different opcode than the `sw aN, OFF(sp)` you may have wanted) or hoist around the function body in unpredictable ways. Declare unitialized, then assign in body at the point you want the spill.
 
 **Related:** `feedback-ido-volatile-saved-arg-forces-local-slot-spill` (write-form's broader cousin: spill an arg to a specific local slot), `feedback-ido-volatile-loop-counter-for-stack-iter` (volatile to force stack-counter loop), `feedback-ido-file-context-affects-frame-size` (when even this lever can't close an 8-byte frame gap).
+
+---
+
+---
+
+<a id="feedback-ido-volatile-int-array-low-pad-grows-frame-and-pushes-buf-up"></a>
+## `volatile int low_pad[N];` declared BEFORE a `float buf[M]` grows the frame by 4N bytes AND pushes buf to a higher stack offset
+
+_When the target has `float buf` at sp+0xK and built emits it at sp+0xK-8 (or sp+0xK-16), the local-array layout differs by a fixed gap. Inserting a `volatile int low_pad[N];` declared BEFORE buf, with `low_pad[i] = 0;` writes in the body, grows the frame by 4*N bytes and forces buf to be placed ABOVE low_pad in the stack. Verified 2026-05-14 on `gl_func_00039A9C`: `volatile int low_pad[2]; low_pad[0]=0; low_pad[1]=0;` before `float buf[3]` grew the frame from -0x30 to -0x38 and moved buf from sp+0x24 to sp+0x28 (matching target's sp+0x28). Sibling `sp_arg` also moved from sp+0x20 to sp+0x34, matching target._
+
+**Tradeoff (why this is partial, not promote-to-100):** the N volatile writes appear as `sw zero, K(sp)` instructions at the top of the function, contributing to a fuzzy% regression even when the structural layout becomes correct. On 39A9C this was 99.61% (baseline) → 77.96% (with 4-element low_pad to fully match target -0x40 frame). Net: layout fix WORSE than original because the extra stores outweigh the offset-correction gains.
+
+**When to use:**
+- The buf-offset gap is exactly 4*N bytes and you have a downstream INSN_PATCH path planned to elide the N volatile-store insns.
+- You're debugging WHICH lever controls IDO's local-array placement (this confirms it's the "volatile-scalar-before-array" ordering rule).
+- Initial pass to confirm the structural cap class (file-context-affects-frame-size vs genuinely C-controllable).
+
+**Why volatile-scalar pushes arrays up:** IDO -O2's stack-slot allocator places volatile scalars at LOW offsets in declaration order (they need slot pinning for the volatile-write semantic), then arrays go ABOVE them at higher offsets. Non-volatile scalars get DCE'd if unused (no `(void)` cast needed for elimination of `int pad1, pad2;`). The `volatile` keyword + observable write is the key to pinning a low-offset slot.
+
+**Anti-pattern: don't use volatile arrays AFTER buf** — they get placed at the TOP of locals (highest offset), pushing buf DOWN, which is the OPPOSITE direction. Verified 2026-05-14 on 39B0C — `volatile int pad1, pad2;` declared AFTER buf went to sp+0x28..0x2F and buf stayed at sp+0x1C.
+
+**Compare to:** `feedback-ido-file-context-affects-frame-size` (when the buf-offset gap isn't C-controllable AT ALL — different .c file context produces the gap). The low_pad recipe works on 39A9C because the frame-shape gap IS reachable from C; the file-context cap is for cases where it isn't.
 
 ---
 
