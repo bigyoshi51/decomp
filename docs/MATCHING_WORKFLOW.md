@@ -13,7 +13,9 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Inline NM-wrap match-percent comments rot — re-measure before trusting](#feedback-inline-nm-percentages-rot) — _Old match % claims in #ifdef NON_MATCHING comment blocks can silently go stale when the toolchain changes.
 - [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — _Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined NULL, stray apostrophes) compile fine by default but break the moment anyone…
 - [Partial NM-wrap with empty/stub inner arms can score 0% — IDO over-optimizes a loop body that has no observable side effects](#feedback-nm-partial-body-empty-arms-zero-percent) — _When a first-pass NM-wrap stubs out conditional arms with `(void)var;` instead of writing real call sequences, IDO -O2 sees the loop body as side-effect-free and unrolls/folds it into a much smaller emit (e.g. 95 insns vs target's 150). objdiff reports 0% match. Fill stub arms with at least one `gl_func_00000000(...)` per arm — the call's opaque side-effect prevents the unroll._
+- [Cross-segment placeholder calls — extern must be `func_00000000`, NOT `gl_func_00000000`, to byte-match expected/.o reloc](#feedback-cross-segment-extern-naming-unprefixed) — _For USO-segment functions whose .s disasm shows `jal func_00000000` (the unresolved cross-segment placeholder), `extern int func_00000000();` in the C body produces the matching R_MIPS_26 reloc against `func_00000000`. Using the prefixed `extern int gl_func_00000000();` (which most game_libs internal-call sites use) makes the reloc symbol `gl_func_00000000` — different reloc table entry → objdiff DIFF_ARG_MISMATCH despite identical .text bytes. Verified 2026-05-14 on gl_func_00047F48: bare C with unprefixed extern matched 100% in report.json (per-symbol objdiff still shows DIFF_ARG_MISMATCH cosmetically but the report's fuzzy_match_percent is 100). Use prefixed names ONLY for in-segment references; unprefixed for cross-segment placeholders._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
+- [split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`](#feedback-split-fragments-clobbers-prior-merge) — _When the bundle you split has a successor that was previously merged via `merge-fragments` (e.g. `game_libs_func_0003AA5C` had absorbed `0003AC50` via fca252b8, growing size 0x1F4 → 0x200), recursive split-fragments can re-split it back, leaving size 0x1F4 + a separate 0xC stub for AC50. Combined with TRUNCATE_TEXT this breaks objdiff with "Symbol data out of bounds: 0xN..0xM". Diagnostic: `objdiff-cli report generate` fails immediately after a split commit. Fix: revert the split commit, run `make expected` to refresh expected/.o. Before recursing split-fragments, run `git log -3 -- <successor>.s` for each newly-split-off — if a `Merge fragment` commit appears, stop._
 - [Re-verify "USO bundle blocked" claims in NM-wrap comments — the cited blocker may not currently apply](#feedback-reverify-bundle-blocked-claims) — _When an NM-wrap comment says "Bundle stays INCLUDE_ASM (per `feedback_uso_split_fragments_breaks_expected_match.md`)" or similar, mechanically check the BLOCKER CONDITION before accepting it. The blocker only applies when the predecessor has an existing SUFFIX_BYTES/PREFIX_BYTES/PROLOGUE_STEALS recipe in the Makefile (per the conditional in `feedback-uso-split-fragments-breaks-expected-match-conditional`). Run `grep <predecessor> Makefile` on the immediate predecessor and successor — if neither appears, the case is "genuinely fresh" and split-fragments.py is the right tool. Two recent verifications: `gl_func_000682F8` (2026-05-07, 5-function bundle, no Makefile recipes on neighbors → 3 exact matches) and `timproc_uso_b3_func_00000DE4` (2026-05-07, 3-function bundle, no recipes → 3 exact matches). The "blocked" comments were written before the doc rule clarified the conditional nature. Don't defer to in-source blocker citations without re-checking the actual condition._
 - [-DNON_MATCHING build of multi-function -O0 file corrupts the byte alignment of NM-wrapped neighbors](#feedback-nm-build-corrupts-neighbors-in-multi-func-o0-file) — _When you have multiple functions in a `<seg>_o0_NNN.c` file (each NM-wrapped) and build with `-DNON_MATCHING`, function N's wrong-size emit (e.g. extra `b +1; nop`) shifts function N+1's start offset, which the…
 - [`expected/.o` can carry prior -DNON_MATCHING build bytes; always refresh baseline before trusting a "matches" signal](#feedback-nm-build-expected-contamination) — _The existing `feedback_make_expected_contamination.md` covers `make expected` accidentally copying YOUR C build as the baseline.
@@ -119,6 +121,34 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — _For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC), DO NOT try fixing it by adding the symbol to undefined_syms_auto.txt.
 - [objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup](#feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware) — _objdiff's reloc-aware scoring (treats `jal SYMBOL + R_MIPS_26 reloc` as equivalent to `jal pre-baked-addr-to-same-symbol`) lets you remove redundant INSN_PATCH-for-jal recipes. But the LINKER still needs the symbol resolved — `func_7C860 = 0x7C860;` in `undefined_syms_auto.txt` is the linker-side resolution, not a matching artifact. Removing it as "redundant" breaks the build with `undefined reference to func_7C860`. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory)._
 
+
+---
+
+<a id="feedback-cross-segment-extern-naming-unprefixed"></a>
+## Cross-segment placeholder calls — extern must be `func_00000000`, NOT `gl_func_00000000`, to byte-match expected/.o reloc
+
+_For USO-segment functions whose .s disasm shows `jal func_00000000` (the unresolved cross-segment placeholder), `extern int func_00000000();` in the C body produces the matching R_MIPS_26 reloc against `func_00000000`. Using the prefixed `extern int gl_func_00000000();` (which most game_libs internal-call sites use) makes the reloc symbol `gl_func_00000000` — different reloc table entry → objdiff DIFF_ARG_MISMATCH despite identical .text bytes._
+
+**Symptom:** `objdiff-cli diff -p . -u <unit> <func>` shows the jal insn with `DIFF_ARG_MISMATCH` but both left and right format-strings read `jal func_00000000`. The `.text` bytes are identical (both `0c000000`). The diff is in the reloc table's symbol name.
+
+**Mechanism:** Splat dumps unresolved cross-segment calls in .s files using the canonical symbol name `func_00000000` (or whatever the segment's own zero-placeholder convention is). When the .s is INCLUDE_ASM'd into a `.o`, the assembler creates an R_MIPS_26 reloc against the literal symbol name in the asm. When you write C using `extern int gl_func_00000000();` (the prefixed convention for game_libs internal-call helpers), the C-emitted reloc is against `gl_func_00000000` — same numeric address (0) but different symbol identity at the reloc-table level.
+
+**Fix:** Use unprefixed `extern int func_00000000();` for cross-segment placeholder calls in USO-segment C bodies. Prefixed names (`gl_func_X`, `game_uso_func_X`) are still correct for resolved in-segment references with concrete addresses.
+
+**Verification (2026-05-14):** `gl_func_00047F48` is an 8-insn tail-call wrapper in game_libs USO:
+
+```c
+extern int func_00000000();
+int gl_func_00047F48(int *a0) {
+    return func_00000000(*(int*)((char*)a0 + 0xE0));
+}
+```
+
+With `extern int func_00000000()`: per-symbol objdiff still shows cosmetic `DIFF_ARG_MISMATCH` on the jal (both sides display `func_00000000`), but `report.json` registers `fuzzy_match_percent: 100.0` for the function — counted as a true match. With `extern int gl_func_00000000()` instead: same cosmetic display, also 100% report — BUT the underlying reloc symbol diverges and would block byte_verify (when properly routed to `build/non_matching/.o` per `feedback-include-asm-tautology-trap`).
+
+**Caveat:** report.json's fuzzy_match_percent is OBJDIFF-AWARE (treats matching reloc-symbol+addend pairs as equivalent regardless of byte addend), so the prefixed-vs-unprefixed naming doesn't surface in the score. The diff is real but cosmetic at the score level. byte_verify (against build/non_matching/.o) DOES catch it because it compares raw `.o` content including reloc table.
+
+**Rule:** For cross-segment unresolved-call placeholders in USO segments, use the unprefixed name from the .s file (typically `func_00000000`). Confirm by inspecting `asm/nonmatchings/<seg>/<seg>/<func>.s` — whatever appears in `jal SYMBOL` is the name your extern must use.
 
 ---
 
@@ -4686,6 +4716,39 @@ last_2_words=$(tail -3 asm/.../<func>.s | head -2 | grep -oE '0x[0-9A-F]{8}' | t
 ```
 
 **Future-proofing:** `split-fragments.py` should auto-detect this pattern and refuse to split. Until then, ALWAYS check for the `03E00008/AFA40000` repeating tail before recursive splits, especially in game_libs / mgrproc_uso / timproc_uso (where SUFFIX_BYTES recipes have already been applied to similar functions).
+
+---
+
+<a id="feedback-reverify-bundle-blocked-claims"></a>
+<a id="feedback-split-fragments-clobbers-prior-merge"></a>
+## split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`
+
+_When you recursively run `split-fragments.py` on a multi-jr-ra bundle and the recursion picks up a successor that was previously merged via the `merge-fragments` skill, split-fragments re-splits that successor back into its constituents. The re-split asm decl sizes don't match what the build system expects, and combined with TRUNCATE_TEXT this produces `objdiff-cli report generate` errors like "Symbol data out of bounds: 0xN..0xM" — the broken state prevents `land-successful-decomp.sh` from running at all._
+
+**Failure mode (2026-05-14):** Recursive split of `gl_func_0003A0C4` (10 jr ra markers) ate into `game_libs_func_0003AA5C` — which had absorbed `0003AC50` via fca252b8 (2026-05-07), growing AA5C from 0x1F4 to 0x200. After split, AA5C was back to 0x1F4 with a separate 0xC `game_libs_func_0003AC50.s` file. The asm decl size mismatch combined with `TRUNCATE_TEXT := 0x8944` in game_libs.c made `game_libs_func_000097B4` (declared 0x604, at the truncation boundary) appear "Symbol data out of bounds: 0x8944..0x8F48" to objdiff. Diagnostic: `objdiff-cli report generate` fails immediately, with no useful per-function info.
+
+**Detection during the split run:**
+
+```bash
+# For EACH function that split-fragments produces, check its git log:
+git log -3 -- asm/nonmatchings/<seg>/<seg>/<new_func>.s
+
+# If you see "Merge fragment <new_func> into <parent>" in the recent history,
+# the split is re-doing a prior manual merge — STOP RECURSING here.
+```
+
+**Recovery if you didn't notice and committed:**
+
+```bash
+git revert <split_commit_sha>     # revert the entire split
+make expected RUN_CC_CHECK=0       # refresh expected/.o snapshots to match
+objdiff-cli report generate         # verify the report now succeeds
+git add -A && git commit -m "Revert split of <X> bundle + refresh expected/"
+```
+
+**Why split-fragments doesn't catch this automatically:** the heuristic is "if there's a `jr ra` mid-function, split here." A prior merge appended a 3-insn epilogue `(sb, jr ra, nop)` at the same scan point. split-fragments has no record of which `jr ra`s came from a prior merge.
+
+**Related:** see `feedback-reverify-bundle-blocked-claims` for the inverse condition (don't avoid splitting when no Makefile recipes apply).
 
 ---
 
