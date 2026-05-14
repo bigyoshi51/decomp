@@ -94,6 +94,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 - [feedback_episodes](#feedback-episodes) — Always log episodes after an exact match, using the canonical helper and schema (updated 2026-04-19)
 - [Backfill episodes for splat's auto-generated empty functions](#feedback-splat-auto-empty-episodes) — _Splat writes `void f(void) {}` (not INCLUDE_ASM) for every `jr $ra; nop` leaf in its initial C stub.
+- **Tool: `scripts/find-nm-wraps-without-episodes.py`** — Walks `src/**/*.c` for NM-wrapped functions lacking `episodes/<name>.json`, annotated with fuzzy% from `report.json`. Use as the entry point for source-1-style sweep work. Does NOT auto-log — caveats in the docstring point at `feedback-include-asm-tautology-trap` so future agents don't repeat the false-positive episode-logging pattern.
 
 ### other
 
