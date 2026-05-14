@@ -3023,7 +3023,24 @@ The name `gl_proto_3787C` is arbitrary — pick a unique name per use site (e.g.
 **Other previously-untried workaround (still untried):**
 - Move the function to a SEPARATE .c file that doesn't include the K&R declaration, declares its own prototyped version. Add to Makefile + linker script. The named-extern trick above is simpler — recommended.
 
-**Scope of the workaround — does NOT extend to int-arg-share patterns (verified negative 2026-05-14, gl_func_00066210):** The named-typed-extern trick fixes the K&R float→double promotion. It does NOT enable IDO's "share $a0 across adjacent K&R calls when both pass the same int value" optimization. A function like `f(1); g = f(1); f(&buf, 4); ...` where target skips the second `li a0, 1` (saving 1 insn because a0 still holds 1 from the first call) cannot be reproduced from typed-extern C — IDO emits independent call sites with full arg setup per typed-extern call. The arg-share is IDO's internal escape-analysis on the K&R callee, not a property of the call-site prototype. Cap stays NM.
+**Scope of the workaround — partial support for int-arg-share patterns (verified mixed 2026-05-14):**
+
+The named-typed-extern trick fixes the K&R float→double promotion. For "share $a0 across adjacent K&R calls when both pass the same int value":
+
+- **Mid-sequence arg-share (e.g. calls 1, 2, ..., N all pass same value): NOT reproducible.** The named-typed-extern produces independent call sites with full arg setup per typed-extern call. Verified negative on `gl_func_00066210` (calls 1+2 share $a0=1).
+- **Last-call arg-carry: REPRODUCIBLE via arg-less call form.** Writing the FINAL call as `gl_func()` with NO C-source args (K&R extern accepts this) makes IDO emit zero arg-setup insns for that call, letting prior call's $a0 carry. Verified positive on `gl_func_00065D08`: 7-call cascade with last call as `gl_func()` produces target's `nop` delay slot exactly (vs explicit `or a0, sN, 0` for `gl_func(a0)`).
+
+```c
+/* shape that works */
+for (...) gl_func(a0);          /* N-1 calls with arg */
+gl_func();                       /* final call inherits a0 */
+
+/* shape that DOESN'T work */
+gl_func(1);                      /* mid-sequence share */
+g = gl_func(1);                  /* IDO re-emits li a0, 1 */
+```
+
+The arg-share is IDO's internal escape-analysis on the K&R callee — works when the C source TRULY OMITS the arg (so IDO has no syntactic arg-binding to honor), not when the source repeats the same value.
 
 **Origin:** 2026-04-19 game_libs gl_func_00067AC8. Tried 3 variants; all failed for the reasons above. Reverted to INCLUDE_ASM.
 
