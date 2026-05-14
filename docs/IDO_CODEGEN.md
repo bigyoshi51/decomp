@@ -144,6 +144,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O3 produces byte-identical output to -O2 for single-file compiles — file-split with OPT_FLAGS=-O3 only adds value for inter-module (IPO) builds, which the per-.c.o pipeline doesn't use](#feedback-ido-o3-equals-o2-for-single-file-compile) — _When a function is stuck at -O2 codegen and you're considering file-split-with-OPT_FLAGS to try -O3, don't bother — IDO's -O3 differs from -O2 only in inter-module optimization (requires `cc -O3 -j ...`).
 - [-O0-cluster split mid-file requires a paired -O2 layout shim, not just the -O0 file](#feedback-o0-cluster-split-with-layout-shim) — _When a -O0 cluster sits MID-file (not at start or end), splitting it out needs THREE files: predecessor (truncated), the -O0 cluster file, AND a successor "layout shim" (-O2 INCLUDE_ASMs only) holding everything…
 - [New -O0 .c file split needs FOUR config touches; objdiff.json is the easy-to-miss one](#feedback-o0-file-split-objdiff-json-step) — _When carving an -O0 function out of its parent .c into a dedicated `<seg>_o0_<offset>.c` file, you need (1) Makefile per-file `OPT_FLAGS := -O0` and `TRUNCATE_TEXT`, (2) tenshoe.ld entry, (3) source split itself, AND…
+- [Loop reloads ALL locals from sp every iteration = -O0 codegen signal](#feedback-ido-o0-loop-stack-reload-signal) — _When a function's loop body starts with `lw tA, X(sp); lw tB, Y(sp); lw tC, Z(sp)` for variables that have no `volatile` or address-taken reason, it's almost certainly -O0 compiled. -O2 keeps loop-carried values in registers (only ra + callee-saves spill). Detection signal: before writing C, check if the loop body's first 3 insns are `lw` from sp-relative offsets matching the function's own prologue spills — if yes, abandon -O2 attempts and either (a) file-split to per-function OPT_FLAGS=-O0, or (b) accept INCLUDE_ASM. Verified 2026-05-14 on gl_func_00071864 (16-bit byte-sum checksum, 23 insns): straightforward -O2 C body produced 5.4% match because target reloads p/accum/i from sp every iteration._
 - [-O0 variant of the int-reader accessor template — 19 insns / 0x4C bytes vs the standard -O2 template's 16 insns / 0x40 bytes](#feedback-o0-int-reader-template-variant) — _When scanning USO accessor templates, also check 0x4C-byte / 19-instruction variants — these are -O0 compiles of the SAME body.
 
 ### indirect / function pointer
@@ -7402,6 +7403,54 @@ src/arcproc_uso/arcproc_uso_o0_12C {'name': 'arcproc_uso_func_0000012C', 'size':
 - `feedback_uso_accessor_o0_variant.md` — accessor templates that need -O0 file split.
 - `feedback_objdiff_null_percent_means_not_tracked.md` — the broader rule for null %.
 - `feedback_non_aligned_o_split.md` — TRUNCATE_TEXT mechanics for non-16-aligned splits.
+
+---
+
+---
+
+<a id="feedback-ido-o0-loop-stack-reload-signal"></a>
+## Loop reloads ALL locals from sp every iteration = -O0 codegen signal
+
+_When a function's loop body starts with `lw tA, X(sp); lw tB, Y(sp); lw tC, Z(sp)` for variables that have no `volatile` or address-taken reason, it's almost certainly -O0 compiled. -O2 keeps loop-carried values in registers (only ra + callee-saves spill)._
+
+**Detection signal:** before writing C, scan the target's loop body. If the FIRST 3 instructions inside the loop are `lw` from sp-relative offsets that MATCH the function's own prologue stack-stores, the function is -O0. Don't grind -O2 C variants — they cap at single-digit %.
+
+**Example (gl_func_00071864, 16-bit byte-sum checksum, 23 insns):**
+
+```asm
+27BDFFF0  addiu $sp, $sp, -0x10
+AFA00008  sw $zero, 0x8($sp)     ; sp[0x8] = 0 (accum spill)
+AFA40004  sw $a0, 0x4($sp)       ; sp[0x4] = p (arg spill)
+18A00010  blez $a1, exit
+AFA0000C  sw $zero, 0xC($sp)     ; (delay) sp[0xC] = 0 (i spill)
+                                  ; --- loop top ---
+8FAF0004  lw $t7, 0x4($sp)       ; reload p
+8FAE0008  lw $t6, 0x8($sp)       ; reload accum
+8FAB000C  lw $t3, 0xC($sp)       ; reload i
+...
+```
+
+Straightforward C body:
+
+```c
+unsigned short f(unsigned char *p, int n) {
+    int i;
+    int accum = 0;
+    for (i = 0; i < n; i++) accum = (accum + p[i]) & 0xFFFF;
+    return (unsigned short)accum;
+}
+```
+
+At -O2 produces 5.4% match (target's stack-heavy loop vs C-emit's register loop). No amount of permutation rescues this — the cap is the optimization level itself.
+
+**Resolution paths:**
+
+1. **File-split to OPT_FLAGS=-O0** — carve the function (or its cluster) into a dedicated `.c` file with per-file `OPT_FLAGS := -O0` in the Makefile + corresponding tenshoe.ld + objdiff.json entries (per `feedback_o0_file_split_objdiff_json_step.md`). Worthwhile only if the function or its callees are also -O0.
+2. **Accept INCLUDE_ASM** — for one-off -O0 stragglers in an -O2 file, the file-split overhead exceeds the value. Document the detection signal inline and move on.
+
+**Why this happens:** small ROM-init / checksum / boot-path functions are often compiled at -O0 for debugging predictability — register pressure is low, debugger-friendly, and the perf impact is one-time-init. The N64 boot path and game_libs init code have ~50 such functions in 1080 Snowboarding alone.
+
+**Distinguish from -O2 stack-heavy patterns:** -O2 DOES spill to stack when (a) `volatile` qualifier present, (b) variable's address taken (`&x` somewhere), or (c) register pressure forces spill. Those don't trigger this signal because the spills are TARGETED (one variable, not all locals). The -O0 signature is uniform: every local lives on stack, every read is sp-relative.
 
 ---
 
