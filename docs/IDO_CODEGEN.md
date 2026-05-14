@@ -8153,6 +8153,14 @@ The linker resolves the R_MIPS_HI16/LO16 relocations to address 0x0002B3B8, prod
 
 **Verified 2026-05-08** on `gl_func_000682F8` — 3-arg helper call `gl_func_0001CA10(self+0x14, &gl_ref_0002B3B8, self)` matches byte-exact in linked ELF; `build/<file>.c.o` shows the expected reloc-stub mismatch in raw `objdump -d`.
 
+**Further confirmations 2026-05-14:**
+- `gl_func_000545BC` (game_libs_post.c): the magic constant `0x2107C` passed to a 2-arg call. `&gl_ref_0002107C` lever pushed 81.40% → 100% (combined with the goto-end recipe; the lui+addiu fix is the +1.4pp final-mile component). EXACT MATCH.
+- `game_libs_func_0004D0E4` (game_libs_post.c): the magic constant `0x3EB00` stored at a struct field. `&gl_ref_0003EB00` lever pushed 70.37% → 72.44% (+2.07pp).
+- `func_000086C0` (bootup_uso.c): alt-entry call to `func_0000027C + 0x18`. `&gl_ref_00000294` lever pushed 81.76% → 84.93% (+3.17pp; collapsed 4-insn materialize-then-adjust to 3-insn lui+jal+adjusted-addiu(DS)).
+- `func_0000B49C` (bootup_uso.c): alt-entry call to `func_00008A40 + 0x18`. `&gl_ref_00008A58` lever pushed 65.58% → 68.48% (+2.90pp).
+
+The recipe is high-yield for any unmatched function where built emits `lui+ori` (or `lui+addiu+addiu`) for a constant or alt-entry pointer that target encodes as `lui+addiu` (or `lui+adjusted-addiu(DS)`).
+
 ### Variant — also applies to ALT-ENTRY tail calls (`func_X + offset` pointer arithmetic)
 
 The recipe extends beyond magic integer constants. When a C body has a tail call like `func_00000000((char*)func_0000027C + 0x18);` (calling into an alt-entry / mid-function jump target), IDO emits the FULL 4-insn materialization-then-adjust sequence:
