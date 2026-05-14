@@ -98,6 +98,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Aliased-pointer local shifts IDO -O2 jal-spill slot offset by 4 bytes without adding insns](#feedback-aliased-pointer-local-shifts-spill-slot) — _When IDO -O2 spills a pointer in a jal delay slot at the wrong sp offset (e.g. sp+0x18 vs target's sp+0x1C), declare a SECOND char* local aliased to the spilled pointer (`char *p, *spillee; spillee = p;`).
 - [/loop's interval is cron fire cadence, NOT a per-invocation timeout](#feedback-loop-interval-not-timeout) — `/loop Nm <prompt>` fires `<prompt>` on a cron every N minutes.
 - [In /loop /decompile, start the next iteration immediately — don't ScheduleWakeup with a delay](#feedback-loop-no-wait) — User's preference for the /decompile loop in 1080 Snowboarding.
+- [Multi-tick partial decode: chunk 100-200 insns/tick, NOT 30](#feedback-multitick-chunk-size-100to200-not-30) — _When progressively decoding a 1+ KB spine function across multiple ticks, the natural chunk is 100-200 insns/tick — ~30/tick under-amortizes the ~2 min per-tick overhead._
 - [`make objects` is the right Makefile target for tools that only need .c.o files](#feedback-make-objects-skips-link-yay0-checksum) — _1080's Makefile defines `objects: $(C_O_FILES)` — builds C objects only, skipping link, Yay0 repack, and md5sum.
 - [make setup regenerates tenshoe.ld and CLOBBERS per-segment .o split customizations](#feedback-make-setup-clobbers-tenshoe-ld-manual-edits) — _Running `make setup` (splat) on 1080 overwrites tenshoe.ld with auto-generated single-`.c.o` per-segment includes, blowing away the carefully-crafted manual `kernel_NNN.c.o` linker fragments.
 - [PREFIX_BYTES Makefile var + scripts/inject-prefix-bytes.py — unblocks USO entry-0 trampoline funcs](#feedback-prefix-byte-inject-unblocks-uso-trampoline) — _Mirror of PROLOGUE_STEALS for the leading-prefix case.
@@ -1356,6 +1357,29 @@ _User's preference for the /decompile loop in 1080 Snowboarding. The default dyn
 - If truly blocked (build broken, agent conflict, unmatchable function queue ahead), THEN stop and tell the user — don't silently schedule.
 
 **Origin:** 2026-04-19 1080 Snowboarding agent-a. After gui_func_000014B4 commit+land, scheduled a 150s wake and user said: "can you make the tick immediately after you finish? idk why you're waiting multiple minutes after finishing a decomp".
+
+---
+
+---
+
+<a id="feedback-multitick-chunk-size-100to200-not-30"></a>
+## Multi-tick partial decode: chunk 100-200 insns/tick, NOT 30
+
+_When progressively decoding a 1+ KB spine function across multiple /loop /decompile ticks, the natural chunk size is 100-200 instructions per tick (~150-300 lines of asm read + one doc-comment edit). The previous self-imposed ~30 insns/tick was a habit, not a constraint — it amortizes per-tick overhead poorly._
+
+**Rule:** For multi-tick partial decode of a large spine function (≥500 insns), aim for **100-200 insns characterized per tick**. Read ~200-400 lines of asm in one or two Read calls, write one cumulative doc-comment block extending the NM-wrap's structural notes, commit. Don't artificially cap at "small enough to fit in a quick tick."
+
+**Why:** Per-tick overhead (preflight, source roll, m2c if relevant, build verify, commit, ff-merge, push) is ~2 minutes wall time regardless of how much you decode. With 30 insns/tick that's a ~50% overhead ratio; with 150 insns/tick the same overhead amortizes over 5x more progress. A 1100-insn function at 30/tick takes 37 ticks (~2 hours); at 150/tick it takes 8 ticks (~25 min) for the same eventual coverage. User flagged this on `game_uso_func_0000591C` (1102 insns): "why do we only attempt ~30 ins on each of these types of loops?" — there was no good reason, just habit.
+
+**How to apply:**
+- For functions <100 insns: one tick, full decode.
+- For functions 100-500 insns: 1-2 ticks at 100-150 insns each.
+- For functions 500-2000 insns: 4-10 ticks at 150-200 insns each.
+- For functions >2000 insns: 200/tick is still the right unit — more ticks, same chunk.
+- Each tick's doc-comment block should cover ALL insns read this tick (not "I read 200 lines, but I'll only commit notes for the first 30"). Read big, commit big.
+- The cumulative-insn-count line at the bottom of the NM-wrap doc-block tells future-you where to pick up; just make sure the increment matches the actual chunk you decoded.
+
+**Origin:** 2026-05-13 1080 Snowboarding agent-b, after ~10 ticks decoded game_uso_func_0000591C from 420 → 715 / 1102. User: "why do we only attempt ~30 ins on each of these types of loops? ... please finish it out, and update the guidance for this type of decompile to reflect this preference." Finishing the function in one tick (387 insns) took the same wall time as the 30-insn ticks that preceded it — confirming per-tick overhead, not per-insn work, dominates.
 
 ---
 
