@@ -111,6 +111,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO treats plain `char` as UNSIGNED by default — use `signed char` for `lb` opcodes](#feedback-ido-char-default-unsigned) — _Casting `(char)int_val` at IDO -O2 emits `lbu` (zero-extend), not `lb` (sign-extend).
 - [Named `unsigned char c = *p;` forces $v0; inline `*p` in the comparison keeps the load in $t6](#feedback-ido-named-char-v0-vs-t6) — When the target has `lbu $t6, 0($sN)` for a char loaded from memory and compared immediately, declaring it as a local (`unsigned char c = *p`) forces IDO to allocate $v0 for the load instead.
 - [IDO -O2 picks bgez vs srl+beqz for sign-test based on C form — `(unsigned)x>>31` forces 2-insn srl+beqz](#feedback-ido-sign-test-form-choice) — For `if (x < 0) {...}`, IDO -O2 emits the 1-insn `bgez x, .Lend` form (branch if non-negative, skipping the body).
+- [Test arbitrary bit-N (N != 31) by `((unsigned)x << (31-N)) >> 31` — emits `sll + bgezl/bltzl`](#feedback-ido-bit-N-test-via-sll-bgezl) — _When target uses `sll t, x, K; bltzl/bgezl t, ...` to test bit N (where K = 31-N), the natural `andi+bnez` form won't match. Write `((unsigned)x << K) >> 31` to force the SLL+sign-branch form. Verified 2026-05-14 on h2hproc_uso_func_000015F0 bit-16 test (94.31% first try)._
 - [`bgez v0; sra t, v0, 1; addiu at, v0, 1; sra t, at, 1` is IDO's signed `/2` lowering](#feedback-ido-signed-divide-2-idiom) — Signed-integer division by 2 in IDO doesn't become a single `sra`.
 
 ### inline / register keyword
@@ -5583,6 +5584,45 @@ initial `if (x < 0)` body emitted bgez (1-insn diff). Switching to
 **Generalizable rule:** when target's sign-test is 2 insns (srl + beqz/bnez
 on a temp), always try the `(unsigned)x >> 31` form first. Don't grind
 register-allocation knobs — the encoding choice IS the source-level lever.
+
+---
+
+---
+
+<a id="feedback-ido-bit-N-test-via-sll-bgezl"></a>
+## Test arbitrary bit-N (N != 31) by `((unsigned)x << (31-N)) >> 31` — emits `sll + bgezl/bltzl`
+
+_For `if (x & (1<<N)) {...}` with N != 31, the natural C emits `andi t, x, mask; beqz/bnez t, ...`. To get the target's `sll t, x, K; bgezl/bltzl t, ...` form (K = 31-N), write the test as `((unsigned)x << K) >> 31`. The `<< K >> 31` round-trip leaves the original bit N at position 31 (sign bit), and IDO -O2 specializes the resulting compare to the SLL-then-sign-branch form._
+
+**The two IDO codegen forms for "test bit N of x":**
+
+| C source                           | IDO -O2 emit                               | comment           |
+|------------------------------------|--------------------------------------------|-------------------|
+| `if (x & (1<<N)) BODY`             | `andi t, x, MASK; bnez t, .Lbody`         | bit-N at ANDI mask |
+| `if (((unsigned)x << K) >> 31) BODY` | `sll t, x, K; bltzl t, .Lbody (likely)`  | K = 31-N          |
+| `if (((unsigned)x << K) >> 31 == 0) NOTBODY` | `sll t, x, K; bgezl t, .Lnotbody (likely)` | inverse polarity |
+
+Where `K = 31 - N` (for testing bit N).
+
+**Worked example — bit 16 test (verified 2026-05-14 on `h2hproc_uso_func_000015F0`):**
+- Target shape: `lw t8, 0x4F0(a1); sll t9, t8, 0xF; bltzl t9, .Lreturn` (test bit 16; return if set)
+- C: `if (((unsigned)a1[0x4F0/4] << 15) >> 31) return;` matched first try
+- (`andi + bnez` polynomial wouldn't have matched — different opcodes entirely)
+
+**Why IDO picks SLL+bgezl/bltzl over ANDI+bnez:** when the test value is
+the result of an expression (load + shift), IDO's combiner notices the
+test reduces to "is the sign bit set after this shift?" and emits the
+sign-branch form. ANDI doesn't go through the sign-branch path.
+
+**Use cases:** USO field-flag bits where the asm uses `sll <K>; bltzl/bgezl`. Common shifts:
+- `sll t, x, 0` → bit 31 → use plain `if (x < 0)` or `(unsigned)x>>31`
+- `sll t, x, 0x1` → bit 30
+- `sll t, x, 0xF` → bit 16
+- `sll t, x, 0x10` → bit 15
+- ... etc
+
+**Don't use for:** plain bit-mask tests where target uses `andi`. The two
+shapes are not interchangeable from C — pick based on what target emits.
 
 ---
 
