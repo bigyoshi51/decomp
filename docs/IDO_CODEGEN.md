@@ -101,6 +101,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops between (size 0x28).
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
+- [Write-only `volatile int dummy = aN;` keeps an 8-byte frame allocated WITHOUT the dead-load artifact of `(void)dummy;`](#feedback-ido-write-only-volatile-keeps-frame-without-deadload) — _When `volatile int dummy;` is the only lever to keep IDO -O2 from collapsing a small stack frame, the default `(void)dummy;` use-site emits a trailing `lw zero, OFF(sp)` dead-load. Swap it for `dummy = aN;` (volatile-WRITE, no read): slot stays anchored, no trailing load emitted. Verified 2026-05-14 on `gl_func_0006AF0C` (79.28% → 86.78%, 16→14 insns)._
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
 - [IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C](#feedback-ido-o2-loop-array-strength-reduction) — When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 caches `s_reg = array + idx` and post-increments it. If target has the NON-strength-reduced form (per-iter `addu base, idx`), no C variant defeats it. Verified 2026-05-06 on gl_func_00055B44.
 - [For args-preserved-as-locals byte-copy loops, decrement the ARG directly (`count--`) — not the local copy (`cp--`)](#feedback-ido-decrement-arg-not-local-for-counter-loop) — When target preserves an arg as the loop counter (one move at entry, then `addiu argReg,argReg,-1` per iter) AND a local mirror, write the loop with `count--` (decrement the arg-named param) and use the local only as the loop-bound capture (`rem = count`). `cp--; rem = cp` regresses 22→29 diff lines on the same function; `count--; rem = count` tightens to 10 diff lines. Verified 2026-05-06 on func_80000598.
@@ -3018,7 +3019,9 @@ void gl_func_0003787C(void *a0) {
 
 Result: `jal` direct call, `swc1` singles (no float→double promotion). Byte-exact on gl_func_0003787C (84 bytes, 0 diffs).
 
-The name `gl_proto_3787C` is arbitrary — pick a unique name per use site (e.g. `gl_proto_<funcname>`). It's only used for prototype enforcement at this call site; no linker entry needed because the reloc target is encoded in the jal opcode (always offset 0 for USO segments since `gl_func_00000000` IS offset 0 in the segment's symbol table).
+The name `gl_proto_3787C` is arbitrary — pick a unique name per use site (e.g. `gl_proto_<funcname>`). It's only used for prototype enforcement at this call site.
+
+**REQUIRED: add a linker entry for the fresh name.** Add `<proto-name> = 0x00000000;` to `undefined_syms_auto.txt` (alongside `gl_func_00000000_va`). Without this entry the per-`.o` byte verification passes (objdiff sees the call as a clean reloc with addend 0), but the final `ld` of `tenshoe.elf` fails with `undefined reference to '<proto-name>'`. The R_MIPS_26 reloc encodes the immediate from the jal opcode, but `ld` still needs the symbol to resolve before it can compute the final address. Earlier draft of this entry incorrectly claimed no linker entry was needed — verified 2026-05-14 by hitting the link break on a clean rebuild.
 
 **Other previously-untried workaround (still untried):**
 - Move the function to a SEPARATE .c file that doesn't include the K&R declaration, declares its own prototyped version. Add to Makefile + linker script. The named-extern trick above is simpler — recommended.
@@ -7177,6 +7180,40 @@ Verified: func_0000553C frame -0x20 → -0x28 via `char pad[8]`, promoting 88.40
 **Caveat: pad alone does NOT grow the frame** (verified 2026-05-06 on game_uso_func_00003A28): IDO -O2 dead-eliminates the unused `char pad[N]` and frame stays at its natural size. The pad-grows-frame trick requires a PAIRED live local — typically the `volatile int saved_aN` from the parent recipe. The volatile is what keeps the frame "anchored" at the larger size; the pad just shifts WHERE the volatile spill lands relative to other slots. If your function has no arg-spill candidate to volatile-ize (no caller-arg-slot save needed), the pad won't help — you need a different lever.
 
 **Related:** `feedback_ido_unused_arg_save.md` (unused arg gets caller-slot spill), `feedback_ido_volatile_buf_pointer_indirect.md` (volatile buf forces pointer-indirect addressing).
+
+---
+
+---
+
+<a id="feedback-ido-write-only-volatile-keeps-frame-without-deadload"></a>
+## Write-only `volatile int dummy = aN;` (no read) keeps an 8-byte stack frame allocated WITHOUT emitting the dead-load artifact of `(void)dummy;`
+
+_When the only lever you have to keep IDO -O2 from collapsing an 8-byte stack frame is a `volatile int dummy;`, the default `(void)dummy;` use-site emits a trailing `lw zero, OFFSET(sp)` dead-load that shows up as an extra mismatching insn. Replace `(void)dummy;` with a write-only `dummy = aN;` (assign any in-scope value) — volatile-write keeps the slot anchored (frame stays -8) but emits no read. Verified 2026-05-14 on `gl_func_0006AF0C` (game_libs_post.c): swapping `(void)dummy;` for `dummy = a0_unused;` dropped built insn count 16→14 (matches target's 14) and promoted 79.28% → 86.78% (+7.50pp)._
+
+**Pattern:**
+
+```c
+void f(int a0_unused, ...) {
+    volatile int dummy;
+    /* ... body that needs an 8-byte frame ... */
+    dummy = a0_unused;   /* OR any other in-scope int — keeps slot alive without reading */
+}
+```
+
+The volatile-WRITE is observable, so IDO can't DCE the slot allocation. But there's no volatile-READ, so no trailing `lw zero, OFF(sp)` is emitted. Net codegen cost is ONE store at the assignment site (`sw aN, OFF(sp)` in a delay slot, typically) — versus the original 2-insn cost of read+write with `(void)dummy;` (volatile-write at top + volatile-read at bottom).
+
+**Why `(void)dummy;` reads (and `dummy = x;` doesn't):**
+
+Per C11 6.7.3, accessing a volatile object is observable. `(void)dummy` is a read access (compiler must emit a `lw`), so IDO emits a load that DOES NOTHING with the value (hence `lw zero, OFF(sp)` — discards into $zero). `dummy = x` is a write access; the compiler emits a store but no load. Both keep the local slot alive against DCE.
+
+**When to use this vs the read form:**
+
+- Use `(void)dummy;` (read-form) when target asm shows a trailing `lw zero, OFF(sp)` near the epilogue — the dead-load is what target HAS and you need to emit it.
+- Use `dummy = x;` (write-only-form) when target shows NO such trailing load and you just need the frame-allocation effect.
+
+**Anti-pattern:** Don't initialize the volatile at decl (`volatile int dummy = 0;`) — that's a write of a constant, which IDO might emit as `sw zero, OFF(sp)` (different opcode than the `sw aN, OFF(sp)` you may have wanted) or hoist around the function body in unpredictable ways. Declare unitialized, then assign in body at the point you want the spill.
+
+**Related:** `feedback-ido-volatile-saved-arg-forces-local-slot-spill` (write-form's broader cousin: spill an arg to a specific local slot), `feedback-ido-volatile-loop-counter-for-stack-iter` (volatile to force stack-counter loop), `feedback-ido-file-context-affects-frame-size` (when even this lever can't close an 8-byte frame gap).
 
 ---
 
