@@ -3694,7 +3694,7 @@ sb $a1, N($v0)          <-- the `int → char` cast doesn't emit an andi;
 **How to apply:**
 - Every decomp candidate where the asm stores a subword (sb, sh) from an arg register, and has no `andi`/`sll+sra` prologue: use `int` arg type, cast at the store.
 - Same applies to return-sized narrow types — `char func(...)` will get a return-value normalization. Use `int` returns unless the asm has the normalization.
-- Conversely, if the target DOES have an `andi $aN, $aN, 0xff` or `sll+sra` right after the prologue, use `unsigned char`/`char`/`short` as appropriate — matching the asm.
+- Conversely, if the target DOES have `andi $aN, $aN, 0xff` or `sll+sra` right after the prologue, narrow the source: **use `arg & 0xFF` (bitwise mask in the call expression) NOT `(unsigned char)arg` cast.** Both narrow semantically, but the cast emits `lbu $aN, off+3(sp)` (read low byte from already-spilled slot) when the arg has been spilled to caller-home; the explicit `& 0xFF` emits `andi $aN, $aN, 0xff` (in-register mask). Verified 2026-05-13 on `gl_func_0002DD90`: `(unsigned char)a0` produced `lbu`, `a0 & 0xFF` produced `andi` → byte-exact match.
 
 **Origin:** hit 2026-04-18 on bootup_uso func_00000A50 and func_00000B14 (both `if (*a0) ((char*)*a0)[N] = a1;`). Target was 6 insts with a bare `sb`; `char a1` gave 8 insts (+andi +spill sw), `int a1 + (char)a1` matched exactly.
 
