@@ -150,6 +150,18 @@ With `extern int func_00000000()`: per-symbol objdiff still shows cosmetic `DIFF
 
 **Rule:** For cross-segment unresolved-call placeholders in USO segments, use the unprefixed name from the .s file (typically `func_00000000`). Confirm by inspecting `asm/nonmatchings/<seg>/<seg>/<func>.s` — whatever appears in `jal SYMBOL` is the name your extern must use.
 
+**When the rename helps vs. when it doesn't (verified 2026-05-14):**
+
+The rename improves match% when the function's per-symbol diff is DOMINATED by jal-target symbol mismatches. It does NOT help when:
+
+- Function is already 100% in report.json (the prefix vs unprefixed cosmetic diff doesn't reduce the score). Re-renaming can REGRESS — e.g., `gl_func_000545BC` went from 100% to 98.6% when I switched extern naming AND replaced an `&gl_ref_0002107C` data ref with a `(char*)0x2107C` literal cast. Revert and leave alone.
+- Function has substantial structural diffs (register allocation, instruction count, scheduling) — `gl_func_0002D064` at 84% has 30+ DIFF_ARG_MISMATCH lines; rename only fixes 1-2.
+- Function uses INSN_PATCH to bridge a stack-spill cap — rename gives ~0.1pp at most (`gl_func_0004E180` went 99.9% → 99.87%, no real change).
+
+**Sweet-spot cases:** function has 1-6 DIFF_ARG_MISMATCH lines, all on jal-symbol references. Examples: `gl_func_00047F48` (fresh decomp via unprefixed rename → 100%), `gl_func_00039A9C` (99.21% → 99.61% via 2 jal-target renames), `gl_func_00039B0C` (99.26% → 99.58%, same fix).
+
+**Pre-check before renaming:** run `objdiff-cli diff -p . -u <unit> <func>` and inspect the diff_kind output. If only the jal lines show DIFF_ARG_MISMATCH, rename is high-yield. If there are also stack-offset, register-allocation, or insn-count diffs, the rename won't push to 100%.
+
 ---
 
 <a id="feedback-objdiff-fuzzy-hides-wrong-lui-addend"></a>
