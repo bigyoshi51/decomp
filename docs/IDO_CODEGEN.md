@@ -166,7 +166,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [For 16-case sparse dispatchers in segments without .rodata, `if (a1 == N) goto cN;` chain beats both switch (jumptable) and if-else-if chain](#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse) — _When the target asm is a chain of sequential `li at, K; beq a1, at, body_K` (compares grouped at top, case bodies after), straight `if-else-if` produces 49 % match (interleaves bodies) and `switch` produces 69 %…
 - [IDO -O2 `void f(void) {}` produces exactly `jr ra; nop` — empty functions ARE matchable](#feedback-ido-empty-void-matchable) — _The CLAUDE.md general note ("Empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop") is WRONG for IDO 7.1 at -O2.
 - [Tiny branch-predicate funcs with forced `addiu sp, -8/+8` frame + explicit `b` to epilogue — unreachable from IDO -O0/-O1/-O2](#feedback-ido-forced-frame-tiny-predicate) — Some 7-9-insn predicate functions (e.g. `return (a & MASK) != 0;`) have a target shape with a forced stack frame (`addiu sp, -8` prologue / `addiu sp, +8` in jr delay slot) AND an explicit `b` to the epilogue-merge…
-- [Use `goto end` for early-return from alloc-check; plain `return` emits extra branch](#feedback-ido-goto-epilogue) — _IDO compiles `return a0` from inside a nested if into `b + lw ra` redundancy, not a direct `beqz/bnez` to the epilogue.
+- [Use `goto end` for early-return from alloc-check; plain `return` emits extra branch. **Two variants: UNIFIED-epilogue (`goto end; ... end: return a0;`) when success returns an arg unchanged, vs SPLIT-epilogue (`goto end_zero; ... return DERIVED; end_zero: return 0;`) when success returns a derived value AND target has `beq zero,zero,.L_epi + lw-in-DS`. Verified 2026-05-14 on gl_func_00021E08 (split form): 68.65% → 100%](#feedback-ido-goto-epilogue) — _IDO compiles `return a0` from inside a nested if into `b + lw ra` redundancy, not a direct `beqz/bnez` to the epilogue.
 - [IDO implicit decl conflicts with later explicit extern](#feedback-ido-implicit-decl-extern-conflict) — K&R-implicit `int func()` from a call BEFORE the explicit `extern void func()` declaration causes IDO cfe to error "Incompatible function return type"
 - [IDO places locals first-declared-highest; add leading pad local to shift scratch slot down](#feedback-ido-local-ordering) — If your local `scratch` ends up at sp+0x1C but the target wants sp+0x18, declare an extra `int pad` BEFORE scratch.
 - [`or v0, v1, zero` after jal = wrapper returning low word of callee's 64-bit return](#feedback-ido-long-long-v1-move) — In 1080 USO wrappers, the target `or v0, v1, zero` right before `jr ra` means the callee returns a `long long` and the wrapper returns only the low 32 bits.
@@ -2496,6 +2496,57 @@ end:
 All 20 insts match byte-for-byte. Plain `return a0` in the inner if would produce 22 insts (one b + one extra lw ra).
 
 **Related:** the skill's `decomp-permuter` section has `PERM_GENERAL(if (old == 0xA) { *arg0 = val; return val; }, if (old == 0xA) goto store)` as a common variation — same idea.
+
+### Variant — SPLIT-epilogue form (use when target's success path is `beq zero,zero,.epi` + lw-in-delay-slot, NOT a unified `return v0` epilogue)
+
+The above form (`goto end; ... end: return a0;`) is the UNIFIED-epilogue recipe — all paths converge at one `return a0;` where the compiler emits `or v0, a0, zero; jr ra` as the shared exit. This works when:
+- The function returns an arg unchanged on the success path (e.g., `return a0;` where a0 is the input/alloc'd pointer).
+- The zero-arm wants the same value zeroed (the arg-equal-zero case naturally has v0=0 since a0=0).
+
+But when the SUCCESS path computes a DIFFERENT return value (e.g., `return *(v0 + 8);` — dereferences a field rather than returning the alloc'd pointer), and target has the SPLIT-epilogue shape:
+```
+   beq  v0, zero, .L_zero_arm
+   lw   t6, OFF(sp)               ; DS — body starts here
+   sb   t6, 2(v0)
+   ... rest of body ...
+   beq  zero, zero, .L_epilog     ; unconditional skip past zero-arm
+   lw   v0, 8(v0)                  ; DS — compute success return value
+ .L_zero_arm:
+   or   v0, zero, zero             ; explicit-zero return for fail path
+ .L_epilog:
+   lw   ra, ...
+```
+
+…then the UNIFIED-epilogue form (`goto end; ... v0 = *(v0+8); end: return v0;`) DOESN'T match. IDO hoists the `lw v0, 8(v0)` early (right after the entry beq) and uses a different reg (v1) to carry the result across the body — producing the wrong shape.
+
+The SPLIT-epilogue form is what works:
+```c
+char *v0 = (char *)alloc(a0);
+if (v0 == 0) goto end_zero;
+v0[2] = (char)a1;
+*(int*)(v0 + 0xC) = a2;
+v0[1] = a3;
+return *(void**)(v0 + 8);     // explicit return at success path
+end_zero:
+return 0;                      // explicit return at zero-arm
+```
+
+Two explicit `return` statements + a `goto end_zero;` at the alloc-fail branch. IDO -O2 then emits:
+- `beq v0, zero, .L_zero` at the alloc-check (skip body)
+- Body stores inline (delay slot of beq filled by first body load)
+- `beq zero, zero, .L_epi` + `lw v0, 8(v0)` (DS) at success-path return
+- `or v0, zero, zero` at `.L_zero` label (the zero-arm body)
+- Shared `.L_epi:` for `lw ra` + epilogue
+
+**Why this works:** the explicit `return *(v0+8);` at the success path keeps `lw v0, 8(v0)` as a LATE computation (right before the return), forcing IDO to schedule it in the delay slot of the unconditional `beq zero,zero,.L_epi`. The separate `return 0;` at the zero-arm label keeps it as a distinct emit (`or v0, zero, zero`) rather than being merged with the success path's return.
+
+**Verified 2026-05-14 on `gl_func_00021E08`:** the unified form (`goto end; ... end: return v0;`) gave 68.65 %; the split form (`goto end_zero;` + two explicit returns) gave 100 %.
+
+**Decision rule:**
+- Target's success path returns the alloc'd pointer / an arg unchanged → UNIFIED form (one return at `end:` label).
+- Target's success path returns a DERIVED value (`*(v0+offset)`, `v0->field`, etc.) AND the asm shows a `beq zero,zero,.L_epi` + lw-in-DS pattern → SPLIT form (explicit return at each exit, `goto` only to the zero-arm label).
+
+Pick the form from target's asm shape — don't default to unified.
 
 ---
 
