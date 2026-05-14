@@ -103,6 +103,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops between (size 0x28).
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
+- [Drop redundant `if (count <= 0) return;` before a for-loop with the same `i < count` test — IDO emits both `blezl` (early-return) AND `blez` (loop-start), doubling the test code](#feedback-ido-drop-redundant-early-return-before-for-loop) — _When target asm has a single `blez tN, .end` before the loop body and your wrap has both `if (count <= 0) return;` AND `for (i = 0; i < count; ...)`, IDO -O2 emits BOTH branch checks (the early-return as `blezl` likely, the loop-start as plain `blez`). The for-loop's initial test already handles count <= 0, so the explicit early-return is redundant. Removing it collapses to a single blez. Verified 2026-05-14 on gl_func_0004ED0C: 88.57% → 96.07% (+7.5pp) just from dropping the redundant check + the inline-method-ptr-for-$t9 fix._
 - [Diagnostic: `bne vN, zero, .L1` + `or aM, vN, zero` in DS means the result is preserved as the next call's arg-aM (NOT dead code) — re-read the C body, the else-branch call takes one more arg than you think](#feedback-ido-bne-ds-preserves-result-for-next-arg) — _Regular (non-likely) bne's DS executes regardless. When target has `bne vN, $zero, .L1` followed by `or aM, vN, $zero` in the DS, IDO is preserving the v0 (call result) into a different arg-reg for the next call on the taken path. The C should pass the call result as the corresponding ARG to the next call. The wrap was missing this arg, capping fuzzy ~12% short. Verified 2026-05-14 on `gl_func_00021EA8`: 87.5% → 100% by changing `func(table, arg)` to `func(table, r, arg)` (`r` = the named call result, `arg` was the original input)._
 - [Short-of-int extraction emits the WRONG halfword address: `(short)int_at_OFF` emits `lh OFF+2` (low half, big-endian), `*(short*)((char*)p + OFF)` emits `lh OFF` (direct halfword at byte offset). Same trap for `(unsigned short)*int_ptr` → `lhu +2` vs `*p & 0xFFFF` → `lw + andi 0xFFFF`](#feedback-ido-short-of-int-vs-direct-short-load) — _When target asm has `lh rT, OFFSET(rS)` reading a halfword at byte offset OFFSET inside a struct of ints, the natural C `(short)struct[OFFSET/4]` does NOT match. IDO -O2 emits `lh rT, OFFSET+2(rS)` for the int-cast form (low half of the 32-bit word, MIPS big-endian). To get the direct halfword load, use `*(short*)((char*)struct + OFFSET)`. Same trap for `(unsigned short)*int_ptr` (emits `lhu OFF+2(p)`) vs `*int_ptr & 0xFFFF` (emits `lw 0(p); andi rT, rT, 0xFFFF`). Verified 2026-05-14 on gl_func_00038C04: both forms fixed null fuzzy → 95.92%._
 - [`x & ~K` emits `andi rT,rS,0xFFFF-K` (sign-extended-complement form); `x & EXPLICIT_MASK` emits `andi rT,rS,EXPLICIT_MASK` (literal form)](#feedback-ido-andi-mask-bytewidth-depends-on-c-form) — _For an 8-bit char store like `*p = *p & ~2;` vs `*p = *p & 0xFD;`, both produce functionally-identical results (clear bit 1 of the low 8 bits) but IDO encodes the andi with a DIFFERENT 16-bit immediate: `~2` → `andi 0xFFFD` (0x31cffffd byte), `0xFD` → `andi 0x00FD` (0x31cf00fd byte). Match the target's literal — `andi 0xFFFD` means source used `~K`; `andi 0x00FD` means explicit mask. Verified 2026-05-14 on gl_func_0002D064. Same one-bit-different-byte issue as `ori vs addiu` for symbol-vs-literal constants._
@@ -7317,6 +7318,66 @@ Per C11 6.7.3, accessing a volatile object is observable. `(void)dummy` is a rea
 **Anti-pattern:** Don't initialize the volatile at decl (`volatile int dummy = 0;`) — that's a write of a constant, which IDO might emit as `sw zero, OFF(sp)` (different opcode than the `sw aN, OFF(sp)` you may have wanted) or hoist around the function body in unpredictable ways. Declare unitialized, then assign in body at the point you want the spill.
 
 **Related:** `feedback-ido-volatile-saved-arg-forces-local-slot-spill` (write-form's broader cousin: spill an arg to a specific local slot), `feedback-ido-volatile-loop-counter-for-stack-iter` (volatile to force stack-counter loop), `feedback-ido-file-context-affects-frame-size` (when even this lever can't close an 8-byte frame gap).
+
+---
+
+---
+
+<a id="feedback-ido-drop-redundant-early-return-before-for-loop"></a>
+## Drop redundant `if (count <= 0) return;` before a for-loop — IDO emits BOTH branch checks (blezl-likely + blez), doubling the test code
+
+_When the C body has both an explicit early-return and a for-loop whose initial test handles the same condition, IDO -O2 emits both checks: the early-return as `blezl` (branch-likely) with a delay-slot reload, AND the for-loop's initial test as a plain `blez`. The for-loop's natural `i < count` already returns when count is 0 or negative — so the explicit early-return is structurally redundant._
+
+**Pattern (verified 2026-05-14 on `gl_func_0004ED0C`):**
+
+Wrong (caps at 88-89%):
+```c
+void f(T *self) {
+    int i;
+    int count = self->count;
+    if (count <= 0) return;          // ← redundant
+    for (i = 0; i < count; i++) {
+        ...
+    }
+}
+```
+
+Built emits:
+```
+lw   v0, count(a0)
+... 
+blezl v0, .L_end                ; early-return (branch-likely)
+lw   ra, ...                     ; DS (annulled if not taken)
+blez  v0, .L_end_again            ; for-loop start (plain blez!)
+or    s1, zero, zero              ; DS: i = 0
+... loop body ...
+```
+
+Two near-identical branch tests in a row is the diagnostic signal.
+
+Right (matches single-blez target):
+```c
+void f(T *self) {
+    int i;
+    int count = self->count;
+    for (i = 0; i < count; i++) {
+        ...
+    }
+}
+```
+
+Built emits a single `blez` matching target's shape.
+
+**How to spot in the wild:**
+- Target's pre-loop has ONE `blez tN, .end` followed by the loop's first body insn.
+- Your built has TWO branches — `blezl` (likely) + `blez` — for what should be one early-test.
+- The C wrap has both an `if (count <= 0) return;` AND a `for (...; i < count; ...)`.
+
+**Fix:** delete the explicit early-return. The for-loop handles count <= 0 naturally.
+
+**Verified 2026-05-14 on `gl_func_0004ED0C`** (game_libs_post.c): combining this fix with the inline-method-ptr-for-$t9 recipe pushed 88.57% → 96.07% (+7.5pp).
+
+**Doesn't apply when** the early-return path runs DIFFERENT cleanup or has a different return value than the for-loop's natural exit. Only the "for-loop already handles it" case is redundant.
 
 ---
 
