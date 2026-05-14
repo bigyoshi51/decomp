@@ -8153,6 +8153,43 @@ The linker resolves the R_MIPS_HI16/LO16 relocations to address 0x0002B3B8, prod
 
 **Verified 2026-05-08** on `gl_func_000682F8` — 3-arg helper call `gl_func_0001CA10(self+0x14, &gl_ref_0002B3B8, self)` matches byte-exact in linked ELF; `build/<file>.c.o` shows the expected reloc-stub mismatch in raw `objdump -d`.
 
+### Variant — also applies to ALT-ENTRY tail calls (`func_X + offset` pointer arithmetic)
+
+The recipe extends beyond magic integer constants. When a C body has a tail call like `func_00000000((char*)func_0000027C + 0x18);` (calling into an alt-entry / mid-function jump target), IDO emits the FULL 4-insn materialization-then-adjust sequence:
+
+```
+lui    a0, %hi(func_0000027C)       ; materialize symbol base
+addiu  a0, a0, %lo(func_0000027C)   ; complete the symbol
+jal    callee
+addiu  a0, a0, 0x18                  ; (DS) add the offset
+```
+
+Target asm has the cleaner 3-insn `lui + jal + adjusted-addiu(DS)` form:
+```
+lui    a0, %hi(func_0000027C+0x18)
+jal    callee
+addiu  a0, a0, %lo(func_0000027C+0x18)   ; (DS, with the +0x18 folded in)
+```
+
+Same recipe applies — declare a NEW symbol at the resolved offset:
+
+```
+gl_ref_00000294 = 0x00000294;        ; in undefined_syms_auto.txt
+                                      ; (0x294 = 0x27C + 0x18)
+```
+
+```c
+extern char gl_ref_00000294;
+func_00000000(&gl_ref_00000294);     /* was: func_00000000((char*)func_0000027C + 0x18); */
+```
+
+IDO emits the 3-insn form. Verified 2026-05-14 on `func_000086C0` (1080 bootup_uso): 81.76% → 84.93% (+3.17pp).
+
+**When to use this variant:**
+- Target has a tail call to an interior offset of another function (alt-entry).
+- Built emits an extra `addiu aN, aN, %lo(symbol)` before the jal compared to expected.
+- The symbol-ref recipe collapses the 4-insn form into target's 3-insn form.
+
 **Companion:** `feedback-ido-split-or-constant` covers the inverse case (forcing `lui+or+ori` via a split-OR shape when the target asm has `or` operations on the constant).
 
 ---
