@@ -103,6 +103,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops between (size 0x28).
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
+- [Diagnostic: `bne vN, zero, .L1` + `or aM, vN, zero` in DS means the result is preserved as the next call's arg-aM (NOT dead code) — re-read the C body, the else-branch call takes one more arg than you think](#feedback-ido-bne-ds-preserves-result-for-next-arg) — _Regular (non-likely) bne's DS executes regardless. When target has `bne vN, $zero, .L1` followed by `or aM, vN, $zero` in the DS, IDO is preserving the v0 (call result) into a different arg-reg for the next call on the taken path. The C should pass the call result as the corresponding ARG to the next call. The wrap was missing this arg, capping fuzzy ~12% short. Verified 2026-05-14 on `gl_func_00021EA8`: 87.5% → 100% by changing `func(table, arg)` to `func(table, r, arg)` (`r` = the named call result, `arg` was the original input)._
 - [Short-of-int extraction emits the WRONG halfword address: `(short)int_at_OFF` emits `lh OFF+2` (low half, big-endian), `*(short*)((char*)p + OFF)` emits `lh OFF` (direct halfword at byte offset). Same trap for `(unsigned short)*int_ptr` → `lhu +2` vs `*p & 0xFFFF` → `lw + andi 0xFFFF`](#feedback-ido-short-of-int-vs-direct-short-load) — _When target asm has `lh rT, OFFSET(rS)` reading a halfword at byte offset OFFSET inside a struct of ints, the natural C `(short)struct[OFFSET/4]` does NOT match. IDO -O2 emits `lh rT, OFFSET+2(rS)` for the int-cast form (low half of the 32-bit word, MIPS big-endian). To get the direct halfword load, use `*(short*)((char*)struct + OFFSET)`. Same trap for `(unsigned short)*int_ptr` (emits `lhu OFF+2(p)`) vs `*int_ptr & 0xFFFF` (emits `lw 0(p); andi rT, rT, 0xFFFF`). Verified 2026-05-14 on gl_func_00038C04: both forms fixed null fuzzy → 95.92%._
 - [`x & ~K` emits `andi rT,rS,0xFFFF-K` (sign-extended-complement form); `x & EXPLICIT_MASK` emits `andi rT,rS,EXPLICIT_MASK` (literal form)](#feedback-ido-andi-mask-bytewidth-depends-on-c-form) — _For an 8-bit char store like `*p = *p & ~2;` vs `*p = *p & 0xFD;`, both produce functionally-identical results (clear bit 1 of the low 8 bits) but IDO encodes the andi with a DIFFERENT 16-bit immediate: `~2` → `andi 0xFFFD` (0x31cffffd byte), `0xFD` → `andi 0x00FD` (0x31cf00fd byte). Match the target's literal — `andi 0xFFFD` means source used `~K`; `andi 0x00FD` means explicit mask. Verified 2026-05-14 on gl_func_0002D064. Same one-bit-different-byte issue as `ori vs addiu` for symbol-vs-literal constants._
 - [`volatile int low_pad[N];` declared BEFORE a `float buf[M]` grows the frame by 4N bytes AND pushes buf to a higher stack offset](#feedback-ido-volatile-int-array-low-pad-grows-frame-and-pushes-buf-up) — _When buf is offset 4N bytes too low vs target, a leading `volatile int low_pad[N]; low_pad[i]=0;` grows the frame by 4N AND pushes buf up by 4N (volatile-scalars-before-array layout rule). Verified 2026-05-14 on gl_func_00039A9C: 2-element low_pad moved buf sp+0x24 → sp+0x28. Cost: N visible `sw zero` insns; net regression unless paired with INSN_PATCH to elide them._
@@ -7316,6 +7317,59 @@ Per C11 6.7.3, accessing a volatile object is observable. `(void)dummy` is a rea
 **Anti-pattern:** Don't initialize the volatile at decl (`volatile int dummy = 0;`) — that's a write of a constant, which IDO might emit as `sw zero, OFF(sp)` (different opcode than the `sw aN, OFF(sp)` you may have wanted) or hoist around the function body in unpredictable ways. Declare unitialized, then assign in body at the point you want the spill.
 
 **Related:** `feedback-ido-volatile-saved-arg-forces-local-slot-spill` (write-form's broader cousin: spill an arg to a specific local slot), `feedback-ido-volatile-loop-counter-for-stack-iter` (volatile to force stack-counter loop), `feedback-ido-file-context-affects-frame-size` (when even this lever can't close an 8-byte frame gap).
+
+---
+
+---
+
+<a id="feedback-ido-bne-ds-preserves-result-for-next-arg"></a>
+## Diagnostic: regular bne's DS holding `or aM, vN, zero` is preserving the result as the NEXT call's argument — your wrap is missing an arg
+
+_When you see this pattern in target asm, the C source you've written is ALMOST certainly under-arging the next call:_
+
+```
+jal    func
+... DS (load some arg) ...
+bne    v0, $zero, .L_next_call    ; result-zero check
+or     a1, v0, $zero               ; DS — preserves v0 (= func result) into a1
+.L_zero_arm:                       ; if v0 == 0
+...
+.L_next_call:                      ; if v0 != 0
+lui    a0, ...                     ; setup next call's arg-a0
+addiu  a0, a0, ...
+jal    next_func                   ; ← takes a1 (= preserved result)!
+```
+
+The `or a1, v0, zero` in a REGULAR (non-likely) bne's DS executes regardless of the branch outcome — but the value is only USED on the taken path (where `.L_next_call` reads a1 as the function's second argument). On the not-taken path (v0 == 0), a1 is set but `.L_zero_arm` doesn't use it (dead store).
+
+**Diagnostic rule:** any `or aM, $vN, $zero` in a bne's DS preserves $vN (= jal result) into $aM for a subsequent jal on the taken path. Re-read the C: the next call needs the result as an explicit arg.
+
+**Recipe:**
+
+```c
+int r = func(arg);
+if (r == 0) {
+    /* zero-arm */
+} else {
+    next_func(other_arg, r, original_input);   /* ← r is the new middle arg */
+}
+```
+
+**The error mode this fixes:** the natural-looking C is
+
+```c
+if (func(arg) == 0) {  /* result discarded — only sign-tested */
+    /* zero-arm */
+} else {
+    next_func(other_arg, original_input);   /* ← MISSING arg */
+}
+```
+
+Without naming the result, the C body reads as a simple test-and-discard. IDO has no signal that the result is needed downstream. The wrap fuzzy% sits in the 80s and won't budge.
+
+**Verified 2026-05-14 on `gl_func_00021EA8`** (game_libs_post.c): 87.5% → 100% by adding `int r0 = func(...)` and passing it as the middle arg to the next call. Same recipe applied to both call-pair branches in the function (4 calls total, 2 pairs).
+
+**Related:** `feedback-ido-arg-save-to-sreg-in-bne-delay` (IDO schedules `or sN, aN, zero` into bne DS — that's a SAVE to s-reg, not result-preserve to a-reg). The diagnostic differs by which register class is the destination of the `or`: a-reg = next-call-arg preserve; s-reg = callee-save copy.
 
 ---
 
