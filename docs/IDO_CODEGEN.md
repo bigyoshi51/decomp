@@ -85,6 +85,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
 - [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
 - [Type-different unique externs (`int X` + `char Y`, both at addr 0) break IDO CSE between sibling lui+addiu in the same call](#feedback-ido-type-split-unique-extern-breaks-cse) — _When `func(p, *(int*)&D_X, &D_Y)` should emit TWO separate `lui+addiu` (target shape) but built emits ONE shared lui via CSE, declaring the externs with DIFFERENT types (one `int`, one `char`) prevents IDO from CSE-folding even when both link-resolve to address 0._
+- [Break `&X` ↔ `*(int*)&X = 0` CSE by expressing the second use as pointer-arithmetic from a NEAR symbol](#feedback-ido-cse-bust-via-near-symbol-pointer-arith) — _When target emits `*(int*)&X = 0` (naked store, single `lui at; sw 0(at)`) but separately needs `end = &X` for a pointer bound, IDO CSEs the address load → wrong shape (`lui v?; addiu v?; sw 0(v?)`, 3 insns). Use `end = &Y + N` where `Y + N` resolves to the same final address as `&X`. Pointer arithmetic on a near symbol post-links to the same VRAM but is syntactically distinct → no CSE. Verified 2026-05-13 on `func_80001184` (kernel zero-init): 72.10% → 81.58% (+9.48pp) by writing `end = D_80012D3C + 8` instead of `end = &D_80012D5C` (both resolve to 0x80012D5C)._
 - [Replace literal `0.0f * 0.0f` with `local[N] * local[N]` (where local[N] holds 0.0f) to force IDO to emit the redundant mul/add insn pair](#feedback-ido-zero-term-via-memory-load-not-literal) — _When target asm has an explicit middle 0-term in a sum (e.g. `sqrlen = a*a + 0 + c*c` with a literal mul.s on the zero), C `0.0f * 0.0f` gets constant-folded out of the expression by IDO -O2. Reference a memory-stored 0.0f local (`local_xz[1]`) instead — the lwc1 + mul.s + add.s chain emits as expected. Verified 2026-05-08 on game_uso_func_00001DDC (+0.73pp from this single line change)._
 - [IDO -O2 auto-unrolls simple count-bounded pointer-chase loops 4x; also constant-folds `/ const` to `* recip`](#feedback-ido-o2-loop-unroll-and-constfold) — A bare `for (i=0; i<n; i++) p = p->next;` loop at IDO -O2 compiles to a Duff's-device-style 4x unrolled body with a remainder prologue.
 - [IDO `register T x = const;` does NOT prevent constant-folding through reads of x](#feedback-ido-register-keyword-doesnt-block-constant-fold) — Declaring `register int one = 1;` in IDO -O2 does NOT pin `one` to a $s-register for all reads.
@@ -2407,6 +2408,33 @@ Generalization: "same-type aliases" rule above only applies WITHIN a single call
 **Application:** when target shows separate `lui+addiu` for two uses of `&D` (one as struct-field-store, another as later call-arg), declare two `extern char D_alias_N;` aliases at 0x0 in `undefined_syms_auto.txt`. No type split required.
 
 **Caveat — does NOT help cluster-load patterns** (verified 2026-05-06 on `game_uso_func_0001001C`, regressed 84.05% → 81.26%): when target uses ONE base reg + multiple offsets (`p = &D + 0xDD0; arg1 = p[0]; arg2 = p[1]` emitting `lui+addiu p; lw 0(p); lw 4(p)`), declaring two unique externs at the offset addresses (e.g., `D_arg1 = 0xDD0; D_arg2 = 0xDD4`) FORCES two separate `lui+addiu` pairs, breaking the cluster. The unique-extern technique only helps when target ALREADY emits two separate base loads — never when target uses cluster-load. Also doesn't help precall-arg-spill caps (`sw a1, 4(sp)` in jal delay slot is structural, not symbol-CSE).
+
+---
+
+<a id="feedback-ido-cse-bust-via-near-symbol-pointer-arith"></a>
+## Break `&X` ↔ `*(int*)&X = 0` CSE by expressing the second use as pointer-arithmetic from a NEAR symbol
+
+_When target emits `*(int*)&X = 0` (naked store: single `lui at; sw 0(at)`, 2 insns) AND separately uses `&X` as a pointer bound (e.g., `end = &X`), the natural C — naked-store-plus-`end = &X` — triggers IDO -O2 to CSE the address load. Built emits `lui v?, hi(X); addiu v?, v?, lo; sw 0(v?); ...; end = v?` — the address materialization is hoisted into a $v-register and reused, growing the store to 3 insns and changing the schedule. Express the second use via pointer arithmetic from a near (same-link-resolution) symbol to break the CSE while preserving post-link byte-identical addresses._
+
+**Verified 2026-05-13** on `func_80001184` (kernel zero-init): 72.10% → 81.58% (+9.48pp) by writing `end = D_80012D3C + 8` instead of `end = &D_80012D5C`. Both expressions resolve to VRAM 0x80012D5C at link time, but the pointer-arithmetic form has no syntactic reference to `D_80012D5C` → no CSE between it and the `*(int*)&D_80012D5C = 0` store. Prologue collapses to target's `lui at; sw 0(at)` form.
+
+**Pattern recognition** — apply when:
+- Target asm starts with `lui at, hi(X); sw zero, lo(X)(at)` (2-insn naked store)
+- Built emits `lui v?, hi(X); addiu v?, v?, lo; sw 0(v?); ... ; mov vN, v?` (3 insns with $v-reg CSE)
+- And the C separately needs `&X` for a pointer bound OR for a struct-field-pointer-store
+
+**Mechanism:** IDO's CSE pass folds `&X` references across the function body. The optimizer doesn't track that `*(int*)&X = 0` is a STORE to X (which doesn't need the address kept around) vs a LOAD of `&X` (which does). It just sees two `&X` SSA values and CSE-folds them into a single materialization, keeping the address live in a register across the store.
+
+**Constraints — when this works:**
+- A "near symbol" exists at predictable offset from X (in the same .data block or array). Pointer arithmetic `Y + N` must post-link to `&X`.
+- Same-link-resolution is enforced by the linker (extern declarations of contiguous data). Verify with `nm` or `objdump -t` that addresses match.
+- This is NOT the same as declaring `D_X` and `D_Y` as separate externs at the same address (that's `feedback-ido-cse-bust-via-distinct-externs`); here, the SECOND symbol (`D_80012D3C`) is a real, distinct address — we're using its offset to LAND on X's address.
+
+**Doesn't help — same-call CSE** (use `feedback-ido-cse-bust-via-distinct-externs` or `feedback-ido-type-split-unique-extern-breaks-cse` instead): if both `&X` uses are within the SAME function call's argument list, pointer-arith reformulation won't separate them because IDO CSEs at the call-arg-marshaling stage. Use distinct-extern aliasing for that case.
+
+**Companion entries:**
+- `feedback-ido-cse-bust-via-distinct-externs` — for same-call-arg CSE
+- `feedback-ido-type-split-unique-extern-breaks-cse` — type-split for arg-list CSE
 
 ---
 
