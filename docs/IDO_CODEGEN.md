@@ -182,6 +182,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [bootup_uso void setters use unfilled delay slot (sw; jr; nop) — not matchable from C](#feedback-ido-unfilled-store-return) — _Some bootup_uso tiny void setters produce `sw; jr $ra; nop` instead of `jr $ra; sw` (delay slot).
 - [Splat synthetic stubs — INCLUDE_ASM + file-scope `extern int f()` (K&R, int return)](#feedback-ido-unspecified-args) — _For stubs like bootup_uso's func_00000000 that callers use with varying arg counts and sometimes want a return value: INCLUDE_ASM the body, and file-scope declare `extern int f();`.
 - [IDO $v0 vs $t-regs — named locals get $v0, inlined expressions get $t6/$t7/$t8](#feedback-ido-v0-reuse-via-locals) — IDO assigns $v0 to named locals (esp. short-lived ones) and $t-regs to intermediate expression temps.
+- [Init pointer/end locals AFTER the call so they don't live across it — IDO uses caller-save regs instead of spilling to stack](#feedback-ido-init-locals-after-call-avoids-spill) — _When loop pointers/end-markers are only used POST-call, declaring them uninitialized at top + initializing AFTER the call keeps them in caller-save $t/$v regs with no stack slot. Putting `int *src = buf; gl_func(...); ...` (init BEFORE call) forces IDO to spill src to stack across the call. Verified 2026-05-13 on game_uso_func_0000C12C: 0 % → 81.27 % from init-after-call alone._
 - [Brace-block scope for short-lived named locals keeps stack frame at natural size](#feedback-ido-brace-block-scope-saves-stack-frame-bytes) — When you introduce named locals to flip IDO's reg pick, declaring at function scope grows the frame by 8 bytes; wrapping in `{ }` keeps the frame natural while preserving the reg-pick win. Verified +0.21pp on mgrproc_uso_func_00001AD0.
 - [`void f(int a0, ...)` with empty body spills all 4 arg regs to caller slots](#feedback-ido-varargs-empty-body) — When target asm is `addiu sp, -8; sw a0, 8(sp); sw a1, 12(sp); sw a2, 16(sp); sw a3, 20(sp); jr ra; addiu sp, 8` — 4 consecutive spills of a0..a3 to caller's arg area, no jal, no other body — the original C was a…
 - [Typed-varargs extern (`int f(int,int,...)`) does NOT force IDO -O2 caller-side stack-arg spills (sw a1,4(sp); sw a2,8(sp))](#feedback-ido-varargs-extern-doesnt-force-caller-spill) — _When target asm shows defensive `sw a1,4(sp); sw a2,8(sp)` spills around a jal but mine doesn't, the natural fix-attempt is to declare a unique-aliased extern with explicit varargs sig.
@@ -8633,3 +8634,61 @@ At -O0, IDO doesn't do branch-folding optimization. The single-return form mater
 **Distinct from `feedback-ido-o0-load-order-not-expression-driven`:** that entry covers field-load order at -O0; this one is about return-statement shape lowering at -O0. Both reflect IDO -O0's lack of dataflow normalization, but the levers are different.
 
 **How to apply:** when picking a -O0 NM-wrap to grind, BEFORE rewriting any `if/return` chain into a single-return: check whether target asm has `beq` or `sltu` for the comparison. If `beq`, keep the explicit-branch form; if `sltu`, the single-return form may be needed.
+
+---
+
+<a id="feedback-ido-init-locals-after-call-avoids-spill"></a>
+## Initialize pointer/end locals AFTER the function call to avoid stack spill across it
+
+_When loop-internal pointers (src, end, dst) only need to live POST-call, declaring them uninitialized at top of function then initializing AFTER the gl_func call keeps them in caller-save $t/$v registers without a stack slot. Initializing them BEFORE the call (the natural C shape) forces IDO to spill across the call since the locals must survive. Verified 2026-05-13 on game_uso_func_0000C12C: 0 % → 81.27 % with this single change._
+
+**The natural-but-suboptimal C:**
+
+```c
+void f(int *a0) {
+    int buf[16];
+    int *src = buf;       /* init BEFORE call — IDO must spill across */
+    int *end = buf + 15;
+    gl_func(&D, buf, 0x40);
+    do {
+        *a0++ = *src++; ...
+    } while (src != end);
+}
+```
+
+IDO -O2 sees `src` and `end` are live across the `gl_func` call, so it spills them to local stack slots (frame grows by 8 bytes, plus the spill/reload bytecode at the call site).
+
+**The matching C:**
+
+```c
+void f(int *a0) {
+    int buf[16];
+    int *src;             /* declared, NOT initialized */
+    int *end;
+    gl_func(&D, buf, 0x40);
+    /* init AFTER the call — live range is post-call only */
+    src = buf;
+    end = buf + 15;
+    do {
+        *a0++ = *src++; ...
+    } while (src != end);
+}
+```
+
+Now `src` and `end` are only live from their init point onward (no live-range across the call), so IDO uses caller-save $t-regs and emits no spill.
+
+**Why it works:** IDO's liveness analysis sees the assignment-after-call form as creating fresh pseudos whose live ranges start post-call. These pseudos can be allocated to any caller-save register (since the caller-save expectation is the call destroys them). The pre-call init form has the pseudos live FROM declaration THROUGH the call, requiring callee-save ($s) or stack spill.
+
+**When this lever applies:**
+- The local's value depends only on stack array addresses (buf, buf + N) or other compile-time values that don't need the call's result.
+- The local is dead BEFORE the call (just hasn't been declared yet) and live AFTER.
+- The natural C "init at declaration" form lives across the call.
+
+**When it does NOT help:**
+- If the local's value depends on the call's return value or output buffer, you can't init it before the call anyway.
+- If the local is used both before AND after the call, splitting init points loses the benefit.
+
+**Companion patterns:**
+- `feedback-ido-v0-reuse-via-locals` — named locals get $v0/$v1; inline derefs get $t-regs.
+- `feedback-ido-brace-block-scope-saves-stack-frame-bytes` — wrap named locals in `{ ... }` to limit lifetime.
+- `feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill` — opposite direction (force caller-slot spill of an arg).
