@@ -167,7 +167,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [For 16-case sparse dispatchers in segments without .rodata, `if (a1 == N) goto cN;` chain beats both switch (jumptable) and if-else-if chain](#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse) — _When the target asm is a chain of sequential `li at, K; beq a1, at, body_K` (compares grouped at top, case bodies after), straight `if-else-if` produces 49 % match (interleaves bodies) and `switch` produces 69 %…
 - [IDO -O2 `void f(void) {}` produces exactly `jr ra; nop` — empty functions ARE matchable](#feedback-ido-empty-void-matchable) — _The CLAUDE.md general note ("Empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop") is WRONG for IDO 7.1 at -O2.
 - [Tiny branch-predicate funcs with forced `addiu sp, -8/+8` frame + explicit `b` to epilogue — unreachable from IDO -O0/-O1/-O2](#feedback-ido-forced-frame-tiny-predicate) — Some 7-9-insn predicate functions (e.g. `return (a & MASK) != 0;`) have a target shape with a forced stack frame (`addiu sp, -8` prologue / `addiu sp, +8` in jr delay slot) AND an explicit `b` to the epilogue-merge…
-- [Use `goto end` for early-return from alloc-check; plain `return` emits extra branch. **Two variants: UNIFIED-epilogue (`goto end; ... end: return a0;`) when success returns an arg unchanged, vs SPLIT-epilogue (`goto end_zero; ... return DERIVED; end_zero: return 0;`) when success returns a derived value AND target has `beq zero,zero,.L_epi + lw-in-DS`. Verified 2026-05-14 on gl_func_00021E08 (split form): 68.65% → 100%](#feedback-ido-goto-epilogue) — _IDO compiles `return a0` from inside a nested if into `b + lw ra` redundancy, not a direct `beqz/bnez` to the epilogue.
+- [Use `goto end` for early-return from alloc-check; plain `return` emits extra branch. **Three variants: UNIFIED-epilogue (`goto end; ... end: return a0;`), SPLIT-epilogue (`goto end_zero; ... return DERIVED; end_zero: return 0;`), and FALL-THROUGH-WITH-NULL-GUARD (`if (X != 0) { partial body }` instead of `if (X == 0) return 0;` when target's beq lands MID-BODY, not at full end). Verified 2026-05-14: split form on gl_func_00021E08 (68.65% → 100%), fall-through form on titproc_uso_func_00001B10 (51.93% → 73.40%)](#feedback-ido-goto-epilogue) — _IDO compiles `return a0` from inside a nested if into `b + lw ra` redundancy, not a direct `beqz/bnez` to the epilogue.
 - [IDO implicit decl conflicts with later explicit extern](#feedback-ido-implicit-decl-extern-conflict) — K&R-implicit `int func()` from a call BEFORE the explicit `extern void func()` declaration causes IDO cfe to error "Incompatible function return type"
 - [IDO places locals first-declared-highest; add leading pad local to shift scratch slot down](#feedback-ido-local-ordering) — If your local `scratch` ends up at sp+0x1C but the target wants sp+0x18, declare an extra `int pad` BEFORE scratch.
 - [`or v0, v1, zero` after jal = wrapper returning low word of callee's 64-bit return](#feedback-ido-long-long-v1-move) — In 1080 USO wrappers, the target `or v0, v1, zero` right before `jr ra` means the callee returns a `long long` and the wrapper returns only the low 32 bits.
@@ -2548,6 +2548,37 @@ Two explicit `return` statements + a `goto end_zero;` at the alloc-fail branch. 
 - Target's success path returns a DERIVED value (`*(v0+offset)`, `v0->field`, etc.) AND the asm shows a `beq zero,zero,.L_epi` + lw-in-DS pattern → SPLIT form (explicit return at each exit, `goto` only to the zero-arm label).
 
 Pick the form from target's asm shape — don't default to unified.
+
+### Variant — FALL-THROUGH-WITH-NULL-GUARD (use when alloc-fail branches into a partial body, not a full end-return)
+
+For functions that allocate MULTIPLE objects in sequence (e.g. `p1 = ... ; p2 = ...`), don't assume every alloc-fail is an early-return. If target's asm shows the SECOND alloc-fail branching into a PARTIAL body (not the function's full end), the original C uses an `if (X != 0) { ... }` INNER-GUARD around the part of the body that uses `X`, rather than an `if (X == 0) return 0;` early-return.
+
+**Example pattern (verified 2026-05-14 on `titproc_uso_func_00001B10`):**
+
+The function has two allocs:
+```
+p1 = a0;
+if (p1 == 0) p1 = alloc(0x40);
+if (p1 == 0) return 0;          // ← FULL end-return on p1 fail
+p2 = a1;
+if (p2 == 0) p2 = alloc(0x2C);
+                                 // ← NO early-return on p2 fail
+if (p2 != 0) {                  // inner-guard around p2-init only
+    gl_func(p2, ...);
+    *(p2 + 0x28) = ...;
+}
+*(p1 + ...) = ...;              // p1-init runs regardless
+gl_func(p1, p2);                // even called with p2 == 0
+return p1;
+```
+
+The C compiler-author knew `gl_func(p1, p2)` is safe with `p2 == 0` (callee handles null), and `*p2 = ...` is the only operation that needs the inner guard. The asm reflects this: `beq v0, zero, .L_partial_body` skips only the `*p2 = ...` block, not the whole function.
+
+**Diagnosis: look at where the alloc-fail beq LANDS:**
+- Lands at the function's `lw ra; addiu sp; jr ra` epilogue → use `goto end; ... end: return ...` (unified or split form).
+- Lands MID-BODY (some body insns still execute after the branch target) → use `if (X != 0) { partial body }` inner-guard form. The post-guard insns are shared between the X==null and X!=null paths.
+
+**Verified 2026-05-14 on `titproc_uso_func_00001B10`:** changing `if (p2 == 0) return 0;` to `if (p2 != 0) { p2-init body }` (with p2 falling through to the post-init shared body) pushed 51.93% → 73.40% (+21.47pp).
 
 ---
 
