@@ -101,6 +101,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops between (size 0x28).
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
+- [`x & ~K` emits `andi rT,rS,0xFFFF-K` (sign-extended-complement form); `x & EXPLICIT_MASK` emits `andi rT,rS,EXPLICIT_MASK` (literal form)](#feedback-ido-andi-mask-bytewidth-depends-on-c-form) — _For an 8-bit char store like `*p = *p & ~2;` vs `*p = *p & 0xFD;`, both produce functionally-identical results (clear bit 1 of the low 8 bits) but IDO encodes the andi with a DIFFERENT 16-bit immediate: `~2` → `andi 0xFFFD` (0x31cffffd byte), `0xFD` → `andi 0x00FD` (0x31cf00fd byte). Match the target's literal — `andi 0xFFFD` means source used `~K`; `andi 0x00FD` means explicit mask. Verified 2026-05-14 on gl_func_0002D064. Same one-bit-different-byte issue as `ori vs addiu` for symbol-vs-literal constants._
 - [`volatile int low_pad[N];` declared BEFORE a `float buf[M]` grows the frame by 4N bytes AND pushes buf to a higher stack offset](#feedback-ido-volatile-int-array-low-pad-grows-frame-and-pushes-buf-up) — _When buf is offset 4N bytes too low vs target, a leading `volatile int low_pad[N]; low_pad[i]=0;` grows the frame by 4N AND pushes buf up by 4N (volatile-scalars-before-array layout rule). Verified 2026-05-14 on gl_func_00039A9C: 2-element low_pad moved buf sp+0x24 → sp+0x28. Cost: N visible `sw zero` insns; net regression unless paired with INSN_PATCH to elide them._
 - [Write-only `volatile int dummy = aN;` keeps an 8-byte frame allocated WITHOUT the dead-load artifact of `(void)dummy;`](#feedback-ido-write-only-volatile-keeps-frame-without-deadload) — _When `volatile int dummy;` is the only lever to keep IDO -O2 from collapsing a small stack frame, the default `(void)dummy;` use-site emits a trailing `lw zero, OFF(sp)` dead-load. Swap it for `dummy = aN;` (volatile-WRITE, no read): slot stays anchored, no trailing load emitted. Verified 2026-05-14 on `gl_func_0006AF0C` (79.28% → 86.78%, 16→14 insns)._
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
@@ -7216,6 +7217,43 @@ Per C11 6.7.3, accessing a volatile object is observable. `(void)dummy` is a rea
 **Anti-pattern:** Don't initialize the volatile at decl (`volatile int dummy = 0;`) — that's a write of a constant, which IDO might emit as `sw zero, OFF(sp)` (different opcode than the `sw aN, OFF(sp)` you may have wanted) or hoist around the function body in unpredictable ways. Declare unitialized, then assign in body at the point you want the spill.
 
 **Related:** `feedback-ido-volatile-saved-arg-forces-local-slot-spill` (write-form's broader cousin: spill an arg to a specific local slot), `feedback-ido-volatile-loop-counter-for-stack-iter` (volatile to force stack-counter loop), `feedback-ido-file-context-affects-frame-size` (when even this lever can't close an 8-byte frame gap).
+
+---
+
+---
+
+<a id="feedback-ido-andi-mask-bytewidth-depends-on-c-form"></a>
+## `x & ~K` emits `andi rT,rS,0xFFFF-K`; `x & EXPLICIT_MASK` emits `andi rT,rS,EXPLICIT_MASK` — choose the C form that matches target's literal
+
+_For 8-bit-stored values, `*p = *p & ~2;` and `*p = *p & 0xFD;` produce functionally-identical results (clear bit 1 of the low 8 bits, since the store is 8-bit `sb`). But IDO encodes the `andi` instruction with a DIFFERENT 16-bit immediate depending on the C form, and the resulting byte differs even though semantic behavior matches._
+
+**Pattern (verified 2026-05-14 on `gl_func_0002D064`):**
+
+C source `*(char*)(a0 + 0) = *(char*)(a0 + 0) & ~2;` → IDO emits:
+```
+lbu  rT, 0(rS)
+andi rU, rT, 0xFFFD       ; 0x31cffffd
+sb   rU, 0(rS)
+```
+
+C source `*(char*)(a0 + 0) = *(char*)(a0 + 0) & 0xFD;` → IDO emits:
+```
+lbu  rT, 0(rS)
+andi rU, rT, 0xFD         ; 0x31cf00fd
+sb   rU, 0(rS)
+```
+
+Both expressions clear bit 1 of the low 8 bits, but the immediate stored in the `andi` instruction differs. The first form uses the C complement operator (`~2` = `0xFFFFFFFD` as signed int), which IDO truncates to the low 16 bits = `0xFFFD`. The second uses the explicit narrow mask, which IDO uses directly = `0xFD`.
+
+**How to apply:**
+
+- If target asm shows `andi rT,rS,0xFFFD` (or any `andi 0xFFF<x>` pattern with the complement form): use `& ~K` in C, where `K` is the bit being cleared.
+- If target asm shows `andi rT,rS,0x00FD` (or any narrow mask form): use the explicit literal `& 0xFD`.
+- Identify which form by looking at the upper 8 bits of the andi immediate. `0xFF<x>` → complement form. `0x00<x>` → explicit literal form.
+
+**Why it matters:** even when both forms are semantically equivalent (e.g., for 8-bit stores), they emit different opcode bytes (0x31cf**FFFD** vs 0x31cf**00FD**). A byte-exact match requires choosing the form that matches target's encoding.
+
+**Same class as:** `feedback-ido-magic-arg-via-symbol-not-literal` (lui+addiu vs lui+ori for `0xKKKKKKKK` constants), `feedback-ido-split-or-constant` (when to combine vs split a constant in C to match `lui+or+ori` vs `lui+addiu`). All three are "same effective value, different opcode encoding, source-form-dependent" patterns.
 
 ---
 
