@@ -2591,6 +2591,10 @@ The C compiler-author knew `gl_func(p1, p2)` is safe with `p2 == 0` (callee hand
 
 **Second verification 2026-05-14 on `titproc_uso_func_00001D7C`** (sibling of 1B10): dead-arm second alloc with the same `if (X == 0) return X;` → `if (X == 0) sub = alloc(...);` fall-through form. Combined with fixing a typo where `*(self+0x28) = base` appeared TWICE in the C source (should have been `sub` for the first store, `self` for the second — TWO distinct pointers, even though `sub == self` in the typical reachable path). Pushed 59.36% → 84.20% (+24.84pp). The two-pointer encoding is target-mandated even when the dead-arm path means both pointers usually alias — IDO preserves the source-level distinction in the emit (two separate `sw rN, 0x28(...)` instructions with different base registers).
 
+**Third verification 2026-05-14 on `titproc_uso_func_00001840`** (third sibling in the same family): same fix applied identically. Pushed 76.87% → 84.26% (+7.39pp).
+
+**Recipe payoff scales INVERSELY with body size:** the alloc-cascade-fix's contribution is a fixed ~6-8 insn diff, so on a function with a longer body the proportional gain is diluted. 1B10 (42-insn) → +21pp; 1D7C (44-insn) → +25pp; 1840 (68-insn) → +7pp. When choosing whether to apply the recipe, weigh against function size — a 200-insn function with the same alloc-cascade-fix yield is ~3-5pp, often not worth the source churn.
+
 ---
 
 ---
