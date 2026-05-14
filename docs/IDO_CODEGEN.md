@@ -3023,6 +3023,8 @@ The name `gl_proto_3787C` is arbitrary — pick a unique name per use site (e.g.
 **Other previously-untried workaround (still untried):**
 - Move the function to a SEPARATE .c file that doesn't include the K&R declaration, declares its own prototyped version. Add to Makefile + linker script. The named-extern trick above is simpler — recommended.
 
+**Scope of the workaround — does NOT extend to int-arg-share patterns (verified negative 2026-05-14, gl_func_00066210):** The named-typed-extern trick fixes the K&R float→double promotion. It does NOT enable IDO's "share $a0 across adjacent K&R calls when both pass the same int value" optimization. A function like `f(1); g = f(1); f(&buf, 4); ...` where target skips the second `li a0, 1` (saving 1 insn because a0 still holds 1 from the first call) cannot be reproduced from typed-extern C — IDO emits independent call sites with full arg setup per typed-extern call. The arg-share is IDO's internal escape-analysis on the K&R callee, not a property of the call-site prototype. Cap stays NM.
+
 **Origin:** 2026-04-19 game_libs gl_func_00067AC8. Tried 3 variants; all failed for the reasons above. Reverted to INCLUDE_ASM.
 
 **Float-RETURN inverse case (2026-05-07, mgrproc_uso_func_000005D0):**
