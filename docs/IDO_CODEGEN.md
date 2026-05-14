@@ -3004,9 +3004,24 @@ mov.s $f14, $f12       # delay slot (pass single float to both f12 and f14)
 - If asm has `jal gl_func_00000000` with ALL-INT arg setup (`$a0..$a3`): the K&R extern works fine, just use int args.
 - If your body doesn't need direct `jal` (e.g., no arg dep on the specific instruction form): NON_MATCHING wrap if ≥80 %, else INCLUDE_ASM.
 
-**Potential future workarounds (not tried):**
-- Move the function to a SEPARATE .c file that doesn't include the K&R declaration, declares its own prototyped version of `gl_func_00000000`. Add to Makefile + linker script. Probably works but adds build complexity.
-- Adopt a naming convention: `gl_func_00000000_ff = 0x0` in undefined_syms_auto.txt as an alias, then declare `extern void gl_func_00000000_ff(float, float);` and call that. Need to verify the linker resolves the alias correctly and that jal works.
+**VERIFIED workaround (2026-05-14, gl_func_0003787C):** Declare a DIFFERENTLY NAMED prototyped extern at function scope. The fresh name doesn't conflict with the K&R `gl_func_00000000` declaration. For 1080 USO segments the linker resolves both via R_MIPS_26 (jal opcode `0x0C000000` + reloc-to-symbol) — both names resolve to the same target offset 0 in the same segment, so post-link bytes are identical to calling `gl_func_00000000` directly.
+
+```c
+/* file scope: extern int gl_func_00000000(); — K&R */
+/* function scope: */
+extern int gl_proto_3787C(void*, void*, void*, int, float, int);
+void gl_func_0003787C(void *a0) {
+    gl_proto_3787C(/* args */, 6.0f, 0);  /* emits direct jal + swc1 singles */
+    gl_func_00000000(a0);                  /* still uses K&R extern */
+}
+```
+
+Result: `jal` direct call, `swc1` singles (no float→double promotion). Byte-exact on gl_func_0003787C (84 bytes, 0 diffs).
+
+The name `gl_proto_3787C` is arbitrary — pick a unique name per use site (e.g. `gl_proto_<funcname>`). It's only used for prototype enforcement at this call site; no linker entry needed because the reloc target is encoded in the jal opcode (always offset 0 for USO segments since `gl_func_00000000` IS offset 0 in the segment's symbol table).
+
+**Other previously-untried workaround (still untried):**
+- Move the function to a SEPARATE .c file that doesn't include the K&R declaration, declares its own prototyped version. Add to Makefile + linker script. The named-extern trick above is simpler — recommended.
 
 **Origin:** 2026-04-19 game_libs gl_func_00067AC8. Tried 3 variants; all failed for the reasons above. Reverted to INCLUDE_ASM.
 
