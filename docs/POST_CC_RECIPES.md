@@ -31,6 +31,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [SUFFIX_BYTES with N words of `0x03E00008,0x00000000` absorbs bundled trailing empty functions in a USO .s file](#feedback-suffix-bytes-for-bundled-empty-trailers) — _When a USO .s file bundles a real function plus N small empty (`jr ra; nop`) functions that splat couldn't separate, write only the main C body and use SUFFIX_BYTES to add N×8 bytes of `0x03E00008,0x00000000` per empty.
 - [SUFFIX_BYTES + PROLOGUE_STEALS combo only matches when successor's data setup is at function start, not mid-function](#feedback-suffix-bytes-only-helps-start-of-function) — _SUFFIX_BYTES injects bytes at predecessor's tail; PROLOGUE_STEALS splices bytes from successor's start.
 - [SUFFIX_BYTES (not pad-sidecar) is the right tool for 4-byte trailing stolen-prologue from predecessor](#feedback-suffix-bytes-unblocks-4byte-stolen-prologue) — _When a predecessor function has a SINGLE trailing instruction (e.g. `lw t8, 0x23C(a0)`) that's the stolen prologue for the next function, pad-sidecar fails (asm-processor alignment shifts the successor by +4).
+- [SUFFIX_BYTES alone (no paired PROLOGUE_STEALS) suffices when the stolen-prologue insns in the .s file are LITERAL `.word` directives](#feedback-suffix-bytes-solo-when-stolen-prologue-is-literal-words) — _If the predecessor's `.s` declares the stolen-prologue lines as raw `.word 0xXXXXXXXX` (no `%hi`/`%lo` macros, no relocations), the successor's C-emit doesn't re-emit them — SUFFIX_BYTES on the predecessor is solo-sufficient. PROLOGUE_STEALS on the successor would corrupt the real prologue. Verified 2026-05-14 on `gl_func_000305CC` (doc-predicted paired commit; reality: SUFFIX_BYTES alone byte-exact)._
 
 
 ---
@@ -1902,6 +1903,44 @@ mid-function lui+lw is the diff.
   no PROLOGUE_STEALS recipe applies. NM-wrap and accept the 2-insn cap.
 - General rule: PROLOGUE_STEALS only splices contiguous bytes from
   symbol start. Anything else needs a different mechanism (none built).
+
+---
+
+---
+
+<a id="feedback-suffix-bytes-solo-when-stolen-prologue-is-literal-words"></a>
+## SUFFIX_BYTES alone (no paired PROLOGUE_STEALS) suffices when the stolen-prologue insns in the .s file are LITERAL `.word` directives
+
+_The standard SUFFIX_BYTES + PROLOGUE_STEALS paired-recipe (per `feedback-prologue-stolen-successor-no-recipe`) assumes the successor's C-emit naturally duplicates the stolen prologue at offset 0, which PROLOGUE_STEALS then strips. But if the predecessor's .s file emits the stolen prologue as raw `.word 0x3C020000` literals (no `lui v0, %hi(SYM)` macros, no R_MIPS_HI16/LO16 relocations), the successor's C-emit DOES NOT duplicate them — IDO has no symbolic reference to re-emit, so the C body for the successor starts fresh with its own prologue. Net: SUFFIX_BYTES on the predecessor is sufficient; PROLOGUE_STEALS on the successor would actually corrupt the function._
+
+**Diagnostic — check the `.s` file format:**
+
+If the stolen-prologue lines are:
+```
+/* offset 0xRR */ .word 0x3C020000    ← LITERAL, no symbol/reloc
+/* offset 0xRR */ .word 0x24420000
+/* offset 0xRR */ .word 0x8C4E0000
+```
+
+then SUFFIX_BYTES is solo-sufficient. The bytes are link-stable (no relocs modify them; `lui v0, 0` stays `lui v0, 0` at runtime — semantically wrong as a "stolen prologue," but the bytes match expected).
+
+If the lines use `glabel`/`jlabel`/`%hi`/`%lo` references or get relocations applied:
+```
+/* offset 0xRR */ lui v0, %hi(D_SOMETHING)
+/* offset 0xRR */ addiu v0, v0, %lo(D_SOMETHING)
+```
+
+then those bytes WOULD be modified at link time to point at the correct symbol — and the successor's C-emit would ALSO emit a matching lui+addiu pair. That's the paired-recipe scenario.
+
+**Verified 2026-05-14 on `gl_func_000305CC`:**
+
+Doc-predicted: "SUFFIX_BYTES on 305CC + PROLOGUE_STEALS=12 on 3061C — paired commit, not solo."
+
+Actual: SUFFIX_BYTES alone byte-exact. The successor `gl_func_0003061C` starts with `addiu sp, sp, -0x18` (no lui+addiu+lw prefix in its C-emit), so PROLOGUE_STEALS=12 would strip the actual prologue and corrupt the function.
+
+The `.s` file `gl_func_000305CC.s` declared size 0x50 with the last 3 lines as `.word 0x3C020000`, `.word 0x24420000`, `.word 0x8C4E0000` — raw bytes, no relocs.
+
+**Rule:** before assuming a paired SUFFIX_BYTES + PROLOGUE_STEALS recipe, **read the predecessor's `.s` file**. If the stolen-prologue lines are bare `.word 0xXXXXXXXX`, try SUFFIX_BYTES solo first.
 
 ---
 
