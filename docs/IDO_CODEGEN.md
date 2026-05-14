@@ -7430,6 +7430,8 @@ Without naming the result, the C body reads as a simple test-and-discard. IDO ha
 
 **Verified 2026-05-14 on `gl_func_00021EA8`** (game_libs_post.c): 87.5% → 100% by adding `int r0 = func(...)` and passing it as the middle arg to the next call. Same recipe applied to both call-pair branches in the function (4 calls total, 2 pairs).
 
+**Diagnostic also applies to vtable indirect-call dispatchers** with preceding `or aM, sN, zero` (preserving an $sN saved-arg into $aM for the call). Same family-pattern, different source: instead of `or aM, vN, zero` (preserving call-result), it's `or aM, sN, zero` (preserving callee-save reg). IMPORTANT: read the function's prologue `or sN, aM, zero` insns FIRST to know which input arg landed in which $sN — the wrong $sN→$aM mapping leads to passing the wrong variable. Verified 2026-05-14 on `gl_func_00038C04`: 99.81% → 100% by switching the 2nd arg of `((void(*)(int,int**))vt[0x3C/4])(off+self, X)` from `self` to `state` after re-reading that target's prologue had `or s0, a1, zero` (s0=state) and `or s1, a0, zero` (s1=self), so the `or a1, s0, zero` before the jalr was preserving STATE.
+
 **Related:** `feedback-ido-arg-save-to-sreg-in-bne-delay` (IDO schedules `or sN, aN, zero` into bne DS — that's a SAVE to s-reg, not result-preserve to a-reg). The diagnostic differs by which register class is the destination of the `or`: a-reg = next-call-arg preserve; s-reg = callee-save copy.
 
 ---
