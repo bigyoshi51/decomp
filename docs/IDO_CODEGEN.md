@@ -2451,6 +2451,14 @@ _When target emits `*(int*)&X = 0` (naked store: single `lui at; sw 0(at)`, 2 in
 
 _IDO compiles `return a0` from inside a nested if into `b + lw ra` redundancy, not a direct `beqz/bnez` to the epilogue. A `goto end_label` at the sole `return` at the bottom produces the clean single-path branch that matches typical libgdl/libc code._
 
+**Quick decision tree** — when your wrap has `if (X == 0) return 0;`-style early-exits and built fuzzy is well below target's, look at where the target's alloc-fail beq LANDS:
+
+1. **Full epilogue** (`lw ra; addiu sp; jr ra`) AND success path returns an arg unchanged → **UNIFIED form**: `goto end; ... end: return arg;`
+2. **Full epilogue** AND success path returns a DERIVED value (`*(v0+N)`, etc.) AND target has `beq zero,zero,.L_epi` + lw-in-DS → **SPLIT form**: `goto end_zero; ... return DERIVED; end_zero: return 0;` (explicit returns at each exit)
+3. **Mid-body** (some body insns still execute after the branch target) → **FALL-THROUGH-WITH-NULL-GUARD form**: `if (X != 0) { partial body }` instead of `return 0;` — the post-guard body is shared between X==0 and X!=0 paths
+
+Get the form WRONG and you'll plateau at the original fuzzy or regress. Get it RIGHT and typical gains are +15-30pp on a single restructure (verified 2026-05-14 on three functions).
+
 **Rule:** When the target asm for an alloc-or-init wrapper has a single shared epilogue that the alloc-fail path branches to via `beqz $v0, .Lepilog`, write C with a single `return a0;` at the bottom and a `goto end;` for the fail case — not a `return a0;` inside the nested if.
 
 **Why:** IDO -O2 doesn't always collapse multiple `return` paths into a branch to the common epilogue. If you write:
