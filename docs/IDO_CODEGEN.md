@@ -7354,6 +7354,10 @@ The OFF mod 4 == 2 case is misleading because it LOOKS like a halfword field at 
 
 **Verified 2026-05-14 on `gl_func_00038C04`:** the wrap had `(short)vtable[0x38/4]` (emitting `lh +0x3A`) where target needed `*(short*)((char*)vtable + 0x38)` (emitting `lh +0x38`). Combined with the `(unsigned short)*p` → `*p & 0xFFFF` fix, pushed null fuzzy (scoring artifact from the wrong-offset lh) → 95.92%.
 
+**Second confirmation 2026-05-14 on `gl_func_0004ED0C`:** identical trap with `(short)vtable[0x8/4]` (emitting `lh +0xA`) → `*(short*)((char*)vtable + 0x8)` (emitting `lh +0x8`). Single byte fix, fuzzy delta only +0.04pp because the dominant remaining diffs are register-cascade caps; but the C body is now semantically correct on the lh insn.
+
+**The trap is contagious in vtable-dispatch loops** — wherever a function does `((fn_ptr_t)vt[N/4])((short)vt[M/4] + base)`, both the cast-of-int AND the offset-divided-by-4 indexing combine to silently produce the wrong-offset lh. Audit candidates by searching for `(short)\w+\[\w+/4\]` patterns; replace systematically with `*(short*)((char*)x + OFF)`.
+
 **Related:** `feedback-ido-andi-mask-bytewidth-depends-on-c-form` (sibling concern: byte-encoded immediates depend on C form even when semantic value is identical).
 
 ---
