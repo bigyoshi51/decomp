@@ -1540,7 +1540,13 @@ If 1+2+3 all hit: this is dual-role. DO NOT merge-fragments — that would elimi
 - Fragment at 0x80009C30 (0x10 bytes, 4 insns): `or $t2, $t5, $at; sw $a2, 0($t2); jr ra; or $v0, $zero, $zero`.
 - `func_80008AD0` (__rmonHitCpuBreak in kernel_035.c) has `jal func_80009C30` and treats the return as `s32*`. Since rmon paths are dead in release, the UAF never triggers.
 
-**Origin:** 2026-04-20 agent-a, kernel_024.c func_80009C30. Initial attempt was to merge-fragments → broke the jal target. Reverted and documented instead.
+**Example 2: kernel/func_8000817C + func_800081D0 (__rmonClearBreak, 1080 Snowboarding):**
+- `func_8000817C` (0x54, 21 insns) is the entry block: `addiu sp,-0x20; sw ra,0x14(sp); ...` ends mid-body at `jal func_800031F0` — NO `jr ra`. Falls through into 0x800081D0.
+- `func_800081D0` (0x94, 37 insns) is the continuation: NO prologue (reuses `func_8000817C`'s frame at sp+0x14/sp+0x1C), has the epilogue (`lw ra,0x14(sp); addiu sp,0x20; jr ra`). Combined logical function is 0xE8 / 58 insns (__rmonClearBreak: restores BREAK-trapped instr words at `rmonbrk_bss_0000` and `D_8001FEF0`).
+- `func_8000745C` has TWO `jal func_800081D0` callsites (0x800074F0, 0x8000752C) — the dual-role jal-callable entry. As a standalone entry it reads sp+0x14/sp+0x1C uninitialized (caller's frame), but the rmon event-loop path is dead in release so no crash.
+- Wraps already exist (kernel_040.c entry-role, kernel_020.c continuation-role); `func_800081D0` standalone caps at ~74% fuzzy — IDO always emits a prologue for a glabel'd function, but the target has none. Structural, not C-fixable. DO NOT merge-fragments (breaks the jal symbol).
+
+**Origin:** 2026-04-20 agent-a, kernel_024.c func_80009C30. Initial attempt was to merge-fragments → broke the jal target. Reverted and documented instead. Example 2 added 2026-05-15 (agent-b) after size-sort surfaced func_8000817C as a no-episode candidate; confirmed same dual-role class, no promotion path.
 
 ---
 
