@@ -5671,6 +5671,8 @@ afa40000 sw    a0,0(sp)
 
 **$a0+$a1 variant:** 3-insn save-arg stubs like `sw a0,0(sp); jr ra; sw a1,4(sp)` — body `void f(int a0, int a1) {}` should match (untested yet).
 
+**Generalization — single-store-to-arg-pointer no-prologue 2-insn leaves are also matchable:** when target is `jr ra; sw aN, OFFSET(aM) [DS]` (single store to a pointer field), plain C `void f(T *aM, U aN) { aM[OFFSET/4] = aN; }` MATCHES at IDO -O2 — IDO schedules the lone store into the jr-ra delay slot AND elides the frame setup entirely (no `addiu sp` prologue). Verified 2026-05-15 on `game_libs_func_00061D80` (2-insn `void f(int *a0, int a1) { a0[1] = a1; }` → exact `jr ra; sw a1, 0x4(a0)`). Differs from the empty-body sentinel above (which spills to caller's $sp slot); this variant stores to the FIRST arg's pointed-to memory. Both share the same "single store + jr ra, no frame" emit shape.
+
 **Origin:** 2026-04-20 tick. Discovered by trying -O2 plain empty body as source=3's first yielded candidate (func_000031B8). Got byte-exact match on first try. Commit landed via land-successful-decomp.sh.
 
 ---
