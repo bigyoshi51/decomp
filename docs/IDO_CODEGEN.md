@@ -67,6 +67,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces andi-pre-jal pattern](#feedback-ido-o1-andi-pre-jal-via-register-u32-mask) — _When target has `andi tN,X,MASK; jal; or argReg,tN,zero` (3-insn mask-pre-jal vs natural delay-slot fold), use `register u32 v = expr & MASK; func(..., v);` block-local. The `& MASK` on the initializer (not the use) commits IDO to emitting the and pre-jal._
 - [Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot](#lift-unconditional-loop-counter-init-out-of-the-if-body-to-claim-the-branchs-delay-slot--leaves-the-result-init-before-the-branch) — _When target has `or v1, a0, 0` (result=sum) BEFORE `beq len, 0` and `or v0, 0, 0` (i=0) IN the delay slot, but built emits `result=sum` in delay slot, lift `unsigned int i = 0;` OUT of the if-body. Both inits become unconditional and IDO picks i=0 for the slot. Generalizes the cap-class previously labeled "no C-level lever"._
 - [When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C](#feedback-ido-target-larger-preemptive-set-nop-delay) — _Diagnostic for the inverse-of-bloat cap: when built `.o` is SHORTER than target by exactly 1 insn (a preemptive `or v0, v1, 0` BEFORE a sltu/bnez that the natural emit folds INTO the branch's delay slot), suspect this scheduling cap. IDO never picks the longer "preemptive + nop" form. Tested early-exit, goto-out, and early-set-clear variants all produce the same shorter natural emit. NM-wrap. Verified 2026-05-08 on kernel/func_800000B0 (91.15% fuzzy)._
+- [Reference `*a2` twice in the C source when target loads it twice across a jal — IDO scheduler picks the second load to fill the jal delay slot](#feedback-ido-double-deref-fills-jal-delay-slot) — _When target asm loads a pointer dereference (`lw t6, 0(a2)`) early, then loads it AGAIN (`lw t8, 0(a2)`) right before a jal whose delay slot is `sw t8, OFFSET(sp)` (store of the second-loaded value), the C body must reference `*a2` twice. Write two assignments (e.g. `b60_1 = *a2; ...; b70 = *a2;`) rather than caching the value in one local — IDO's scheduler picks the second source-level read to fill the delay slot. Caching `int t = *a2;` and writing `b60_1 = t; b70 = t;` produces a single-load form with an unfilled delay slot. Verified 2026-05-15 on `gl_func_0003F2B8` (byte-exact 0x50 emit)._
 
 ### $s register allocation
 
@@ -9347,3 +9348,41 @@ Now `src` and `end` are only live from their init point onward (no live-range ac
 - `feedback-ido-v0-reuse-via-locals` — named locals get $v0/$v1; inline derefs get $t-regs.
 - `feedback-ido-brace-block-scope-saves-stack-frame-bytes` — wrap named locals in `{ ... }` to limit lifetime.
 - `feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill` — opposite direction (force caller-slot spill of an arg).
+
+<a id="feedback-ido-double-deref-fills-jal-delay-slot"></a>
+## Reference `*ptr` twice in the C source when target loads it twice across a jal — IDO scheduler picks the second load to fill the jal delay slot
+
+**Symptom:** target asm shows two `lw <tN>, 0(a2)` loads of the same pointer dereference: the first early, the second immediately before a jal whose delay slot is the **store** of the second-loaded value to a stack local. Example from `gl_func_0003F2B8`:
+
+```
+lw  t6, 0(a2)         # first load of *a2
+addiu t7, $0, 1
+sw  t7, 0x60(sp)
+sw  t6, 0x64(sp)
+lw  t8, 0(a2)         # SECOND load of *a2 (could've been kept in t6)
+addiu a0, sp, 0x20
+jal func
+sw  t8, 0x70(sp)      # delay slot: store the second-loaded value
+```
+
+**Pitfall:** caching `*a2` in one local (`int t = *a2; b64 = t; b70 = t;`) produces a single-load form with the jal's delay slot filled by something else (or unfilled). The byte sequence diverges.
+
+**Fix:** write two source-level dereferences:
+
+```c
+void gl_func_0003F2B8(int *a0, int a1, int *a2) {
+    int b18;
+    char b20[0x40];
+    int b60_0, b60_1, pad6c, b70;
+    b60_0 = 1;
+    b60_1 = *a2;          // first read
+    func_00000000(b20, a1);
+    b70 = *a2;            // second read — IDO loads it pre-jal and stores in delay slot
+    b18 = 12;
+    func_00000000(&b18);
+}
+```
+
+**Why it works:** IDO's scheduler treats each source-level `*a2` as an independent load. The pre-jal expression `b70 = *a2;` (re-derefs immediately before the call) gets lowered to `lw <reg>, 0(a2); sw <reg>, b70_off(sp)`. The scheduler then moves the `sw` into the jal's delay slot, leaving the `lw` immediately before. A cached local would only get one `lw` and the scheduler can't manufacture a second one.
+
+**Detection signal:** target has TWO loads of the same offset off the same base register, separated by a few unrelated instructions, with the SECOND load's destination feeding a `sw` in the next jal's delay slot. Verified 2026-05-15 on `gl_func_0003F2B8` (byte-exact 0x50 emit).
