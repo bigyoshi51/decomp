@@ -292,6 +292,8 @@ gl_func_0002D8D8: 14 insns (size 0x38)
 
 **Anti-pattern:** blindly applying PROLOGUE_STEALS=8 to every function in a chain. Functions with INSIDE-symbol stolen-prologue end up missing their first 8 bytes after the splice — symbol size goes from 0x38 to 0x30, byte_verify fails. The diagnostic step takes 5 seconds and prevents a wasted iteration.
 
+**Sub-class: `v1`-preserved-across-jalr cap.** Some prologue-stolen successors don't just borrow the lui+lw setup — they also assume `$v1` (or whatever caller-saved reg the predecessor set up) is PRESERVED across an inner jalr inside the function. C-only emit treats `$v1` as caller-saved per O32 ABI and spills/reloads it around the jalr (+2 insns vs target). PROLOGUE_STEALS handles the prologue-duplicate but NOT the cross-call register preservation. Symptom: splice fires successfully, but the C-emit is still +4–8 bytes over target with extra `sw v1, K(sp) / lw v1, K(sp)` around an internal jalr. `register int *g` hint doesn't help (IDO still spills caller-saved regs across calls). No plain-C path produces the "v1 lives across the jalr" shape. Verified 2026-05-15 on `gl_func_00042484` (game_libs_post): splice fired, 22/21 insns cap (one extra spill+reload pair). Accept NM-wrap; INSN_PATCH the 2-byte spill/reload offsets is the next-pass option if needed.
+
 ---
 
 ---
