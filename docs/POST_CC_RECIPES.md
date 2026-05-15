@@ -32,6 +32,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [SUFFIX_BYTES + PROLOGUE_STEALS combo only matches when successor's data setup is at function start, not mid-function](#feedback-suffix-bytes-only-helps-start-of-function) — _SUFFIX_BYTES injects bytes at predecessor's tail; PROLOGUE_STEALS splices bytes from successor's start.
 - [SUFFIX_BYTES (not pad-sidecar) is the right tool for 4-byte trailing stolen-prologue from predecessor](#feedback-suffix-bytes-unblocks-4byte-stolen-prologue) — _When a predecessor function has a SINGLE trailing instruction (e.g. `lw t8, 0x23C(a0)`) that's the stolen prologue for the next function, pad-sidecar fails (asm-processor alignment shifts the successor by +4).
 - [SUFFIX_BYTES alone (no paired PROLOGUE_STEALS) suffices when the stolen-prologue insns in the .s file are LITERAL `.word` directives](#feedback-suffix-bytes-solo-when-stolen-prologue-is-literal-words) — _If the predecessor's `.s` declares the stolen-prologue lines as raw `.word 0xXXXXXXXX` (no `%hi`/`%lo` macros, no relocations), the successor's C-emit doesn't re-emit them — SUFFIX_BYTES on the predecessor is solo-sufficient. PROLOGUE_STEALS on the successor would corrupt the real prologue. Verified 2026-05-14 on `gl_func_000305CC` (doc-predicted paired commit; reality: SUFFIX_BYTES alone byte-exact)._
+- [`volatile int pad[N]` frame-grow can't decouple frame-size from in-frame spill offset — a 99.9% wrap with a 4-byte spill-slot shift is INSN_PATCH-only](#feedback-volatile-pad-frame-offset-coupling) — _When a near-exact (99.7–99.95%) wrap's sole residual is a stack spill slot 4 bytes off (e.g. `local`/`buf` at sp+0x28 where target wants sp+0x24), `volatile int pad[N]` cannot fix it: pad[N] sets BOTH the frame size AND the in-frame offset through one knob (offset moves ~`0x34-4N`, frame size moves with N), so there is no N giving both the correct frame AND the correct slot. Stop pad-grinding the whole 99.9% NM band; the residual is INSN_PATCH-only (1 sw + 1 addiu offset). Verified 2026-05-15 on `gl_func_00039A9C` (-64 frame, buf@0x24 vs 0x28) and `gl_func_00041768` (-48 frame, local@0x28 vs 0x24)._
 
 
 ---
@@ -2224,3 +2225,35 @@ Earlier family matches (10E2C/10B38/F49C/0FA54) didn't need this because their f
 The misalignment doesn't break landing the FORCE'd function itself (its own bytes still match expected), and it doesn't break landing the NEXT function either: the land script's `byte_verify()` uses `mips-linux-gnu-objdump -t` to extract the function's bytes by `addr+size` from each `.o` independently, so the absolute offset divergence is invisible to the comparison — only the body bytes matter, and they match. The visible artifact is in `report.json`: the next function shows up with `fuzzy_match_percent: None` (the field is omitted in the JSON, scoring as 0%) because objdiff's comparator pairs symbols by name but can't reconcile the layout shift. **Don't grind on the next function trying to "raise its score above zero" — check `byte_verify` first.** If the bytes match expected, log the episode and land via the script; the report's None-fuzzy is just the upstream-SUFFIX artifact, not a real cap.
 
 (There's no clean fix to make the expected baseline NOT include the suffix without also making the build pipeline skip SUFFIX_BYTES_FORCE during refresh — and the build pipeline correctly applies it for the FORCE'd function. Best current practice: match the next function via byte-verify, ignore the report.json oddity, and proceed.)
+
+---
+
+<a id="feedback-volatile-pad-frame-offset-coupling"></a>
+## `volatile int pad[N]` frame-grow can't decouple frame-size from in-frame spill offset
+
+_A recurring cap class across the 99.7–99.95% game_libs NM band: the wrap is byte-exact except for one stack spill slot that lands 4 bytes off where the target wants it._
+
+**Symptom:** objdiff diff on a near-exact wrap shows ONLY:
+```
+< afaf0028  sw  t7,40(sp)        ; mine: local @ sp+0x28
+> afaf0024  sw  t7,36(sp)        ; target: local @ sp+0x24
+< 27a50028  addiu a1,sp,40
+> 27a50024  addiu a1,sp,36
+```
+(optionally also the prologue/epilogue `addiu sp` if the frame size is wrong).
+
+**Why pad-tuning fails:** the standard `volatile int pad[N]; (void)pad;` frame-grow trick uses ONE knob (N) to control TWO coupled quantities:
+- the **frame size** (`addiu sp, sp, -K`) grows with N, and
+- the **in-frame offset** of the real spill slot moves as roughly `0x34 - 4*N` (each extra pad int pushes the slot 4 bytes *lower*).
+
+So there is no N that simultaneously yields the correct frame size AND the correct slot offset. Concretely: the value of N that makes the frame match (e.g. pad[3]→ -48, pad[4]→ -64) fixes the slot 4 bytes away from target; the N that would fix the slot gives the wrong frame size (more total diffs, a regression).
+
+**Verified instances (2026-05-15, agent-b):**
+- `gl_func_00039A9C`: pad[4] → correct -64 frame, but buf@sp+0x24 vs target sp+0x28; pad[5] → buf@0x20 (worse).
+- `gl_func_00041768`: pad[3] → correct -48 frame, but local@sp+0x28 vs target sp+0x24; pad[2] → -40 frame (wrong) + local@0x20 (6 diffs).
+
+**Rule:** When a wrap is ≥99.7% and the *entire* residual is a 4-byte (or 8-byte) shift of one spill slot, do NOT iterate pad sizes — it's a coupled-knob dead-end. Either:
+1. Accept as a documented NM cap (the ROM is built from INCLUDE_ASM and is byte-correct; the wrap is reference-only), or
+2. INSN_PATCH the 1–2 affected `sw`/`addiu`/`lwc1` offset immediates directly (cheap: 1–2 word rewrites, unlike the whole-function INSN_PATCH that's cargo-culting).
+
+Don't spend more than one build confirming the coupling; cite this entry and move on.
