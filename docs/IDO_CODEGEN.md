@@ -4965,6 +4965,30 @@ $f12 for `swc1`, so IDO emits `mtc1 $a1, $f12` at entry.
 **The C fix is just to write the signature correctly** — the compiler does
 the rest.
 
+### Sub-trap: source-order of float-arg use determines mtc1 mapping
+
+When a function takes TWO+ float args via mixed-mode (e.g., `void f(int *p, float a1, float a2)`), IDO's mtc1 mapping is driven by **first-use order in the C body**, not by ABI arg position. If the body uses `a2` before `a1`, IDO maps `a2 → $f12` and `a1 → $f14` (REVERSED from the natural "first-arg-to-f12" assignment). Verified 2026-05-15 on `gl_func_000402A4` (3-float-arg Vec3 add):
+
+```c
+// Source order: a1 (dx) used first → IDO emits mtc1 a1, f12; mtc1 a2, f14
+void gl_func_000402A4(int *a0, float dx, float dy, float dz) {
+    *(float*)(a0 + 0xB4) += dx;   // dx used first → a1 → f12 ✓
+    *(float*)(a0 + 0xB8) += dy;
+    ...
+}
+
+// Source order: a2 (dy) used first → IDO emits mtc1 a2, f12; mtc1 a1, f14 (SWAPPED)
+void gl_func_000402A4(int *a0, float dx, float dy, float dz) {
+    *(float*)(a0 + 0xB8) += dy;   // dy used first → a2 → f12 (ABI-swapped)
+    *(float*)(a0 + 0xB4) += dx;
+    ...
+}
+```
+
+The swapped form cascades through the function (the FPU regs holding dy and dx flip downstream), producing different bytes even when the C is semantically equivalent. If the target asm has `mtc1 a1, f12; mtc1 a2, f14` (natural ABI ordering), the source must use the 1st-float-arg BEFORE the 2nd-float-arg.
+
+**Sub-cap on gl_func_000402A4 (97.75% NM):** This rule conflicts with target's apparent statement ordering (B8 store before B4 store via addiu-base-update). Either keep ABI-correct mtc1 (correct C order, target's natural-emit cap) OR keep target's store order (ABI-swapped mtc1, regress). For Vec3-style fields with mixed-mode floats, the cap may be unbreakable from C alone.
+
 **Companions**:
 
 - `feedback_ido_knr_float_call.md` — the inverse: when CALLER tries to pass
