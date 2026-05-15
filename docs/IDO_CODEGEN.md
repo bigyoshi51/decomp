@@ -9386,3 +9386,39 @@ void gl_func_0003F2B8(int *a0, int a1, int *a2) {
 **Why it works:** IDO's scheduler treats each source-level `*a2` as an independent load. The pre-jal expression `b70 = *a2;` (re-derefs immediately before the call) gets lowered to `lw <reg>, 0(a2); sw <reg>, b70_off(sp)`. The scheduler then moves the `sw` into the jal's delay slot, leaving the `lw` immediately before. A cached local would only get one `lw` and the scheduler can't manufacture a second one.
 
 **Detection signal:** target has TWO loads of the same offset off the same base register, separated by a few unrelated instructions, with the SECOND load's destination feeding a `sw` in the next jal's delay slot. Verified pattern 2026-05-15 on `gl_func_0003F2B8` — duplicate-deref produces the expected scheduler emit, though that function caps at 83.4% NM due to the separate unused-arg-spill family (sw a0, 0xB8(sp) + sw a2, 0x68(sp)).
+
+<a id="feedback-ido-wrapper-buf-size-drives-frame-size"></a>
+## "Caller-slot arg-spill cap" in stack-buf wrapper family is a frame-size cap — `char buf[N]` size drives IDO's frame allocation
+
+**Symptom:** small wrapper that builds a stack buffer and calls one or two helpers with `&buf[0x08]` / `&buf[0]`-style args. Decompiles to ~98–99 % fuzzy with a diff that looks like an "extra arg spill":
+
+```
+mine offset 0x08: sw a0, 0x78(sp)       expected: sw a0, 0xB8(sp)
+mine offset 0x20: sw a2, 0x80(sp)       expected: sw a2, 0xC0(sp)
+mine offset 0x54: addiu sp, sp, 0x78    expected: addiu sp, sp, 0xB8
+```
+
+The labels look like "unused-arg-spill cap family" because target spills `a0`/`a2` to caller slots and you spill them too — just at smaller offsets. Easy to misdiagnose as a register-allocation cap.
+
+**Root cause:** target's `sw a0, 0xB8(sp)` writes to OUR sp+0xB8, which equals CALLER's sp+0 (the caller's $a0 slot). The offset 0xB8 = our frame size. Target chose a frame of 0xB8; your `char buf[0x60]` produced a frame of 0x78. Same spill, different offset.
+
+**Fix:** size the buffer so IDO allocates the same frame as target. If target frame is 0xB8 and your current frame is 0x78, grow `buf` by 0x40:
+
+```c
+void gl_func_0003F044(int *a0, int a1, float *a2) {
+    char buf[0xA0];   // sized to drive frame to -0xB8 (not 0x60 → -0x78)
+    *(int*)&buf[0x00] = 0x32;
+    *(int*)&buf[0x48] = (int)a2;
+    func_00000000(&buf[0x08], a1);
+    *(float*)&buf[0x4C] = a2[0];
+    /* ... */
+    func_00000000(&buf[0x00]);
+    (void)a0;
+}
+```
+
+**Detection signal:** diff is 4–7 mismatches, all of the form "same opcode, offset differs by a constant K" — and K equals (target_frame − built_frame). Compute the delta, grow buf by that amount.
+
+**Why this matters:** before discovering this lever, multiple wrappers in the gl_func_0003Fxxx family were committed as 83–93 % NM wraps with "unused-arg-spill cap" framing (gl_func_0003F2B8, gl_func_0003F350). They're likely all promotable by retrying with a correctly-sized buffer. Verified 2026-05-15 on `gl_func_0003F044`: char buf[0x60] → 99.79 % (5 frame-offset diffs); char buf[0xA0] → 100 % byte-exact.
+
+**Companion patterns:** `feedback-ido-o2-lowest-spill-slot` (related: IDO picks lowest spill slot when frame has unused space). The "grow buf" lever is a different angle on the same allocation behavior.
