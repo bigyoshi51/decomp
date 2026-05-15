@@ -8445,6 +8445,8 @@ The linker resolves the R_MIPS_HI16/LO16 relocations to address 0x0002B3B8, prod
 
 The recipe is high-yield for any unmatched function where built emits `lui+ori` (or `lui+addiu+addiu`) for a constant or alt-entry pointer that target encodes as `lui+addiu` (or `lui+adjusted-addiu(DS)`).
 
+**Variant — segment-base + offset (USO / relocatable code, no new symbol required):** In game_libs / USO segments where `D_00000000` is the segment-base extern, you can write `(char*)&D_00000000 + 0xN` instead of declaring a new `gl_ref_<addr>` and editing `undefined_syms_auto.txt`. IDO emits the same `lui %hi(D_00000000+0xN); addiu %lo(D_00000000+0xN)` pair (signed-corrected) — the linker resolves D_00000000=0 plus addend 0xN, yielding the same bytes as a fresh `gl_ref_0000N` symbol. Verified 2026-05-15 on `gl_func_0000B868` (call#2 3rd arg = 0xD4E0 → `(char*)&D_00000000 + 0xD4E0`; promoted 40% → 100% mnemonic). Cleaner for one-off magic constants; use the named-`gl_ref_<addr>` form when the same magic appears in many call sites (one extern declaration vs N inline casts).
+
 ### Variant — also applies to ALT-ENTRY tail calls (`func_X + offset` pointer arithmetic)
 
 The recipe extends beyond magic integer constants. When a C body has a tail call like `func_00000000((char*)func_0000027C + 0x18);` (calling into an alt-entry / mid-function jump target), IDO emits the FULL 4-insn materialization-then-adjust sequence:
