@@ -7324,6 +7324,61 @@ Per C11 6.7.3, accessing a volatile object is observable. `(void)dummy` is a rea
 
 ---
 
+<a id="feedback-ido-sreg-priority-first-assignment-not-decl-order"></a>
+## $s0 priority follows FIRST-ASSIGNMENT order in the function body, NOT declaration order
+
+_When two locals compete for $s0 (typical final-mile cap when fuzzy is 95-99%), IDO -O2's allocator picks the one assigned FIRST in the body — declaration order alone does NOT flip the allocation. The for-loop's init clause `for (i = 0; ...)` runs AFTER any earlier explicit body assignments, so it doesn't beat them for priority._
+
+**Pattern (verified 2026-05-14 on `gl_func_0004ED0C`):**
+
+C source where iter gets $s0:
+```c
+void f(T *self) {
+    int *iter = self;     /* assigned at decl */
+    int i;                /* declared but not yet assigned */
+    int count = self->count;
+    for (i = 0; i < count; i++) {  /* i assigned here */
+        ... iter[k] ...
+    }
+}
+```
+
+Built: `or s0, a0, zero` (s0 = iter), `or s1, zero, zero` (s1 = i) — wrong.
+
+C source where i gets $s0 (move i's assignment EARLIER in body):
+```c
+void f(T *self) {
+    int *iter;
+    int i;
+    int count;
+    i = 0;            /* ← first body assignment */
+    iter = self;       /* second */
+    count = self->count;
+    for (; i < count; i++) {
+        ... iter[k] ...
+    }
+}
+```
+
+Built: `or s0, zero, zero` (s0 = i), `or s1, a0, zero` (s1 = iter) — matches target.
+
+**Doesn't help (verified):**
+- Just swapping `int i;` and `int *iter;` declarations: NO change in $s0 allocation.
+- Adding `register` keyword: NO change.
+
+**Why it works:** IDO -O2's $s-reg allocator weights live ranges by their first-write point in the linearized body. The for-loop init is emitted AFTER any preceding explicit assignments, so a body-prefix assignment beats the for-init for "first to need $s reg".
+
+**When to apply:**
+- Fuzzy is 95-99% on a function with both a counter and a pointer competing for $s0.
+- Diff shows `$s0` and `$s1` swapped between two locals.
+- Target's prologue `or s0, ...` order tells you which local should be in $s0.
+
+**Verified 2026-05-14 on `gl_func_0004ED0C`:** 96.07% → 97.68% (+1.6pp final-mile).
+
+---
+
+---
+
 <a id="feedback-ido-drop-redundant-early-return-before-for-loop"></a>
 ## Drop redundant `if (count <= 0) return;` before a for-loop — IDO emits BOTH branch checks (blezl-likely + blez), doubling the test code
 
