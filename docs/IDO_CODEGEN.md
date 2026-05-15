@@ -40,6 +40,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 - [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
+- [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
 - [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO spill a0 early and reload via a fresh temp ($t6).
 - [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes a0 as a parameter and passes it through unchanged
 - [IDO picks $a1 (not $a3) to save an arg across a jal — can't reliably flip from C](#feedback-ido-arg-save-reg-pick) — _When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; sw a1, N(sp); ...jal...; lw a1, N(sp)`.
@@ -469,6 +470,44 @@ structural shape is locked.
 
 Discovered 2026-05-06 promoting `gui_func_00000000` from 4.1% (varargs
 form) to 95.30% (this recipe).
+
+---
+
+<a id="feedback-ido-preassign-conditional-overwrite-ternary"></a>
+## Pre-assign default + conditional-overwrite for data-mux ternary
+
+_When the target asm shows a register's default value loaded from a caller-spill in a `beq cond, $0, .skip` delay slot, then ONLY OVERWRITTEN on fall-through via `addiu` or similar, the matching C idiom is the explicit pre-assign with conditional overwrite — NOT a `?:` ternary._
+
+**Target asm shape:**
+```
+beq    $rv, $0, .skip
+lw     $p, CALLER_SLOT(sp)     ; [delay] default value: load from caller spill
+addiu  $p, sp, BUF_OFF         ; fall-through: overwrite to local buf addr
+.skip: ...                     ; both paths continue with $p set
+```
+
+**Matching C:**
+```c
+char *p = a0;             /* default — IDO emits as lw a0_spill */
+if (gl_func_X(a0, buf)) {
+    p = buf;              /* conditional overwrite via addiu sp+OFF */
+}
+```
+
+**Non-matching alternatives:**
+- `char *p = cond ? buf : a0;` — IDO emits a branch around the assignment, not the delay-slot-fill pattern.
+- Explicit `if/else`:
+  ```c
+  if (cond) p = buf;
+  else p = a0;
+  ```
+  Has the same problem; doesn't schedule the default load into the delay slot.
+
+**Why this works:** IDO's scheduler treats the pre-assign `p = a0` as a definition that "always runs," then sees the `if (cond) p = buf;` overwrite as a conditional update. When the next live use of `p` (the call) is in the fall-through path, IDO fills the conditional branch's delay slot with the default-load (since the default value MUST be set before the branch resolves whether it's needed).
+
+**Verified 2026-05-15** on `gl_func_0005FFD0` (game_libs_post.c): 33.7% → 73.5% (+39.8pp). 22-insn 2-call ternary-pick wrapper where `p` is either `&buf` (post-call success) or `a0` (post-call fail). The pre-assign form matched the target's `lw a3, 0x80(sp) [delay] / addiu a3, sp, 0x1C` shape; both ternary and if/else variants left the delay slot unfilled and required an extra branch.
+
+**Cap considerations:** Even with this idiom, additional gaps may remain (frame size, register-name choice, downstream branch shape). The recipe specifically targets the delay-slot fill at the conditional-overwrite branch.
 
 ---
 
