@@ -6036,8 +6036,23 @@ When target asm dispatch starts with `addiu $at,zero,N; beql v0,zero,...; <lw de
 - 1 unconditional `b end` with delay slot (`lw $ra,...` or other)
 - Often a "dead" duplicate lw between `b`'s delay slot and the first case body label
 
+**EXCEPTION — 2-case store variant IS reachable via `switch` (verified 2026-05-15, `game_libs_func_00047F68`):**
+
+The "unreachable / NM-wrap and accept the cap" verdict above applies to the **lw-preload variant** (delay slots hoist the case body's first `lw`) and/or denser case sets. For the **2-case STORE variant** — exactly `case 0` and `case 1`, each body a single `sw` (no preload `lw` in the delay slots) — a literal C `switch` DOES byte-match, and IDO emits **no `.rodata` jumptable** for just 2 sparse cases (so the linker-discard problem never arises). Confirmed exact (objdiff 100.0):
+
+```c
+void game_libs_func_00047F68(int *a0, int a1) {
+    *(int*)((char*)a0 + 0x188) = a1;
+    switch (a1) {
+    case 0: *(int*)((char*)a0 + 0x1E0) = 1; break;
+    case 1: *(int*)((char*)a0 + 0x1E0) = 0; break;
+    }
+}
+```
+→ `beq a1,zero,caseA; sw a1,0x188(a0)(delay); addiu at,zero,1; beql a1,at,caseB; sw zero,0x1E0(a0)(delay); ...` exactly. `if (a1==0){} else if (a1==1){}` and goto-variants all emit plain `bne/nop` (54%); ONLY `switch` emits the `beq`+`beql` dispatch with the store in the beql delay slot. **Before NM-wrapping a 3-arm beql dispatch as a cap, first try a literal `switch` — if it's ≤2 sparse cases with store (not lw-preload) bodies, it will match and no jumptable is generated.**
+
 **Related:**
-- `feedback_ido_switch_rodata_jumptable.md` — switch → .rodata jumptable, discarded by 1080 linker
+- `feedback_ido_switch_rodata_jumptable.md` — switch → .rodata jumptable, discarded by 1080 linker (DENSE switches only; ≤2 sparse cases emit no jumptable)
 - `feedback_ido_branch_likely_arm_choice.md` — beql arm-choice rules for SIMPLE if/return patterns
 
 ---
