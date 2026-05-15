@@ -466,6 +466,8 @@ This is the source pattern `r = q; if (!r) { r = alloc(N); if (!r) goto end; }` 
 - Look for `bnez aM, +K` patterns BEFORE each subsequent alloc — those are the dead-test guards.
 - Write C with explicit `x = prev; if (!x) { x = alloc(); if (!x) goto end; }` for EACH cascade level.
 
+**Caveat — single-$s-reg cascade unreachable:** the recipe assumes target uses ONE $s per cascade level. If target's prologue saves only ONE $s register but the dead-arm path still emits the inner alloc+test (i.e., the asm logically uses the same $s for both "self" and "sub"), the 2-var C `sub = self; if (!sub) ...` form REGRESSES because it forces IDO to allocate `sub` to a separate $s. Verified 2026-05-15 on `gl_func_000011A4`: target uses $s0 only (frame -0x28, one spill slot at 0x18); single-var C hits 50/54 = 92.6%; 2-var cascade hit 61/54 (+7 over target due to extra $s1 spill+restore pair). No C-level path produces target's "dead-arm in same $s" shape. Accept 92.6% NM.
+
 **Companion memos:**
 - `feedback_ido_bnel_shared_store_after_helper.md` — related branch-likely shared-tail pattern.
 - `feedback_alloc_fail_skip_explicit_return_zero.md` — for the alloc-fail end path's `return 0;` shape.
