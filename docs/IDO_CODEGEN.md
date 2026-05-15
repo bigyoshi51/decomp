@@ -7588,6 +7588,8 @@ Both expressions clear bit 1 of the low 8 bits, but the immediate stored in the 
 
 **Same class as:** `feedback-ido-magic-arg-via-symbol-not-literal` (lui+addiu vs lui+ori for `0xKKKKKKKK` constants), `feedback-ido-split-or-constant` (when to combine vs split a constant in C to match `lui+or+ori` vs `lui+addiu`). All three are "same effective value, different opcode encoding, source-form-dependent" patterns.
 
+**Caveat — `~K` doesn't always emit `andi`** (verified 2026-05-15 on `gl_func_0002D2F4`): when `~K` evaluates to a value whose upper 16 bits aren't sign-consistent with the lower 16 (e.g., `~0x80` = `0xFFFFFF7F`), IDO emits a 3-insn sequence: `addiu temp, $zero, -129; and rT, rS, temp` (load-32-bit-then-AND) instead of a 1-insn `andi rT, rS, 0xFF7F`. Use the EXPLICIT 16-bit-fitting constant `0xFF7F` to force the andi-immediate form. The `~K` form only works cleanly when `K <= 0xFF` AND the bit-K position is in the LOW byte; for larger K or bit positions in the second byte, prefer the explicit narrow constant.
+
 ---
 
 ---
