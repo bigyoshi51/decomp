@@ -9419,6 +9419,8 @@ void gl_func_0003F044(int *a0, int a1, float *a2) {
 
 **Detection signal:** diff is 4–7 mismatches, all of the form "same opcode, offset differs by a constant K" — and K equals (target_frame − built_frame). Compute the delta, grow buf by that amount.
 
-**Why this matters:** before discovering this lever, multiple wrappers in the gl_func_0003Fxxx family were committed as 83–93 % NM wraps with "unused-arg-spill cap" framing (gl_func_0003F2B8, gl_func_0003F350). They're likely all promotable by retrying with a correctly-sized buffer. Verified 2026-05-15 on `gl_func_0003F044`: char buf[0x60] → 99.79 % (5 frame-offset diffs); char buf[0xA0] → 100 % byte-exact.
+**Why this matters:** before discovering this lever, multiple wrappers in the gl_func_0003Fxxx family were committed as 83–93 % NM wraps with "unused-arg-spill cap" framing (gl_func_0003F2B8, gl_func_0003F350). Verified 2026-05-15 on `gl_func_0003F044`: char buf[0x60] → 99.79 % (5 frame-offset diffs); char buf[0xA0] → 100 % byte-exact.
+
+**Doesn't fully unlock siblings, though.** Retrying `gl_func_0003F2B8` (char buf[0x58] → 0x98) bumped 83.4 → 83.6 % only. Frame now matches target's -0xB8, but a separate cap remains: target's `sw a2, 0x68(sp)` is a LOCAL-slot spill of `a2` (not a caller-slot store). My emit doesn't produce it because the body uses `*a2` only before the call — IDO doesn't see a reason to preserve. Forcing the local spill likely needs a `register int *a2` hint or a body rewrite that commits `a2` to a callee-preserved register. **The buf-size lever fixes ALL frame-offset diffs (caller-slot stores, sp adjustments, epilogue) but does NOT fix local-slot spills.**
 
 **Companion patterns:** `feedback-ido-o2-lowest-spill-slot` (related: IDO picks lowest spill slot when frame has unused space). The "grow buf" lever is a different angle on the same allocation behavior.
