@@ -5477,6 +5477,8 @@ This means the matching technique of "use `register int one = 1; flag = one;` to
 - If your target uses `or rD, $sN, $zero` where $sN holds a constant, the source has a NON-constant assignment chain into $sN, OR target was compiled at a different opt level / with different IDO flags. From the same -O2 source you cannot reach this shape via constant-only locals.
 - The OTHER case still holds: `register int *base = &D_X;` (pointer-to-extern) IS preserved as $s-reg in some cases — pointer assignments aren't constant-folded the same way, since the address is link-resolved. So `register T*` for extern-derived addresses can still affect codegen even when `register int = literal` cannot.
 
+**Same fold applies to comparison immediates (sltu+addiu vs sltiu).** When the C is `unsigned int chunk = 0x2710; if (len < chunk) ...`, IDO -O2 folds `chunk` to its constant and emits `sltiu at, len, 0x2710` (immediate form) — even though chunk is a named local with a long live range that spans the call and gets spilled to $s0. Target's `addiu s0, 0, 0x2710; sltu at, len, s0` (register form) is unreachable from this source — same root cause as the `flag = one` example: constant-prop runs before reg-alloc. Verified 2026-05-15 on `gl_func_00066720` (chunked-copy loop, 17/29 = 58.6% cap). Knob to break it would need an opaque 0x2710 (extern const, memory load, or `__asm__("" : "+r"(chunk))` barrier) — none of which the source likely had.
+
 **Companion memos:**
 - `feedback_ido_local_ordering.md` — IDO's local-declaration order doesn't drive $s-reg numbering (allocator is weight-driven).
 - `feedback_unique_extern_with_offset_cast_breaks_cse.md` — for pointer-to-extern, you CAN break CSE with a proxy zero, at the cost of register-renumber penalty.
