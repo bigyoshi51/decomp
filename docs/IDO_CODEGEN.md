@@ -9424,3 +9424,37 @@ void gl_func_0003F044(int *a0, int a1, float *a2) {
 **Doesn't fully unlock siblings, though.** Retrying `gl_func_0003F2B8` (char buf[0x58] → 0x98) bumped 83.4 → 83.6 % only. Frame now matches target's -0xB8, but a separate cap remains: target's `sw a2, 0x68(sp)` is a LOCAL-slot spill of `a2` (not a caller-slot store). My emit doesn't produce it because the body uses `*a2` only before the call — IDO doesn't see a reason to preserve. Forcing the local spill likely needs a `register int *a2` hint or a body rewrite that commits `a2` to a callee-preserved register. **The buf-size lever fixes ALL frame-offset diffs (caller-slot stores, sp adjustments, epilogue) but does NOT fix local-slot spills.**
 
 **Companion patterns:** `feedback-ido-o2-lowest-spill-slot` (related: IDO picks lowest spill slot when frame has unused space). The "grow buf" lever is a different angle on the same allocation behavior.
+
+<a id="feedback-ido-pass-unused-arg-to-suppress-caller-slot-spill"></a>
+## Suppress the "unused-arg caller-slot spill" by passing the unused arg to one of the func calls (even when the call doesn't visibly need it)
+
+**Symptom:** small wrapper with K&R-style arg signature (`f(a0, a1, a2, a3)`) where some args are "unused" (not referenced in the body). Target asm spills only the FIRST arg (`sw a0, frame(sp)`) to its caller slot; your emit spills MORE (e.g. `sw a1, frame+4(sp)` too). Diff is +1 insn, "extra unused-arg spill."
+
+```
+mine offset 0x10: sw a1, 0xBC(sp)   <-- extra
+target offset 0x10: sw a2, 0x60(sp) (data write into buf, not spill)
+```
+
+The naive C uses `(void)a1;` or just leaves a1 unmentioned — both cause IDO to spill a1 to caller slot.
+
+**Fix:** pass the unused arg as an argument to one of the existing helper calls in the body, even if the called function doesn't conceptually need it:
+
+```c
+void gl_func_0003F008(int a0, int a1, int a2, int a3) {
+    char buf[0xA0];
+    *(int*)&buf[0x48] = a2;
+    *(int*)&buf[0x4C] = a3;
+    func_00000000(&buf[0x08], a1);   // <-- pass a1 here, even though target asm
+                                       //     shows no $a1 setup before this jal
+    *(int*)&buf[0x00] = 0x18;
+    func_00000000(&buf[0x00]);
+}
+```
+
+**Why it works:** `$a1` already holds the caller-passed value through the function entry (it's the second arg register; no instruction has clobbered it). When the C source says `func(buf, a1)`, IDO recognizes a1 is USED for the call, suppresses the K&R-style caller-slot spill — AND skips the `or a1, a1, $0` setup insn because $a1 already has the right value. Net effect: target's lean shape, no extra spill, no extra setup.
+
+**When to apply:** the wrapper-family wraps in 1080 that say "extra `sw a1, 0xBC(sp)` (unused a1 arg)" — gl_func_0003F0A4, 0003F0E8, 0003F158, 0003F198, 0003EFC4, 0003EF2C, 0003EF78, and others. Pick the call that's nearest the K&R-spilled-arg's position in the calling convention; whichever call already gets target's $aN-passed-naturally pattern is the one to add the arg to.
+
+**Promoted gl_func_0003F008 from 92.5 % NM → 100 % byte-exact** on 2026-05-15. Likely promotes most of the family.
+
+**Caveat:** only works for args target also keeps in registers (caller passed them, no intermediate clobber). If the arg has been clobbered before the call where you want to pass it, IDO has to reload it — which may add insns elsewhere.
