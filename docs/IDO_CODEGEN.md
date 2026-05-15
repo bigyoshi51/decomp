@@ -6403,7 +6403,9 @@ IDO at -O2 schedules `sw t9; addu t1; jr; sw a1(delay)` — same instruction set
 
 **How to recognize:** target asm has `addu tN, base, idx_scaled; sw tX, FIELD(base); jr ra; sw tY, FIELD2(tN)`. Your C produces `sw tX, FIELD(base); addu tN, base, idx_scaled; jr ra; sw tY, FIELD2(tN)` — two independent instructions flipped at positions [-4, -3] before jr.
 
-**Origin:** 2026-04-20, bootup_uso/func_000020AC (array-append-pair to list at offsets 0xC0/0xC4 in a struct).
+**Promotion via INSN_PATCH:** since it's exactly 2 independent words flipped (the `addu` and the `sw`), and both encodings are bare register-only (no relocations on either), a 2-entry INSN_PATCH that swaps the bytes at the two offsets cleanly promotes the NM wrap to byte-EXACT. Add `<func>=0xOFF_ADDU:<addu_word>,0xOFF_SW:<sw_word>` to the per-`.o` `INSN_PATCH` list in the Makefile. Verified 2026-05-15 on `gl_func_00048354`: 17/19 → 19/19 via the patch.
+
+**Origin:** 2026-04-20, bootup_uso/func_000020AC (array-append-pair to list at offsets 0xC0/0xC4 in a struct). Reproduced 2026-05-15 on `gl_func_00048354` (game_libs_post, same idiom at struct offsets 0x258/0x25C); 4 source variants (int*/char*/typed-base/post-inc) all produced the swap.
 
 ---
 
