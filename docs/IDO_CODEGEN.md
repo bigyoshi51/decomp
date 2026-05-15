@@ -7378,6 +7378,21 @@ Built: `or s0, zero, zero` (s0 = i), `or s1, a0, zero` (s1 = iter) — matches t
 
 **Verified 2026-05-14 on `gl_func_0004ED0C`:** 96.07% → 97.68% (+1.6pp final-mile).
 
+**Placement matters when there's a LEADING function call:** if the function body starts with a `func();` call BEFORE any non-trivial body, the `i = 0;` first-assignment must come AFTER that call, NOT before. Pre-call placement caused a regression on gl_func_0002D064 (89.47% → 87.67%, -1.8pp); post-call placement gave +2.35pp (89.47% → 91.82%). Reasoning: the leading call kills caller-save registers, and IDO re-evaluates allocator weights post-call. Placing `i = 0;` PRE-call assigns it to a transient that's killed; POST-call assigns it to a callee-save slot.
+
+```c
+void f(T *self) {
+    int i, *iter;
+    func_X();        /* ← leading call */
+    i = 0;            /* ← AFTER call: gets $s0 */
+    iter = self;      /* ← second body-assignment */
+    ... body ...
+    for (; i < count; i++) { ... }
+}
+```
+
+Verified 2026-05-14 on gl_func_0002D064 (final mile: 91.82% → 100% combined with store-statement-order matching).
+
 ---
 
 ---
