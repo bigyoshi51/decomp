@@ -5673,6 +5673,8 @@ afa40000 sw    a0,0(sp)
 
 **Generalization — single-store-to-arg-pointer no-prologue 2-insn leaves are also matchable:** when target is `jr ra; sw aN, OFFSET(aM) [DS]` (single store to a pointer field), plain C `void f(T *aM, U aN) { aM[OFFSET/4] = aN; }` MATCHES at IDO -O2 — IDO schedules the lone store into the jr-ra delay slot AND elides the frame setup entirely (no `addiu sp` prologue). Verified 2026-05-15 on `game_libs_func_00061D80` (2-insn `void f(int *a0, int a1) { a0[1] = a1; }` → exact `jr ra; sw a1, 0x4(a0)`). Differs from the empty-body sentinel above (which spills to caller's $sp slot); this variant stores to the FIRST arg's pointed-to memory. Both share the same "single store + jr ra, no frame" emit shape.
 
+**Return-0 variant — `int f(int, int, int) { return 0; }` emits save-N-arg + `or v0, zero, zero` in jr-ra DS.** When target is `sw a0,0(sp); sw a1,4(sp); sw a2,8(sp); jr ra; or v0,zero,zero [DS]` (size 0x14, 5 insns), the matching C is `int f(int a0, int a1, int a2) { return 0; }`. The save-N-arg pattern still fires (one sw per declared arg), and `return 0` ends up in the jr-ra delay slot via `or v0, zero, zero`. Verified 2026-05-15 on `game_libs_func_0003D538`. Same recipe for 1-, 2-, 4-arg variants: declare `int f(...) { return 0; }` and IDO emits N save-arg slots + return-0 sentinel.
+
 **Origin:** 2026-04-20 tick. Discovered by trying -O2 plain empty body as source=3's first yielded candidate (func_000031B8). Got byte-exact match on first try. Commit landed via land-successful-decomp.sh.
 
 ---
