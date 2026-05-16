@@ -34,6 +34,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [SUFFIX_BYTES (not pad-sidecar) is the right tool for 4-byte trailing stolen-prologue from predecessor](#feedback-suffix-bytes-unblocks-4byte-stolen-prologue) — _When a predecessor function has a SINGLE trailing instruction (e.g. `lw t8, 0x23C(a0)`) that's the stolen prologue for the next function, pad-sidecar fails (asm-processor alignment shifts the successor by +4).
 - [SUFFIX_BYTES alone (no paired PROLOGUE_STEALS) suffices when the stolen-prologue insns in the .s file are LITERAL `.word` directives](#feedback-suffix-bytes-solo-when-stolen-prologue-is-literal-words) — _If the predecessor's `.s` declares the stolen-prologue lines as raw `.word 0xXXXXXXXX` (no `%hi`/`%lo` macros, no relocations), the successor's C-emit doesn't re-emit them — SUFFIX_BYTES on the predecessor is solo-sufficient. PROLOGUE_STEALS on the successor would corrupt the real prologue. Verified 2026-05-14 on `gl_func_000305CC` (doc-predicted paired commit; reality: SUFFIX_BYTES alone byte-exact)._
 - [`volatile int pad[N]` frame-grow can't decouple frame-size from in-frame spill offset — a 99.9% wrap with a 4-byte spill-slot shift is INSN_PATCH-only](#feedback-volatile-pad-frame-offset-coupling) — _When a near-exact (99.7–99.95%) wrap's sole residual is a stack spill slot 4 bytes off (e.g. `local`/`buf` at sp+0x28 where target wants sp+0x24), `volatile int pad[N]` cannot fix it: pad[N] sets BOTH the frame size AND the in-frame offset through one knob (offset moves ~`0x34-4N`, frame size moves with N), so there is no N giving both the correct frame AND the correct slot. Stop pad-grinding the whole 99.9% NM band; the residual is INSN_PATCH-only (1 sw + 1 addiu offset). Verified 2026-05-15 on `gl_func_00039A9C` (-64 frame, buf@0x24 vs 0x28) and `gl_func_00041768` (-48 frame, local@0x28 vs 0x24)._
+- [INSN_PATCH bnel→bne demotion + delay-slot nopping when the pulled insn already lives at the bne-taken target](#feedback-insn-patch-bnel-demote-with-delay-nop) — _When IDO -O2 emits `bnel rN, rM, +K; <insn>` and target uses `bne rN, rM, +K-1; nop`, INSN_PATCH can swap the branch opcode + nop the delay slot AS LONG AS the same `<insn>` is duplicated at the bne-taken target offset (so it stays live post-patch). Verified 2026-05-16 on gl_func_0006AF0C (linked-list walk, 4-insn patch)._
 
 
 ---
@@ -2292,3 +2293,39 @@ So there is no N that simultaneously yields the correct frame size AND the corre
 2. INSN_PATCH the 1–2 affected `sw`/`addiu`/`lwc1` offset immediates directly (cheap: 1–2 word rewrites, unlike the whole-function INSN_PATCH that's cargo-culting).
 
 Don't spend more than one build confirming the coupling; cite this entry and move on.
+
+---
+
+<a id="feedback-insn-patch-bnel-demote-with-delay-nop"></a>
+## INSN_PATCH bnel→bne demotion + delay-slot nopping when the pulled insn already lives at the bne-taken target
+
+_When IDO -O2 picks `bnel rN, rM, +K; <insn>` (branch-likely with a useful insn in the delay) and target uses `bne rN, rM, +K-1; nop`, INSN_PATCH can demote the branch AND nop out the delay-slot insn — PROVIDED the same `<insn>` already exists in the C-emit at offset `bne-taken-target` (i.e., IDO emitted it twice: once pulled into the bnel delay, once at the natural fall-through point that becomes the bne-taken target)._
+
+**Diagnostic:** 4 diffs in same-size functions with the shape:
+```
+@0xC:  bnel a3,a1,+5  →  bne a3,a1,+4   (opcode swap + offset -1)
+@0x10: <pulled insn>  →  nop            (delay slot)
+@0x?:  base-reg variant  →  (uses the now-LIVE register set by the still-present sibling insn)
+```
+
+**Why it works:** bnel's branch-likely semantic ANNULS the delay slot when not-taken. IDO uses this for branches that "speculatively" run useful work iff taken. The same insn often appears again at the fall-through-after-body point as a DUPLICATE (IDO's compiler emits both forms for code-motion). After INSN_PATCH:
+- bnel→bne flips to always-execute-delay; nop in delay does nothing.
+- The duplicate insn at the bne-taken target NOW serves as the canonical update.
+- Subsequent insns that referenced the bnel-delay-set register now read the SAME register set by the duplicate at the bne-target.
+
+**Recipe (verified 2026-05-16 on gl_func_0006AF0C):**
+```
+14-insn linked-list walk. Built had `bnel a3,a1,+5; move a2,a3 [DS]` then
+the body, then duplicate `move a2, a3` at the post-body fall-through.
+Target had `bne a3,a1,+4; nop; <body>; move a2, a3; lw a3, 0(a2)`.
+INSN_PATCH: @0xC=bne+4, @0x10=nop. The DUPLICATE `move a2, a3` at 0x20 in
+the built emit (originally dead — only reached by impossible path) becomes
+LIVE under the patched bne-taken jump. Patched @0x24 lw to use 0(a2) (the
+newly-live base) closes the function. 4 INSN_PATCH entries, byte-exact.
+```
+
+**When NOT to use:**
+- The pulled delay-slot insn is the ONLY occurrence in the function (no duplicate at fall-through). Patching to nop loses the operation; semantics break.
+- The delay-slot insn modifies a register READ on the bne-taken target side without being recreated.
+
+**Class:** same as `feedback-insn-patch-for-ido-codegen-caps` (operand/encoding changes at fixed offsets, same size). Specific to the bnel-pulled-delay pattern.
