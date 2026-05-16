@@ -1317,6 +1317,8 @@ All three defenses had silent-fail modes. After the fix, each is independently s
 - `scripts/land-successful-decomp.sh` — patched
 - `scripts/validate-episodes.sh` — new defense-in-depth gate
 
+**Anti-pattern: wrap doc declares INSN_PATCH "invalid here" citing tautology-trap fear.** When grinding a 90-99% NM wrap, the residual diff is often pure register-field bytes (rename: $a1→$t8, etc.). A wrap-doc author may write off INSN_PATCH as "would be tautology trap — bytes not produced by the C, default build is byte-exact via INCLUDE_ASM anyway." That's a misapplication. The tautology trap is about byte-verifying *inside* the wrap (INCLUDE_ASM ⇄ expected). The INSN_PATCH-promotion path is different: REMOVE the `#ifdef NON_MATCHING ... #else INCLUDE_ASM ... #endif` wrap, use the C body unconditionally, and apply INSN_PATCH to patch the register-field bytes the C body emits to match expected. Now the build path runs C-emit + INSN_PATCH, produces byte-exact .o, and the function is genuinely matched. Caught on `func_800047B0` (2026-05-16): wrap doc declared INSN_PATCH invalid, but the function had 19 pure register-rename diffs and unwrap + INSN_PATCH promoted it to EXACT cleanly. Don't trust the "INSN_PATCH won't work here" wrap-doc claim without verifying — check whether the residual diff is pure register-field reshuffles within the same opcode/structure.
+
 ---
 
 ---
