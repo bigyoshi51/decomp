@@ -1427,6 +1427,8 @@ Same mechanism as the existing `.L80000570 = 0x80000570;` family. The labels res
 _HISTORICAL — inject-prefix-bytes.py used to refuse functions whose first insn wasn't addiu sp / jr ra / opcode 0x09. As of 2026-05-04 the whitelist also covers SPECIAL (opcode 0), addi/slti/sltiu/andi/ori/xori/lui/lw/lbu/lhu/ll. Leaf USO entry-0 functions (e.g. gui_func_00000000 starting with `andi a0, a0, 0xFF`) can now be patched with PREFIX_BYTES._
 
 > **STATUS — RESOLVED 2026-05-04 in `agent-e` (1080 project).** The script's first-insn whitelist now includes all common leaf-entry opcodes. The "refusing to patch" error should only fire on genuine garbage (data misidentified as code). If you hit it on a real function, add the opcode to `VALID_ENTRY_OPCODES` in `inject-prefix-bytes.py`.
+>
+> **2026-05-16 second extension (stores accepted):** added `0x28` (sb), `0x29` (sh), `0x2B` (sw) — symmetric with the previously-accepted 0x23/0x24/0x25 loads. Unblocked `game_libs_func_0005AFB0`, a doubly-linked-list insert whose C-emit's first insn is `sw a2, 4(a0)` (`a0[1] = a2`). Same generalization principle as the 2026-05-16 splice-script COP1/mtc1 extension (sixth-extension section above): when a documented cap cites "script rejects opcode X" and X is a legitimate function-entry shape, extend the whitelist rather than working around.
 
 
 `PREFIX_BYTES := <func>=<bytes>` in the Makefile triggers
