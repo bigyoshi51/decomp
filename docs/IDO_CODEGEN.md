@@ -53,6 +53,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO pre-call outgoing-arg spills (`sw aN, N(sp)` before jal for args loaded from globals) are not C-reproducible for K&R callees](#feedback-ido-precall-arg-spill-unreachable) — _Some IDO-compiled functions emit extra `sw $a1, 4(sp); sw $a2, 8(sp)` stores IMMEDIATELY before a jal, saving the OUTGOING arg values (just loaded from global memory) into the caller's arg-save slots.
 - [IDO -O2 empty `void f(int a0) {}` produces exactly `jr ra; sw a0, 0(sp)` — save-arg sentinels ARE matchable from C](#feedback-ido-save-arg-sentinel-empty-body) — _The 2-insn "save-arg-to-caller-shadow-space" sentinel (`jr ra; sw a0, 0(sp)`) — previously documented as non-C-expressible — IS matchable from IDO -O2 with the trivial C body `void f(int a0) { }`.
 - [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a1's register assignment, IDO spills a0 to the caller's arg-save slot (extra `sw…
+- [IDO -O2 won't put `addiu aN, aN, K` into a jal-delay slot when a store via the SAME base precedes the call](#feedback-ido-no-addiu-into-jal-delay-when-store-via-base-precedes) — _For `*a0_offset_K = v; func(&a0[L], ...)`, IDO emits the `addiu a0,a0,L*4` as a standalone insn before the jal — it can't sink into the delay slot because the preceding store-via-a0 is a true dependency on the original $a0. Creates a fixed +1-insn delta vs targets that DO have the addiu in the delay slot. No clean C lever; structural cap. Verified 2026-05-16 on gl_func_0003E904 (built 26 vs target 25)._
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
 - [Pre-load arg field into named local to force field-load BEFORE `&D` materialization clobbers the arg-register](#feedback-ido-preload-field-into-local-forces-load-before-clobber) — _When target reads `lw aN, K(a0)` BEFORE `lui a0, %hi(D_X)` (load via original arg-pointer, then clobber it), the inline `func(&D, arg->field)` form emits clobber-then-reload-via-spill (+1 insn). Fix: `int val = arg->field; func(&D, val);` — named local creates a sequence point that forces field-load first. 2026-05-10: unlocked gl_func_00054668 (75.62% → byte-exact)._
@@ -9546,3 +9547,24 @@ void gl_func_0003F008(int a0, int a1, int a2, int a3) {
 **Promoted gl_func_0003F008 from 92.5 % NM → 100 % byte-exact** on 2026-05-15. Likely promotes most of the family.
 
 **Caveat:** only works for args target also keeps in registers (caller passed them, no intermediate clobber). If the arg has been clobbered before the call where you want to pass it, IDO has to reload it — which may add insns elsewhere.
+
+
+---
+
+<a id="feedback-ido-no-addiu-into-jal-delay-when-store-via-base-precedes"></a>
+## IDO -O2 won't put `addiu aN, aN, K` (func-arg setup) into a jal-delay slot when a store via the SAME base precedes the call
+
+_When a function does `*a0_offset_K = v; func(&a0[L], ...);` IDO -O2 emits `sw v, K(a0); addiu a0, a0, L*4; sw a1, off(sp); jal func; sw arg, off(sp) [delay]`. The `addiu a0` is left as a standalone instruction BEFORE the jal, not filled into the delay slot. Target asm sometimes has the addiu in the delay slot (`jal func; addiu a0, a0, L*4 [delay]`), saving one insn — but IDO's scheduler treats the preceding store-via-a0 as a true dependency on the original $a0 value, so it can't sink the addiu past it._
+
+**Symptom:** built has +1 insn vs target on a function with shape "store via base; func(base+K, ...)". Example: gl_func_0003E904 (built 26 vs target 25 insns). All other diffs at the same offset are just downstream insn-shift artifacts.
+
+**C-level levers tested (2026-05-16, gl_func_0003E904):**
+- Compute `int *p = a0 + L*4;` as a local before any stores, then `func(p, ...)` — IDO emits the addiu earlier (a0 is now dead) but the delay slot still gets filled with a spill, not the addiu.
+- Reorder the store to AFTER the func call — changes semantics (the callee may rely on the store; can't blindly move).
+- Use `(char*)a0 + L` vs `&a0[L/4]` — same emit.
+
+**Verdict:** structural cap; no clean C lever. The `addiu` stays as a standalone insn, locking the function at -1 insn over target. INSN_PATCH is blocked by the size delta (it can only overwrite, not insert/delete).
+
+**Workaround:** none currently. If a permuter run finds a fold where the store can be reordered without breaking the callee's contract, it would unlock; otherwise accept the NM cap.
+
+**Related:** `feedback-insn-patch-size-diff-blocked` (POST_CC_RECIPES.md) — same root cause, different surface.
