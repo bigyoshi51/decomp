@@ -6,7 +6,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 ## Index
 
-- [PROLOGUE_STEALS via splice-function-prefix.py only fires when the function's first insn is LUI — sll-led / non-LUI stolen-prologues are silently skipped](#feedback-prologue-steals-lui-only-splice-restriction) — `scripts/splice-function-prefix.py` checks `(first_word >> 26) & 0x3F == 0x0F` (LUI opcode) before splicing. If the redundant prefix to strip is `sll rN, rM, K` (opcode 0x00) — e.g. when the predecessor's tail seeded a strength-reduction step like `sll t6, a1, 2` — the script logs `splice-skip: <func> doesn't start with LUI` and leaves the bytes intact. The Makefile `PROLOGUE_STEALS := <func>=N` line silently no-ops. To unblock: extend the splice script's verify to allow opcode 0x00 (SR/SLL family), OR pick the SUFFIX_BYTES-on-predecessor path instead.
+- [PROLOGUE_STEALS via splice-function-prefix.py first-insn opcode whitelist — historically a frequent blocker, now LUI/LW/ANDI/R-type/COP1(mtc1-zero)](#feedback-prologue-steals-lui-only-splice-restriction) — `scripts/splice-function-prefix.py` checks `(first_word >> 26) & 0x3F` against a whitelist before splicing. Originally LUI-only; extended several times (LW 2026-05-06, ANDI 2026-05-08, R-type 2026-05-08, COP1/mtc1-zero 2026-05-16). When a function's documented cap cites "splice rejects opcode X" — re-check the current whitelist before assuming it still applies. Whenever the whitelist grows, re-examine documented-blocked functions; some prior caps are unblocked by the new tuple.
 - [Prologue-stolen successor + IDO &D-CSE: combine PROLOGUE_STEALS with a unique extern to break the CSE and reach 100 %](#feedback-combine-prologue-steals-with-unique-extern) — _When a prologue-stolen successor uses v0=&D for in-body field stores AND the target ALSO emits a fresh `lui aN; lw aN, 0(aN)` for a *D dereference at a call site (instead of reusing v0), straight C with PROLOGUE_STEALS…
 - [INSN_PATCH can rewrite a function's trailing region when IDO emits dead BB markers PLUS TRUNCATE_TEXT clips the actual epilogue — collapse the dead bytes INTO the missing epilogue](#feedback-insn-patch-collapses-dead-bb-into-truncated-tail) — _A function whose IDO-emitted body has dead 'b epilogue; nop' BB markers BEFORE the real epilogue, AND whose `.o` is TRUNCATE_TEXT'd to a size that drops the trailing jr ra + nop, looks like it has fewer insns than…
 - [Prologue-stolen-successor diagnostic: read the .s first instruction to tell whether stolen-prologue is INSIDE the symbol (no recipe) or OUTSIDE in predecessor's SUFFIX_BYTES (PROLOGUE_STEALS=8 needed)](#feedback-prologue-stolen-inside-vs-outside-symbol) — _Same chain (e.g. gl_func 0x2D838 family) can have BOTH variants: some siblings include the lui+lw stolen-prologue at offset 0 of their symbol (matches IDO's natural emit, no recipe), others have it in the predecessor's symbol's tail (PROLOGUE_STEALS+SUFFIX_BYTES needed). Diagnostic: if the .s file starts with `lui tN, 0; lw tN, 0(tN)` it's inside; if it starts with `addiu sp` it's outside._
@@ -46,7 +46,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 This is intentional for the case where the .o was built from `INCLUDE_ASM` (which starts with `addiu sp` not LUI) — the script becomes a safe no-op. But it ALSO blocks legitimate non-LUI stolen-prefix patterns:
 
 - **sll-led** (opcode 0x00) — happens when the predecessor's tail seeds a strength-reduction step. Example: `timproc_uso_b3_func_00002EF0` has its predecessor's trailing `sll t6, a1, 2` setting up `t6 = a1*4` before fall-through; the function's body does the remaining `sub + sll, t6, t6, 3` to reach `a1*24`. C-emit naturally reproduces all three (`sll + sub + sll`); only the first 4 bytes need stripping. PROLOGUE_STEALS=4 silently fails because opcode 0x00 ≠ 0x0F.
-- **mtc1-led** (opcode 0x11, COP1) — predecessor's tail seeds an FPU constant. Example (2026-05-15): `gl_func_00042338`'s predecessor `gl_func_000422AC` ends with `mtc1 zero, $f0` (= `f0 = 0.0f`, word `0x44800000`) as the LAST 4 bytes of its 0x8C symbol; the successor calls `gl_func_00000000(&buf, 0.0f ×7)` reusing that f0. C-emit re-materializes `mtc1 zero,$f0` at offset 0; PROLOGUE_STEALS=4 logs `splice-skip: ... doesn't start with LUI/LW/ANDI/R-type (word=0x44800000)` and no-ops. (Note: the splice script's accepted-prefix set has grown since this entry was first written — it now takes LUI/LW/ANDI/R-type — but still not COP1/mtc1.) Stays NM with INCLUDE_ASM until the verify-block also accepts opcode 0x11.
+- **mtc1-led** (opcode 0x11, COP1) — predecessor's tail seeds an FPU constant. Example: `gl_func_00042338`'s predecessor `gl_func_000422AC` ends with `mtc1 zero, $f0` (`f0=0.0f`) as the last 4 bytes; the successor calls `gl_func_00000000(&buf, 0.0f ×7)` reusing $f0. **CLOSED 2026-05-16** — splice script now accepts opcode 0x11 narrowly gated to `mtc1 zero, $fN` (`word & 0xFFE007FF == 0x44800000`). Verified on `gl_func_00064174` (sibling in the same cluster); see sixth-extension section below.
 
 **Workarounds:**
 - (preferred) Use SUFFIX_BYTES on the predecessor instead — append the trailing insn to the predecessor's symbol; successor's body becomes the natural emit (no PROLOGUE_STEALS needed). Blocked when predecessor is itself unmatched (can't add SUFFIX without owning the function's bytes).
@@ -104,6 +104,35 @@ sll`. Verified 2026-05-08 on `gl_func_000315C4` (predecessor sets
 This was the previously-documented "SLL-led, blocked" case from the
 top of this section — explicitly closed via the same "extend the
 tuple" recipe predicted there.
+
+**2026-05-16 sixth extension (COP1/mtc1-zero now accepted):**
+splice-function-prefix.py was extended to accept opcode 0x11 (COP1) as
+a PROLOGUE_STEALS=4 first-insn, narrowly gated to the float-zero
+materialization form `mtc1 zero, $fN` (word & 0xFFE007FF == 0x44800000
+— pinned source = zero, any dest $fN). Other COP1 sub-opcodes (cwc1,
+cfc1, lwc1, swc1, mfc1, ctc1) are still rejected to avoid silently
+splicing arbitrary FPU ops. Use case: the predecessor's tail ends
+with `mtc1 zero, $f0` materializing $f0=0.0f for the successor's
+zero-store loop; the C body's `a0[0] = 0.0f;` re-materializes the
+same `mtc1 zero, $f0` at offset 0, which PROLOGUE_STEALS=4 strips.
+
+Verified 2026-05-16 on `gl_func_00064174` (10-float-zero + Vec3
+bit-copy): predecessor `game_libs_func_00064124`'s 0x50 symbol ends
+in `mtc1 zero, $f0`. C body `void f(float *a0, int *a1) { int pad[3];
+int tmp[3]; a0[0..9] = 0.0f; tmp[0..2] = a1[0..2]; a0[10..12] =
+*(float*)&tmp[0..2]; }` plus PROLOGUE_STEALS=4 strips the leading
+duplicate mtc1; 10-insn INSN_PATCH closes the remaining frame-size
+and register-allocation diffs (frame -0x18 → -0x20, tmp-base v0 → t6,
+tmp slot sp+0x4 → sp+0xC). Was a documented "splice script rejects
+COP1" cap — now byte-exact via the script extension. Gate is now
+`opcode1 in (0x0F, 0x23, 0x0C, 0x00, 0x11)` with the additional
+0x44800000-mask check for the COP1 branch.
+
+Sibling `gl_func_00042338` (15-insn stolen mtc1 successor calling
+`gl_func_00000000` with 7 zero floats) was identified by the same
+cap-doc lookup; the splice extension makes it splice-able, though
+the rest of that function's emit shape needs its own grind (K&R
+extern + fn-ptr cast may still cap it).
 
 **2026-05-08 fifth finding (chained-SUFFIX inheritance with predecessor-INCLUDE_ASM is permanently blocked at INCLUDE_ASM-only or NM-with-extended-signature; document the body via `#ifdef NON_MATCHING` not `#if 0`):**
 
