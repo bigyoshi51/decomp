@@ -8,6 +8,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### branch likely / bnel
 
+- [Isolated-compile vs full-TU IDO -O2 codegen can DIVERGE for the same function — verify decodes against the full `make` build, never an isolated cc](#feedback-isolated-vs-full-tu-o2-divergence) — _A function body can compile to the exact target shape (12 insns, plain beq/bne, nop delays) when cc'd IN ISOLATION with the exact project flags, yet the full-TU `make` build of the same source (asm-processor phase-1 output verified identical) produces a different, worse shape (17 insns, beql/bnel, loop rotation) at the SAME -O2. IDO's optimizer is TU-context-dependent. Implication: a "proven-correct in isolation" decode can still be sub-80 in the real build — that's NOT a logic error, don't re-derive; it's permuter / TU-robust-form territory. Always measure against the build .o. Verified 2026-05-16 game_libs_func_0003D9E4._
 - [Branch-likely opcode cheat sheet — decode raw `.word` correctly before drafting C control flow](#feedback-mips-branch-likely-opcode-cheatsheet) — Top 6 bits of the instruction (`(word >> 26) & 0x3F`): `0x14` = `beql`, `0x15` = `bnel`, `0x16` = `blezl`, `0x17` = `bgtzl`. In the high byte, that's `0x50–0x53` = `beql` (rs varies the low 2 bits), `0x54–0x57` = `bnel`, `0x58–0x5B` = `blezl`, `0x5C–0x5F` = `bgtzl`. So `5320000B` IS `beql $t9, $zero, +0xB` — branch on EQUAL, not `bnezl`. Misreading silently inverts the C if-condition direction; the body compiles fine but byte-matches drop dramatically.
 - [IDO emits the if-body's first store TWICE around a beql — once in delay slot (annulled on taken) + once at fall-through](#feedback-ido-beql-speculative-store-double-emit) — _For `if (cond) { dst = val; ... }` IDO -O2 emits `beql cond_reg, $0, end; sw val, dst_off(dst_reg)` in the delay slot AND ALSO `sw val, dst_off(dst_reg)` at the fall-through.
 - [Asm `blez/blezl` vs `bne/beql` distinguishes `> 0` (signed) from `!= 0` (eq) source](#feedback-ido-blez-vs-bne-signed-compare) — When target asm uses `blez $rs, X` or `blezl $rs, X` for a conditional, the C source MUST be `if (val > 0)` (signed comparison), NOT `if (val != 0)`.
@@ -9613,3 +9614,52 @@ the deref base so the param's home slot is loaded twice), then INSN_PATCH
 the `bne`→`bnel` opcode + the delay-slot load + register renames — all
 same-length word overwrites (jal orphan-relocs auto-stripped). Don't keep
 grinding C control-flow shapes; this residual is regalloc-bound.
+
+---
+
+<a id="feedback-isolated-vs-full-tu-o2-divergence"></a>
+## Isolated-compile vs full-TU IDO -O2 codegen can diverge for the same function — always verify against the full `make` build
+
+_IDO 7.1's -O2 optimizer is translation-unit-context-dependent. The same
+function body, same flags, can produce two different instruction shapes
+depending on whether it is compiled alone or as part of the full source
+file. This breaks the common "test the C in isolation, eyeball the asm"
+shortcut: an isolated test can look byte-perfect while the real build is
+sub-80%._
+
+**Concrete case (2026-05-16, `game_libs_func_0003D9E4`, 12-insn list walk):**
+
+Compiled IN ISOLATION with the EXACT project flags:
+```
+cc -c -G 0 -non_shared -Xcpluscomm -Wab,-r4300_mul -O2 -mips2 -32 \
+   -I include -I src -DNON_MATCHING -o /tmp/f.o /tmp/f.c
+```
+→ 12 insns, plain `beq`/`bne`, `nop` delay slots — target shape
+byte-for-byte except ONE register (counter in `$v0`; target reuses the
+dead `$a0` param).
+
+The full-TU `make non_matching_objects` build of `game_libs_post.c`
+(asm-processor phase-1 output verified textually identical to the
+source for this function) → 17 insns, `beql`/`bnel`, loop rotation,
+**3.75% fuzzy**. Same C. Same flags. Same -O2.
+
+**Why:** IDO's RTL optimizer / reorg makes decisions influenced by
+whole-TU state (function ordering, accumulated optimizer context), not
+purely the single function. A small isolated TU and a multi-thousand-line
+TU can land in different optimization states for the identical function.
+
+**Implications / how to apply:**
+- ALWAYS score against `build/.../<file>.c.o` (objdiff / the project's
+  byte_verify), NEVER an isolated `cc` of the extracted function. An
+  isolated test is a useful *sanity check that the logic is right*, but
+  it is NOT proof the build matches.
+- If isolated == target but full build diverges: the C **logic is
+  correct** — stop re-deriving control flow. The residual is a
+  TU-context optimizer artifact. Escalate to the permuter, or search for
+  a loop/branch form that survives the full-TU optimizer to the target
+  shape (different break/continue placement, counter-register recycling,
+  goto vs structured).
+- This is a distinct class from "wrong C shape." Diagnose by extracting
+  the function from the asm-processor phase-1 output and cc'ing it alone
+  with the exact flags: if that hits the target shape, you have this
+  divergence, not a logic bug.
