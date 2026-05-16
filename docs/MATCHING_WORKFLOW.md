@@ -122,6 +122,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [TRUNCATE_TEXT must match natural compiled size, not the clean ROM boundary — drift cuts real code](#feedback-truncate-text-preserve-drift) — _When splitting a .c file with TRUNCATE_TEXT, set the target to the natural compiled size (including asm-processor drift), not the expected clean boundary.
 - [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — _For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC), DO NOT try fixing it by adding the symbol to undefined_syms_auto.txt.
 - [objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup](#feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware) — _objdiff's reloc-aware scoring (treats `jal SYMBOL + R_MIPS_26 reloc` as equivalent to `jal pre-baked-addr-to-same-symbol`) lets you remove redundant INSN_PATCH-for-jal recipes. But the LINKER still needs the symbol resolved — `func_7C860 = 0x7C860;` in `undefined_syms_auto.txt` is the linker-side resolution, not a matching artifact. Removing it as "redundant" breaks the build with `undefined reference to func_7C860`. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory)._
+- [Complex function peaks <80%: keep INCLUDE_ASM but embed the verified decode as an in-source resume-comment](#feedback-sub80-complex-embed-decode-resume-comment) — _CLAUDE.md's ≥80% NM-wrap threshold means sub-80 complex functions stay plain INCLUDE_ASM, but discarding the partial decode wastes the iteration. The sub-80 forward-progress artifact = INCLUDE_ASM + a structured comment recording peak %, the verbatim candidate C, and the precise residual + suspected codegen lever, so the next tick resumes from the peak (not scratch). Verified 2026-05-16 gl_func_0003D7F8 (26→30→73%, residual isolated to one bnel + a3 home double-reload)._
 
 
 ---
@@ -5050,3 +5051,44 @@ which is also when `expected/` gets refreshed.
 `game_libs_func_0003D538` was a complete 5-insn arg-home stub; successor
 `gl_func_0003D550` read `t6` uninitialized at +0x8. Merged into one 0x70
 function at entry 0x3D54C, byte-exact vs baserom @ 0xE22624.
+
+---
+
+<a id="feedback-sub80-complex-embed-decode-resume-comment"></a>
+## Complex function peaks <80%: keep INCLUDE_ASM (per CLAUDE.md) but embed the verified decode as an in-source resume-comment
+
+_CLAUDE.md is explicit: NM-wrap threshold is ≥80%; below that the artifact
+stays plain INCLUDE_ASM (not a `#ifdef NON_MATCHING` wrap). The decompile
+skill's "commit a 40-60% NM wrap, tighten next run" guidance conflicts;
+CLAUDE.md wins (project instruction, override priority). But discarding a
+hard-won partial decode means the next tick restarts from scratch — wasted
+work. Resolution: the sub-80 forward-progress artifact is **plain
+INCLUDE_ASM + a structured in-source comment that records the verified C
+body and the precise remaining gap**, so a future tick resumes from the
+peak instead of re-deriving it._
+
+**When this applies:** a non-trivial function (constructor, 40+ insn
+orchestrator, branch-likely-heavy) where iteration got the structure
+byte-aligned (control flow, data refs, epilogue all match) but it stalls
+below 80% on a residual that needs deep multi-variation grinding
+(bnel/beql shaping, spilled-param double-reload, IDO struct-copy unroll).
+
+**The resume-comment must contain:**
+1. The peak fuzzy % (so the next tick knows the baseline and won't regress).
+2. The full candidate C body (the exact source that hit the peak — copy it
+   verbatim into the comment, not a paraphrase).
+3. The PRECISE residual: which target insns differ and the suspected
+   codegen lever (e.g. "target `bnel t8,zero; lw t1,0(t9)` vs C-emit plain
+   `bne`; needs branch-likely shaping + spilled-param a3 double-reload").
+4. An explicit "resume here, do NOT re-derive" marker.
+
+This keeps the build on the correct INCLUDE_ASM path (no false-positive
+episode risk, no <80% wrap littering `report.json`) while making the
+partial decode a durable, Codex-readable asset. Verified 2026-05-16
+(`gl_func_0003D7F8`, iterated 26→30→73%, structure fully aligned, residual
+isolated to one branch-likely + a3 home double-reload; decode recorded
+in-source so the next pass starts at 73%).
+
+**Contrast:** ≥80% → use the `#ifdef NON_MATCHING` wrap (preserves C on the
+non-matching build path, eligible for INSN_PATCH promotion). <80% →
+INCLUDE_ASM + resume-comment. The 80% line is the artifact-form switch.
