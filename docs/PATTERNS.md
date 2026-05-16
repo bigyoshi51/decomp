@@ -80,6 +80,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### other
 
+- [Null-coalesce + return-deref: `if (a0==0) a0=D; return a0[N];` collapses both paths via shared delay-slot load](#feedback-null-coalesce-return-deref) — _For a 6-insn pattern `bne a0,zero,jr_ra; nop; lui+lw D; jr ra; lw v0,N(a0)`, the source is `if (a0==0) a0=D; return a0[N/4];`. IDO emits a single deref in the jr-ra delay slot serving BOTH the bne-taken and fall-through paths. Verified 2026-05-15 on game_libs_func_0006F614._
 - [Leading-nop empty stub functions need PREFIX_BYTES — `void f(void){}` won't match](#feedback-nop-prefixed-empty-stub) — _A function whose body is `nop; nop; jr ra; nop` (4 insns / 0x10) can't be reached from natural C. Predecessor ends cleanly so the leading nops aren't alignment padding — they're a stub placeholder. Match via NM-wrap with `void f(void){}` + PREFIX_BYTES of N nop-words. Verified 2026-05-15 detection on game_libs_func_0003ECDC._
 - [An "89-99% cap" on an NM wrap might actually be 100% post-link — check raw .text bytes before giving up](#feedback-89pct-objdiff-cap-may-be-100) — _If `objdiff-cli diff` reports 80-99% on a function whose ONLY DIFF kinds are `DIFF_ARG_MISMATCH` on jal/data-reloc reg/symbol names (not opcode or immediate mismatches), the function is likely byte-identical after…
 - [When reading USO `.word`-style asm, decode the rs field — don't guess "(s2)" from context](#feedback-asm-base-reg-misread) — USO asm is raw `.word 0xHEXHEX` directives, not mnemonics.
@@ -8552,6 +8553,36 @@ The build then fails with `Error: symbol "<func>" defined twice`.
 **Fix:** after running split-fragments on a bundle where some sub-symbols already have C bodies, manually delete the auto-added INCLUDE_ASM lines. The pre-existing C bodies are the canonical source. The newly-generated per-symbol .s files give the diff baselines those C bodies were waiting for.
 
 **Side benefit:** symbols that were stuck as "C body but no per-symbol expected baseline" suddenly start getting fuzzy-match scores after the split. Often several jump from `None` to 90%+ instantly because the C was correct but invisible to objdiff.
+
+---
+
+<a id="feedback-null-coalesce-return-deref"></a>
+## Null-coalesce + return-deref: `if (a0==0) a0=D; return a0[N];` collapses both paths via shared delay-slot load
+
+_For a 6-insn pattern `bne a0,zero,jr_ra; nop; lui+lw D; jr ra; lw v0,N(a0)` (where the final `lw v0,N(a0)` is in the jr-ra delay slot), the C source is the simplest possible null-coalesce-then-return: `if (a0==0) a0 = D; return a0[N/4];`. IDO emits a single `lw v0,N(a0)` in the jr-ra delay slot that serves both arms — the bne-taken path (a0 unchanged) and the fall-through path (a0 = D) both converge on the same register at the same offset._
+
+**Asm signature:**
+```
++0x00: bne   a0, zero, +0x10    ; skip over D-fallback
++0x04: nop                       ; delay slot of bne
++0x08: lui   a0, %hi(D)         ; only executed if a0==0
++0x0C: lw    a0, %lo(D)(a0)     ; (continues fall-through)
++0x10: jr    ra                  ; <- bne target
++0x14: lw    v0, N(a0)          ; delay slot serves BOTH paths
+```
+
+**Match shape:**
+```c
+extern int *D_X;
+int f(int *a0) {
+    if (a0 == 0) a0 = D_X;
+    return a0[N/4];
+}
+```
+
+The deref-in-delay-slot is what makes the size = 6 insns (not 7) — IDO doesn't emit a separate post-merge load.
+
+Verified 2026-05-15 on `game_libs_func_0006F614` (N=4, returns a0[1]).
 
 ---
 
