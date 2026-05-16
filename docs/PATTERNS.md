@@ -8599,6 +8599,8 @@ _A function whose body is `nop; nop; jr ra; nop` (4 insns / 0x10) can't be reach
 
 **NOT** an INSN_PATCH case (that overwrites bytes already emitted at given offsets); the natural emit doesn't include the leading nops, so PREFIX_BYTES prepends them.
 
-Verified 2026-05-15 detection on `game_libs_func_0003ECDC` (NM-wrapped pending PREFIX_BYTES verification of downstream-offset safety).
+**BLOCKER 2026-05-16: `scripts/inject-prefix-bytes.py` whitelist.** The script refuses to patch when the target function's first natural insn is outside `VALID_ENTRY_OPCODES` — the whitelist was sized for the USO loader-trampoline use case (b/jr/lui-at-start) and rejects e.g. `sw` (opcode 0x2b) at function entry. So a function whose C-emit begins with a store (like `game_libs_func_0005AFB0`'s `sw a2, 4(a0)` from a DLL-insert body) can't be auto-prefixed even though the structural fit is correct. Unblocking requires extending VALID_ENTRY_OPCODES in the script. Defer until needed for ≥2 candidates.
+
+Verified 2026-05-15 detection on `game_libs_func_0003ECDC` (empty body, blocked by whitelist independently — first insn is also nop, but inject script no-ops on detect-match) and `game_libs_func_0005AFB0` (DLL-insert body, blocked by whitelist 2026-05-16).
 
 **Origin:** 2026-05-08 game_uso_func_0000D458 bundle. Pre-existing C bodies for D5BC/D5DC/D5F8/D634 were defined but `report.json` showed `None` for them (no per-symbol baseline). After splitting, removing the redundant INCLUDE_ASMs, and refreshing expected/.o: D634→100%, D5BC→96.88%, D5DC→94.71%, D5F8→65.20%.
