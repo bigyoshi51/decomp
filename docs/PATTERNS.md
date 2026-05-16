@@ -80,6 +80,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### other
 
+- [Leading-nop empty stub functions need PREFIX_BYTES — `void f(void){}` won't match](#feedback-nop-prefixed-empty-stub) — _A function whose body is `nop; nop; jr ra; nop` (4 insns / 0x10) can't be reached from natural C. Predecessor ends cleanly so the leading nops aren't alignment padding — they're a stub placeholder. Match via NM-wrap with `void f(void){}` + PREFIX_BYTES of N nop-words. Verified 2026-05-15 detection on game_libs_func_0003ECDC._
 - [An "89-99% cap" on an NM wrap might actually be 100% post-link — check raw .text bytes before giving up](#feedback-89pct-objdiff-cap-may-be-100) — _If `objdiff-cli diff` reports 80-99% on a function whose ONLY DIFF kinds are `DIFF_ARG_MISMATCH` on jal/data-reloc reg/symbol names (not opcode or immediate mismatches), the function is likely byte-identical after…
 - [When reading USO `.word`-style asm, decode the rs field — don't guess "(s2)" from context](#feedback-asm-base-reg-misread) — USO asm is raw `.word 0xHEXHEX` directives, not mnemonics.
 - [Bulk alias-removal scan: some .s files have a LEADING blank line — use re.MULTILINE not lines[0].startswith](#feedback-bulk-alias-scan-handle-leading-blank-lines) — When bulk-editing .s files via `lines[0].startswith('nonmatching <fn>,')`, files that begin with a blank line are silently skipped — `lines[0]` is `\n`, not the macro. ~25-30 .s files in 1080's asm tree have this layout.
@@ -8551,5 +8552,22 @@ The build then fails with `Error: symbol "<func>" defined twice`.
 **Fix:** after running split-fragments on a bundle where some sub-symbols already have C bodies, manually delete the auto-added INCLUDE_ASM lines. The pre-existing C bodies are the canonical source. The newly-generated per-symbol .s files give the diff baselines those C bodies were waiting for.
 
 **Side benefit:** symbols that were stuck as "C body but no per-symbol expected baseline" suddenly start getting fuzzy-match scores after the split. Often several jump from `None` to 90%+ instantly because the C was correct but invisible to objdiff.
+
+---
+
+<a id="feedback-nop-prefixed-empty-stub"></a>
+## Leading-nop empty stub functions need PREFIX_BYTES — std C `void f(void){}` won't match
+
+_A function whose body is `nop; nop; jr ra; nop` (4 insns / 0x10) can't be reached from natural C. `void f(void){}` emits `jr ra; nop` = 2 insns / 0x8, which is half the target size. The leading nops aren't alignment padding — predecessor ends cleanly and the symbol genuinely owns the leading 8 bytes._
+
+**Detection signal:** the .s file shows `nop; nop; jr ra; nop` (or generally any N leading `0x00000000` words before the actual `0x03E00008` epilogue), and the predecessor's `.s` ends cleanly with its own `jr ra; nop` (no leak).
+
+**Origin:** these are typically stub placeholders left by the original devs — a function that was intended to be filled in but wasn't, with `nop`s reserving the entry-point bytes.
+
+**Match path:** NM-wrap with `void f(void){}` (2-insn emit) plus PREFIX_BYTES of N nop-words (e.g. `<func>=0x00000000,0x00000000` for 2 leading nops). Verify downstream offsets don't shift — if the parent .c.o uses TRUNCATE_TEXT, the leading insertion is fine; if neighbouring symbols are referenced via absolute offsets in other recipes, double-check.
+
+**NOT** an INSN_PATCH case (that overwrites bytes already emitted at given offsets); the natural emit doesn't include the leading nops, so PREFIX_BYTES prepends them.
+
+Verified 2026-05-15 detection on `game_libs_func_0003ECDC` (NM-wrapped pending PREFIX_BYTES verification of downstream-offset safety).
 
 **Origin:** 2026-05-08 game_uso_func_0000D458 bundle. Pre-existing C bodies for D5BC/D5DC/D5F8/D634 were defined but `report.json` showed `None` for them (no per-symbol baseline). After splitting, removing the redundant INCLUDE_ASMs, and refreshing expected/.o: D634→100%, D5BC→96.88%, D5DC→94.71%, D5F8→65.20%.
