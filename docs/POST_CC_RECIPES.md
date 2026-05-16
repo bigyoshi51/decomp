@@ -35,6 +35,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [SUFFIX_BYTES alone (no paired PROLOGUE_STEALS) suffices when the stolen-prologue insns in the .s file are LITERAL `.word` directives](#feedback-suffix-bytes-solo-when-stolen-prologue-is-literal-words) — _If the predecessor's `.s` declares the stolen-prologue lines as raw `.word 0xXXXXXXXX` (no `%hi`/`%lo` macros, no relocations), the successor's C-emit doesn't re-emit them — SUFFIX_BYTES on the predecessor is solo-sufficient. PROLOGUE_STEALS on the successor would corrupt the real prologue. Verified 2026-05-14 on `gl_func_000305CC` (doc-predicted paired commit; reality: SUFFIX_BYTES alone byte-exact)._
 - [`volatile int pad[N]` frame-grow can't decouple frame-size from in-frame spill offset — a 99.9% wrap with a 4-byte spill-slot shift is INSN_PATCH-only](#feedback-volatile-pad-frame-offset-coupling) — _When a near-exact (99.7–99.95%) wrap's sole residual is a stack spill slot 4 bytes off (e.g. `local`/`buf` at sp+0x28 where target wants sp+0x24), `volatile int pad[N]` cannot fix it: pad[N] sets BOTH the frame size AND the in-frame offset through one knob (offset moves ~`0x34-4N`, frame size moves with N), so there is no N giving both the correct frame AND the correct slot. Stop pad-grinding the whole 99.9% NM band; the residual is INSN_PATCH-only (1 sw + 1 addiu offset). Verified 2026-05-15 on `gl_func_00039A9C` (-64 frame, buf@0x24 vs 0x28) and `gl_func_00041768` (-48 frame, local@0x28 vs 0x24)._
 - [INSN_PATCH bnel→bne demotion + delay-slot nopping when the pulled insn already lives at the bne-taken target](#feedback-insn-patch-bnel-demote-with-delay-nop) — _When IDO -O2 emits `bnel rN, rM, +K; <insn>` and target uses `bne rN, rM, +K-1; nop`, INSN_PATCH can swap the branch opcode + nop the delay slot AS LONG AS the same `<insn>` is duplicated at the bne-taken target offset (so it stays live post-patch). Verified 2026-05-16 on gl_func_0006AF0C (linked-list walk, 4-insn patch)._
+- [Screen INSN_PATCH candidates by op-mismatch count — register-rename (op-mismatch=0, always patchable) vs structural divergence (high op-mismatch, tautology trap, defer)](#feedback-insn-patch-screen-by-opmismatch-count) — _Before unwrapping a SAME-LEN near-exact wrap for INSN_PATCH, align expected vs build insns and count how many diffs have a different mnemonic. 0 = pure register/imm (logic-safe). Small+paired = independent-insn schedule swap (still safe). High (e.g. 25/37) = the C decode structurally diverges — INSN_PATCH would fake the logic; defer with a negative finding. Verified 2026-05-16: gl_func_00062E10 (12/2→exact) vs timproc_uso_b1_func_00001130 (37/25→deferred)._
 
 
 ---
@@ -2329,3 +2330,46 @@ newly-live base) closes the function. 4 INSN_PATCH entries, byte-exact.
 - The delay-slot insn modifies a register READ on the bne-taken target side without being recreated.
 
 **Class:** same as `feedback-insn-patch-for-ido-codegen-caps` (operand/encoding changes at fixed offsets, same size). Specific to the bnel-pulled-delay pattern.
+
+---
+
+## feedback-insn-patch-screen-by-opmismatch-count
+
+**Screen INSN_PATCH candidates by op-mismatch count BEFORE unwrapping — distinguishes register-rename (always patchable) from structural divergence (NOT patchable, tautology trap)**
+
+When a SAME-LEN near-exact wrap has N differing words, classify each diff:
+align expected vs build instruction lists, count diffs (`ndiff`) and, among
+those, how many have a different **mnemonic** (`op-mismatch`, comparing
+`insn.split()[0]`). The ratio is a fast triage:
+
+- **op-mismatch = 0** → every diff is pure register/immediate at the same
+  opcode. The C logic produces the right instruction stream; only the
+  allocator/scheduler chose different registers. **Always legitimately
+  INSN_PATCH-able** (compiler artifact, not faked logic).
+- **op-mismatch small (1–2) AND the mismatched offsets form a localized,
+  paired swap of independent setup insns** (e.g. target `lui a0,X` @0x18 /
+  `addiu at,Y` @0x20 vs build emitting them in the opposite order) →
+  instruction-scheduling artifact of two independent insns, logic-identical.
+  **Still INSN_PATCH-able.** Verify the swap is genuinely independent (no
+  data dep between the two insns) before trusting it.
+- **op-mismatch high (e.g. 25 of 37)** → the instruction *stream* diverges
+  structurally (target `jal func` where build has `lui`; target `multu`
+  where build has `lw`). The C decode does NOT produce the target's logic —
+  INSN_PATCH-ing it would be **rewriting the function via the patch table,
+  the tautology trap**. NOT a valid INSN_PATCH; the C body needs structural
+  correction or it's a documented-cap-class wrap. Defer with a negative
+  finding; do not grind INSN_PATCH on it.
+
+**Why this matters:** the recalibrated rule says compiler-artifact diffs are
+INSN_PATCH-able "at any diff count" — but that presupposes the diffs ARE
+compiler-artifact. op-mismatch count is the cheap screen that proves it
+before you sink time unwrapping + patching. A 12-diff wrap with
+op-mismatch=2-paired-swap promotes in one tick; a 37-diff wrap with
+op-mismatch=25 is a different (wrong-C) problem entirely.
+
+Verified 2026-05-16: `gl_func_00062E10` (ndiff 12, op-mismatch 2 = a
+lui/addiu schedule swap → byte-exact via 12-word INSN_PATCH) vs
+`timproc_uso_b1_func_00001130` (ndiff 37, op-mismatch 25 → correctly
+deferred, NOT INSN_PATCH).
+
+**Class:** screening heuristic for `feedback-insn-patch-for-ido-codegen-caps`.
