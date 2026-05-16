@@ -1288,6 +1288,8 @@ def byte_verify(name):
 
 For NM-wrapped sources, `build/non_matching/.o` defines `-DNON_MATCHING=1` and actually compiles the C body, making the comparison meaningful. For plain-C sources (post-cc recipes etc.), `build/.o` still holds — that's the path the recipes apply to.
 
+**Sub-trap: ad-hoc `make build/src/<seg>/X.c.o CFLAGS_EXTRA=-DNON_MATCHING` does NOT compile the C body.** The Makefile rule for `build/src/%.c.o` doesn't reference `$(CFLAGS_EXTRA)` (only `$(CFLAGS) $(OPT_FLAGS) $(MIPSISET) $(CPPFLAGS)` — no extension hook). The `CFLAGS_EXTRA=...` override is silently ignored, the build follows the default `#else INCLUDE_ASM` branch, and the output appears to byte-match expected — the classic tautology trap. Always verify NM-wrap C-emit via `make build/non_matching/src/<seg>/X.c.o` (which is the dedicated rule that defines `-DNON_MATCHING`). Caught 2026-05-15 on `func_00005068`, almost promoted as exact match before noticing 13-vs-14 insn diff in proper non_matching build.
+
 **Two separate bugs combined to let the false positives slip through.** Each was independently sufficient to defeat the gate — fixing only one would not have helped:
 
 1. **Circular byte_verify** (above).
