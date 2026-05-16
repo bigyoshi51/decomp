@@ -19,6 +19,7 @@ _13 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [When an NM-wrap commit shows .text mismatch, FIRST stash to confirm — upstream state may already be broken](#feedback-pre-existing-text-mismatch-diagnose-via-stash) — _When you add an `#ifdef NON_MATCHING / void func() { ... } / #else INCLUDE_ASM(...) / #endif` wrap and observe `cmp build/.o.text expected/.o.text` reports a diff, the natural assumption is that your wrap broke…
 - [Bash `cd` into main worktree during land persists across later turns — run land from subshell](#feedback-shell-cwd-drift-in-worktree) — In 1080 parallel-agent worktree flow, the manual land fallback is `cd <main-worktree> && git merge --ff-only <agent-branch> && git push`.
 - [Recovering when another agent's process has mass-reverted your worktree's src/ files](#feedback-worktree-mass-revert-recovery) — _With multiple parallel agents on 1080-decomp, one agent's rebase/reset/splat-rerun can mass-revert another worktree's src/ .c files to all-INCLUDE_ASM, wiping your in-progress NM wraps and exact matches.
+- [`git rebase` silently leaves duplicate entries in multi-line Makefile variables when two agents add the same key](#feedback-rebase-duplicates-multiline-makefile-key) — _When parallel agents both add identical `<func>=…` entries to the same backslash-continued Makefile variable, rebase keeps both lines without conflict markers. Build passes, but the key is duplicated. After rebase, run `grep -oE '[a-zA-Z_]+=' Makefile | sort | uniq -c | awk '$1>1'` to spot duplicates._
 
 
 ---
@@ -670,6 +671,26 @@ This re-syncs your worktree to the last landed state. Any uncommitted local edit
 - If you see the mass-revert happen mid-tick, STOP. Don't make edits — reset first, then re-apply what you had in memory.
 
 **Origin:** 2026-04-20, agent-a, mid-grind on game_uso_func_0000751C. My `game_uso_func_000074D8` exact match had just landed but the local worktree was reset to pre-match state, plus many other src/ files showed as `M` without my edits. `git reset --hard origin/main` recovered; all landed work was intact.
+
+---
+
+<a id="feedback-rebase-duplicates-multiline-makefile-key"></a>
+## `git rebase` silently leaves duplicate entries in multi-line Makefile variables when two agents add the same key
+
+_When agent-A and agent-B both add a Makefile recipe entry for the same function name (e.g. `gl_func_X=...`) to the SAME backslash-continued variable (`INSN_PATCH := ... \`), `git rebase origin/main` resolves the textual conflict by KEEPING BOTH lines. Both are syntactically valid; make uses one of them (typically the last); build/byte_verify still pass. But the Makefile now carries a duplicate that wastes a `patch-insn:` cycle and confuses readers._
+
+**Symptom:** After `git rebase origin/main`, your Makefile has the same `<funcname>=...` entry twice in a multi-line variable. `make` doesn't error. Build artifacts are correct. But `grep -c <funcname>=` shows 2 hits.
+
+**Why this is easy to miss:** the rebase reports "Successfully rebased" with no conflict markers — the line-continuation context makes the entries look like "different positions in a list," so the 3-way merge accepts both. There's no semantic-level "is this key already in the variable?" check.
+
+**Mitigation:**
+- After every rebase that touches `Makefile`, run `awk '/INSN_PATCH := / {p=1} p && /^\\t/ && $0 ~ /^\\t/ {print}' Makefile | sort | uniq -c | awk '$1 > 1'` (or similar grep) to spot duplicates.
+- Or simpler: `grep -oE '[a-zA-Z_]+=' Makefile | sort | uniq -c | awk '$1 > 1'` — flags any key appearing on multiple lines in the file.
+- When you spot a duplicate, dedupe with `Edit` (remove the second line; keep the one with the `\` continuation appropriate for context).
+
+**Verified 2026-05-16 on agent-i:** my `gl_func_0004DEF0=...` INSN_PATCH commit and a parallel agent's `gl_func_0004DEF0=...` commit (identical content but interleaved with `gl_func_0003EDBC` in different orders) both landed in the same Makefile variable post-rebase. Caught while adding gl_func_0003EE50; removed in same commit.
+
+**General lesson:** any "list of named entries" file (Makefile multi-line vars, undefined_syms_auto.txt, splat YAML lists) is vulnerable. Periodically dedupe these as hygiene.
 
 ---
 
