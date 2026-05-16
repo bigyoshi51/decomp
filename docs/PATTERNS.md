@@ -31,6 +31,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Frame size and $s-reg save count are independent dimensions of the prologue — `char pad[N]` grows the frame but doesn't add $s-reg saves](#feedback-frame-size-vs-sreg-saves-independent) — _When target has prologue `addiu sp, -0xE8; sw ra, 0x24; sw s2, 0x20; sw s1, 0x1C; sw s0, 0x18` (4 saves at offsets 0x18-0x24) and mine has `addiu sp, -0xE8; sw ra, 0x1C; sw s1, 0x18; sw s0, 0x14` (3 saves at…
 - [game_uso per-frame compute spine functions share a Vec3-stage entry template](#feedback-game-uso-per-frame-vec3-stage-template) — _Multiple game_uso spine functions (0x591C, 0x6A30, 0x7C1C — at minimum) start with the SAME Vec3-stage pattern: read 3 floats from `a0->0x30->{0xB4,0xB8,0xBC}` and copy them into a local Vec3 stack buffer.
 - [For stack-allocated packet builders, typed struct on stack beats `char[] + cast` for matching IDO's direct-sp-offset stores](#feedback-typed-stack-struct-for-direct-sp-stores) — When building a small struct on the stack to pass to a callee (e.g., `char pkt[12]; *(s16*)(pkt + 6) = X; pkt[4] = Y; func(pkt)`), IDO emits indirect stores via a t-reg that first computes `&pkt` (`addiu t6, sp, 0x18;…
+- [Build is N insns SHORT and passes `&local` to a call — declare the slots as a stack STRUCT to force the dropped adjacent-field stores](#feedback-stack-struct-by-address-not-bare-locals) — _LEN-DIFF (build < target, NOT a regalloc cap): separate `int tag; T* p;` locals + `&tag` lets IDO drop the `p` store as dead. Switching to `struct { int tag; T* p; } s;` + `&s` makes every field a live ordered store, recovering the missing insns. Then op-mismatch-screen → INSN_PATCH if pure register/imm. Verified 2026-05-16 gl_func_0003D68C: 87.11% (34 vs 36) → 97.86% SAME-LEN → byte-exact._
 
 ### FPU / float patterns
 
@@ -8604,3 +8605,48 @@ _A function whose body is `nop; nop; jr ra; nop` (4 insns / 0x10) can't be reach
 Verified 2026-05-15 detection on `game_libs_func_0003ECDC` (empty body, blocked by whitelist independently — first insn is also nop, but inject script no-ops on detect-match) and `game_libs_func_0005AFB0` (DLL-insert body, blocked by whitelist 2026-05-16).
 
 **Origin:** 2026-05-08 game_uso_func_0000D458 bundle. Pre-existing C bodies for D5BC/D5DC/D5F8/D634 were defined but `report.json` showed `None` for them (no per-symbol baseline). After splitting, removing the redundant INCLUDE_ASMs, and refreshing expected/.o: D634→100%, D5BC→96.88%, D5DC→94.71%, D5F8→65.20%.
+
+---
+
+<a id="feedback-stack-struct-by-address-not-bare-locals"></a>
+## Build is N insns SHORT and passes `&local` to a call — the callee wants a stack STRUCT; declare it as one to force adjacent-field stores
+
+_When a function builds a few adjacent stack slots and passes their address
+to a callee (commonly an indirect/vtable call), decompiling those slots as
+separate locals + `&firstLocal` lets IDO drop stores it deems dead — the
+build comes out **fewer instructions than target** (LEN-DIFF, build < target,
+NOT a register-allocation cap). The fix: declare the slots as a single
+`struct { ... } s;` and pass `(T*)&s`. The struct makes every field a
+live, ordered store, recovering the missing instructions._
+
+**Detection signal:**
+- `objdiff` fuzzy stuck ~85–90%, and an instruction-count compare shows
+  **build has fewer insns than target** (e.g. 34 vs 36).
+- The target's missing insns are stores into stack slots that are
+  contiguous and just below the slot whose address is passed to a call
+  (e.g. target stores `tag` at sp+0x54 and `ptr` at sp+0x58, call gets
+  `a1 = sp+0x54`). The callee reads them as struct fields.
+
+**Recipe:**
+```c
+/* WRONG — compiler drops the pf store, build 2 insns short */
+int tag; float *pf;
+tag = 7; pf = &f[0];
+call(..., &tag);
+
+/* RIGHT — struct forces both adjacent stores, SAME-LEN */
+struct { int tag; float *pf; } s;
+s.tag = 7; s.pf = &f[0];
+call(..., (int *)&s);
+```
+
+**Then screen for INSN_PATCH.** Once SAME-LEN, run the op-mismatch screen
+(`docs/POST_CC_RECIPES.md#feedback-insn-patch-screen-by-opmismatch-count`).
+If op-mismatch=0 the remaining diffs are pure register/imm — promote to
+byte-exact with INSN_PATCH instead of leaving it an NM wrap.
+
+**Verified 2026-05-16 (`gl_func_0003D68C`):** 3-int-fill → float-convert →
+indirect vtable call `(*(v0->0x2C))(.., &localStruct)`. Separate
+`int tag; float *pf;` locals → 87.11%, build 34 vs target 36 (pf store
+dropped). Switching to `struct { int tag; float *pf; } s;` → 97.86%,
+SAME-LEN 36, op-mismatch=0 → 26-word INSN_PATCH → byte-exact.
