@@ -16,6 +16,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO bnel tail-merging routes the false-path epilogue through the true-path's register-restore tail (cosmetic, ~99 % cap)](#feedback-ido-bnel-tail-merge-register-restore) — When the function body is `if (cond) { several jal calls }` and the true path ends with reload-args-then-jal patterns like `lw a0,0x18(sp); jal; lw a1,0x1C(sp)`, IDO sets the bnel branch target to the MIDDLE of those…
 - [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
+- [Annulled `bnel`/`beql` needs test-reg ≠ delay-load-base-reg — the enabler is IDO double-reloading a spilled pointer param into two regs; single reload (test==base) forces plain `bne`](#feedback-ido-branch-likely-needs-distinct-test-and-delay-base-regs) — _When target has `lw t8,off(sp); lw t9,off(sp); bnel t8,zero,L; lw t1,0(t9)` (same spilled param reloaded into TWO regs — t8 tests, t9 is the delay-slot load base), GCC reorg can annul-fill only because the branch-test reg ≠ the delay load's base reg. C that reloads the param once (test and deref share one reg) makes reorg emit a plain `bne` + no annul → exactly 1 insn short. The double-reload is an IDO regalloc/reorg artifact, NOT reachable by C restructuring (verified ineffective: EQUAL-in-if arm-swap, pointer-local CSE). Path forward is permuter or force-SAME-LEN-then-INSN_PATCH the bne→bnel. Verified 2026-05-16 gl_func_0003D7F8._
 - [Multi-case literal-dispatch bnel chain (sparse `if (c == X) c = Y` ladder) needs "modify-c-in-place + single masked return" + separate `int v` for the compare source](#feedback-ido-bnel-dispatch-modify-c-mask-return) — _`int v; c &= 0xFF; v = c; if (v == X1) c = Y1; else if (v == X2) c = Y2; ...; return c & 0xFF;` produces the bnel-chain pattern with `bne+move v0,a0` first compare and per-case `addiu a0; jr ra; andi v0,a0,0xFF` hit-handlers (matches USO entry-glyph dispatchers). Per-case `return CONST` form emits a shorter 4-insn-per-case chain without the `or v0,a0,$0` default-save. Cap ~95 % via the chain-source-register picker (a0 alias vs target's v0)._
 - [IDO -O2 sparse-case switch (case 0 + case 1) compiles to 3-arm beql dispatch with delay-slot pre-loads — unreachable from C if-else; switch is also rejected (.rodata jumptable)](#feedback-ido-sparse-switch-beql-preload-unreachable) — _When target asm shows `addiu $at,zero,1; beql v0,zero,caseA; <lw delay>; beql v0,$at,caseB; <lw delay>; b end; <lw ra delay>` (3-arm beql dispatch with each delay slot pre-loading the case body's first lw), this is a…
 - [bc1fl with target=epilogue and `lw ra,X(sp)` in delay slot is a CONDITIONAL-CALL marker, not a clamp — the if-block guards a `jal` between here and the epilogue](#feedback-ido-bc1fl-skips-jal-to-epilogue) — _Diagnostic for misreading IDO -O2 trailing FP conditionals: when target's last bc1fl jumps to the epilogue with `lw ra,X(sp)` in the delay slot, it's NOT a clamp/store guard; it's `if (!cond) jal()` where the jal sits between the bc1fl and the epilogue. Decode the C as `if (cond_complement) func();`._
@@ -9568,3 +9569,47 @@ _When a function does `*a0_offset_K = v; func(&a0[L], ...);` IDO -O2 emits `sw v
 **Workaround:** none currently. If a permuter run finds a fold where the store can be reordered without breaking the callee's contract, it would unlock; otherwise accept the NM cap.
 
 **Related:** `feedback-insn-patch-size-diff-blocked` (POST_CC_RECIPES.md) — same root cause, different surface.
+
+---
+
+<a id="feedback-ido-branch-likely-needs-distinct-test-and-delay-base-regs"></a>
+## Annulled `bnel`/`beql` requires test-reg ≠ delay-slot-load base-reg; the enabler is IDO double-reloading a spilled pointer param
+
+_GCC 2.7.2 / IDO reorg fills a branch-likely's annulled delay slot with the
+branch TARGET's first instruction. It will only do this (emit `bnel`/`beql`
+instead of plain `bne`/`beq`) when the delay-slot instruction is safe to
+execute speculatively — in particular when the **branch's test register is
+different from the base register of the load it pulls into the delay**._
+
+**Target shape:**
+```
+lw   t8, 0x24(sp)        ; reload spilled param a3  -> t8
+lw   t9, 0x24(sp)        ; reload SAME spilled a3   -> t9  (second reload!)
+bnel t8, zero, .copy     ; test t8
+lw   t1, 0(t9)           ; delay-likely: first copy load, base t9 (≠ t8)
+```
+The two `lw … 0x24(sp)` of the same spilled parameter into **two distinct
+registers** is what makes test-reg (t8) ≠ delay-load-base (t9), which is
+the precondition for reorg to annul.
+
+**Why C can't force it:** natural C reloads the spilled param **once** and
+uses that one register for both the null test and the dereference, so
+test-reg == load-base and reorg falls back to a plain `bne` + separate
+load → the function comes out **exactly 1 instruction short**. The
+double-reload is an IDO register-allocator/reorg artifact tied to the
+spilled-parameter liveness across an intervening call; it is NOT reachable
+by C expression restructuring at a given frame shape.
+
+**Verified ineffective levers (2026-05-16, `gl_func_0003D7F8`):**
+- `#feedback-ido-bnel-arm-swap` (EQUAL case in the `if` arm) — already in
+  that shape, still plain `bne`.
+- pointer-local `int *p = a3;` then deref via `p` — IDO CSEs `p` back to
+  the single `a3` reload, no change.
+
+**Path forward:** (a) permuter on the near-match body (randomizes spill /
+register choices until the t8≠t9 split + branch-likely appears); or
+(b) force SAME-LEN first (introduce a second, distinct spilled local for
+the deref base so the param's home slot is loaded twice), then INSN_PATCH
+the `bne`→`bnel` opcode + the delay-slot load + register renames — all
+same-length word overwrites (jal orphan-relocs auto-stripped). Don't keep
+grinding C control-flow shapes; this residual is regalloc-bound.
