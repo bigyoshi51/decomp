@@ -56,6 +56,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 empty `void f(int a0) {}` produces exactly `jr ra; sw a0, 0(sp)` — save-arg sentinels ARE matchable from C](#feedback-ido-save-arg-sentinel-empty-body) — _The 2-insn "save-arg-to-caller-shadow-space" sentinel (`jr ra; sw a0, 0(sp)`) — previously documented as non-C-expressible — IS matchable from IDO -O2 with the trivial C body `void f(int a0) { }`.
 - [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a1's register assignment, IDO spills a0 to the caller's arg-save slot (extra `sw…
 - [IDO -O2 won't put `addiu aN, aN, K` into a jal-delay slot when a store via the SAME base precedes the call](#feedback-ido-no-addiu-into-jal-delay-when-store-via-base-precedes) — _For `*a0_offset_K = v; func(&a0[L], ...)`, IDO emits the `addiu a0,a0,L*4` as a standalone insn before the jal — it can't sink into the delay slot because the preceding store-via-a0 is a true dependency on the original $a0. Creates a fixed +1-insn delta vs targets that DO have the addiu in the delay slot. No clean C lever; structural cap. Verified 2026-05-16 on gl_func_0003E904 (built 26 vs target 25)._
+- [Inline `aN[OFFSET]` at each use to force IDO to emit the same `lw` twice — matches target's redundant-reload shape](#feedback-ido-inline-arg-deref-defeats-cse-emit-multiple-lw) — _When built is N insns short and the missing insns are duplicate `lw aN, K(aN)` for the same struct field, refactor the C to inline the deref at each use instead of caching into a local. IDO's CSE doesn't fold separate-statement field-deref loads. Verified 2026-05-16 on gl_func_00046B64: caching `int *p = a0[0x240/4]` produced 23 insns (target 24); inlining `(int*)a0[0x240/4]` at all 3 use sites gave 24 insns matching target's count._
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
 - [Pre-load arg field into named local to force field-load BEFORE `&D` materialization clobbers the arg-register](#feedback-ido-preload-field-into-local-forces-load-before-clobber) — _When target reads `lw aN, K(a0)` BEFORE `lui a0, %hi(D_X)` (load via original arg-pointer, then clobber it), the inline `func(&D, arg->field)` form emits clobber-then-reload-via-spill (+1 insn). Fix: `int val = arg->field; func(&D, val);` — named local creates a sequence point that forces field-load first. 2026-05-10: unlocked gl_func_00054668 (75.62% → byte-exact)._
@@ -9663,3 +9664,34 @@ TU can land in different optimization states for the identical function.
   the function from the asm-processor phase-1 output and cc'ing it alone
   with the exact flags: if that hits the target shape, you have this
   divergence, not a logic bug.
+
+---
+
+<a id="feedback-ido-inline-arg-deref-defeats-cse-emit-multiple-lw"></a>
+## Inline `aN[OFFSET]` at each use (vs caching in a local) to force IDO to emit the same `lw` twice — matches target's redundant-reload shape
+
+_When built has one `lw` for `a0[K]` cached into a local, but target has TWO+ `lw a0,K(a0)` (target's C source apparently inlines the deref at each use, breaking IDO's CSE), refactor the C body to inline `aN[K]` at every use instead of caching into a local. IDO will re-emit the lw at each reference. This is the reverse of the usual "cache for clarity" idiom — for byte-match grinding, the wasted memory reads ARE the match._
+
+**Symptom:** built is 1+ insns SHORT vs target, and the missing insns look like duplicate `lw aN, K(aN)` for the same struct field.
+
+**Recipe:**
+```c
+// REGRESSES (caches → 1 lw):
+int *p = (int*)a0[0x240/4];
+p[0x144/4] = toggled;
+vtable = (int*)p[0x28/4];
+... (int)p ...
+
+// FIXES (inlines → 3 lw's of 0x240 in target's pattern):
+((int*)a0[0x240/4])[0x144/4] = toggled;
+vtable = (int*)((int*)a0[0x240/4])[0x28/4];
+... (int)a0[0x240/4] ...
+```
+
+**Why it works:** the original target source apparently didn't cache (perhaps the dev preferred inline style, OR a non-aliased volatile-like access semantics required separate loads). IDO -O2's CSE doesn't fold separate-statement loads of the same struct field across statements — each inline `a0[K]` becomes its own `lw`.
+
+**Verified 2026-05-16 on `gl_func_00046B64`:** 85% NM → exact via inline-the-deref + 12-insn INSN_PATCH for the leftover register-rename diffs. The inline change alone took 23 insns → 24 insns (matching target's count). Cap on the wrap doc was "needs INSN_PATCH for final register-rename"; the actual blocker was the missing inline-vs-cached lw, NOT the register names.
+
+**When to apply:** built is exactly N insns short, AND the missing N insns are duplicate `lw` for the same struct field that built loaded once into a local. Don't apply when the cached local has a NON-trivial computation — inlining duplicates compute too.
+
+**Complementary recipe:** `feedback-unique-extern-neutral-when-clobber-forces-reload` (PATTERNS.md) covers the &D-extern case where unique-externs force separate reloads. This entry covers arg-pointer field-deref CSE-defeat via inline.
