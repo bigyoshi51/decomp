@@ -2,7 +2,7 @@
 
 > IDO 7.1 codegen quirks: how the compiler emits specific patterns, and what C-source shapes do or don't match a given asm.
 
-_119 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_121 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Quick reference by sub-topic
 
@@ -123,6 +123,8 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
 - [IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C](#feedback-ido-o2-loop-array-strength-reduction) — When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 caches `s_reg = array + idx` and post-increments it. If target has the NON-strength-reduced form (per-iter `addu base, idx`), no C variant defeats it. Verified 2026-05-06 on gl_func_00055B44.
 - [For args-preserved-as-locals byte-copy loops, decrement the ARG directly (`count--`) — not the local copy (`cp--`)](#feedback-ido-decrement-arg-not-local-for-counter-loop) — When target preserves an arg as the loop counter (one move at entry, then `addiu argReg,argReg,-1` per iter) AND a local mirror, write the loop with `count--` (decrement the arg-named param) and use the local only as the loop-bound capture (`rem = count`). `cp--; rem = cp` regresses 22→29 diff lines on the same function; `count--; rem = count` tightens to 10 diff lines. Verified 2026-05-06 on func_80000598.
+- [Bitfield setter `*a0 = (*a0 & ~M) | (V << N);` emits ONE sw; target's two-sw shape needs split into two statements](#feedback-ido-bitfield-setter-two-statement-split-for-redundant-sw) — _When target asm has TWO `sw rX, 0(a0)` writes (cleared-mask intermediate + final OR'd value) for a bitfield setter, the natural single-expression form `*a0 = (*a0 & ~M) | (V << N);` emits only ONE `sw`. Split into `*a0 = *a0 & ~M; *a0 = *a0 | (V << N);` — IDO honors the two sequence points and emits the intermediate store. Verified 2026-05-17 on game_libs_func_0000A884/A8B4/A938/A96C (4 bitfield setters)._
+- [Leaf with `beqz $tN, +K` branching past function end into next function's `jr ra` body — tail-fallthrough caps INCLUDE_ASM-only](#feedback-ido-leaf-beqz-fallthrough-into-next-func) — _Pattern: an 8-insn getter where the false-condition branch lands past the function's own `jr ra` insn, falling through into the immediately-following empty function's `jr ra; nop`. The fall-through provides the return for the false case; the true case uses the function's own jr ra. Cannot be reproduced from C alone — IDO has no way to emit a function that intentionally relies on linker layout placing a specific neighbor after it. Identified 2026-05-17 on game_libs_func_0000A8D8 (where next function game_libs_func_0000A8F8 is empty `void f(void){}`)._
 
 ### char / int / signed / narrow
 
@@ -9770,3 +9772,82 @@ void f(int *a0) {
 - Target re-materializes the constant per use (the inverse: drop the named local then).
 
 **Complementary to** `feedback-ido-shared-base-via-deferred-assign-and-named-locals` (PATTERNS.md): same lever shape (named local → CSE), applied to FP literals rather than &D-base.
+
+---
+
+<a id="feedback-ido-bitfield-setter-two-statement-split-for-redundant-sw"></a>
+## Bitfield setter `*a0 = (*a0 & ~M) | (V << N);` emits ONE sw; target's two-sw shape needs split into two statements
+
+_When target asm has TWO `sw rX, 0(a0)` writes (a cleared-mask intermediate followed by the OR'd final value) for what is logically a bitfield setter, the natural single-expression form emits only ONE `sw` (built shorter by 4 bytes / 1 insn). Split the single expression into TWO statements: clear-then-set. IDO honors the sequence points and emits the intermediate store._
+
+**Symptom:** built `.o` for a setter is 4 bytes / 1 insn shorter than `expected/.o`. The missing insn is a `sw rX, 0(aN)` that writes the cleared-mask intermediate. Target's body looks like:
+
+```mips
+lw    $t6, 0($a0)        ; load *a0
+li    $at, ~M            ; mask
+andi  $t9, $a1, K        ; new bits in low position
+and   $t7, $t6, $at      ; cleared = *a0 & ~M
+sw    $t7, 0($a0)        ; INTERMEDIATE STORE — the one your build is missing
+or    $t0, $t7, $t9      ; final = cleared | new
+jr    $ra
+sw    $t0, 0($a0)        ; FINAL STORE
+```
+
+**Don't write:**
+```c
+void setter(int *a0, int a1) {
+    *a0 = (*a0 & ~M) | ((a1 & K) << N);   /* emits ONE sw */
+}
+```
+
+**Do write:**
+```c
+void setter(int *a0, int a1) {
+    *a0 = *a0 & ~M;                 /* emits intermediate sw */
+    *a0 = *a0 | ((a1 & K) << N);    /* emits final sw */
+}
+```
+
+**Why:** the C `=` operator is a sequence point; two assignments to `*a0` force two stores. IDO -O2 does NOT fuse them across statements even when the second's RHS only adds bits (it has no proof the intermediate value isn't observable from another thread / signal handler / aliased pointer). The single-expression form gives IDO one assignment to compile, so one store.
+
+**Where this shows up:** bitfield-accessor patterns generated by IDA / Ghidra reverse engineering — splat-mis-bundled getter/setter pairs at the tail of larger functions (the gl_func_0000A7B4 family). Once you spot one setter needing the split, the whole accessor cluster likely needs it.
+
+**Verified 2026-05-17 on:** game_libs_func_0000A884 (bits 0..1), A8B4 (bits 2..4), A938 (bits 6..9), A96C (bits 10..13). 4/4 setters needed the split. Their paired getters (A878, A8A4, A928, A95C) matched exactly with single-expression `(*a0 >> N) & M` — only the setters need the split.
+
+**Doesn't apply when:** the setter writes only the cleared value (no OR) or only the new value (no clear) — those are single-store patterns by construction. Only the clear-AND-set composite needs the split.
+
+---
+
+<a id="feedback-ido-leaf-beqz-fallthrough-into-next-func"></a>
+## Leaf with `beqz $tN, +K` branching past function end into next function's `jr ra` body — tail-fallthrough caps INCLUDE_ASM-only
+
+_Pattern: a leaf getter where the false-condition branch lands PAST the function's own `jr ra` insn, falling through into the immediately-following function's body. The fall-through provides the return for the false case; the true case is handled by the function's own jr ra. Cannot be reproduced from any tested C form — IDO has no lever to emit a function that intentionally relies on linker layout placing a specific neighbor after it. INCLUDE_ASM-cap._
+
+**Symptom:** an 8-insn leaf body whose `beqz` offset targets the FIRST insn of the next function (not a label within itself):
+
+```mips
+glabel get_bit5
+    lw    $t6, 0($a0)
+    or    $v0, $0, $0         ; preemptive return = 0
+    sra   $t7, $t6, 5
+    andi  $t8, $t7, 1
+    beqz  $t8, +3              ; branch to +0x10 past function end
+    nop                         ; delay slot (always executed)
+    jr    $ra                   ; true path: return 0x20 via DS
+    li    $v0, 0x20             ; DS of jr ra
+
+glabel next_func                ; immediately follows
+    jr    $ra                   ; ← beqz's target lands HERE
+    nop
+```
+
+If `($t8 == 0)`: beqz branches to `next_func`'s `jr ra; nop` — returns with v0=0 (preserved from the `or v0,0,0` preset).
+If `($t8 != 0)`: falls through to `jr ra; li v0, 0x20` — returns with v0=0x20.
+
+**Why C can't reproduce:** the function is 8 insns. The "false path" of the conditional doesn't return from this function — it returns from the LINKER-ADJACENT function. No C-level lever asks IDO to emit a function shorter than it needs (truncated `jr ra` short by relying on the next symbol's body to supply one). Even SUFFIX_BYTES doesn't fit: the missing `jr ra; nop` IS the next function — duplicating it here would make the next function 0-byte.
+
+**Action:** keep `INCLUDE_ASM` for the leaf, decode the neighbor (almost always `void f(void){}` — the empty function whose body is the fallthrough target). Document the dependency in the leaf's comment so a future split-into-its-own-.c doesn't break it (re-ordering would invalidate the fallthrough).
+
+**Identified 2026-05-17 on:** game_libs_func_0000A8D8 (8-insn bit-5 getter), where next function game_libs_func_0000A8F8 IS the empty `void f(void){}` whose `jr ra; nop` is the fallthrough's return.
+
+**Cousin patterns:** `feedback-ido-fabs-dead-mov` (unreachable insns from branch-likely artifacts) — but that's intra-function dead code, recoverable via `fabsf()`. The tail-fallthrough is inter-function and not recoverable.
