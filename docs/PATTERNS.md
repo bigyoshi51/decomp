@@ -8,6 +8,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### alloc / passthrough / nullable construction
 
+- [1080 project-wide polymorphic-dispatch idiom: `obj->0x28` is a descriptor whose `+0x1C/+0x64` is a fn-ptr called with `(short)(desc+0x18/+0x60) + obj`](#feedback-1080-obj-0x28-vtable-dispatch) — _Recurring across ≥3 segments (timproc_uso_b1_2A8C, game_uso_B274, titproc_uso_26FC, 2026-05-17). Asm shape: `lw vt,0x28(obj); lw t9,OFF(vt); lh tX,OFF2(vt); jalr t9; addu a0,tX,obj` (OFF/OFF2 = 0x1C/0x18 or 0x64/0x60 — desc layout varies, idiom is constant). C: `vt=(int*)obj[0x28/4]; (*(void(**)())&vt[OFF/4])(*(short*)((char*)vt+OFF2) + (int)obj);`. It's a 1080 object-model "call my type's handler, passing a sub-view pointer." Recognize it to decode the tail instantly; it does NOT byte-match first pass when obj/vt land in $v0/$v1/$a1 differently (see the 2A8C 83% NM wrap — pure $v/$a regalloc, permuter target)._
 - [game_uso ~0x1xxxx init/reset family — s0=a0, func_00000000 calls w/ D[]-pair args, branch-selected pair, trailing a0->field=0](#feedback-game-uso-ee84-init-reset-family) — _≥4 instances 2026-05-17 (EE84 91%, 11460 83%, D63C 68%, 11624 64%). Template-match the C instead of decoding cold; match beql/bgtzl/blez flavor exactly._
 - [When alloc-fail-zero matches the natural fall-through value, drop the explicit `return 0;` and wrap body in `if (!alloc_failed)` — saves 2-3 insns](#feedback-alloc-fail-skip-explicit-return-zero) — _A common alloc-and-init pattern uses `if (s == 0) return 0;` after `s = alloc()`.
 - [Alloc-or-init constructors — `goto init` unblocks `beq v0,zero; or a0,v0,zero(delay)` delay-slot move](#feedback-alloc-or-init-goto-pattern) — _For "if(a0==0) a0=alloc(); init_with_a0; return a0" constructor pattern, the natural C form (merged init via `if(a0)` wrap) caps ~92.5% — IDO can't couple v0-test with v0→a0 move into beq delay slot post-merge.
@@ -8693,3 +8694,50 @@ void game_uso_func_XXXX(int *a0 /*, int a1 */) {
 ```
 
 **Yield:** first-pass 64–91% (higher when fewer branches). Residual is the usual multi-tick: `a0->0xB4` reload-CSE (target reloads per-deref; C collapses), branch-likely delay-slot shaping, and exact D offsets. Sub-80 → keep INCLUDE_ASM + decode comment per CLAUDE.md; ≥80 → NON_MATCHING wrap. Match the **branch flavor exactly**: `beql` = `==0` case in the taken arm; `bgtzl` = `> 0` (signed); `blez` = `<= 0`.
+
+---
+
+<a id="feedback-1080-obj-0x28-vtable-dispatch"></a>
+## 1080 project-wide polymorphic-dispatch idiom (`obj->0x28` descriptor)
+
+A pervasive 1080 object-model convention. Many objects carry a
+**descriptor/vtable pointer at offset `0x28`**. Dispatch looks like:
+
+```
+lw    vt, 0x28(obj)      # vt = obj->descriptor
+lw    t9, OFF(vt)        # handler fn-ptr  (OFF = 0x1C or 0x64 …)
+lh    tX, OFF2(vt)       # a signed short  (OFF2 = 0x18 or 0x60 …)
+jalr  t9
+addu  a0, tX, obj        # arg = (short)vt->OFF2 + obj   (a sub-view ptr)
+```
+
+The descriptor's internal layout varies by object family (handler at
+`+0x1C` with short at `+0x18`, or `+0x64`/`+0x60`, etc.) but the
+**idiom is invariant**: load `obj->0x28`, call `desc->handler`,
+passing `(short)desc->someOffset + obj` (i.e. "this object reinterpreted
+as a sub-component the handler expects").
+
+C form:
+```c
+int *vt = (int *)obj[0x28 / 4];
+((void (*)(int))vt[OFF / 4])(*(short *)((char *)vt + OFF2) + (int)obj);
+```
+
+**Recognition value:** when you see `lw _,0x28(_)` feeding a
+`jalr` whose delay slot is `addu a0, <lh-of-that>, <the obj>`, you do
+not need to reverse the call target — it is this dispatch. Decode the
+tail mechanically and move on.
+
+**Matching caveat:** this tail rarely byte-matches on the first pass.
+IDO's allocation of `obj` vs `vt` into `$v0/$v1/$a1` depends on
+surrounding live ranges; structural C rewrites (function- vs
+block-scope locals) do not reliably pin it. See
+`timproc_uso_b1_func_00002A8C` (86=86 structurally exact, 83%, the
+15 mismatches are exactly this tail ×3 — a clean decomp-permuter
+target, NOT a structural cap). Treat as: decode-comment it, NM-wrap
+if ≥80%, flag as permuter candidate.
+
+Seen 2026-05-17 in: `timproc_uso_b1_func_00002A8C` (OFF 0x1C/0x18,
+×3), `game_uso_func_0000B274` (0x1C/0x18), `titproc_uso_func_000026FC`
+(0x64/0x60) — three different segments, confirming it is engine-wide
+(libgdl object model), not a per-file accident.
