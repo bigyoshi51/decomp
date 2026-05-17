@@ -8,6 +8,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### alloc / passthrough / nullable construction
 
+- [game_uso ~0x1xxxx init/reset family — s0=a0, func_00000000 calls w/ D[]-pair args, branch-selected pair, trailing a0->field=0](#feedback-game-uso-ee84-init-reset-family) — _≥4 instances 2026-05-17 (EE84 91%, 11460 83%, D63C 68%, 11624 64%). Template-match the C instead of decoding cold; match beql/bgtzl/blez flavor exactly._
 - [When alloc-fail-zero matches the natural fall-through value, drop the explicit `return 0;` and wrap body in `if (!alloc_failed)` — saves 2-3 insns](#feedback-alloc-fail-skip-explicit-return-zero) — _A common alloc-and-init pattern uses `if (s == 0) return 0;` after `s = alloc()`.
 - [Alloc-or-init constructors — `goto init` unblocks `beq v0,zero; or a0,v0,zero(delay)` delay-slot move](#feedback-alloc-or-init-goto-pattern) — _For "if(a0==0) a0=alloc(); init_with_a0; return a0" constructor pattern, the natural C form (merged init via `if(a0)` wrap) caps ~92.5% — IDO can't couple v0-test with v0→a0 move into beq delay slot post-merge.
 - [alloc-or-passthrough cascades emit ALL dead-test arms — match the source's `x = prev; if (!x) alloc()` chain literally](#feedback-alloc-or-passthrough-cascade-includes-dead-arms) — When target asm shows multiple bnez+jal patterns after a successful first alloc (where bnez tests a register that just got the alloc result and is ALWAYS non-zero), the source has a cascade of `x = prev; if (!x) { x =…
@@ -8657,3 +8658,38 @@ indirect vtable call `(*(v0->0x2C))(.., &localStruct)`. Separate
 `int tag; float *pf;` locals → 87.11%, build 34 vs target 36 (pf store
 dropped). Switching to `struct { int tag; float *pf; } s;` → 97.86%,
 SAME-LEN 36, op-mismatch=0 → 26-word INSN_PATCH → byte-exact.
+
+---
+
+<a id="feedback-game-uso-ee84-init-reset-family"></a>
+## game_uso ~0x1xxxx "init/reset" family — s0=a0, sequence of func_00000000 USO calls with D[]-pair args, trailing a0->field=0
+
+_Recurring template in game_uso (≥4 instances 2026-05-17: `game_uso_func_0000EE84` 90.69%, `0x00011460` 83.18%, `0x0000D63C` 68%, `0x00011624` 64%). Recognize it from the asm shape and template the C instead of decoding cold._
+
+**Asm signature:**
+- Prologue saves `s0` (+ `ra`); early `or s0, a0, zero` (often in a `jal` delay slot — the first call gets the raw `a0`).
+- Reads a sub-object pointer `p = a0->0xB4` and/or scalar fields like `a0->0x100`/`0x108`/`0xFC`.
+- A small compute on a field (`% 5`, clamp `< 10`, flag `| 0xNN`) producing an `a1` arg.
+- 2–4 `jal 0x0` (USO `func_00000000`) calls. Args 5/6 pushed at `sp+0x10/0x14` as small ints (often `1,1`). One or more calls take a **D[]-pair**: `lui rX,0; addiu rX,rX,OFF; lw a1,0(rX); lw a2,4(rX)` → `func(..., *(int*)(&D_00000000+OFF), *(int*)(&D_00000000+OFF+4), ...)`.
+- A `beql`/`bgtzl`/`blez` on a field selects **which D-pair** (two parallel call sites, the branch-likely delay slot pre-loads the taken side's first word).
+- Ends storing **0 into a fixed `a0->field`** (e.g. `0xF8`/`0x114`/`0x120`), sometimes duplicated on both branch paths (beql speculative double-store).
+
+**C template:**
+```c
+void game_uso_func_XXXX(int *a0 /*, int a1 */) {
+    int *s0 = a0;
+    func_00000000(a0);                       /* leading call gets raw a0 */
+    /* compute aN from s0->0xB4-> / s0->0xNN as the asm shows */
+    func_00000000(s0, /*a1*/, 0, /*a3*/, 1, 1);
+    if (<field cmp matching the beql/bgtzl/blez>) {
+        func_00000000(s0, *(int*)((char*)&D_00000000+OFF_A),
+                          *(int*)((char*)&D_00000000+OFF_A+4), 1);
+    } else {
+        func_00000000(s0, *(int*)((char*)&D_00000000+OFF_B),
+                          *(int*)((char*)&D_00000000+OFF_B+4), 1);
+    }
+    s0[FIELD/4] = 0;
+}
+```
+
+**Yield:** first-pass 64–91% (higher when fewer branches). Residual is the usual multi-tick: `a0->0xB4` reload-CSE (target reloads per-deref; C collapses), branch-likely delay-slot shaping, and exact D offsets. Sub-80 → keep INCLUDE_ASM + decode comment per CLAUDE.md; ≥80 → NON_MATCHING wrap. Match the **branch flavor exactly**: `beql` = `==0` case in the taken arm; `bgtzl` = `> 0` (signed); `blez` = `<= 0`.
