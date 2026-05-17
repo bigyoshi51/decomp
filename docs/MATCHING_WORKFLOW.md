@@ -5133,6 +5133,16 @@ successor's body uses `$f0`/`$fN` uninitialized (e.g. `swc1 f0, N(sp)`)
 right after its own `addiu sp`. Same forward-merge logic applies in
 principle.
 
+**3-insn combo variant (2026-05-17, `game_uso_func_000041C0`→`000043D8`):**
+the stolen prologue can be MORE than 1-2 insns — here it was a 3-insn
+combo `lw t6,16(a0)` (0x8C8E0010) **+** `lui at,0;lwc1 f0,0x94(at)` (a
+`&D` float-const load). The successor reads BOTH `t6` and the float
+(`f0`/`f2`) uninitialized. When trimming, count ALL trailing insns
+after the predecessor's `jr ra`+nop that the successor consumes
+uninitialized (base-reg load AND any FPU/`&D` const setup) — don't stop
+at the first `lw`. game_uso variant, no external refs → clean
+forward-merge (verified verbatim build.o==.s, the USO method).
+
 **EXCLUSION — do NOT forward-merge when the successor is clone-canonical
 or otherwise externally referenced.** `00001C74` is the canonical decode
 for a byte-identical-clone family (timproc_uso_b1/b3 stubs reference the
