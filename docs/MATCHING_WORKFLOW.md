@@ -5086,6 +5086,17 @@ function body in the NEXT symbol reading a register that the orphan set._
   (`/* E22624 0003D54C ... */` → baserom @ 0xE22624) and compare the merged
   build `.o` `.text` slice to that. Raw `.word` re-assembles to itself, so a
   correctly-constructed merge is byte-exact by construction.
+  - **USO caveat (2026-05-17, timproc_uso_b3):** the baserom-offset check
+    only works when the `.s` addr comment's FIRST column is a real baserom
+    file offset (game_libs: `/* E22624 0003D54C ... */` — distinct 6-hex
+    `E2xxxx`). For relocatable USO segments the first column is
+    USO-INTERNAL (== the vram/func addr, e.g. `/* 001184 00001184 ... */`)
+    and slicing `baserom[0x1184:]` compares the wrong region → spurious
+    MISMATCH. For those, verify by **build `.o` disasm == `.s` words**
+    (ignoring `jal`/reloc placeholder words, opcode 0x03 → 0 in the
+    pre-link `.o`): equal word count + zero non-reloc diffs ⇒ byte-correct
+    by construction. Don't conclude a USO boundary fix failed from a
+    baserom-slice mismatch — re-check via the verbatim-`.o`-vs-`.s` method.
 
 **Not an episode.** This is an INCLUDE_ASM boundary fix — byte-equality is
 tautological (the documented INCLUDE_ASM trap). The forward progress is the
