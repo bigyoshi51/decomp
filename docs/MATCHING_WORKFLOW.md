@@ -5052,6 +5052,20 @@ which is also when `expected/` gets refreshed.
 `gl_func_0003D550` read `t6` uninitialized at +0x8. Merged into one 0x70
 function at entry 0x3D54C, byte-exact vs baserom @ 0xE22624.
 
+**SYSTEMATIC in game_libs (3× confirmed 2026-05-16):** splat repeatedly
+mis-splits the exact instruction `lw t6, 0x10(a0)` = word **`0x8C8E0010`**
+as either its own tiny symbol OR the trailing insn bundled into the
+predecessor's declared size, when it is really the stolen leading insn of
+the next function (whose body reads `t6` uninitialized near its prologue,
+e.g. `sw t6, N(sp)` / `beq t6, zero, ...`). Cases: `0003D54C`→`0003D550`
+(own 0x4 sym), `0003DA14`→`0003DA18` (own 0x4 sym), `0003DB3C` tail
+orphan @0x3DBEC → `0003DBF0` (bundled in predecessor's 0xB4, real DB3C is
+0xB0). **Detection grep:** `grep -rl '8C8E0010' asm/nonmatchings/.../*.s`
+then for each hit check if it is (a) a lone-insn file, or (b) the LAST
+`.word` after a `jr ra`+delay in a larger file; in both cases the next
+function almost certainly reads `t6` uninitialized → forward-merge.
+Worth a sweep — there are likely more of these across game_libs.
+
 ---
 
 <a id="feedback-sub80-complex-embed-decode-resume-comment"></a>
