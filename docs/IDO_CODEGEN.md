@@ -9696,4 +9696,6 @@ vtable = (int*)((int*)a0[0x240/4])[0x28/4];
 
 **When to apply:** built is exactly N insns short, AND the missing N insns are duplicate `lw` for the same struct field that built loaded once into a local. Don't apply when the cached local has a NON-trivial computation — inlining duplicates compute too.
 
+**When NOT to apply (verified 2026-05-16 on `timproc_uso_b1_func_00001908`):** built is N insns short BUT the missing insns are STRUCTURAL register-shuffles around a cached pointer (target keeps `self` in `$a3` from one spill-reload, my emit reloads per-use into `$a0`). Inlining the deref REGRESSED by losing 1 more insn (86.60% → 85.96%, 172B/43 → 168B/42). Diagnostic: look at the missing insns in the diff — if they're `lw self,sp+0xN; lw sub,K(self)` PAIRS, this recipe applies; if they're `lw sub,K(self)` only (self already cached in an unchanged reg), inlining doesn't help and may hurt by collapsing the cached form.
+
 **Complementary recipe:** `feedback-unique-extern-neutral-when-clobber-forces-reload` (PATTERNS.md) covers the &D-extern case where unique-externs force separate reloads. This entry covers arg-pointer field-deref CSE-defeat via inline.
