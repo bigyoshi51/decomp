@@ -9768,7 +9768,7 @@ void f(int *a0) {
 
 **Doesn't apply when:**
 - Single-use constant (no CSE benefit, named local just adds noise).
-- Constant is 0.0f (target may use `mtc1 $0, $fN` differently — see `feedback-ido-f2-intermediate-unreproducible` for the 0.0f-specific traps).
+- Constant is 0.0f (target may use `mtc1 $0, $fN` differently — see `feedback-ido-f2-intermediate-unreproducible` for the 0.0f-specific traps). Verified 2026-05-17 on `game_libs_func_00064124`: target has $f2=0.0f (bulk zeros) AND $f4=0.0f (delay-slot store) as DISTINCT regs. `float zero2 = 0.0f;` named local with single-use at the $f4 site does NOT split the CSE — IDO still folds the named zero into the same reg as literal 0.0f stores. The lever is asymmetric: lui+mtc1-LITERAL setup CAN be pinned via name; mtc1-$0 setup CAN'T (no shared setup to amortize).
 - Target re-materializes the constant per use (the inverse: drop the named local then).
 
 **Complementary to** `feedback-ido-shared-base-via-deferred-assign-and-named-locals` (PATTERNS.md): same lever shape (named local → CSE), applied to FP literals rather than &D-base.
