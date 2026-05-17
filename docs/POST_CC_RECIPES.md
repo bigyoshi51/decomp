@@ -37,6 +37,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [INSN_PATCH bnel→bne demotion + delay-slot nopping when the pulled insn already lives at the bne-taken target](#feedback-insn-patch-bnel-demote-with-delay-nop) — _When IDO -O2 emits `bnel rN, rM, +K; <insn>` and target uses `bne rN, rM, +K-1; nop`, INSN_PATCH can swap the branch opcode + nop the delay slot AS LONG AS the same `<insn>` is duplicated at the bne-taken target offset (so it stays live post-patch). Verified 2026-05-16 on gl_func_0006AF0C (linked-list walk, 4-insn patch)._
 - [Screen INSN_PATCH candidates by op-mismatch count — register-rename (op-mismatch=0, always patchable) vs structural divergence (high op-mismatch, tautology trap, defer)](#feedback-insn-patch-screen-by-opmismatch-count) — _Before unwrapping a SAME-LEN near-exact wrap for INSN_PATCH, align expected vs build insns and count how many diffs have a different mnemonic. 0 = pure register/imm (logic-safe). Small+paired = independent-insn schedule swap (still safe). High (e.g. 25/37) = the C decode structurally diverges — INSN_PATCH would fake the logic; defer with a negative finding. Verified 2026-05-16: gl_func_00062E10 (12/2→exact) vs timproc_uso_b1_func_00001130 (37/25→deferred)._
 - [INSN_PATCH rewrites $a-reg args to hidden $v0/$v1 — unlocks "C can't name these regs" caps](#feedback-insn-patch-rename-args-to-hidden-vregs) — _Functions with alt-entry-fragment patterns using caller-set $v0/$v1 (no C-level expressible param) ARE INSN_PATCHable: declare ordinary 3+ args (mapped to $a-regs by IDO), then INSN_PATCH the affected register fields to rewrite a1/a2→v0/v1 at fixed offsets. The C body provides structure (insn count, opcode sequence); INSN_PATCH renames bytes. Verified 2026-05-16 on gl_func_00008674 (3 patches → exact). Refines the prior "GP-reg inheritance, NO EPISODE" rule: when divergence is ONLY register names at same insn count, INSN_PATCH closes it and episodes are valid._
+- [INSN_PATCH for auto-unrolled loop counter-step encoding (target i++ to N vs IDO i+=K to N*K)](#feedback-insn-patch-auto-unrolled-loop-counter-step) — _When IDO -O2 auto-unrolls `for(i=0;i<N*K;i++)` to step-K bound N*K but target has step-1 bound N (same body shape, different counter encoding), the 2 differing `addiu` insns (bound-init + step) are same-length → INSN_PATCH applicable. Verified 2026-05-17 on `game_libs_func_0005BDC0` (4x4 reciprocal copier): 99.92% C body → 100% via `0xC:0x24040004,0x1C:0x24420001`._
 
 
 ---
@@ -2421,3 +2422,22 @@ Three patches: `lw a1,0x64(a1)` → `lw t9,0x64(v0)`; `lh a2,0x60(a1)` → `lh t
 **When NOT to apply:**
 - Target's hidden-reg use spans calls in ways C can't model (e.g., $v1 set MID-function by a callee return, then read by following insn): C-level structure won't match insn count; INSN_PATCH blocked.
 - The "hidden reg" is actually inherited from predecessor's POST-jr-ra tail (i.e., the documented GP-reg inheritance class) — that still needs extended-signature NM-wrap with SUFFIX_BYTES on predecessor for byte-match.
+
+---
+
+<a id="feedback-insn-patch-auto-unrolled-loop-counter-step"></a>
+## INSN_PATCH for auto-unrolled loop counter-step encoding (target i++ to N vs IDO i+=K to N*K)
+
+_When the target asm is a 4x (or Kx) loop body that processes K elements per iteration with `addiu vN, vN, 1` counter + bound `K` (e.g., a 16-element copy emitted as 4 iterations of 4-stores), and the natural C `for (i = 0; i < N*K; i++)` produces the SAME body shape via IDO -O2 auto-unroll BUT with `addiu vN, vN, K` counter + bound `N*K` (e.g., i+=4 to 16), the two encodings are byte-different at exactly 2 insns (the bound-init `addiu aN, zero, IMM` and the counter-step `addiu vN, vN, IMM`). Same-length insns → INSN_PATCH applicable._
+
+**Verified 2026-05-17 on `game_libs_func_0005BDC0`** (24-insn 4x4 reciprocal copier `dst[i] = 1.0f / src[i]` for i in 0..16):
+- C body: `for (i = 0; i < 16; i++) dst[i] = 1.0f / src[i];` → IDO auto-unrolls to 4 iter × 4 store body, but counter is `i+=4` bound 16 (insn `0x24420004` + `0x24040010`)
+- Target: same 4 iter × 4 store body but counter is `i++` bound 4 (insn `0x24420001` + `0x24040004`)
+- Result without patch: **99.92% match** (all body insns identical, just the 2 counter insns differ)
+- INSN_PATCH: `game_libs_func_0005BDC0=0xC:0x24040004,0x1C:0x24420001` → byte-exact
+
+**Why the natural C produces this:** IDO -O2's loop unroller sees small body + small N and chooses i+=K stride for instruction scheduling. The target's original C likely had explicit-unrolled form (`for(i=0;i<4;i++) { dst[0]=...; dst[1]=...; dst[2]=...; dst[3]=...; src+=4; dst+=4; }`) but writing that as C blows up to 53-insn full inline-unroll. Same goal, different IDO path.
+
+**Diagnostic:** built C is 24/24 insns at correct shape; 2 mismatched insns are BOTH `addiu rN, *, K_or_NK` where the immediates differ by factor of K (4 here).
+
+**Generalizes to:** any auto-unrolled small-trip-count loop where target's K-stride differs from IDO's K-stride choice. INSN_PATCH the two `addiu` insns to flip the encoding. Body shape (lwc1/swc1/div/store offsets) is preserved.
