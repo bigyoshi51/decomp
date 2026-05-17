@@ -9,6 +9,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 - [`discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates](#feedback-discover-has-source-misleading) — Discover treats any mention of a symbol in `src/` as "has source", including bare `INCLUDE_ASM(...)` lines. For source-3 picks (small unstarted), use a Python filter that checks for an actual C function definition (`(void|int|...) name(...)` syntax), not just the symbol name.
 - [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used code and naturally drives type discovery.
 - [m2c on .word-only USO asm — assemble + objdump round-trip to get mnemonics](#feedback-m2c-word-only-asm) — splat emits `.word 0xNNNNNNNN` for USO functions whose lui-relocations spimdisasm can't resolve; m2c then errors with "Function contains no instructions". Round-trip the bytes through `mips-linux-gnu-as` + `objdump -d -M no-aliases` to get readable mnemonics for hand-paste into a temp .s.
+- [decomp-permuter `import.py` needs a C body under `#ifdef NON_MATCHING` — bare `INCLUDE_ASM` invisible](#feedback-permuter-import-requires-ifdef-non-matching-body) — _When you intend to grind a function via permuter, the verified decode MUST be wrapped in `#ifdef NON_MATCHING / #else INCLUDE_ASM` (even at sub-80% fuzzy where the `/decompile` skill normally says "keep plain INCLUDE_ASM"). `import.py` parses C source for a function DEFINITION; `INCLUDE_ASM(funcname)` alone registers no function. Discovered 2026-05-16 via parallel-agent commits restoring DBEC/DDC0 C bodies as permuter seeds._
 - [CI / decomp.dev compares fresh build/.o vs committed expected/.o — `make expected` results MUST be git-committed for changes to show on the dashboard](#feedback-expected-must-be-committed-for-decomp-dev) — The land script and `scripts/refresh-report.sh` do NOT run `make expected`.
 - [Ghidra struct annotation does NOT auto-propagate across xrefs — each function in a family needs its own prototype set](#feedback-ghidra-struct-annotation-doesnt-auto-propagate) — _Validated 2026-05-04 on 1080's rmon family.
 - [Permuter scores ≥1000 genuinely mean "structural issue, no match possible" — stop grinding](#feedback-permuter-1000-plus-structural) — _Ran decomp-permuter random mode for ~3 minutes on `n64proc_uso_func_00000014` (12k+ iterations).
@@ -500,3 +501,30 @@ mips-linux-gnu-objdump -d -M no-aliases /tmp/decode.o
 **Long-term fix:** migrate USO disasm to spimdisasm proper (per `project_1080_uso_spimdisasm_migration_todo.md`) so the .s files have mnemonics from the start. Until then, the round-trip is the cheapest workaround.
 
 ---
+
+---
+
+<a id="feedback-permuter-import-requires-ifdef-non-matching-body"></a>
+## decomp-permuter `import.py` needs a C body under `#ifdef NON_MATCHING` — bare `INCLUDE_ASM` invisible
+
+_For the `<80% → keep INCLUDE_ASM` rule (`/decompile` skill threshold): if you intend to grind the function via permuter later, leave the verified C decode wrapped in `#ifdef NON_MATCHING` even when fuzzy is sub-80%. `import.py` parses the source file looking for a function DEFINITION that matches the target asm — bare `INCLUDE_ASM("...", funcname);` registers no function, and permuter setup fails with "no such function found"._
+
+**Symptom:** `python3 decomp-permuter/import.py <src.c> <asm.s>` errors with no function matching the target name — even though `INCLUDE_ASM(funcname)` is right there in the .c file. The import is C-source-driven, not asm-symbol-driven.
+
+**Recipe:** when documenting a sub-80% verified decode, wrap it:
+```c
+#ifdef NON_MATCHING
+/* <doc comment with cap notes> */
+void funcname(int a0, ...) {
+    /* verified decode, even at 60-79% fuzzy */
+}
+#else
+INCLUDE_ASM("asm/nonmatchings/<seg>", funcname);
+#endif
+```
+
+The `#else INCLUDE_ASM` keeps the default build byte-exact via ROM bytes; the `#ifdef NON_MATCHING` block makes the function importable by permuter for later grinding. This is the EXCEPTION to the "<80% keep plain INCLUDE_ASM" rule: any function you plan to permuter-grind needs the NM wrap.
+
+**Discovered 2026-05-16** when a parallel agent (per main commit `4c5f7158`) restored `game_libs_func_0003DBEC`'s C body under NON_MATCHING explicitly as a "permuter seed" — same gotcha as `game_libs_func_0003DDC0`. The verified-decode-as-INCLUDE_ASM-only pattern blocked permuter setup until the body was restored.
+
+**Caveat (false-positive-episode risk):** the project-wide classifier flagged ~140 episodes as tautology-trap candidates because they were logged against NM-wrapped functions where the C body was 19–78% but the wrap inflated reported match. Permuter seeds DO NOT and SHOULD NOT log episodes — they're scaffold, not ground truth. Episode-logging guard remains "exact match only, via build/non_matching/.o byte-verify against expected/.o."
