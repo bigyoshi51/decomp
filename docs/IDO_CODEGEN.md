@@ -4849,6 +4849,8 @@ void func(int *a0, float a1) {   /* a1 arrives in $a1 (int reg), not $f14 */
 
 If the first arg IS float, that one goes in `$f12`, and the second float goes in `$f14`. Only after a non-float first arg does the ABI switch to int-reg passing.
 
+**DON'T bit-cast via `*(float*)&intArg`** — this triggers IDO's "address taken" path and emits a stack round-trip (`sw aN, K(sp); lwc1 $fN, K(sp)`) instead of the clean `mtc1 aN, $fN`. Verified 2026-05-17 on `game_libs_func_0000254C`: with `int a1, int a2` + `*(float*)&a1` the body became 7 insns (sw/lwc1 pair per arg); with `float a1, float a2` the body became 5 insns matching target's two mtc1's. The trap is intuitive ("I want bit-cast"), but the right tool is just declaring the param `float` — the ABI conversion is what produces the mtc1.
+
 **Rule 2 (IDO hoists pure float ops into delay slots):** For patterns like "compute float value, then maybe store it":
 
 ```c
