@@ -57,6 +57,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a1's register assignment, IDO spills a0 to the caller's arg-save slot (extra `sw…
 - [IDO -O2 won't put `addiu aN, aN, K` into a jal-delay slot when a store via the SAME base precedes the call](#feedback-ido-no-addiu-into-jal-delay-when-store-via-base-precedes) — _For `*a0_offset_K = v; func(&a0[L], ...)`, IDO emits the `addiu a0,a0,L*4` as a standalone insn before the jal — it can't sink into the delay slot because the preceding store-via-a0 is a true dependency on the original $a0. Creates a fixed +1-insn delta vs targets that DO have the addiu in the delay slot. No clean C lever; structural cap. Verified 2026-05-16 on gl_func_0003E904 (built 26 vs target 25)._
 - [Inline `aN[OFFSET]` at each use to force IDO to emit the same `lw` twice — matches target's redundant-reload shape](#feedback-ido-inline-arg-deref-defeats-cse-emit-multiple-lw) — _When built is N insns short and the missing insns are duplicate `lw aN, K(aN)` for the same struct field, refactor the C to inline the deref at each use instead of caching into a local. IDO's CSE doesn't fold separate-statement field-deref loads. Verified 2026-05-16 on gl_func_00046B64: caching `int *p = a0[0x240/4]` produced 23 insns (target 24); inlining `(int*)a0[0x240/4]` at all 3 use sites gave 24 insns matching target's count._
+- [`float four = 4.0f;` named local pins the FP constant to one $fN across multiple uses](#feedback-ido-named-float-const-pins-fp-reg-across-body) — _For FP literals used 2+ times in a function body, declare `float NAME = LITERAL;` as a named local — IDO -O2 pins one $f-reg and reuses, vs re-materializing `lui at, IMM; mtc1 at, $fN` per use. Different from the `register int N = 1;` constant-fold trap because FP literals need lui+mtc1 setup. Verified 2026-05-16 on game_libs_func_000086A0 (parallel) and gl_func_0000871C (this tick) — both 4.0f-pinning under `float four = 4.0f;`._
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
 - [Pre-load arg field into named local to force field-load BEFORE `&D` materialization clobbers the arg-register](#feedback-ido-preload-field-into-local-forces-load-before-clobber) — _When target reads `lw aN, K(a0)` BEFORE `lui a0, %hi(D_X)` (load via original arg-pointer, then clobber it), the inline `func(&D, arg->field)` form emits clobber-then-reload-via-spill (+1 insn). Fix: `int val = arg->field; func(&D, val);` — named local creates a sequence point that forces field-load first. 2026-05-10: unlocked gl_func_00054668 (75.62% → byte-exact)._
@@ -9738,3 +9739,32 @@ vtable = (int*)((int*)a0[0x240/4])[0x28/4];
 **When NOT to apply (verified 2026-05-16 on `timproc_uso_b1_func_00001908`):** built is N insns short BUT the missing insns are STRUCTURAL register-shuffles around a cached pointer (target keeps `self` in `$a3` from one spill-reload, my emit reloads per-use into `$a0`). Inlining the deref REGRESSED by losing 1 more insn (86.60% → 85.96%, 172B/43 → 168B/42). Diagnostic: look at the missing insns in the diff — if they're `lw self,sp+0xN; lw sub,K(self)` PAIRS, this recipe applies; if they're `lw sub,K(self)` only (self already cached in an unchanged reg), inlining doesn't help and may hurt by collapsing the cached form.
 
 **Complementary recipe:** `feedback-unique-extern-neutral-when-clobber-forces-reload` (PATTERNS.md) covers the &D-extern case where unique-externs force separate reloads. This entry covers arg-pointer field-deref CSE-defeat via inline.
+
+---
+
+<a id="feedback-ido-named-float-const-pins-fp-reg-across-body"></a>
+## `float four = 4.0f;` named local pins the FP constant to one $fN across multiple uses
+
+_For functions that use a non-zero FP literal (e.g. 4.0f, 2.0f, 58.0f) multiple times, declaring `float NAME = LITERAL;` as a named local pins the constant in a single $fN register across all uses. Without the named local, IDO -O2 may re-materialize the constant (`lui at, IMM; mtc1 at, $fN`) at each use site, doubling the setup overhead. With the named local, single setup + register reuse — matches target's emit when target was compiled with the same pattern._
+
+**Symptom:** built has extra `lui at, 0xXXXX; mtc1 at, $fN` pairs around each FP-literal use; target has single setup near the top and reuses $fN.
+
+**Recipe (verified 2026-05-16 by parallel agent on `game_libs_func_000086A0`, by me on `gl_func_0000871C`):**
+```c
+void f(int *a0) {
+    float four = 4.0f;      /* pin $f4 = 4.0f */
+    float f550 = *(float*)((char*)a0 + 0x550);
+    if (f550 < four) { ... }                       /* uses $f4 */
+    ...
+    *(float*)((char*)a0 + 0x550) = -(f550 / four); /* reuses $f4 */
+}
+```
+
+**Why it works:** unlike the `register int one = 1;` case (which constant-folds away per the documented "register honored narrowly" rule), FP literals require lui+mtc1 setup that's expensive to duplicate. IDO -O2 treats the named float local as a hint to allocate one $f-reg and reuse rather than CSE'ing the literal into per-use materialization. Effective for 2+ uses of the same constant.
+
+**Doesn't apply when:**
+- Single-use constant (no CSE benefit, named local just adds noise).
+- Constant is 0.0f (target may use `mtc1 $0, $fN` differently — see `feedback-ido-f2-intermediate-unreproducible` for the 0.0f-specific traps).
+- Target re-materializes the constant per use (the inverse: drop the named local then).
+
+**Complementary to** `feedback-ido-shared-base-via-deferred-assign-and-named-locals` (PATTERNS.md): same lever shape (named local → CSE), applied to FP literals rather than &D-base.
