@@ -14,6 +14,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 - [N64 RSP ucode data-section layout — id-string at fixed offset within 0x800 block, used as fingerprint anchor](#feedback-n64-ucode-data-section-layout-id-offset-signature) — _Stock Nintendo F3DEX 1.x gfx ucodes pack their banner ID string at offset 0x2B0 within a 0x800-byte DMEM data section; aspMain audio ucodes put it near the end (~0x7F0).
 - [N64 ucode IMEM + DMEM can live in different ROM segments — search both before declaring a blob "non-ucode"](#feedback-n64-ucode-imem-dmem-split-across-segments) — _1080 stores gfx ucode IMEM (5 KB each, F3DEX 1.x family) in `game_libs` segment ROM 0xDFA43C+, but the paired DMEM data tables (0x800 each) in `bootup_uso_pre` ROM 0xDB7140+.
 - [n64sym is unreliable](#feedback-n64sym) — n64sym has very high false positive rate — validate ALL names against real function prologues before using
+- [gui_uso has inline CPU-side RDP display-list builders (texture-load Gfx fragments) via a GfxCtx idiom — recognize by `0xFD10/0xF510/0xE600/0xF400/0xE700/0xF200/0x700` constant lui's + no calls/branches](#feedback-gui-uso-inline-rdp-dl-builder) — _A no-call/no-branch function emitting paired words via `g=(ctx*)a0->0xC; i=g->idx; g->idx=i+1; slot=(int*)g->buf + i*2; slot[0]=w0; slot[1]=w1;` (a0->0xC reloaded TWICE per packet) is a hand-built RDP DL fragment, not opaque data. Top-byte constants decode as G_SETTIMG(0xFD)/G_SETTILE(0xF5)/G_RDPLOADSYNC(0xE6)/G_LOADTILE(0xF4)/G_RDPPIPESYNC(0xE7)/G_SETTILESIZE(0xF2). Verified gui_uso_func_0000413C 2026-05-17: 7-packet texture-load sequence; args = texW/texH/fmt. The GfxCtx double-reload idiom ×N + cross-packet constant CSE drives a regalloc cascade that no first-pass C reproduces (1% first attempt) — multi-run sub-80 target; decode-comment the packet formulas for forensic value._
 - [Splat-bundled "function" with 100+ jr-ra-byte patterns is opaque data — but its TYPE (RSP ucode vs GFX DL data vs other) needs forensic check](#feedback-rsp-microcode-mistaken-for-code) — _When a bundled "function" has anomalous size (50+ KB) with high `grep -c 03E00008` count, it's NOT CPU code — that part of the original claim still holds.
 
 
@@ -470,3 +471,47 @@ nonmatching func_80002CD0, 0x9C
 Don't rely on `*/` line wrapping — the parser is line-oriented. If you have detail that doesn't fit on one line, put the full description in the matching `src/<file>.c` wrap-comment instead and keep the `.s`-side comment minimal.
 
 **Bonus:** `.s` files reject unicode characters (em-dash `—`, smart quotes, etc.) the same way C source does (assembler pipeline uses EUC-JP encoding). Stick to ASCII.
+
+---
+
+<a id="feedback-gui-uso-inline-rdp-dl-builder"></a>
+## gui_uso has inline CPU-side RDP display-list builders via a GfxCtx idiom
+
+A `gui_uso` (or any rendering-segment) function that is **no-call,
+no-branch**, ends in a single `jr ra`, and is a long run of
+arithmetic + paired `sw` stores with `lui $at, 0xFD10 / 0xF510 /
+0xE600 / 0xF400 / 0xE700 / 0xF200 / 0x700` constants is NOT opaque
+data and NOT a generic leaf — it is a **hand-built RDP display-list
+fragment** (the C equivalent of `gDPLoadTextureBlock`-style macro
+expansion).
+
+**Recognize the per-packet idiom** (repeats N times):
+
+```
+v0 = a0->0xC          ; GfxCtx*  (lw v0,12(a0))
+v1 = v0->4            ; write index (Gfx units)
+v0->4 = v1 + 1
+t  = a0->0xC          ; a0->0xC RELOADED (second lw, distinct reg)
+b  = t->0             ; Gfx *buf
+slot = b + v1*8       ; 8-byte (2-word) command slot
+slot[0] = w0 ; slot[1] = w1
+```
+
+So `a0->0xC` points to `struct { Gfx *buf @0x0; int idx @0x4; }`.
+Each packet writes one 64-bit RDP command. Top-byte → opcode:
+`0xFD`=G_SETTIMG, `0xF5`=G_SETTILE, `0xE6`=G_RDPLOADSYNC,
+`0xF4`=G_LOADTILE, `0xE7`=G_RDPPIPESYNC, `0xF2`=G_SETTILESIZE,
+`0x07`/`0x00` low-half continuation words. A
+SETTIMG→SETTILE→LOADSYNC→LOADTILE→PIPESYNC→SETTILE→SETTILESIZE run is
+the canonical texture-load block; args are typically
+`texW / texH / fmt+palette`.
+
+**Decomp note:** the `a0->0xC` double-reload per packet (×N) plus
+cross-packet CSE of packed constants (e.g. a SETTILE word reused by a
+later packet) drives an IDO register-allocation cascade that a
+faithful first-pass C transcription does not reproduce (verified
+`gui_uso_func_0000413C` 2026-05-17: structurally exact intent, 1%
+byte match first attempt). Treat as a **multi-run sub-80 target** —
+on the first pass, decode-comment every packet's `(w0,w1)` bit-pack
+formula (high forensic value: it documents the exact GBI sequence and
+the GfxCtx struct) and keep INCLUDE_ASM. Do not log an episode.
