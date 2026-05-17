@@ -5251,6 +5251,21 @@ in-source so the next pass starts at 73%).
 non-matching build path, eligible for INSN_PATCH promotion). <80% →
 INCLUDE_ASM + resume-comment. The 80% line is the artifact-form switch.
 
+**Comment-syntax hazard (recurring — burned twice 2026-05-17):** these
+resume-comments contain C-like pseudocode, which repeatedly breaks the
+build because C comments do **not** nest and `*/` can appear
+incidentally:
+- A nested `/* ... */` inside the block (e.g. `int a3 /*+sp88=arg4*/`)
+  terminates the OUTER comment early → "Empty declaration specifiers".
+- A `*/` token formed incidentally (e.g. `char*/int*`, or a pointer
+  deref followed by a divide `*p/2`) also closes the comment.
+Rules when writing a decode resume-comment: never put `/*` or `*/`
+inside it; write pointer types as `char-ptr`/`int-ptr` not `char*`;
+write "arg notes" as plain text (`a3, [sp+88]=arg4`) not inline
+`/* */`; avoid `*/`-forming sequences like `)*/`. After editing, the
+build catches it immediately — but it lands on `main` if you commit
+before building, so **always `make` before the decode-comment commit**.
+
 ---
 
 <a id="feedback-asm-offset-base-after-addiu-mutation"></a>
