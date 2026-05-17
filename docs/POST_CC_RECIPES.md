@@ -15,6 +15,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [INSN_PATCH entry silently no-ops when added to the wrong .c.o's list](#feedback-insn-patch-wrong-co-list-silent-noop) — _When you add an INSN_PATCH entry to the wrong per-.c.o list in the Makefile (e.g. `gl_func_0002D130` to `game_libs_tail.c.o`'s list when the function lives in `game_libs_post.c.o`), the build silently doesn't apply the patch — no error, no warning. Sanity-check via `make ... 2>&1 | grep "patch-insn: <funcname>"` — if absent, the entry is in the wrong list. Caught 2026-05-16 on gl_func_0002D130._
 - [INSN_PATCH offsets are body-dependent — drop C-only crutches before applying a ported patch](#feedback-insn-patch-offsets-body-dependent) — _When porting an INSN_PATCH from a sibling worktree, the patch's word offsets reference positions WITHIN the function as it's emitted.
 - [INSN_PATCH on R_MIPS_HI16/LO16 reloc instructions makes build/.o vs expected/.o byte_verify FAIL even though post-link ROM bytes match](#feedback-insn-patch-on-reloc-instructions-breaks-byte-verify) — _When INSN_PATCH targets the lui/lw pair of an extern symbol access (e.g., `lui t0, %hi(D_X); lw t0, %lo(D_X)(t0)`), it bakes the post-resolution bytes (0x3C08A404, 0x8D080010 for D_A4040010) directly into the .o.
+- [INSN_PATCH can strip stale HI16/LO16 relocs when target expected bytes are raw `.word` code](#feedback-insn-patch-strip-raw-word-jumptable-relocs) — _When C emits a local jump-table in `.rodata` with HI16/LO16 relocs but expected/.o comes from raw `.word` USO asm with literal `lui at,0; lw tN,IMM(at)` and no reloc entries, patch the `lui` as a same-word entry plus patch the `lw` to the target immediate. `patch-insn-bytes.py` strips both orphan relocs, making build/.o byte-equal to expected/.o._
 - [Check sibling worktrees BEFORE declaring INSN_PATCH (or any tool) missing](#feedback-insn-patch-recipe-infra-missing-on-agent-a) — _A previous tick concluded "INSN_PATCH infra missing on agent-a/origin/main" without checking projects/1080-agent-b/.
 - [INSN_PATCH cannot fix functions where IDO emits a different INSTRUCTION COUNT than target — only operand-order / register-choice diffs at fixed offsets](#feedback-insn-patch-size-diff-blocked) — _scripts/patch-insn-bytes.py overwrites N specific 4-byte words in place — function size is unchanged.
 - [INSN_PATCH that replaces a `jal 0` placeholder with a non-jump opcode leaves an orphan R_MIPS_26 reloc that breaks the link with `relocation truncated to fit`](#feedback-insn-patch-jal-to-non-jal-orphan-reloc-link-fail) — _patch-insn-bytes.py now auto-zeroes orphan R_MIPS_26 entries when a patch word overwrites a jal/j opcode with a non-jump (since 2026-05-07). HI16/LO16 cases still un-stripped — see the older sibling section._
@@ -781,6 +782,23 @@ Diffs vs target across 7 fixed-offset words. Offsets 0x0/0x4 are R_MIPS_HI16/LO1
 - `feedback_mid_function_jal_targets_block_byte_correct_link.md` — analogous reloc-vs-byte issue for jal targets
 
 ---
+
+<a id="feedback-insn-patch-strip-raw-word-jumptable-relocs"></a>
+## INSN_PATCH can strip stale HI16/LO16 relocs when target expected bytes are raw `.word` code
+
+_When C emits a local jump-table in `.rodata` with HI16/LO16 relocs but expected/.o comes from raw `.word` USO asm with literal `lui at,0; lw tN,IMM(at)` and no reloc entries, patch the `lui` as a same-word entry plus patch the `lw` to the target immediate. `patch-insn-bytes.py` strips both orphan relocs, making build/.o byte-equal to expected/.o._
+
+This is the mirror exception to `feedback-insn-patch-on-reloc-instructions-breaks-byte-verify`: that older warning applies when expected/.o also carries reloc entries and only register fields should be patched. For raw `.word` USO asm, expected/.o has no reloc entries at all. Leaving the build's local `.rodata` relocation in place makes byte-verify fail even if the opcode immediate is already zero.
+
+Recipe:
+
+```makefile
+build/src/<seg>/<file>.c.o: INSN_PATCH := func=0xHI:0x3C010000,0xLO:0x8C2E0224
+```
+
+The same-word `lui` patch is intentional: it tells `patch-insn-bytes.py` to remove the stale R_MIPS_HI16 reloc even though the instruction word already matches. The `lw` patch changes the LO16 immediate and removes the paired R_MIPS_LO16 reloc.
+
+Verified 2026-05-17 on `game_uso_func_0000EDD4`: IDO emitted a 5-case switch jump table at `.rodata+0x4`; target raw-asm bytes loaded from `+0x224`. C body plus `INSN_PATCH := game_uso_func_0000EDD4=0x14:0x3C010000,0x1C:0x8C2E0224` produced byte-identical no-alias opcodes against expected.
 
 ---
 
