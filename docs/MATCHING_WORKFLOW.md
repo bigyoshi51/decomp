@@ -5112,6 +5112,30 @@ then for each hit check if it is (a) a lone-insn file, or (b) the LAST
 function almost certainly reads `t6` uninitialized → forward-merge.
 Worth a sweep — there are likely more of these across game_libs.
 
+**FPU-const variant (2026-05-17, `arcproc_uso_func_00001BBC`→`00001C74`):**
+the stolen-leading-insn isn't always `lw t6,0x10(a0)`. A successor that
+needs a float constant at entry has its `lui at,0x3F80; mtc1 at,$f0`
+(= `f0 = 1.0f`; words `0x3C013F80,0x44810000`) bundled as the trailing 2
+`.word`s of the predecessor's symbol. Detection signal: predecessor's
+declared size has `jr ra`+nop then 1–2 trailing FPU-const insns; the
+successor's body uses `$f0`/`$fN` uninitialized (e.g. `swc1 f0, N(sp)`)
+right after its own `addiu sp`. Same forward-merge logic applies in
+principle.
+
+**EXCLUSION — do NOT forward-merge when the successor is clone-canonical
+or otherwise externally referenced.** `00001C74` is the canonical decode
+for a byte-identical-clone family (timproc_uso_b1/b3 stubs reference the
+name `arcproc_uso_func_00001C74`). Renaming it to its true entry address
+(the merged-symbol convention) breaks every clone stub. The forward-merge
+recipe's "verify no external refs" precondition is mandatory: `grep -rn
+<successor> src/ undefined_syms_auto.txt` first. If it's clone-canonical
+/ referenced, the boundary is instead a SUFFIX_BYTES(predecessor +=
+stolen words) + PROLOGUE_STEALS(successor=N) **pair** — and since both
+are typically `#else INCLUDE_ASM` the *linked ROM is already correct*
+(bytes contiguous), so this is deferrable infra, not a build bug.
+Document the boundary in-source and move on rather than risk the
+cross-reference breakage.
+
 ---
 
 <a id="feedback-sub80-complex-embed-decode-resume-comment"></a>
