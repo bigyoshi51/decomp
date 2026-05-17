@@ -123,7 +123,49 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — _For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC), DO NOT try fixing it by adding the symbol to undefined_syms_auto.txt.
 - [objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup](#feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware) — _objdiff's reloc-aware scoring (treats `jal SYMBOL + R_MIPS_26 reloc` as equivalent to `jal pre-baked-addr-to-same-symbol`) lets you remove redundant INSN_PATCH-for-jal recipes. But the LINKER still needs the symbol resolved — `func_7C860 = 0x7C860;` in `undefined_syms_auto.txt` is the linker-side resolution, not a matching artifact. Removing it as "redundant" breaks the build with `undefined reference to func_7C860`. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory)._
 - [Complex function peaks <80%: keep INCLUDE_ASM but embed the verified decode as an in-source resume-comment](#feedback-sub80-complex-embed-decode-resume-comment) — _CLAUDE.md's ≥80% NM-wrap threshold means sub-80 complex functions stay plain INCLUDE_ASM, but discarding the partial decode wastes the iteration. The sub-80 forward-progress artifact = INCLUDE_ASM + a structured comment recording peak %, the verbatim candidate C, and the precise residual + suspected codegen lever, so the next tick resumes from the peak (not scratch). Verified 2026-05-16 gl_func_0003D7F8 (26→30→73%, residual isolated to one bnel + a3 home double-reload)._
+- [Alias-extern via `undefined_syms_auto.txt` unblocks typed redecl that conflicts with file-scope K&R prototype](#feedback-alias-extern-via-undefined-syms) — _Add `gl_func_00000000_<suffix> = 0x00000000;` as a sibling alias symbol, then declare the alias with a typed prototype in block scope. Linker resolves both names to the same address. Unlocks (a) direct `jal` vs fn-ptr-cast `lui+addiu+jalr` (saves 2 insns) and (b) single-precision swc1 float-arg stores vs K&R double-promote sdc1. Verified 2026-05-17 promoting gl_func_00042338._
 
+
+---
+
+<a id="feedback-alias-extern-via-undefined-syms"></a>
+## Alias-extern via `undefined_syms_auto.txt` — sibling symbol unblocks typed redecl that conflicts with file-scope K&R prototype
+
+_When a file-scope K&R prototype (`extern int gl_func_00000000();`) prevents a block-scope typed redeclaration (IDO 7.1 cfe rejects with "Incompatible function return type") — and the typed prototype is what's needed for byte-exact match (direct `jal` instead of fn-ptr-cast `lui+addiu+jalr`, OR single-precision float args instead of K&R double-promote) — add a FRESH-named alias symbol to `undefined_syms_auto.txt` that resolves to the same address. Then declare the alias with the typed prototype._
+
+**Recipe:**
+
+1. In `undefined_syms_auto.txt`, add an alias entry next to the original:
+   ```
+   gl_func_00000000_va = 0x00000000;          /* existing alias for K&R varargs */
+   gl_func_00000000_<suffix> = 0x00000000;    /* NEW: your fresh alias */
+   ```
+   The address must match the original symbol's link-time value (usually `0x00000000` for relocatable USO/library segments — the linker fills in the actual address via R_MIPS_26 reloc).
+
+2. In the C source, declare the alias with the typed prototype you need:
+   ```c
+   extern void gl_func_00000000_<suffix>(void*, float, float, ..., float);
+   void my_caller(void) {
+       gl_func_00000000_<suffix>(args...);
+   }
+   ```
+
+3. Build. The compiler emits `jal` with R_MIPS_26 reloc against `gl_func_00000000_<suffix>`. The linker resolves it to the alias's value (== original's value), so the jal target byte is identical.
+
+**Two distinct caps this unlocks:**
+
+- **Direct vs indirect call**: typed prototype emits `jal` (1 insn); the fn-ptr-cast workaround `((void(*)(...))gl_func_00000000)(args)` emits `lui+addiu+jalr` (3 insns). The +2 insns are unfixable via INSN_PATCH (size-count diff).
+- **Float vs K&R double-promote**: typed `extern void f(void*, float, float, ...)` keeps float args as single-precision (mfc1 + swc1 stack stores). K&R `extern void f();` triggers default-promote so floats become doubles (cvt.d.s + sdc1 doubleword stores) — wrong codegen for non-vararg targets.
+
+**When to use:** ONLY when both conditions hold:
+- The file already has a file-scope K&R declaration of the target function that you can't easily change (it's used by many other functions in the same .c, or it's auto-generated).
+- The current function needs typed args for byte-exact match.
+
+**When NOT to use:** if you can change the file-scope decl to typed at top, do that instead — one prototype for the whole file is cleaner.
+
+**Precedent:** `gl_func_00000000_va` (game_uso) — first established `_va` alias for varargs K&R pattern, 2026-04-20.
+
+**Concrete example (2026-05-17):** `gl_func_00042338` promoted to byte-exact via `gl_func_00000000_42338(void*, float, ...)` alias. Combined with `PROLOGUE_STEALS=4` (separate post-cc recipe) for the stolen mtc1-zero prefix.
 
 ---
 
