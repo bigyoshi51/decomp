@@ -399,6 +399,8 @@ The merged form `if(a0){init}` forces a CFG where the init block has TWO predece
 
 The branched per-stage init blocks fight the scheduler trick. For multi-stage, prefer the natural `if (p_n != 0) {...}` form and accept the cap.
 
+**SIZE LIMIT — short bodies only.** The recipe works for short init bodies (verified on 22-27-insn constructors: CAA0, C814, 36B9C). Long bodies regress because the merged epilogue changes the live-range of self across many $s-reg locals, and IDO picks a totally different $s allocation. Tested 2026-05-17 on `gl_func_000011A4` (54-insn, 11 stores + 3 calls in body): goto-end form took 92.6 % → 46.2 %. Use the `return 0` early-exit form for any alloc-or-init with > ~30 insns of body code.
+
 **Related:**
 - `feedback_ido_goto_epilogue.md` — different goto pattern for alloc-fail early-returns to common label.
 - `feedback_objdiff_reloc_tolerance.md` — the 100% has reloc-name diffs (R_MIPS_HI16 vs labeled), tolerated by objdiff.
