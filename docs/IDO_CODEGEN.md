@@ -6694,6 +6694,8 @@ This pattern is **target-friendly** and matches what game source likely had. **U
 
 **Quick check:** `objdump -d <built.o>` of the pre-jumptable function — if the dispatch is `lui $at; addu $at, $at, idx; lw $tN, 0($at); jr $tN`, jump table was emitted; rewrite as if-goto. If dispatch is just chained `beq`s, the switch is safe.
 
+**Density trigger (2026-05-17, game_uso_func_0000EDD4):** When target HAS a jumptable and you want IDO to emit one, write `int v0 = 0;` pre-init + 5 explicit case labels (NO default — last case is `case N: break;`). Plain `switch { case 0..3; default: v0=0; }` → IDO falls back to cascading else-if chain (20 % match, no jumptable). Adding `case 4: break;` and pre-initing `v0 = 0` before the switch → IDO emits the jumptable cleanly without the redundant `or v0, zero, zero` arms (95 %+ match). The bound test `sltiu $at, $a1, 5` then naturally pairs with 5 case labels.
+
 ---
 
 ---
