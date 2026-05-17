@@ -36,6 +36,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [`volatile int pad[N]` frame-grow can't decouple frame-size from in-frame spill offset — a 99.9% wrap with a 4-byte spill-slot shift is INSN_PATCH-only](#feedback-volatile-pad-frame-offset-coupling) — _When a near-exact (99.7–99.95%) wrap's sole residual is a stack spill slot 4 bytes off (e.g. `local`/`buf` at sp+0x28 where target wants sp+0x24), `volatile int pad[N]` cannot fix it: pad[N] sets BOTH the frame size AND the in-frame offset through one knob (offset moves ~`0x34-4N`, frame size moves with N), so there is no N giving both the correct frame AND the correct slot. Stop pad-grinding the whole 99.9% NM band; the residual is INSN_PATCH-only (1 sw + 1 addiu offset). Verified 2026-05-15 on `gl_func_00039A9C` (-64 frame, buf@0x24 vs 0x28) and `gl_func_00041768` (-48 frame, local@0x28 vs 0x24)._
 - [INSN_PATCH bnel→bne demotion + delay-slot nopping when the pulled insn already lives at the bne-taken target](#feedback-insn-patch-bnel-demote-with-delay-nop) — _When IDO -O2 emits `bnel rN, rM, +K; <insn>` and target uses `bne rN, rM, +K-1; nop`, INSN_PATCH can swap the branch opcode + nop the delay slot AS LONG AS the same `<insn>` is duplicated at the bne-taken target offset (so it stays live post-patch). Verified 2026-05-16 on gl_func_0006AF0C (linked-list walk, 4-insn patch)._
 - [Screen INSN_PATCH candidates by op-mismatch count — register-rename (op-mismatch=0, always patchable) vs structural divergence (high op-mismatch, tautology trap, defer)](#feedback-insn-patch-screen-by-opmismatch-count) — _Before unwrapping a SAME-LEN near-exact wrap for INSN_PATCH, align expected vs build insns and count how many diffs have a different mnemonic. 0 = pure register/imm (logic-safe). Small+paired = independent-insn schedule swap (still safe). High (e.g. 25/37) = the C decode structurally diverges — INSN_PATCH would fake the logic; defer with a negative finding. Verified 2026-05-16: gl_func_00062E10 (12/2→exact) vs timproc_uso_b1_func_00001130 (37/25→deferred)._
+- [INSN_PATCH rewrites $a-reg args to hidden $v0/$v1 — unlocks "C can't name these regs" caps](#feedback-insn-patch-rename-args-to-hidden-vregs) — _Functions with alt-entry-fragment patterns using caller-set $v0/$v1 (no C-level expressible param) ARE INSN_PATCHable: declare ordinary 3+ args (mapped to $a-regs by IDO), then INSN_PATCH the affected register fields to rewrite a1/a2→v0/v1 at fixed offsets. The C body provides structure (insn count, opcode sequence); INSN_PATCH renames bytes. Verified 2026-05-16 on gl_func_00008674 (3 patches → exact). Refines the prior "GP-reg inheritance, NO EPISODE" rule: when divergence is ONLY register names at same insn count, INSN_PATCH closes it and episodes are valid._
 
 
 ---
@@ -2373,3 +2374,42 @@ lui/addiu schedule swap → byte-exact via 12-word INSN_PATCH) vs
 deferred, NOT INSN_PATCH).
 
 **Class:** screening heuristic for `feedback-insn-patch-for-ido-codegen-caps`.
+
+---
+
+<a id="feedback-insn-patch-rename-args-to-hidden-vregs"></a>
+## INSN_PATCH rewrites $a-reg args to hidden $v0/$v1 — unlocks "C can't name these regs" caps
+
+_Functions with the alt-entry-fragment pattern that uses caller-set $v0 and/or $v1 directly (no C-level expressible param) ARE INSN_PATCH-promotable. Declare ordinary 3+ args in C — they map to $a0/$a1/$a2/$a3 — then INSN_PATCH the per-insn register fields to rewrite a1/a2 → v0/v1 at the affected offsets. The patched bytes execute target's hidden-register semantics; the C source documents the structural intent without faithfully naming the registers._
+
+**Why it works:** the C body's job is to produce the right INSN COUNT, SHAPE, and opcode sequence — not the right register names. INSN_PATCH then renames specific bytes. Same class as the existing `feedback-insn-patch-for-ido-codegen-caps` (operand/encoding changes at same insn count), just applied to register fields that target $v-regs which C doesn't directly name.
+
+**Recipe (verified 2026-05-16 by parallel agent on `gl_func_00008674`):**
+```c
+/* Target uses $v0 = fnptr base, $v1 = addend (caller-set hidden regs).
+ * C maps args to $a0/$a1/$a2 then INSN_PATCH renames to a0/v0/v1. */
+int gl_func_00008674(int unused, int *hidden_v0, int hidden_v1) {
+    volatile int *spill = &unused;  /* forces sw a0, 0x18(sp) caller-slot spill */
+    (void)spill;
+    return ((int(*)(int))hidden_v0[0x64/4])(*(s16*)((char*)hidden_v0 + 0x60) + hidden_v1);
+}
+```
+```makefile
+build/src/.../game_libs.c.o: INSN_PATCH := \
+    gl_func_00008674=0x0C:0x8C590064,0x10:0x844E0060,0x18:0x01C32021
+```
+Three patches: `lw a1,0x64(a1)` → `lw t9,0x64(v0)`; `lh a2,0x60(a1)` → `lh t6,0x60(v0)`; `addu a0,a2,a3` → `addu a0,t6,v1`.
+
+**Generalizes to:**
+- Hidden $v0/$v1 alt-entry-fragments (caller falls through with $v0/$v1 pre-loaded).
+- Any function where target uses $v-regs for body computation that the C-level mapping pattern (args → $a-regs) can't reach.
+
+**Updates prior cap doc** (`feedback-prologue-steals-gp-reg-inheritance`, this doc's earlier "GP-reg inheritance" entry): that entry says "NO EPISODE — the C body's semantics diverge from the actual fall-through callee convention." This refines: when the divergence is ONLY register names at SAME insn count, INSN_PATCH closes it and episodes ARE valid (byte-exact against expected). The "no episode" rule still applies to true insn-count divergence (e.g., predecessor's tail-emit reproduced in successor's emit prefix).
+
+**When to apply:**
+- Diagnostic: built C is ≥80% structural at correct insn count; remaining diffs are all `<opcode> aN,...` vs `<same opcode> vN,...` at fixed offsets.
+- Map: count target's $v0/$v1 uses; declare matching ordinary args in C (named to document the role); INSN_PATCH all reg-field rewrites.
+
+**When NOT to apply:**
+- Target's hidden-reg use spans calls in ways C can't model (e.g., $v1 set MID-function by a callee return, then read by following insn): C-level structure won't match insn count; INSN_PATCH blocked.
+- The "hidden reg" is actually inherited from predecessor's POST-jr-ra tail (i.e., the documented GP-reg inheritance class) — that still needs extended-signature NM-wrap with SUFFIX_BYTES on predecessor for byte-match.
