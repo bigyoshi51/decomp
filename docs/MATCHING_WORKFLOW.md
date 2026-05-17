@@ -1051,7 +1051,7 @@ Don't try to use `git stash` to undo a partial state when the partial state span
 <a id="feedback-extern-redeclaration-blocks-nm-build"></a>
 ## redeclaring `extern char D_00000000` in NM wrap blocks NM-build when file already has it as `extern int`
 
-_IDO cfe rejects extern redeclarations with conflicting types. When adding a new NM wrap that needs &D_00000000 access, check the file's TOP for the existing extern (often `extern int D_00000000;`) — don't add `extern char D_00000000;` near the function._
+_IDO cfe rejects extern redeclarations — even SAME-TYPE redeclarations. When adding a new NM wrap that needs &D_00000000 access, check the file's TOP for the existing extern (often `extern int D_00000000;`) — don't add ANY local extern (matching or conflicting type) near the function. Same-type redeclaration verified 2026-05-17 on game_uso_func_00011258: file scope had `extern int D_00000000;`, local-extern added the same form, IDO errored "redeclaration of 'D_00000000'; previous declaration at line N"._
 
 When adding a new NM-wrap function body that uses `&D_00000000`, don't
 reflexively add `extern char D_00000000;` near the function. Most 1080
