@@ -371,6 +371,7 @@ The KEY signature: `beq v0, zero, +epi` IMMEDIATELY after the alloc jal returns,
 | `if(a0==0) a0=alloc(); if(a0!=0){init;} return a0;` | 92.5% | Init test post-merge → IDO emits `or a0,v0,zero` BEFORE `beq a0,zero,+epi` (separated, not delay-coupled) |
 | `if(a0==0){a0=alloc(); if(a0==0)return 0;} init; return a0;` | 85.9% | Early-return adds `b epi; lw ra(delay)` jump-to-epilogue overhead |
 | `if(a0==0&&(a0=alloc())==0)return 0; init; return a0;` | 85.9% | Same as above (short-circuit && compiles same) |
+| **`if(a0==0){a0=alloc(); if(a0==0)goto end;} init; end: return a0;`** | **100%** | Natural variant — alloc-fail uses `goto end` instead of `return 0`. Merges into shared epilogue, same emit as the `goto init` form |
 | **`if(a0!=0)goto init; a0=alloc(); if(a0==0)goto end; init: ...; end: return a0;`** | **100%** | Goto disambiguates fall-through alloc-fail from merge-test; IDO couples v0-test+a0-move |
 
 **Why goto wins:** the `if(a0!=0) goto init` jumps OVER the alloc, so the test `if(a0==0) goto end` happens in the LINEAR code path right after the jal. IDO sees: jal returns v0, then test v0 directly, with the v0→a0 move (which is needed for the init: label) freely schedulable into the beq delay slot.
@@ -378,6 +379,8 @@ The KEY signature: `beq v0, zero, +epi` IMMEDIATELY after the alloc jal returns,
 The merged form `if(a0){init}` forces a CFG where the init block has TWO predecessors (skip-alloc path and alloc-success path), so IDO must materialize a0 BEFORE the test (since the skip-alloc path doesn't go through v0).
 
 **Concrete example (2026-05-02):** `timproc_uso_b5_func_000010EC` (28 insns, alloc-or-init constructor with 7 init field stores). Variants in 92.5%/85.9% caps; goto form hit 100%.
+
+**Concrete example (2026-05-17):** `gl_func_0003CAA0` (24 insns, alloc-or-Vec6-zero). Started as wrap with `if (a0==0) return 0;` early-return cap. Promoted to byte-exact via the natural `if(a0==0){ alloc; if(!a0) goto end; } ...; end:` variant (no need to invert to `goto init`).
 
 **Apply when:**
 - Function takes a pointer arg `a0` that's tested for null at entry
