@@ -110,7 +110,7 @@ _119 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
 - [Decoding `a0 * K` multiplication sequences from `sll/subu/addu` chains: walk left-to-right, each `sll<<N` is `*2^N`, each `addu/subu r,r,aM` is `±aM`. Read the chain to recover K — don't trust the C-source comment, the asm has the truth](#feedback-ido-decoding-multiply-via-shift-add-chain) — _When target asm has 5 chained `sll/addu/subu` insns at function entry computing `a0 * K` for an array stride or struct offset, walk the chain step-by-step to recover K. A miscoded `K` in the C source produces shift-counts that LOOK similar to target's but encode a different multiplier — and you can spend ticks chasing register-cascade caps that aren't the real issue. Verified 2026-05-14 on gl_func_0002D130: doc comment said "0x320-byte stride" (wrong), asm chain `sll<<2;subu;sll<<2;subu;sll<<5` decodes to `a0 * 11 * 32 = 0x160` (right). Single-character C constant fix yielded +3.36pp._
-- [Don't reuse a single C variable across two distinct lifetimes (`char *p = arg0; ... p = arg0->next; while(p) ...`) hoping IDO will reuse the same $sN slot — REGRESSES. IDO sees the lifetimes as merged for live-range analysis and shifts the allocator unfavorably](#feedback-ido-variable-reuse-across-lifetimes-regresses) — _Negative finding 2026-05-14: when target asm has `or s0, a0, zero` (s0 = arg0 initially) followed by `or s0, v0, zero` later (s0 reused for a different value), the natural fix-attempt is to reuse the same C variable name across both phases. Verified on func_000086C0: this REGRESSES 84.94% → 74.67% — IDO merges the live ranges and reorganizes register allocation across the function. The right fix is to use TWO distinct C variables (e.g., `arg0` and `node`) and accept that IDO may not reuse the $s reg the same way; or use INSN_PATCH for the prologue $s-reg moves._
+- [Reuse an arg as a later loop iterator only AFTER a separate null-test temp to get `lw v0` + delay-slot `$s0 = v0`](#feedback-ido-reuse-arg-after-null-test-for-sreg-iterator) — _When target first preserves `a0` in `$s0`, later loads `node = s0->next` into `$v0`, tests it, and copies `$v0` into `$s0` in the branch delay slot, write `node = *(arg0+off); if (node != 0) { arg0 = node; do { ...; arg0 = arg0->next; } while (arg0 != 0); }`. The separate temp creates the `lw v0`/test; reusing `arg0` only inside the if lets `$s0` become the iterator. Verified 2026-05-16 on `func_000086C0`: 84.94% → 99.70%, then exact with inline `$t9` callback._
 - [Don't cast a K&R extern function pointer inline (`((int(*)(int))gl_func_X)(...)`) to fix arg-reg allocation — REGRESSES even when the cast is semantically correct. IDO treats the casted form as variadic-style and forces extra spills](#feedback-ido-typed-cast-of-kr-extern-regresses) — _Negative finding 2026-05-14: when target asm has `or a1, a0, zero` (self preserved in $a1) but built has `or a2, a0, zero` (self in $a2), the natural fix-attempt is to add an inline typed cast like `((int(*)(int))gl_func_00000000)(arg)` to declare a 1-arg signature for THIS call (so $a1 is free for self preservation). Verified on timproc_uso_b1_func_00001130: this REGRESSES 86.17% → 70.33%. IDO emits extra arg-spill scaffolding for the typed-cast form even though it's a valid C-level shape. Don't try this lever on K&R `extern int gl_func_X();` calls; the K&R ABI is what's already best-emit. Distinct from `feedback-ido-magic-arg-via-symbol-not-literal` (which fixes a different issue: lui+addiu vs lui+ori for the constant arg). For the arg-reg-preservation cap, accept the cap or use INSN_PATCH._
 - [`$s0` priority is FIRST-ASSIGNMENT order, not declaration order — initialize the wanted-in-$s0 local first in the function body](#feedback-ido-sreg-priority-first-assignment-not-decl-order) — _When two locals compete for $s0, IDO -O2 picks the one assigned FIRST in the body, NOT the one declared first. Declaration order alone does NOT flip the allocation. Verified 2026-05-14 on gl_func_0004ED0C: declaring `int i;` before `int *iter` and assigning `i = 0;` before `iter = self;` flipped $s0 from iter to i (matching target) — but JUST swapping declaration order produced no change. The for-loop init `for (i = 0; ...)` runs AFTER any earlier assignments, so the assignment order matters. +1.6pp final-mile fix._
 - [Drop redundant `if (count <= 0) return;` before a for-loop with the same `i < count` test — IDO emits both `blezl` (early-return) AND `blez` (loop-start), doubling the test code](#feedback-ido-drop-redundant-early-return-before-for-loop) — _When target asm has a single `blez tN, .end` before the loop body and your wrap has both `if (count <= 0) return;` AND `for (i = 0; i < count; ...)`, IDO -O2 emits BOTH branch checks (the early-return as `blezl` likely, the loop-start as plain `blez`). The for-loop's initial test already handles count <= 0, so the explicit early-return is redundant. Removing it collapses to a single blez. Verified 2026-05-14 on gl_func_0004ED0C: 88.57% → 96.07% (+7.5pp) just from dropping the redundant check + the inline-method-ptr-for-$t9 fix._
@@ -7417,6 +7417,45 @@ Per C11 6.7.3, accessing a volatile object is observable. `(void)dummy` is a rea
 **Related:** `feedback-ido-volatile-saved-arg-forces-local-slot-spill` (write-form's broader cousin: spill an arg to a specific local slot), `feedback-ido-volatile-loop-counter-for-stack-iter` (volatile to force stack-counter loop), `feedback-ido-file-context-affects-frame-size` (when even this lever can't close an 8-byte frame gap).
 
 ---
+
+---
+
+<a id="feedback-ido-reuse-arg-after-null-test-for-sreg-iterator"></a>
+## Reuse an arg as a later loop iterator only AFTER a separate null-test temp to get `lw v0` + delay-slot `$s0 = v0`
+
+_When target first preserves `a0` in `$s0`, later loads `node = s0->next` into `$v0`, tests it, and copies `$v0` into `$s0` in the branch delay slot, write the C with a separate null-test temp and only then reuse the arg variable as the iterator. Verified 2026-05-16 on `func_000086C0` (bootup_uso.c): 84.94% -> 99.70% from the iterator shape, then 100% after applying the existing inline-function-pointer `$t9` recipe._
+
+**Target shape:**
+
+```asm
+or    s0, a0, zero
+...
+lw    v0, 0x34(s0)
+beq   v0, zero, end
+or    s0, v0, zero
+```
+
+**C shape:**
+
+```c
+node = *(char **)(arg0 + 0x34);
+if (node != 0) {
+    arg0 = node;
+    do {
+        ...
+        arg0 = *(char **)(arg0 + 0x84);
+    } while (arg0 != 0);
+}
+```
+
+The failed extremes are instructive:
+
+- `node` as the only iterator keeps the loop clean but leaves the original `arg0` in a caller-slot spill instead of `$s0`.
+- `arg0 = *(arg0 + off); while (arg0 != 0)` puts the load directly into `$s0`, losing the target's `$v0` load plus branch-delay copy.
+
+The split temp is the lever: it gives IDO one pseudo for the null test (`v0`) and then lets the reassigned arg pseudo take over `$s0` for the loop body.
+
+**Pair with:** `feedback-ido-indirect-call-t9` when the loop calls a callback loaded from the node's object; naming the callback local can leave the match stuck at 99.70%.
 
 ---
 
