@@ -100,6 +100,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 ### other
 
+- [Immediate-masked sibling scan finds cross-segment libreultra reimplementations (osSetThreadPri etc.)](#feedback-immediate-masked-sibling-scan-finds-cross-segment-os-implementations) — _Masking 16-bit imms + 26-bit jal targets per insn produces a structural signature that surfaces game_libs USO reimplementations of kernel libreultra functions (e.g. `gl_func_0006F534` = `osSetThreadPri`, `gl_func_0006C9F4` = `__osPiRawStartDma`). Standard byte-identical mirror scan misses these because the externs differ. Used 2026-05-17 to find 2 osXxx siblings._
 - [Aliased-pointer local shifts IDO -O2 jal-spill slot offset by 4 bytes without adding insns](#feedback-aliased-pointer-local-shifts-spill-slot) — _When IDO -O2 spills a pointer in a jal delay slot at the wrong sp offset (e.g. sp+0x18 vs target's sp+0x1C), declare a SECOND char* local aliased to the spilled pointer (`char *p, *spillee; spillee = p;`).
 - [/loop's interval is cron fire cadence, NOT a per-invocation timeout](#feedback-loop-interval-not-timeout) — `/loop Nm <prompt>` fires `<prompt>` on a cron every N minutes.
 - [In /loop /decompile, start the next iteration immediately — don't ScheduleWakeup with a delay](#feedback-loop-no-wait) — User's preference for the /decompile loop in 1080 Snowboarding.
