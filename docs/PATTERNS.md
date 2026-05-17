@@ -382,6 +382,8 @@ The merged form `if(a0){init}` forces a CFG where the init block has TWO predece
 
 **Concrete example (2026-05-17):** `gl_func_0003CAA0` (24 insns, alloc-or-Vec6-zero). Started as wrap with `if (a0==0) return 0;` early-return cap. Promoted to byte-exact via the natural `if(a0==0){ alloc; if(!a0) goto end; } ...; end:` variant (no need to invert to `goto init`).
 
+**Concrete example (2026-05-17):** `gl_func_00036B9C` (27 insns, alloc-or-init + extra `a1` param stored at `a0[0x38]`). First-pass with `a1`-store LAST gave 26/27. Target's asm had `lw t7, 0x1C(sp)` (a1-reload from home slot) interleaved BEFORE the 3 swc1-zero stores. Moving the C `a0[0x38] = a1;` BEFORE the float zeros made IDO emit the lw t7 at the same position → byte-exact. **Sub-recipe — store-interleave order matches source order:** when target asm interleaves a spilled-param reload between adjacent unrelated stores, write the C statements in that interleaved order; IDO -O2 honors source-order when no data dep forces reordering.
+
 **Apply when:**
 - Function takes a pointer arg `a0` that's tested for null at entry
 - On null, calls an allocator (e.g., `gl_func_00000000(SIZE)`) and tests the return
