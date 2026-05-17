@@ -16,6 +16,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Cross-segment placeholder calls — extern must be `func_00000000`, NOT `gl_func_00000000`, to byte-match expected/.o reloc](#feedback-cross-segment-extern-naming-unprefixed) — _For USO-segment functions whose .s disasm shows `jal func_00000000` (the unresolved cross-segment placeholder), `extern int func_00000000();` in the C body produces the matching R_MIPS_26 reloc against `func_00000000`. Using the prefixed `extern int gl_func_00000000();` (which most game_libs internal-call sites use) makes the reloc symbol `gl_func_00000000` — different reloc table entry → objdiff DIFF_ARG_MISMATCH despite identical .text bytes. Verified 2026-05-14 on gl_func_00047F48: bare C with unprefixed extern matched 100% in report.json (per-symbol objdiff still shows DIFF_ARG_MISMATCH cosmetically but the report's fuzzy_match_percent is 100). Use prefixed names ONLY for in-segment references; unprefixed for cross-segment placeholders._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`](#feedback-split-fragments-clobbers-prior-merge) — _When the bundle you split has a successor that was previously merged via `merge-fragments` (e.g. `game_libs_func_0003AA5C` had absorbed `0003AC50` via fca252b8, growing size 0x1F4 → 0x200), recursive split-fragments can re-split it back, leaving size 0x1F4 + a separate 0xC stub for AC50. Combined with TRUNCATE_TEXT this breaks objdiff with "Symbol data out of bounds: 0xN..0xM". Diagnostic: `objdiff-cli report generate` fails immediately after a split commit. Fix: revert the split commit, run `make expected` to refresh expected/.o. Before recursing split-fragments, run `git log -3 -- <successor>.s` for each newly-split-off — if a `Merge fragment` commit appears, stop._
+- [split-fragments.py over-splits a single function that has an internal early-return `jr ra` — re-split ONCE, don't recurse blindly](#feedback-split-fragments-over-splits-on-internal-early-return) — _split-fragments.py boundaries on every `jr ra` (03E00008). A function with an early-return (e.g. `bnel`/`beq` to a shared epilogue with a mid-body `jr ra`) has 2+ `jr ra` and gets wrongly cut. Diagnostic: after a recursive split, disassemble the split-off piece — if a branch in the PREDECESSOR (`bnel`/`bne`/`beq`) targets an address INSIDE the split-off piece, or both share a trailing `jr ra` epilogue, they are ONE function. Fix: `git checkout -- <bundle>.s src/.../*.c`, `rm` the wrongly-split `.s` files, then run split-fragments.py ONCE per real boundary (don't recurse past a piece whose predecessor branches into it). Verified 2026-05-17: titproc_uso_func_000015F4 bundle — naive recurse made 15F4/16B8/16E8 (jr=3), but 16B8's `bnel 0x16BC→0x16EC` jumps into "16E8" → correct is 15F4(0xC4)+16B8(0x60, jr=2 internal early-return)._
 - [A standalone tiny (0x4–0x8) symbol can be the STOLEN LEADING insn of the successor, not the predecessor's tail — merge FORWARD when the predecessor is a complete function](#feedback-tiny-fragment-stolen-leading-insn-merge-forward) — _The merge-fragments skill assumes fragment→predecessor. When the fragment has no prologue/jr-ra AND the predecessor ends in jr-ra (a complete function, e.g. an arg-home stub `sw a0..a2; jr ra; move v0,0`) AND the successor reads the fragment's set register uninitialized, the fragment is the successor's stolen entry insn. Merge it FORWARD: prepend its `.word`(s) to the successor's .s, retitle the unified symbol at the fragment's (earlier) address, bump size, drop the successor's INCLUDE_ASM, add the old successor name to undefined_syms_auto.txt as a resolvable absolute. Verify vs baserom (not stale expected/.o, which keeps the pre-merge size). Verified 2026-05-16: game_libs_func_0003D54C (`lw t6,0x10(a0)`) absorbed gl_func_0003D550 (read t6 uninit at +0x8) → 0x70 byte-exact._
 - [Re-verify "USO bundle blocked" claims in NM-wrap comments — the cited blocker may not currently apply](#feedback-reverify-bundle-blocked-claims) — _When an NM-wrap comment says "Bundle stays INCLUDE_ASM (per `feedback_uso_split_fragments_breaks_expected_match.md`)" or similar, mechanically check the BLOCKER CONDITION before accepting it. The blocker only applies when the predecessor has an existing SUFFIX_BYTES/PREFIX_BYTES/PROLOGUE_STEALS recipe in the Makefile (per the conditional in `feedback-uso-split-fragments-breaks-expected-match-conditional`). Run `grep <predecessor> Makefile` on the immediate predecessor and successor — if neither appears, the case is "genuinely fresh" and split-fragments.py is the right tool. Two recent verifications: `gl_func_000682F8` (2026-05-07, 5-function bundle, no Makefile recipes on neighbors → 3 exact matches) and `timproc_uso_b3_func_00000DE4` (2026-05-07, 3-function bundle, no recipes → 3 exact matches). The "blocked" comments were written before the doc rule clarified the conditional nature. Don't defer to in-source blocker citations without re-checking the actual condition._
 - [-DNON_MATCHING build of multi-function -O0 file corrupts the byte alignment of NM-wrapped neighbors](#feedback-nm-build-corrupts-neighbors-in-multi-func-o0-file) — _When you have multiple functions in a `<seg>_o0_NNN.c` file (each NM-wrapped) and build with `-DNON_MATCHING`, function N's wrong-size emit (e.g. extra `b +1; nop`) shifts function N+1's start offset, which the…
@@ -5047,6 +5048,40 @@ Look for EXTRA instructions in built that aren't in expected (or vice versa). Co
 **Why future-you should know this:** documented NM-cap doc-comments may be MISDIAGNOSED. A wrap that says "frame-size diff, register-allocation cap, permuter territory" might actually be a pure address-shift artifact downstream of an upstream byte-count cascade. Always strip-diff the body before trusting the doc-comment's claim about what's wrong.
 
 ---
+
+<a id="feedback-split-fragments-over-splits-on-internal-early-return"></a>
+## split-fragments.py over-splits a single function that has an internal early-return `jr ra`
+
+split-fragments.py finds function boundaries by counting `jr ra`
+(`03E00008`). A single function with an **early return** — common when IDO
+emits `bnel`/`bne`/`beq` to a shared epilogue and the not-taken path has its
+own mid-body `jr ra` — therefore contains 2+ `jr ra` and gets wrongly cut at
+the internal one. The skill's "recurse split-fragments until no more splits"
+is unsafe here: it will keep peeling at every `jr ra`.
+
+**Diagnostic** (run after any recursive split, before decoding):
+disassemble each split-off piece. It is NOT a real boundary if either holds:
+- a branch in the **predecessor** (`bnel`/`bne`/`beq`) targets an address
+  that falls **inside** the split-off piece, or
+- the predecessor and the split-off piece both end at / branch to the **same
+  shared trailing `jr ra` epilogue**.
+
+Either means they are one function with an internal early-return.
+
+**Fix:** `git checkout -- <bundle>.s src/<seg>/*.c`, `rm` the wrongly-created
+`.s` files, then run split-fragments.py **once per genuine boundary** — stop
+recursing into any piece whose predecessor branches into it. A correctly
+split function may legitimately report `jr=2`; that is the internal
+early-return, not a defect.
+
+Verified 2026-05-17: `titproc_uso_func_000015F4` bundle (`jr=3`). Naive
+recurse produced 15F4 / 16B8 / 16E8, but 16B8's `bnel 0x16BC→0x16EC` jumps
+into "16E8" and both share the `0x1708` epilogue. Correct boundary is two
+functions: `15F4` (0xC4, jr=1) + `16B8` (0x60, jr=2 — internal early-return).
+The 16B8/16E8 cut had silently broken the cross-branch and made any match
+impossible. (Tangential find: the 16B8 `.s` also carries 2 unreachable
+trailing orphan words — `lui at,0x3f80; mtc1 $f16` between its `jr` and the
+cleanly-prologued `func_00001718` — a later SUFFIX_BYTES candidate.)
 
 <a id="feedback-tiny-fragment-stolen-leading-insn-merge-forward"></a>
 ## A standalone tiny (0x4–0x8) symbol can be the STOLEN LEADING insn of the successor — merge FORWARD when the predecessor is complete
