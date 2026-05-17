@@ -1072,6 +1072,21 @@ You'd expect the "natural" translation of `bnel v0, t6 → return 0` to be `if (
 
 **Origin:** 2026-04-19 game_libs gl_func_0000A9F4. First attempt `r != a1 → 0; else 1` → `beql` (wrong). Swapped to `r == a1 → 1; else 0` → `bnel` (100 %).
 
+**Caveat — DOES NOT apply to 2-stage NULL-check returning 0/1.** For:
+```c
+if (p == NULL) return 0;
+if (p->field == 0) return 0;
+return 1;
+```
+IDO -O2 emits eager-init `move v0,zero; beqz p; nop` even for the canonical
+"== case in the if arm" form. The single-stage swap recipe above only works
+when there's exactly ONE branch and the not-taken path falls through to a
+`b + addiu v0,zero,1`. With TWO early-returns chained, IDO doesn't move the
+return-value init into either delay-likely. The `goto end` shared-epilogue
+form is also identical. Cap is permuter-class (regalloc-driven: target reuses
+the return reg as the second-deref base). Verified 2026-05-17 on
+arcproc_uso_func_00000F78.
+
 ---
 
 ---
