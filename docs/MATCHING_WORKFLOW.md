@@ -5077,11 +5077,28 @@ early-return, not a defect.
 Verified 2026-05-17: `titproc_uso_func_000015F4` bundle (`jr=3`). Naive
 recurse produced 15F4 / 16B8 / 16E8, but 16B8's `bnel 0x16BC→0x16EC` jumps
 into "16E8" and both share the `0x1708` epilogue. Correct boundary is two
-functions: `15F4` (0xC4, jr=1) + `16B8` (0x60, jr=2 — internal early-return).
+functions: `15F4` (0xC4, jr=1) + `16B8` (jr=2 — internal early-return).
 The 16B8/16E8 cut had silently broken the cross-branch and made any match
-impossible. (Tangential find: the 16B8 `.s` also carries 2 unreachable
-trailing orphan words — `lui at,0x3f80; mtc1 $f16` between its `jr` and the
-cleanly-prologued `func_00001718` — a later SUFFIX_BYTES candidate.)
+impossible.
+
+**Correction (same-day 2026-05-17):** the first repair over-extended `16B8`
+to `0x60`, swallowing 2 words past its real `jr`+nop end —
+`lui at,0x3f80; mtc1 $f16` @ USO 0x1710/0x1714. These were first written off
+as "unreachable trailing orphan / SUFFIX_BYTES candidate." **Wrong.** They
+are the constant-hoisted prologue of the NEXT function: `func_00001718`'s
+body uses `$f16` un-set at its `+0x008` (`swc1 $f16,96(sp)`), and
+`lui 0x3f80; mtc1 $f16` materializes `1.0f`. IDO hoists the FP-const load
+**above** the `addiu sp` frame setup, and splat (no USO symbols) bundled it
+into the predecessor's range. Correct fix: shrink `16B8` to its true `0x58`
+(22 insns), move the 2 words into the successor's `.s`, rename the symbol to
+its true start address (`func_00001718` → `func_00001710`, size 0x128 →
+0x130). Safe because no decoded callers referenced it yet (only its own
+INCLUDE_ASM). **General rule:** a 2-word `lui <reg>,<hi>; mtc1 <reg>,$fN`
+(or `lui;addiu`) sitting AFTER a function's `jr ra`+delay and BEFORE the
+next `addiu sp` is almost never orphan/SUFFIX — it's the next function's
+hoisted FP/address constant (stolen prologue). Check whether the following
+function uses that `$fN`/reg un-initialized; if so, move it forward and
+re-address the symbol, don't SUFFIX it onto the predecessor.
 
 <a id="feedback-tiny-fragment-stolen-leading-insn-merge-forward"></a>
 ## A standalone tiny (0x4–0x8) symbol can be the STOLEN LEADING insn of the successor — merge FORWARD when the predecessor is complete
