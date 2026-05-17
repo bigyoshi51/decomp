@@ -6898,6 +6898,8 @@ nop
 
 **How to apply:** when the target has unexplained `sw a0, FRAME(sp)` at entry and nothing that reads it back, your C needs an unused `int a0` parameter. Don't try to make the parameter "do something" — IDO spills it regardless.
 
+**Multiple-unused-leading-params wrinkle (2026-05-16, `gl_func_0003F444`):** with `f(int a0, int a1, int a2, int a3)` where a0 AND a1 are unused but a2/a3 are used, IDO spills BOTH unused leading params (`sw a0,FRAME(sp)` AND `sw a1,FRAME+4(sp)`). If the target spills only a0 (not a1), there is NO C lever to suppress the a1-only spill — dropping a `(void)a0;` cast does not change it; the count of homed unused-leading-params is fixed by IDO's prologue logic. Such a one-extra-`sw a1` residual is LEN-DIFF +1 (so INSN_PATCH, which is same-length-only, cannot remove it) and is genuinely permuter-class — don't grind C shapes for it.
+
 **When not to apply:** if the target asm has NO `sw a0` or `sw a0` is followed by a clear `lw a0` later, then a0 genuinely IS used — write C that uses it.
 
 **Origin:** 2026-04-18 game_libs 12-func cluster (prefix `addiu sp; sw a0; sw ra; lui a0; jal; addiu a0, a0`). Matched 7 plain + 1 return-1 variant + 3 address-literal variants with this pattern.
