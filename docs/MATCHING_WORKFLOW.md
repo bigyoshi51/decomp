@@ -167,6 +167,10 @@ _When a file-scope K&R prototype (`extern int gl_func_00000000();`) prevents a b
 
 **Concrete example (2026-05-17):** `gl_func_00042338` promoted to byte-exact via `gl_func_00000000_42338(void*, float, ...)` alias. Combined with `PROLOGUE_STEALS=4` (separate post-cc recipe) for the stolen mtc1-zero prefix.
 
+**Caveat — verify net fuzzy delta, not just the targeted opcode.** Adding the block-scope `extern` declaration can shift IDO's register allocation, LUI hoisting, and stack-frame offsets around the call site. The opcode you targeted (e.g. `swc1` vs `sw`) WILL be fixed, but collateral codegen changes can net-regress the overall match. Always rerun `objdiff-cli report generate` and compare the fuzzy % before vs after. Negative example: `func_000087A4` (bootup_uso, 2026-05-17) — alias-extern correctly emitted `lwc1/swc1` for the 5th-arg float stack store, but fuzzy went 91.14% → 91.09% due to different LUI hoisting + 8-byte stack offset shifts. Reverted.
+
+**When this happens** (recipe fixes the opcode but regresses overall), the cap is still in the "structural disruption" class — the recipe is doing too much. Options: live with the residual cap, accept a partial improvement at a different function, or move to permuter / INSN_PATCH for the same-LEN cases.
+
 ---
 
 <a id="feedback-cross-segment-extern-naming-unprefixed"></a>
