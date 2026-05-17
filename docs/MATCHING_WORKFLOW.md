@@ -5106,3 +5106,40 @@ in-source so the next pass starts at 73%).
 **Contrast:** ≥80% → use the `#ifdef NON_MATCHING` wrap (preserves C on the
 non-matching build path, eligible for INSN_PATCH promotion). <80% →
 INCLUDE_ASM + resume-comment. The 80% line is the artifact-form switch.
+
+---
+
+<a id="feedback-asm-offset-base-after-addiu-mutation"></a>
+## Asm offsets are relative to the base register's CURRENT state — track addiu mutations before decoding `sw/lw offset(base)`
+
+_When IDO emits `addiu rN, rN, K` before a store/load that uses `rN` as base, the offset in the subsequent `sw/lw N(rN)` is relative to the MUTATED register, not the original. A wrap that decodes the literal asm offset as if it were applied to the original arg will silently target the wrong struct field. Result: wrap looks plausible, builds clean, but writes to wrong offset and caps low. Always track base-register mutations across the function body before transcribing offsets._
+
+**Symptom:** wrap doc claims a clean shape like `a0->[0x1C] = a1` matching `sw a1, 0x1C(a0)` in asm, but objdiff shows the store's effective offset doesn't match target. Built emits `sw a1, 12(a0)`, target emits `sw a1, 28(a0)`, even though both have `addiu a0, a0, 0x10` upstream.
+
+**Mechanism:**
+```
+8C8E002C  lw t6, 0x2C(a0)        ; a0 = orig (still arg)
+24840010  addiu a0, a0, 0x10      ; a0 = orig + 0x10 (MUTATED)
+...
+AC85001C  sw a1, 0x1C(a0)         ; effective addr = (orig + 0x10) + 0x1C = orig + 0x2C !!
+```
+
+Literal asm offset is `0x1C`. Effective address against ORIGINAL arg is `0x2C`. A wrap that writes `a0[0x1C/4] = a1` (using the C arg name `a0` which holds the original value) decodes to `orig + 0x1C` — WRONG address.
+
+**Correct decode for the above asm:** `a0[0x2C/4] = (int)a1;` (effective `orig + 0x2C`).
+
+**Rule for wrap decoding:**
+1. Track every `addiu rN, rN, K` (or other base-register mutation) at the point of every `sw/lw offset(rN)`.
+2. The C offset = (current register state offset from original) + (literal asm offset).
+3. Variants of base mutation to watch for:
+   - `addiu rN, rN, K` — straight bump
+   - `addu rN, rN, rM` — base shift by register
+   - `or rD, rN, zero; addiu rN, rN, K` — orig saved to rD, then rN mutated (the asm pattern in `gl_func_0003E904`)
+
+**How to verify:** before promoting a wrap, check the asm sequence between `addiu rN, rN, K` and the next `lw/sw offset(rN)`. If `K + offset` doesn't match the C wrap's offset expression, the wrap is mis-decoded.
+
+**Cheap diagnostic:** objdiff diff line-up at the suspect instruction. If asm and built share the SAME mnemonic + base + immediate but DIFFERENT literal offsets, suspect a base-mutation tracking error in the wrap.
+
+**Verified 2026-05-17 on gl_func_0003E904:** wrap had `a0->[0x1C] = a1` decoded against orig_a0 but target's `sw a1, 0x1C(a0)` runs after `addiu a0, a0, 0x10`, giving effective `orig_a0 + 0x2C`. Fixing to `a0[0x2C/4] = a1` brought built's sw bytes into agreement (87.28→87.52%; remaining cap is unrelated scheduler artifact).
+
+**Companion to** `feedback_asm_decode_claims_rot` (asm-decode CLAIMS in wrap comments can be wrong; same applies to offset transcriptions, not just opcode names).
