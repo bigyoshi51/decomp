@@ -215,6 +215,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Use `volatile T *arg` to prevent IDO from fusing two `sb`/`sw` stores to the same address](#feedback-ido-volatile-preserve-redundant-io) — When the target asm has two distinct stores to the same address (e.g. `sb $t9, 0(a0); sb $t0, 0(a0)` where the second value is derived from the first), plain C emits ONE store because IDO fuses `*a0 = val; *a0 = val |…
 - [`volatile int saved_arg = aN;` forces IDO to spill aN to a LOCAL stack slot instead of the caller's outgoing-arg slot](#feedback-ido-volatile-unused-local-forces-local-slot-spill) — _When target has `sw $aN, 0x24(sp)` (local-slot offset) but your IDO build emits `sw $aN, 0xBC(sp)` (caller's outgoing-arg slot at sp+frame_size+slot), the difference is whether IDO treats the saved arg as "live local"…
 - [`(void)a; (void)b; (void)c;` after the call forces IDO to spill ALL incoming args to caller's outgoing-arg-shadow](#feedback-ido-void-cast-arg-spill) — _Multi-arg forwarder pattern: `f(a, b, c) { callee(&D); (void)a; (void)b; (void)c; }` emits `sw $a0,0x18(sp); sw $a1,0x1c(sp); sw $a2,0x20(sp)` (varargs-prologue-style) instead of register-shifting args. Sister technique to `volatile int saved` but for many args._
+- [Signed `%` (and `/`) on a memory-loaded divisor emits a `break 7` (÷0) AND a `break 6` (INT_MIN/−1 overflow) guard pair — C-unsuppressible](#feedback-ido-signed-mod-break-pair) — _A C `(a + b) % n` where `n` is loaded from memory compiles to `div $zero,t4,t5; mfhi tP; bnez t5,+2; nop; break 7` THEN (for the result use) `addiu at,$zero,-1; bne t5,at,+2; lui at,0x8000; bne t4,at,+2; nop; break 6`. The `break 7` is the divide-by-zero trap; the `break 6` is the signed INT_MIN/−1 overflow trap MIPS HW can't represent. Both are emitted for signed `/` and `%` whenever the divisor isn't a compile-time-known nonzero constant — there is NO C form that suppresses them (they're part of IDO's signed-div lowering, not optimizer-removable). A ring-buffer index `idx=(first+count)%max` (inlined osSendMesg shape) therefore caps <100 from plain C unless `max` is a literal. Verified 2026-05-17 func_800044CC (libultra PI-event callback). Use `unsigned` operands to drop to `divu` + only `break 7` (no overflow guard), or post-cc INSN_PATCH if the target really uses signed div._
 
 
 ---
@@ -9914,3 +9915,50 @@ expected/.o is the *tautology trap*, not a match (see the build-path
 guard in docs/POST_CC_RECIPES.md#feedback-insn-patch-screen-by-opmismatch-count).
 Convert to unconditional C, then byte_verify build/.o vs expected/.o
 (reloc-aware) before episode + land.
+
+### feedback-ido-signed-mod-break-pair
+
+**Pattern:** A signed `%` or `/` whose divisor is not a compile-time
+known-nonzero constant (e.g. loaded from memory) lowers in IDO -O2 to
+the full trapping sequence:
+
+```
+div   $zero, $dividend, $divisor
+mfhi  $r            # (% ; mflo for /)
+bnez  $divisor, +2  # skip the next trap if divisor != 0
+nop
+break 7             # divide-by-zero trap
+addiu $at, $zero, -1
+bne   $divisor, $at, +2   # skip overflow trap unless divisor == -1
+lui   $at, 0x8000
+bne   $dividend, $at, +2  # ... and dividend == INT_MIN (0x80000000)
+nop
+break 6             # signed INT_MIN / -1 overflow trap
+```
+
+**Why it can't be removed from C:** `break 7` (÷0) and `break 6`
+(INT_MIN/−1 overflow — a result MIPS hardware cannot represent) are
+part of IDO's *signed* integer division lowering, not an optimizer
+artifact. IDO only elides them when it can prove the divisor is a
+nonzero constant at compile time. Any `int x % n` / `int x / n` with
+`n` coming from a `lw` keeps the entire guard pair. This is distinct
+from the strength-reduction `(x<<10)/x` case
+(`#feedback-ido-div-strength-reduction-needs-dfg-visibility`): there
+only `break 7` appears because the divisor equals the shifted dividend
+(never INT_MIN-vs-−1); the `% n` ring-index case emits BOTH.
+
+**Implications for matching:**
+- A plain-C ring buffer `idx = (first + count) % max;` (the classic
+  inlined `osSendMesg` body) will reproduce the `div+mfhi+break 7`
+  but is otherwise exact — it caps just below 100 only by the guard
+  shape, which is *already what the target has*, so it usually MATCHES.
+  Don't "fix" the breaks; the target libultra code has them too.
+- If the target uses `divu` + only `break 7` (no `break 6`), the
+  original operands were `unsigned` — make the C operands `u32`.
+- If the target has NEITHER break (bare `div;mflo`), the divisor was a
+  known constant there — use a literal, or it's a different routine.
+- Only reach for post-cc INSN_PATCH if the target genuinely lacks a
+  guard your signed C must emit (rare).
+
+Verified 2026-05-17 on `func_800044CC` (1080 kernel, libultra
+PI-event callback with an inlined `osSendMesg` ring-index `%`).
