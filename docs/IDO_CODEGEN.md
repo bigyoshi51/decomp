@@ -9331,6 +9331,8 @@ When NM diff shows TARGET spills 2+ incoming args to the caller's outgoing-arg-s
 
 **Anti-pattern 2:** Don't put the casts BEFORE the call — `(void)a; gl_func_0(&D); (void)b;` won't emit `$b`'s spill before the call either; both must come after. (Verified during the gl_func_0004D224 grind: tried before-call, the spill collapsed.)
 
+**Anti-pattern 3 — SCOPE LIMIT, arg already body-used:** The recipe ONLY works when the arg has NO body-level use (it's truly "unused" except for the conditional preservation across the call). If the arg is read inside the body (e.g. `if (cond) callee(arg[0x20])`), adding `(void)arg;` after widens the arg's live range across the whole function and IDO -O2 promotes it from `$aN` to a `$s-reg`, churning $s-allocation everywhere. Verified 2026-05-17 on `gl_func_0005B68C` (95% → 73% regression — a0 was used inside the if-block as `a0[0x20]`, then trailing `(void)a0` promoted a0 to $s0 cascading the whole function). Recipe scope: forwarder shape where args are passed through OR completely unused, not partial-use shapes.
+
 **Related:** `feedback_ido_volatile_unused_local_forces_local_slot_spill.md` (single-arg local-slot spill via `volatile int saved`). `feedback_ido_unused_arg_save.md` (background on caller-shadow vs local-slot spill).
 
 
