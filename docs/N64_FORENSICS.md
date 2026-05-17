@@ -142,6 +142,22 @@ void gl_func_00006DC8(int a0) {
 
 **Origin:** 2026-04-19 game_libs gl_func_00006DC8. Inline form got 90 % (right offsets, wrong register). Named local got 100 %.
 
+**Unrecoverable variant (2026-05-17, game_libs_func_00052674):** the
+gl_ref_ recipe needs the absolute address. Some game_libs init
+functions are pure `lui rX,0; sw _,off(rX)` runs where the targets are
+USO 0-placeholders with **no reloc info in the `.s` AND none in
+`expected/.o`** (`objdump -r expected/...o` shows nothing in range).
+Diagnostic that it's unrecoverable: multiple **redundant-looking
+identical stores** (e.g. `sw zero,0(at)` 3-4× each with its own
+`lui at,0`). Clean C never emits redundant identical stores, so these
+must be *distinct* USO-runtime-patched data exports whose addresses
+exist only in the original loaded image — not in any build artifact.
+You cannot assign correct `gl_ref_` addresses by inspection. Keep
+INCLUDE_ASM, decode-comment the structure + OR-mask constants
+(forensic value), do NOT grind. Only landable if the original ROM's
+resolved symbol table is reconstructed (out of scope for CPU-progress
+work).
+
 ---
 
 ---
