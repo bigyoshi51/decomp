@@ -5286,3 +5286,34 @@ Literal asm offset is `0x1C`. Effective address against ORIGINAL arg is `0x2C`. 
 **Verified 2026-05-17 on gl_func_0003E904:** wrap had `a0->[0x1C] = a1` decoded against orig_a0 but target's `sw a1, 0x1C(a0)` runs after `addiu a0, a0, 0x10`, giving effective `orig_a0 + 0x2C`. Fixing to `a0[0x2C/4] = a1` brought built's sw bytes into agreement (87.28→87.52%; remaining cap is unrelated scheduler artifact).
 
 **Companion to** `feedback_asm_decode_claims_rot` (asm-decode CLAIMS in wrap comments can be wrong; same applies to offset transcriptions, not just opcode names).
+
+---
+
+<a id="feedback-immediate-masked-sibling-scan-finds-cross-segment-os-implementations"></a>
+## Immediate-masked sibling scan finds cross-segment libreultra reimplementations (osSetThreadPri etc.)
+
+_Standard byte-identical mirror scan misses sibling functions when the bytes differ only in immediates (jal targets, lui/lw offsets to data). Masking immediates while preserving opcode + register structure surfaces functions that are STRUCTURALLY identical but compiled into different segments with different externs._
+
+**Implementation:** Compute a structural signature per function:
+```python
+def mask_imm(insns):
+    out = []
+    for ins in insns:
+        v = int(ins, 16)
+        op = (v >> 26) & 0x3F
+        if op == 0: out.append(f"R{ins}")     # R-type: keep all (regs only)
+        elif op in (2, 3): out.append(f"J{op:02X}")  # J-type: mask 26-bit target
+        else:
+            top = (v >> 16) & 0xFFFF
+            out.append(f"I{top:04X}")          # I-type: keep top 16, mask imm
+    return ''.join(out)
+```
+
+**Verified 2026-05-17:** Found `gl_func_0006F534` (56-insn game_libs USO) as structural sibling of kernel `func_80006110` (= `osSetThreadPri`, matched in src/o1/). Same control flow, same struct accesses, just with game_libs's `gl_func_0001CA10` placeholder for OS-API calls instead of resolved `func_800066B0` etc. Game_libs has USO-side reimplementations of multiple libreultra functions; this scan reveals them.
+
+**How to use:** When the matched sibling is in kernel (`src/o1/func_XXX.c` or `src/kernel/`), the game_libs/USO version typically:
+- Replaces resolved `jal func_XXXXXX` with unresolved `jal func_00000000` (= `gl_func_0001CA10` or similar placeholder)
+- Replaces `lui $t,%hi(D_8000XXXX)` with relocatable USO data refs (need alias-extern via `undefined_syms_auto.txt`)
+- Preserves struct field offsets (the underlying types are shared)
+
+**Caveat:** Each distinct OS-global symbol needs its OWN alias (e.g., `D_6F534_run` for `__osRunningThread`, `D_6F534_runq` for `__osRunQueue`). The 2-alias setup is the typical complexity; high-arity libreultra wrappers may need more.
