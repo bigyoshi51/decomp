@@ -9,6 +9,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 ### branch likely / bnel
 
 - [Isolated-compile vs full-TU IDO -O2 codegen can DIVERGE for the same function — verify decodes against the full `make` build, never an isolated cc](#feedback-isolated-vs-full-tu-o2-divergence) — _A function body can compile to the exact target shape (12 insns, plain beq/bne, nop delays) when cc'd IN ISOLATION with the exact project flags, yet the full-TU `make` build of the same source (asm-processor phase-1 output verified identical) produces a different, worse shape (17 insns, beql/bnel, loop rotation) at the SAME -O2. IDO's optimizer is TU-context-dependent. Implication: a "proven-correct in isolation" decode can still be sub-80 in the real build — that's NOT a logic error, don't re-derive; it's permuter / TU-robust-form territory. Always measure against the build .o. Verified 2026-05-16 game_libs_func_0003D9E4._
+- [Same-base multi-deref: intervening `jal` forces natural reload (exact-able) vs no-call → IDO CSEs base (reload-CSE cap)](#feedback-intervening-call-forces-reload-vs-cse-cap) — _Triage which small fresh/split funcs to push to byte-exact: a `jal` between two same-base derefs forces the reload that matches the target (verified timproc_uso_b3_func_00001184 byte-exact land); no call → IDO CSEs, N-short reload-CSE cap (120C/11D4/EE84/DDC0 family), no C form defeats it. Exact-able case must be unconditional C, not #else INCLUDE_ASM (tautology)._
 - [Branch-likely opcode cheat sheet — decode raw `.word` correctly before drafting C control flow](#feedback-mips-branch-likely-opcode-cheatsheet) — Top 6 bits of the instruction (`(word >> 26) & 0x3F`): `0x14` = `beql`, `0x15` = `bnel`, `0x16` = `blezl`, `0x17` = `bgtzl`. In the high byte, that's `0x50–0x53` = `beql` (rs varies the low 2 bits), `0x54–0x57` = `bnel`, `0x58–0x5B` = `blezl`, `0x5C–0x5F` = `bgtzl`. So `5320000B` IS `beql $t9, $zero, +0xB` — branch on EQUAL, not `bnezl`. Misreading silently inverts the C if-condition direction; the body compiles fine but byte-matches drop dramatically.
 - [IDO emits the if-body's first store TWICE around a beql — once in delay slot (annulled on taken) + once at fall-through](#feedback-ido-beql-speculative-store-double-emit) — _For `if (cond) { dst = val; ... }` IDO -O2 emits `beql cond_reg, $0, end; sw val, dst_off(dst_reg)` in the delay slot AND ALSO `sw val, dst_off(dst_reg)` at the fall-through.
 - [Asm `blez/blezl` vs `bne/beql` distinguishes `> 0` (signed) from `!= 0` (eq) source](#feedback-ido-blez-vs-bne-signed-compare) — When target asm uses `blez $rs, X` or `blezl $rs, X` for a conditional, the C source MUST be `if (val > 0)` (signed comparison), NOT `if (val != 0)`.
@@ -9868,3 +9869,46 @@ If `($t8 != 0)`: falls through to `jr ra; li v0, 0x20` — returns with v0=0x20.
 **Identified 2026-05-17 on:** game_libs_func_0000A8D8 (8-insn bit-5 getter), where next function game_libs_func_0000A8F8 IS the empty `void f(void){}` whose `jr ra; nop` is the fallthrough's return.
 
 **Cousin patterns:** `feedback-ido-fabs-dead-mov` (unreachable insns from branch-likely artifacts) — but that's intra-function dead code, recoverable via `fabsf()`. The tail-fallthrough is inter-function and not recoverable.
+
+---
+
+<a id="feedback-intervening-call-forces-reload-vs-cse-cap"></a>
+## Same-base multi-deref: an intervening `jal` forces a natural reload (exact-able); NO call → IDO CSEs the base (reload-CSE cap)
+
+_Predictive heuristic for which small split-off / fresh functions are
+worth pushing to byte-exact vs which will plateau on the reload-not-CSE
+residual (the EE84/DDC0/120C family)._
+
+When a function dereferences the **same base** twice (e.g. `a0->0x6A8`
+read for two separate sub-objects), the target asm reloads it (`lw t6,
+N(a0)` … `lw t9, N(a0)`):
+
+- **If there is an intervening `jal`** between the two uses, IDO -O2
+  *must* reload (the call clobbers caller-saved regs / the value can't
+  live across it) — so natural C (`func(a0->X); func(a0->X);`) emits the
+  two reloads and **matches**. These are exact-able; prioritize them.
+  Verified 2026-05-17 `timproc_uso_b3_func_00001184` — byte-exact
+  unconditional-C land (0→100%, +0.02% completion), the C had a `jal`
+  between the two `a0->0x6A8` derefs.
+- **If there is NO call** between the uses (pure load/op/store, e.g.
+  `(a0->0x6A8->0x6C)->0x18 |= 4; (a0->0x6A8->0x94)->0x18 |= 4;`), IDO
+  -O2 **CSEs** the base into one `lw` while the target reloads → build
+  is N insns short, no C expression form defeats it (cast, re-deref,
+  explicit locals all CSE back). This is the documented reload-not-CSE
+  cap — verified `timproc_uso_b3_func_0000120C`/`000011D4` (2-short),
+  same family as EE84 `a0->0xB4` / DDC0. Keep INCLUDE_ASM + decode
+  comment; don't grind.
+
+**Triage rule:** before investing a tick toward exact on a small
+fresh/split function with a repeated base deref, check for an
+intervening `jal`. Has-call → go for the byte-exact unconditional-C
+land. No-call same-base-multi-deref → expect the reload-CSE cap, record
+the decode and move on.
+
+**Land mechanics reminder:** the exact-able case must be **unconditional
+C** (NOT `#ifdef NON_MATCHING / #else INCLUDE_ASM`). With the #else
+INCLUDE_ASM wrap the real build path is INCLUDE_ASM and build/.o ==
+expected/.o is the *tautology trap*, not a match (see the build-path
+guard in docs/POST_CC_RECIPES.md#feedback-insn-patch-screen-by-opmismatch-count).
+Convert to unconditional C, then byte_verify build/.o vs expected/.o
+(reloc-aware) before episode + land.
