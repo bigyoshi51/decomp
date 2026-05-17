@@ -436,6 +436,8 @@ SUFFIX_BYTES infrastructure):
    decompilation; the patched bytes are an IDO-codegen-quirk fixup the
    build pipeline applies. (Discuss in episode notes if relevant.)
 
+**Dead-arg-home stores in jal delay slots — fake-extra-arg + INSN_PATCH combo**: when a target wrap caps at 13/14 (or N/N+1) with the only diff being an extra `sw aN, offset(sp)` (caller's home slot) in a jal's delay slot that IDO -O2 won't emit because the arg isn't reused after the call, the recipe is two-step: (a) add a "spurious" extra arg pass to force IDO to materialize an aN copy in the delay slot — e.g. `func(0, a0)` becomes `func(0, a0, a0)`, which makes IDO emit `or a2, a1, zero` in the delay slot. (b) INSN_PATCH at that delay-slot offset rewrites the `or a2,a1,zero` (`00A03025`) into the target's dead home store (`sw a1, 0x4(sp)` = `AFA50004`). Same-LEN swap, no reloc needed. Verified 2026-05-17 on `func_00005068` and sibling `func_000054A0` (both INSN_PATCH=`0x24:0xAFA50004`).
+
 **FPU register caps are also INSN_PATCH-able**: the recipe works
 identically for FPU register-renumber diffs (e.g. IDO assigns
 `$f0/$f2/$f12/$f14` to named float locals in declaration order; target
