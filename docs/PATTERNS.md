@@ -75,6 +75,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Prologue-stolen boundary bug — pad sidecar is a cheaper fix than reverse-merge](#feedback-prologue-stolen-pad-sidecar-alternative) — _`feedback_splat_prologue_stolen_by_predecessor.md` prescribes reverse-merge (rename successor 8 bytes earlier, prepend the 2 stolen insns).
 - [Apply unique-extern CSE-break across N unrolled-loop iters by passing the D_BASE as a macro parameter](#feedback-unique-extern-via-macro-param-for-unrolled-loops) — _When a function has N unrolled iterations encoded as a `#define INIT_ITER(...)` macro and each iter shares CSE'd `&D_00000000` references, scale the unique-extern recipe across iters by adding a D_BASE macro parameter.
 - [For long unrolled loops, write the iter body as a C `#define` macro and invoke it N times — IDO emits N independent copies cleanly](#feedback-unrolled-loop-via-c-macro-for-decomp) — _When a target function contains a long unrolled loop (no asm-level loop construct — the same per-iter template repeated N times with varying parameters), the cheap way to write matching C is `#define INIT_ITER(...) do…
+- [N-unroll byte-exact requires LAST call arg-count drop when target skips final arg setup](#feedback-unroll-last-call-arg-drop) — _When N-times-unrolled K&R calls all use same args (a0=s0, a1=s1), and target shows N×(move a0; jal; move a1 DS) pattern + 1 final (jal; move a0 DS) — the last call drops its a1 setup. Match by writing `gl_func_X(s0,s1); ... gl_func_X(s0,s1); gl_func_X(s0);` — final 1-arg form lets IDO skip the a1=s1 emit. Verified 2026-05-18 on gl_func_000444B4 (96.56% → byte-exact, 5-unroll dispatcher)._
 
 ### delay slot / scheduler
 
@@ -8741,3 +8742,50 @@ Seen 2026-05-17 in: `timproc_uso_b1_func_00002A8C` (OFF 0x1C/0x18,
 ×3), `game_uso_func_0000B274` (0x1C/0x18), `titproc_uso_func_000026FC`
 (0x64/0x60) — three different segments, confirming it is engine-wide
 (libgdl object model), not a per-file accident.
+
+<a id="feedback-unroll-last-call-arg-drop"></a>
+## N-unroll byte-exact requires LAST call arg-count drop when target skips final arg setup
+
+When an N-times-unrolled K&R call sequence in target asm shows the pattern:
+
+```
+move a1, s1     ; set a1 once before loop
+sw t7, 0(a0)
+jal             ; call #1
+move a0, s0     ; DS: set a0
+move a0, s0     ; set a0 for call #2
+jal             ; call #2
+move a1, s1     ; DS: set a1
+... (repeats for #3, #4)
+move a1, s1     ; DS of call #4
+jal             ; call #5 — note no move-a1 between call #4 DS and call #5
+move a0, s0     ; DS: set a0
+```
+
+Each of calls #1..#4 needs `(move a0; jal; move a1 DS)` = 3 insns of setup. Call #5 only sets `a0` via DS — 1 insn of setup. Total insert count = 4×3 + 1 = 13 (matching 9 moves + 4 jal-jal gap insns).
+
+The asymmetric pattern is IDO's way of avoiding redundant arg setup when the final call only uses a subset of args. Match by writing the last call with FEWER args:
+
+```c
+extern int gl_func_00000000();  /* K&R */
+void gl_func_X(int *a0, int a1) {
+    int *s0 = ...;
+    int *s1 = &a0[1];
+    /* ... */
+    gl_func_00000000(s0, s1);
+    gl_func_00000000(s0, s1);
+    gl_func_00000000(s0, s1);
+    gl_func_00000000(s0, s1);
+    gl_func_00000000(s0);  /* 1-arg final — drops the a1=s1 emit */
+}
+```
+
+ANSI-prototype'd `gl_func_X(int*, int*)` would reject the 1-arg call — must keep extern as K&R `gl_func_00000000()`.
+
+Diagnosis: if a uniform-arg unroll matches at 96-99% with an extra `move a1, s1` near the end of the function (vs target's missing one), try dropping the final call's varying arg. Verify by counting `02202825` (move a1, s1) instances in target vs your emit — equal counts mean uniform unroll; off-by-one means asymmetric final call.
+
+Verified 2026-05-18 on `gl_func_000444B4` (1080-agent-i): 96.56% → 100% via this exact swap.
+
+**See also:**
+- `feedback_knr_def_for_inconsistent_arg_callers.md` (K&R required for mixed-arity)
+- `feedback_unrolled_loop_via_c_macro_for_decomp.md` (macro form for longer unrolls)
