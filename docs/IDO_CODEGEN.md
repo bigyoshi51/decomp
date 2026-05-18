@@ -135,6 +135,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 picks bgez vs srl+beqz for sign-test based on C form — `(unsigned)x>>31` forces 2-insn srl+beqz](#feedback-ido-sign-test-form-choice) — For `if (x < 0) {...}`, IDO -O2 emits the 1-insn `bgez x, .Lend` form (branch if non-negative, skipping the body).
 - [Test arbitrary bit-N (N != 31) by `((unsigned)x << (31-N)) >> 31` — emits `sll + bgezl/bltzl`](#feedback-ido-bit-N-test-via-sll-bgezl) — _When target uses `sll t, x, K; bltzl/bgezl t, ...` to test bit N (where K = 31-N), the natural `andi+bnez` form won't match. Write `((unsigned)x << K) >> 31` to force the SLL+sign-branch form. Verified 2026-05-14 on h2hproc_uso_func_000015F0 bit-16 test (94.31% first try)._
 - [`bgez v0; sra t, v0, 1; addiu at, v0, 1; sra t, at, 1` is IDO's signed `/2` lowering](#feedback-ido-signed-divide-2-idiom) — Signed-integer division by 2 in IDO doesn't become a single `sra`.
+- [`bgez x, +4 (DELAY: andi t, x, M-1); beq t, $0, +2; nop; addiu t, t, -M` is IDO's signed `x % POW2` lowering](#feedback-ido-signed-modulo-pow2-idiom) — _Signed remainder by a power-of-2 mask M (e.g. M=8 → mask=7) emits a fast-path / slow-path sequence: delay-slot ALWAYS computes `t = x & (M-1)`; if x>=0 jump straight to use (low bits ARE the remainder, 0..M-1); if x<0 AND those low bits are nonzero, subtract M to get a negative remainder (-(M-1)..-1). Write as `x % M` (signed int) in C. Spotted 2026-05-18 on gl_func_00009EBC's `(a2 % 8) << 3` grid-index computation._
 
 ### inline / register keyword
 
