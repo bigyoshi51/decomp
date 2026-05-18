@@ -74,6 +74,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces andi-pre-jal pattern](#feedback-ido-o1-andi-pre-jal-via-register-u32-mask) — _When target has `andi tN,X,MASK; jal; or argReg,tN,zero` (3-insn mask-pre-jal vs natural delay-slot fold), use `register u32 v = expr & MASK; func(..., v);` block-local. The `& MASK` on the initializer (not the use) commits IDO to emitting the and pre-jal._
 - [Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot](#lift-unconditional-loop-counter-init-out-of-the-if-body-to-claim-the-branchs-delay-slot--leaves-the-result-init-before-the-branch) — _When target has `or v1, a0, 0` (result=sum) BEFORE `beq len, 0` and `or v0, 0, 0` (i=0) IN the delay slot, but built emits `result=sum` in delay slot, lift `unsigned int i = 0;` OUT of the if-body. Both inits become unconditional and IDO picks i=0 for the slot. Generalizes the cap-class previously labeled "no C-level lever"._
 - [When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C](#feedback-ido-target-larger-preemptive-set-nop-delay) — _Diagnostic for the inverse-of-bloat cap: when built `.o` is SHORTER than target by exactly 1 insn (a preemptive `or v0, v1, 0` BEFORE a sltu/bnez that the natural emit folds INTO the branch's delay slot), suspect this scheduling cap. IDO never picks the longer "preemptive + nop" form. Tested early-exit, goto-out, and early-set-clear variants all produce the same shorter natural emit. NM-wrap. Verified 2026-05-08 on kernel/func_800000B0 (91.15% fuzzy)._
+- [Leaf load-hoist-above-aliasing-store: don't cache the first deref in a named local](#feedback-ido-leaf-load-hoist-no-named-temp) — _When a no-frame leaf's target hoists `lw t6, off(aN)` ABOVE a preceding `sw aM, 0(a0)` (aliasing store) AND uses transient `$t6/$t7` for two un-CSE'd derefs of the same `aN[k]`, write the load-bearing statement FIRST in source with NO named temp. A named `int t = aN[k];` both mis-allocates the value ($v0 instead of $t6) and CSEs the second deref to one load. Verified byte-exact 2026-05-18 on `game_libs_func_000664D4` (7-insn doubly-linked-list splice)._
 - [Reference `*a2` twice in the C source when target loads it twice across a jal — IDO scheduler picks the second load to fill the jal delay slot](#feedback-ido-double-deref-fills-jal-delay-slot) — _When target asm loads a pointer dereference (`lw t6, 0(a2)`) early, then loads it AGAIN (`lw t8, 0(a2)`) right before a jal whose delay slot is `sw t8, OFFSET(sp)` (store of the second-loaded value), the C body must reference `*a2` twice. Write two assignments (e.g. `b60_1 = *a2; ...; b70 = *a2;`) rather than caching the value in one local — IDO's scheduler picks the second source-level read to fill the delay slot. Caching `int t = *a2;` and writing `b60_1 = t; b70 = t;` produces a single-load form with an unfilled delay slot. Verified pattern 2026-05-15 on `gl_func_0003F2B8` — duplicate-deref produces the expected scheduler emit, though that function caps at 83.4% NM due to the separate unused-arg-spill family (sw a0, 0xB8(sp) + sw a2, 0x68(sp))._
 
 ### $s register allocation
@@ -9963,3 +9964,66 @@ only `break 7` appears because the divisor equals the shifted dividend
 
 Verified 2026-05-17 on `func_800044CC` (1080 kernel, libultra
 PI-event callback with an inlined `osSendMesg` ring-index `%`).
+
+## Leaf load-hoist above an aliasing store — don't cache the first deref in a named local
+<a name="feedback-ido-leaf-load-hoist-no-named-temp"></a>
+
+**Symptom.** A tiny no-frame leaf's target asm hoists a load above a
+preceding store that *could* alias it, and uses two transient temp
+registers for two reads of the same `aN[k]`:
+
+```
+lw   $t6, 4($a1)      ; load a1[1]   -- HOISTED above the next store
+sw   $a1, 0($a0)      ; a0[0] = a1
+sw   $t6, 4($a0)      ; a0[1] = t6
+lw   $t7, 4($a1)      ; load a1[1] AGAIN (different reg, no CSE)
+sw   $a0, 0($t7)      ; (a1[1])[0] = a0
+sw   $a0, 4($a1)      ; a1[1] = a0   (jr delay slot)
+```
+
+**Two traps:**
+
+1. **Program-order C keeps the store first.** `a0[0]=(int)a1;
+   a0[1]=a1[1];` emits `sw a1,0(a0); lw t6,4(a1); sw t6,4(a0)` — IDO
+   will *not* reorder a load above an aliasing store it can't prove
+   disjoint (both `int*`). 6/7 words, only the first two swapped.
+2. **A named temp fixes the order but breaks regalloc + CSE.**
+   `int t=a1[1]; a0[0]=a1; a0[1]=t; ((int*)a1[1])[0]=a0;` puts the
+   load first, but the named local lands in `$v0` (not `$t6`), and the
+   later `a1[1]` deref is CSE'd back to `t` → only **one** load instead
+   of the target's two.
+
+**Fix.** Write the load-bearing statement FIRST, no named temp, and
+leave the later access as a fresh bare deref so it does not CSE:
+
+```c
+void f(int *a0, int *a1) {
+    a0[1] = a1[1];                 /* lw t6,4(a1); (stores reorder) */
+    a0[0] = (int)a1;
+    ((int *)a1[1])[0] = (int)a0;   /* fresh deref -> 2nd lw into t7 */
+    a1[1] = (int)a0;
+}
+```
+
+IDO -O2 then: schedules `lw t6,4(a1)` first (the RHS of stmt 1),
+**swaps the two independent `a0` stores** into target order
+(`sw a1,0(a0)` before `sw t6,4(a0)`), reloads `a1[1]` into `$t7`
+(no CSE across the intervening `a0` stores — conservative aliasing),
+and drops the final `a1[1]=a0` into the `jr` delay slot. Byte-exact.
+
+**Why it works.** The hoist the scheduler *won't* do across a store
+(trap 1) it *will* do when the load is the first statement's own RHS
+(nothing to hoist past). The two same-base stores `0(a0)`/`4(a0)` are
+provably disjoint so the scheduler is free to put them in either
+order — it picks the target's. Transient subexpressions get the
+caller-save `$t` temps IDO uses for scratch; a named local enters the
+priority allocator and grabs `$v0`.
+
+**Generalizes:** any small leaf where the target double-loads `aN[k]`
+into distinct `$t` regs around stores to a *different* aliasing-class
+base — express both reads as bare derefs in the order that puts the
+first load ahead of the first conflicting store; never introduce a
+local to "hold" it. Sibling of
+`#feedback-ido-double-deref-fills-jal-delay-slot` (same no-CSE
+double-deref principle, jal-delay-slot variant). Verified 2026-05-18
+on `game_libs_func_000664D4` (1080 game_libs, byte-exact 7/7).
