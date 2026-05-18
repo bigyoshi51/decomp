@@ -575,6 +575,18 @@ preceding code symbols, not one. The fix must enumerate ALL
 `func_<any> + N` lwc1/ldc1 refs in bootup_uso and symbolize each — a
 broad splat-config/late_rodata pass, reinforcing the deferred rating.
 
+**Not all folds are read-only FP literals (added 2026-05-17):** some
+folded sites are *writable globals*. func_00006808 does a read-modify-
+write `*(int*)(func_00000000 + 0x4) |= 0x20000` (and a paired exit
+mask), and func_00006808 also reads `func_00000188 + 0x3C` as an int
+table; func_0000057C is hit at both `+0x34` (func_000063B4) and `+0x38`.
+So the fix is not uniformly ".rodata const" — the symbolization pass
+must classify each folded site as (a) `.rodata` f32/f64 literal,
+(b) mutable `.data`/`.bss` global (needs real storage + a writable
+symbol), or (c) a folded table — getting the section/qualifier wrong
+will compile but mismatch or corrupt state. Enumerate AND type each
+site before re-extracting.
+
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
 won't be clean — verify per-function via linked ELF/objdiff). DEFERRED to a
