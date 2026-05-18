@@ -599,6 +599,20 @@ resolve as `D_base[i]`. Confirm the run's extent by listing every
 `func_000008?? + N` ref and checking the addresses are contiguous at
 8-byte stride before re-extracting.
 
+**splat already symbolizes the pool START — the fix is to suppress the
+spurious code symbol, not invent the data symbol (added 2026-05-17):**
+func_0000D900 uses BOTH `D_00000988` (a CORRECTLY-emitted f64 rodata
+symbol at 0x988) AND `func_0000098C + 0x4` in the same function. So the
+pool genuinely starts at 0x988, splat got `D_00000988` right (8 bytes
+→ 0x988–0x98F), then emitted a bogus *code* symbol `func_0000098C` at
+0x98C that swallows 0x990+ as instructions. The corrective action is
+therefore narrower than "add a D_ array from scratch": delete/disable
+the spurious `func_0000098C` (and the func_000008B4/D4/F4 etc. bogus
+code symbols) in the splat config so the existing rodata region
+(anchored by the real `D_0000098?` symbols) extends over the run.
+Check the splat yaml/symbol_addrs for an erroneous `func_` entry at
+each fold base before hand-authoring data symbols.
+
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
 won't be clean — verify per-function via linked ELF/objdiff). DEFERRED to a
