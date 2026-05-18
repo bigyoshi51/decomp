@@ -613,6 +613,16 @@ code symbols) in the splat config so the existing rodata region
 Check the splat yaml/symbol_addrs for an erroneous `func_` entry at
 each fold base before hand-authoring data symbols.
 
+**The fold class is NOT bootup_uso-only (added 2026-05-17):** the same
+"f64 const folded behind a spurious code symbol" pattern occurs in
+game_uso too — e.g. `game_uso_func_0000E1FC` reads `D_00000E68 + 0x208`
+as an `ldc1` f64 threshold (D_00000E68 is a USO static-table symbol,
++0x208 lands past it in the literal pool). So the deferred
+symbolization pass is per-USO: every relocatable USO segment
+(bootup_uso, game_uso, timproc_uso_b5, …) needs its own
+enumerate-folded-sites + suppress-spurious-`func_`-symbols + re-extract
+pass. Budget the focused session accordingly (it's N segments, not 1).
+
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
 won't be clean — verify per-function via linked ELF/objdiff). DEFERRED to a
