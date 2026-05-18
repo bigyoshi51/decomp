@@ -177,6 +177,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 ### other
 
 - [Asm epilogue with no `move v0, ...` before `jr ra` indicates void return — match the C signature](#feedback-ido-epilogue-no-move-v0-implies-void-return) — _When the target's epilogue is `lw ra, X(sp); addiu sp, sp, +N; jr ra; nop` with NO `move v0, ...` (or `or v0, ..., zero`) immediately before `jr ra`, the function returns `void`. C bodies declared as `T *fn(...)` with `return X;` will emit a spurious `move v0, X` that doesn't appear in target. Fix: declare as `void fn(...)`, drop the `return X;`. Verified 2026-05-07 on `game_uso_func_00001DDC`: 19.64% → 19.90% just from the signature change._
+- [`(char*)&D_00000000 + 0xK` constant-folds field offsets into per-access absolute `lui;lw` — use a distinct relocated symbol for a held base register](#feedback-ido-generic-reloc-base-folds-vs-distinct-symbol) — _When the target keeps a single reloc base in a reg/stack and uses base+offset for many fields of one object, the generic `(char*)&D_00000000 + 0xK` makes IDO -O2 fold each `obj+fieldoff` into a separate ABSOLUTE `lui;lw` (no held base; shorter, wrong frame). A distinct `extern T D_000K;` + `&D_000K` keeps the symbol address in one reg (its own HI/LO reloc; offsets stay immediates). The distinct symbol must be in the segment symbol table (undefined_syms_auto.txt / splat) or it's a link error. Seen 2026-05-18 on `gl_func_0006A304` (USO pointer-fixup driver, NM-wrapped pending symbol plumbing)._
 - [IDO `addu` operand order depends on whether expression is split into a named local](#feedback-ido-addu-operand-order) — For `v1 = A + B` in C, IDO picks `addu $rd, $rs, $rt` with `$rs = first-computed operand` and `$rt = second-computed operand`.
 - [IDO doesn't share `lui $at` across stores to adjacent externs — struct retype DOESN'T fix it at -O1](#feedback-ido-adjacent-extern-shared-at) — _IDO -O1 (and possibly -O2) emits a fresh `lui $at` before EACH store to an external symbol, even when the symbols are adjacent bytes AND are declared as fields of a single struct.
 - [Two adjacent-offset global stores — split into per-store extern symbols to force `lui $at` per store](#feedback-ido-adjacent-store-extern-split) — _When target emits `lui $at, HI; sw X, 0($at); lui $at, HI; sw Y, 4($at)` (two independent `lui $at` per store, no cached base pointer), writing the obvious C `*(int*)&SYM = X; *((int*)&SYM + 1) = Y;` makes IDO cache…
@@ -10027,3 +10028,56 @@ local to "hold" it. Sibling of
 `#feedback-ido-double-deref-fills-jal-delay-slot` (same no-CSE
 double-deref principle, jal-delay-slot variant). Verified 2026-05-18
 on `game_libs_func_000664D4` (1080 game_libs, byte-exact 7/7).
+
+## Generic `&D_00000000 + 0xK` folds field offsets to absolute loads — use a distinct relocated symbol when the target holds a base register
+<a name="feedback-ido-generic-reloc-base-folds-vs-distinct-symbol"></a>
+
+**Symptom.** Target accesses many fields of one fixed (reloc'd)
+object through a single held base — the base is computed once
+(`lui;addiu`), spilled (`sw base, 0xNN(sp)`), and reloaded
+`lw tA, 0xNN(sp); lw tB, OFF(tA)` (base+offset) before every field:
+
+```
+lui  t6, 4
+addiu t6, t6, 0x1710        ; base = seg + 0x41710
+sw   t6, 0x1C(sp)           ; spill the base
+...
+lw   t7, 0x1C(sp)           ; reload base
+lw   t8, 0x10(t7)           ; base->0x10   (base+offset)
+...
+lw   t9, 0x1C(sp); lw ..,0x18(t9)  ; base->0x18
+```
+
+**Trap.** Writing the object as `char *obj = (char*)&D_00000000 +
+0x41710;` and then `*(int*)(obj + 0x10)`, `*(int*)(obj + 0x18)`, …
+makes IDO -O2 treat each `&D_00000000 + 0x41710 + fieldoff` as one
+manifest constant and emit a **separate absolute `lui;lw`** per field
+(`lui a0,4; lw a0,0x1720(a0)` for +0x10, etc.). No base register is
+ever held; the function is several insns shorter and the frame is
+smaller (no spill slot). This is the *generic-base* symbol
+(`D_00000000` = segment base 0) being foldable at every use.
+
+**Fix.** Give the object its own **distinct relocated symbol** so the
+address needs a real HI/LO reloc pair and IDO must materialize it once
+into a register (then field offsets stay immediates → base+offset,
+matching the target's held-base shape):
+
+```c
+extern int D_00041710;            /* distinct seg-offset symbol */
+int *obj = &D_00041710;
+... obj[4] ...  obj[6] ...        /* base+offset, one held base */
+```
+
+**Prerequisite.** `D_00041710` must exist in the segment symbol
+table — add it to `undefined_syms_auto.txt` (or the splat config) at
+the correct VRAM/offset first, or the reference is an unresolved-
+symbol link error (`ERR=1`). Until that plumbing exists, NM-wrap with
+the real C body (the logic is correct; only the addressing mode is
+off) and defer the symbol work.
+
+**Rule of thumb.** Generic `&D_00000000 + 0xK` is fine when the target
+itself uses absolute `lui;lw` per access (the common case). The moment
+the target holds ONE base across many field accesses (spilled or in an
+$s reg), switch to a distinct symbol — the generic form structurally
+cannot produce a held base. Seen 2026-05-18 on `gl_func_0006A304`
+(1080 game_libs USO pointer-relocation fixup driver).
