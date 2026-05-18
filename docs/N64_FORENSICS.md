@@ -566,6 +566,15 @@ declares the bootup_uso literal pool (`.rodata`/`.late_rodata`) and emits
 `D_0000098C..D_000009A8` (or breaks func_0000098C's tail), then re-extract.
 After that the three callers get proper f32/f64 consts and can byte-match.
 
+**NOT a single-symbol fold (added 2026-05-17):** the same bug recurs at
+`func_00000044 + 0xC` (an f32 literal folded into func_00000044, the
+f32-reader @ vram 0x44; referenced by func_000003F8 lwc1 @ 0x518/0x534).
+So the literal pool is scattered and folded into *multiple* nearest-
+preceding code symbols, not one. The fix must enumerate ALL
+`grep -rho '+ 0x[0-9A-Fa-f]\+' | sort -u` literal sites across
+`func_<any> + N` lwc1/ldc1 refs in bootup_uso and symbolize each — a
+broad splat-config/late_rodata pass, reinforcing the deferred rating.
+
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
 won't be clean — verify per-function via linked ELF/objdiff). DEFERRED to a
