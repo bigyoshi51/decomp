@@ -587,6 +587,18 @@ symbol), or (c) a folded table — getting the section/qualifier wrong
 will compile but mismatch or corrupt state. Enumerate AND type each
 site before re-extracting.
 
+**The f64 pool is a CONTIGUOUS strided table, not scattered singletons
+(added 2026-05-17):** func_0000B75C reads `func_000008B4`,
+`func_000008D4`, `func_000008F4` — three 0x20-apart symbols — each at
+`+0x4 / +0xC / +0x14 / +0x1C` (4 f64 per symbol). That's one packed
+`double[]` rodata array that splat chopped into successive 0x20-byte
+"function" symbols. So the right fix for the read-only-literal subset
+is a SINGLE `D_<base>` double array spanning the run (size = last
+folded offset − base), not N per-offset symbols; then the lui/%lo refs
+resolve as `D_base[i]`. Confirm the run's extent by listing every
+`func_000008?? + N` ref and checking the addresses are contiguous at
+8-byte stride before re-extracting.
+
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
 won't be clean — verify per-function via linked ELF/objdiff). DEFERRED to a
