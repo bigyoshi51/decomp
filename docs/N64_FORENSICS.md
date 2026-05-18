@@ -2,9 +2,11 @@
 
 > N64-specific knowledge: RSP ucode, splat config, ROM layout, game-specific.
 
-_9 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_10 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Index
+
+- [bootup_uso FP literal pool is splat-folded into func_0000098C — 3 mis-attributed f32/f64 consts block func_0000E270/D900/E2D0](#bootup-uso-fp-literal-pool-folded-into-func-0000098C) — _splat disassembled the bootup_uso FP constant region (vram 0x990-0x9A8) AS code because the USO segment has no literal-pool symbol; `func_0000098C + {0x4,0xC,0x14}` are really f64/f32/f64 constants. Fix = splat-config literal-pool break-out + re-extract (deferred, multi-file)._
 
 - [1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches](#feedback-1080-rsp-ucode-not-f3dex2) — Spiked 2026-05-04.
 - [game_libs absolute-address data refs use `extern T *gl_ref_XXXXXXXX` + undefined_syms](#feedback-game-libs-gl-ref-data) — _For `lui $rN, %hi(SYM); lw $rN, %lo(SYM)($rN)` pairs in game_libs (USO) that load a pointer from a fixed absolute address, declare `extern T *gl_ref_ADDR;` in game_libs.c and add `gl_ref_ADDR = 0xADDR;` to…
@@ -531,3 +533,45 @@ byte match first attempt). Treat as a **multi-run sub-80 target** —
 on the first pass, decode-comment every packet's `(w0,w1)` bit-pack
 formula (high forensic value: it documents the exact GBI sequence and
 the GfxCtx struct) and keep INCLUDE_ASM. Do not log an episode.
+
+---
+
+<a id="bootup-uso-fp-literal-pool-folded-into-func-0000098C"></a>
+## bootup_uso FP literal pool is splat-folded into func_0000098C
+
+_The bootup_uso USO segment has no rodata/literal-pool symbol, so splat
+disassembled the FP constant region (vram 0x990–0x9A8) AS code, folding
+it into the nearest preceding code symbol `func_0000098C` (real code,
+0x4C @ 0x98C). Any `lui %hi(func_0000098C + N); l{w,d}c1 %lo(func_0000098C + N)`
+reference is actually an FP constant load, not a read into a function body._
+
+**The 3 mis-attributed constants** (enumerate with
+`grep -rho 'func_0000098C + 0x[0-9A-Fa-f]\+' asm/nonmatchings/bootup_uso/`):
+
+| Symbol expr            | Load  | Type | vram   | Used by                       |
+|------------------------|-------|------|--------|-------------------------------|
+| `func_0000098C + 0x4`  | ldc1  | f64  | 0x990  | func_0000D900, func_0000E2D0  |
+| `func_0000098C + 0xC`  | lwc1  | f32  | 0x998  | func_0000E270                 |
+| `func_0000098C + 0x14` | ldc1  | f64  | 0x9A0  | func_0000D900                 |
+
+**Confirmation it's data, not code:** func_0000D900 builds the double 0.5
+inline right next to one of these loads (`lui $at, 0x3FE00000` →
+0x3FE0000000000000 = 0.5), i.e. it's mixing immediate-built doubles with
+pool-loaded doubles — an FP-math fingerprint, not control flow.
+
+**Why a typed-extern does NOT fix it:** the bytes at 0x990–0x9A8 are
+disassembled as instructions inside `func_0000098C`'s `nonmatching` block,
+so there is no symbol to retype. The real fix is a splat-config pass that
+declares the bootup_uso literal pool (`.rodata`/`.late_rodata`) and emits
+`D_0000098C..D_000009A8` (or breaks func_0000098C's tail), then re-extract.
+After that the three callers get proper f32/f64 consts and can byte-match.
+
+**Status:** multi-file re-extraction = high blast radius (and 1080 has the
+known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
+won't be clean — verify per-function via linked ELF/objdiff). DEFERRED to a
+focused non-/loop session; do not attempt under a 60s tick. Concrete
+recipe captured here so the future session starts from the answer, not the
+question.
+
+**Origin:** 2026-05-17, 1080 bootup_uso, while triaging the func_0000E270
+NM wrap (size-1 vein exhausted; this was the highest-value real %-mover lead).
