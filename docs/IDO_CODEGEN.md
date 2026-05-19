@@ -80,6 +80,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### $s register allocation
 
+- [Append+overflow: hold `n = count+1` in a named temp; do NOT reload the just-stored counter for the bound test](#feedback-ido-append-overflow-count-temp) — _The recurring record-append shape `n=self->K+1; self->K=n; if(!((u)n<cap)) cb_assert(); return self->K-1;` byte-matches only when the incremented value lives in ONE temp reused by the `sltu` AND the `sw`. Writing `self->K=self->K+1; if(!((u)self->K<cap))…` reloads `self->K` for the test, which IDO allocates to `$v1`/`$t7` instead of the target's `$v0` (count+1 from the bump) → ~7 regalloc diffs at the tail. Same-count, pure-C lever (no post-cc). The 4 field stores still use uncached `*(short*)(self[K2/4]+self[K/4]*8+OFF)` derefs (idx reloaded per store). Verified 2026-05-19 byte-exact on `gl_func_000503A4`; applies to the game_libs record-append family (gl_func_00044CE8 etc.)._
 - [At IDO -O0, count target's `sw sN, ...` saves to set the EXACT number of `register T x;` declarations](#feedback-ido-o0-register-count-matches-target-s-saves-exactly) — _At -O0, IDO promotes register-typed locals to s0/s1/s2/... in declaration order.
 - [IDO -O2 global s-register allocator is NOT driven by local declaration order](#feedback-ido-sreg-order-not-decl-driven) — _`feedback_ido_local_ordering.md` covers STACK OFFSETS (first-declared → highest sp offset).
 - [Drop the `int *s2 = a0;` alias when `a0` is deeply used across calls — alias forces IDO to allocate TWO distinct $s regs](#feedback-ido-arg-alias-doubles-s-reg-when-used-across-calls) — _When `a0` is referenced both as the loop-base AND passed unchanged as an arg to inner calls, an explicit `int *s2 = a0;` alias makes IDO allocate $s2 for the alias AND $s3 for the original `a0` ($s3 = a0 spill, retained for the post-call passthrough). Drop the alias and use `a0` directly throughout — IDO collapses to a single $s register, saving 3 spill insns. Counters the older "alias is DCE'd at -O2" claim from `feedback-ido-3save-vs-2save-arg-preserve` (different live-range shape). Verified 2026-05-08 on `gl_func_00068524` (88.72% → 100% with this + entry-test type fix)._
@@ -10182,3 +10183,55 @@ frame-size diffs (frame 0x20 vs 0x18); switching to in-place `a0`
 reuse → **byte-exact 32/32, pure C, no post-cc recipe**. Decoded
 from a bare "Multi-pass decode pending" stub in one focused
 multi-pass session (36→34→32/7→32/6→MATCH).
+
+## Append+overflow: hold `n = count+1` in a named temp; don't reload the just-stored counter for the bound test
+<a name="feedback-ido-append-overflow-count-temp"></a>
+
+**Shape.** Recurring game_libs record-append tail:
+
+```
+n = self->[K] + 1;
+self->[K] = n;
+if (!((unsigned)n < (unsigned)cap)) cb_assert(&D + STR);
+return self->[K] - 1;
+```
+
+Target asm: `lw v0,K(a0); addiu v0,v0,1; sltu at,v0,a1;
+... sw v0,K(a0); ...; lw v0,K(s0); ... addiu v0,v0,-1` — the
+**count+1** value stays in `$v0` and feeds BOTH the `sltu` (bound
+test) and the `sw` (store back); the return path reloads `self->[K]`
+into `$v0` again and subtracts 1.
+
+**Trap.** Writing it without the temp —
+`self->[K] = self->[K] + 1; if (!((unsigned)self->[K] < cap)) …;` —
+makes IDO emit a *fresh load* of `self->[K]` for the test. Because
+the field-store reloads earlier in the function already consume the
+low scratch regs, that reloaded value lands in `$v1`/`$t7`, not the
+target's `$v0`. Result: same instruction count, ~7 register-only
+diffs clustered at the tail (`8C8F0044` vs `8C820044`, `25E3…` vs
+`2442…`, `0065082B` vs `0045082B`, …).
+
+**Fix.** Introduce the explicit temp and reuse it:
+
+```c
+int n = self[K/4] + 1;
+self[K/4] = n;
+if (!((unsigned int)n < (unsigned int)cap)) gl_func_00000000(&D + STR);
+return self[K/4] - 1;     /* genuine reload → v0, -1, jr-delay */
+```
+
+`n` pins count+1 to `$v0` for the sltu+sw; the `return` line's
+`self[K/4]` is a real second load (target reloads too — `lw v0`
+in the epilogue, `addiu v0,v0,-1` in the `jr ra` delay slot).
+Pure-C, no post-cc recipe.
+
+**Companion idiom.** The 4 (or N) field stores preceding this tail
+reload `self->[K]` and `self->[base]` *per store* (no cached
+slot/idx) — keep them as uncached
+`*(short*)(self[base/4] + self[K/4]*8 + OFF) = val;` so IDO
+re-emits the `lw;lw;sll;addu` per field (matches the target's
+un-CSE'd per-store address recompute).
+
+Verified 2026-05-19 byte-exact on `gl_func_000503A4` (game_libs
+4×u16 record-append, 40/40, 6-arg with 2 stack args). Same family:
+`gl_func_00044CE8` and other append+assert functions.
