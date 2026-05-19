@@ -44,6 +44,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
+- [Reuse the PARAMETER as the object (not a fresh local) → IDO arg-saves to the caller slot (small frame) instead of an in-frame spill slot (+8 frame)](#feedback-ido-reuse-param-as-object-caller-slot-spill) — _In an alloc-or-given constructor `obj = a0 ? a0 : alloc(N)` whose object must survive ≥1 jal, a fresh `int obj;` local spills to an IN-FRAME slot (frame grows +8, all spill offsets shift). Assigning back into the PARAMETER instead (`if (a0==0){ a0=alloc(N); … } … use a0 … return a0;`) makes IDO spill via the ARG-SAVE-to-caller-slot convention (`sw a0, framesize(sp)`), keeping the minimal frame and matching the target's spill offsets. Erased the final 6 frame-size diffs on gl_func_00041524 (→ byte-exact 32/32, pure C). Try this whenever the only residual is `addiu sp,-N` / spill-offset off by a constant and the object is param-derived._
 - [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO spill a0 early and reload via a fresh temp ($t6).
 - [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes a0 as a parameter and passes it through unchanged
 - [IDO picks $a1 (not $a3) to save an arg across a jal — can't reliably flip from C](#feedback-ido-arg-save-reg-pick) — _When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; sw a1, N(sp); ...jal...; lw a1, N(sp)`.
@@ -10127,3 +10128,57 @@ fast way to distinguish "loop unroll" from "regalloc/scheduling"
 (the latter has the right insn count, wrong registers/order).
 Verified 2026-05-18 on `game_libs_func_00054144` (game_libs
 triangle-centroid; 3-trip ×2-unroll → 76 vs target 51).
+
+## Reuse the parameter as the object (not a fresh local) — IDO arg-saves to the caller slot, keeping the minimal frame
+<a name="feedback-ido-reuse-param-as-object-caller-slot-spill"></a>
+
+**Context.** "alloc-or-given" constructor shape: an object that is
+either the caller-supplied pointer or a freshly `alloc()`'d one, then
+passed through ≥1 `jal` (init/register) and returned.
+
+**Symptom.** C is byte-exact in structure (same insn count, right
+ops/branches) but every spill offset is shifted and the prologue/
+epilogue differ by a constant: e.g. `addiu sp,sp,-0x20` vs target
+`-0x18`, `sw a2,0x1C(sp)` vs `sw a2,0x18(sp)`, `addiu sp,sp,0x20` vs
+`+0x18`. A coherent +8-byte frame delta, N spill words off by the
+same constant.
+
+**Cause.** Writing the object as a FRESH local —
+`int obj; obj=a0; if(a0==0) obj=alloc(N); …` — makes IDO allocate an
+IN-FRAME stack slot for `obj` (it's a distinct pseudo that lives
+across the jal). That grows the frame by 8 (slot + alignment) and
+pushes every other spill down.
+
+**Fix.** Assign back into the PARAMETER and use it as the object:
+
+```c
+int f(int a0) {
+    if (a0 == 0) { a0 = alloc(N); if (a0 == 0) goto end; }
+    cb(a0, …);            /* a0 survives the jal */
+    … use a0 …
+end:
+    return a0;
+}
+```
+
+IDO then spills the live arg via its **arg-save-to-caller-slot**
+convention — `sw a0, <framesize>(sp)` into the caller's argument
+slot ABOVE the frame — instead of carving an in-frame local. The
+frame stays minimal and the spill offsets match the target.
+
+**When to reach for it.** The only residual diffs are the
+prologue/epilogue `addiu sp` pair plus a handful of spill `sw/lw`
+words all off by the same constant, AND the spilled value is
+derived from a parameter. This is the C-level lever for that exact
+cap (no INSN_PATCH needed). Combine with the ternary-alloc
+goto-end single-epilogue idiom
+(`#feedback-ido-alloc-or-passthrough-ternary`) and inlining call
+results (no named `int r` for `r=cb(); if(r)…` → fold into the
+target var) to remove other in-frame locals.
+
+Verified 2026-05-18 on `game_libs_post.c gl_func_00041524`
+(alloc-or-given constructor): a fresh `int obj` capped at 6
+frame-size diffs (frame 0x20 vs 0x18); switching to in-place `a0`
+reuse → **byte-exact 32/32, pure C, no post-cc recipe**. Decoded
+from a bare "Multi-pass decode pending" stub in one focused
+multi-pass session (36→34→32/7→32/6→MATCH).
