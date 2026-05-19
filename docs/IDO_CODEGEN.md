@@ -110,6 +110,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 - [IDO -O2 if-guarded do-while defers register-only assignment past jal](#feedback-ido-if-guarded-do-while-defers-reg-move) — When a `p = a0;`-style register-only move is hoisted by IDO ahead of an unrelated jal (no data dep), wrapping the loop as `if (count > 0) { p = a0; do { ... } while (i < count); }` forces the move AFTER the count load…
 - [IDO `while(1){}` always emits unreachable jr-ra epilogue + 2 alignment nops — caps short infinite-loop stubs](#feedback-ido-infinite-loop-unreachable-epilogue) — For functions whose target is a tight infinite-loop stub (`b .; nop; …nops; jr ra; nop`), IDO emits jr $ra at offset 0x20 with seven nops between (size 0x28).
+- [IDO -O2 2x-unrolls a known-small-trip loop; a target with a non-unrolled body + `li`-constant bound is likely an un-suppressible-from-C cap](#feedback-ido-unrolls-known-small-trip-loop) — _When the target loop has ONE body + `addiu iv; bne iv,tN` (tN=`li` constant) but C-emit is ~2x the insns with two body copies per pass, IDO computed the static trip count and unrolled 2x. for-loop AND do-while both unroll (trip count known either way). If the target was compiled NON-unrolled despite `li`-constant bounds, no C-level lever reliably suppresses it (runtime/opaque bound would defeat trip analysis but contradicts the baked `li`); treat as a loop-unroll cap. Diagnose via `build/non_matching/.../X.c.o` disasm: count body copies. Seen 2026-05-18 on game_libs_func_00054144 (76 vs 51)._
 - [IDO -O2 auto-unrolls do-while pointer-walks with subu/andi alignment guard regardless of bounds origin](#feedback-ido-pointer-walk-loop-unroll-guard-unflippable) — _For a do-while loop walking through memory clearing fields (`do { ptr += 4; ptr[-4]=ptr[-3]=ptr[-2]=ptr[-1]=0; } while (ptr != end);`), IDO -O2 emits TWO loops + a `subu/andi 0x3F` alignment guard.
 - [IDO rewrites pointer-comparison sentinels as `s1 != magic - slot` in unrolled-loop bodies — recognize the pattern](#feedback-ido-sentinel-rewrite-in-unrolled-loops) — _When IDO encounters `if (s1 + slot != (char*)MAGIC)` inside an unrolled loop and MAGIC doesn't fit a 16-bit immediate, it rewrites the test as `if (s1 != (char*)(MAGIC - slot))` and emits `addiu $at, $zero, sentinel;…
 - [Decoding `a0 * K` multiplication sequences from `sll/subu/addu` chains: walk left-to-right, each `sll<<N` is `*2^N`, each `addu/subu r,r,aM` is `±aM`. Read the chain to recover K — don't trust the C-source comment, the asm has the truth](#feedback-ido-decoding-multiply-via-shift-add-chain) — _When target asm has 5 chained `sll/addu/subu` insns at function entry computing `a0 * K` for an array stride or struct offset, walk the chain step-by-step to recover K. A miscoded `K` in the C source produces shift-counts that LOOK similar to target's but encode a different multiplier — and you can spend ticks chasing register-cascade caps that aren't the real issue. Verified 2026-05-14 on gl_func_0002D130: doc comment said "0x320-byte stride" (wrong), asm chain `sll<<2;subu;sll<<2;subu;sll<<5` decodes to `a0 * 11 * 32 = 0x160` (right). Single-character C constant fix yielded +3.36pp._
@@ -10082,3 +10083,47 @@ the target holds ONE base across many field accesses (spilled or in an
 $s reg), switch to a distinct symbol — the generic form structurally
 cannot produce a held base. Seen 2026-05-18 on `gl_func_0006A304`
 (1080 game_libs USO pointer-relocation fixup driver).
+
+## IDO -O2 2x-unrolls a known-small-trip loop — non-unrolled target with li-constant bound is likely an un-suppressible-from-C cap
+<a name="feedback-ido-unrolls-known-small-trip-loop"></a>
+
+**Symptom.** Target has a single tight loop body ending
+`addiu iv,iv,K; bne iv,tN,.Lbody` where `tN` is a `li`-loaded
+constant (e.g. `li t0,6`), ~28 insns. Your C-emit is ~2x larger
+(e.g. 76 vs 51) and `build/non_matching/.../X.c.o` disassembly shows
+**two full copies of the loop body per loop pass** plus a residual
+(two `addiu iv` and the `bne` after the second copy).
+
+**Cause.** IDO -O2 computed the static trip count (`iv: 0,K,2K…`
+with a constant bound → N iterations) and unrolled the loop 2x.
+This happens for **both** `for (i=0;i!=N;i+=K)` and
+`do { } while (iv != N)` — the loop FORM is irrelevant; only the
+*statically-known trip count* matters. Restructuring for↔do-while
+does NOT help (verified).
+
+**Why the target isn't unrolled.** It was compiled such that IDO did
+NOT unroll, yet its bound is a baked `li 6`. Two possibilities:
+(a) the original source's bound is a runtime/opaque value (defeats
+trip-count analysis → no unroll) that merely *happens* to be 6 at
+the relevant call/inline site — but then the asm would not show a
+flat `li 6` unless it was constant-propagated; (b) IDO's unroll
+cost-heuristic declined for that exact body shape (body
+size/complexity over threshold). Neither is reliably reproducible
+from clean C while keeping the `li N` bound: making the bound opaque
+(`volatile`, a memory load, a noinline helper return) changes other
+codegen and usually still mismatches.
+
+**Verdict.** No robust C-level lever to suppress IDO's
+small-known-trip 2x-unroll. Treat as an IDO-loop-unroll cap: keep
+the correct algorithm NM-wrapped, document it, move on. Do NOT keep
+grinding loop-form variants — for/while/do-while/pointer-walk all
+unroll identically when the trip count is statically derivable.
+
+**Diagnostic recipe.** Build `build/non_matching/src/<seg>/<unit>.c.o`
+(compiles the `#ifdef NON_MATCHING` body with `-DNON_MATCHING`),
+`objdump -d` the symbol, and count loop-body repetitions. If body
+appears 2x with two increment insns per pass → this cap. This is the
+fast way to distinguish "loop unroll" from "regalloc/scheduling"
+(the latter has the right insn count, wrong registers/order).
+Verified 2026-05-18 on `game_libs_func_00054144` (game_libs
+triangle-centroid; 3-trip ×2-unroll → 76 vs target 51).
