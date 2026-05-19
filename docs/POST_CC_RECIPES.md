@@ -13,6 +13,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [INSN_PATCH Makefile var + scripts/patch-insn-bytes.py promotes 99% IDO-cap wraps to 100%](#feedback-insn-patch-for-ido-codegen-caps) — _For functions where the C body is correct but 1-2 instructions cap below 100% due to IDO scheduler/allocator choices that aren't reachable from C source (FPU pipeline-driven add.s operand order, reg-allocator t6 vs t9…
 - [INSN_PATCH is a NO-OP when the function is wrapped `#ifdef NON_MATCHING / #else INCLUDE_ASM` — drop the wrap to make it effective](#feedback-insn-patch-noop-under-include-asm-wrap) — _When a function uses the `#ifdef NON_MATCHING { body } #else INCLUDE_ASM(...); #endif` template AND has INSN_PATCH defined for it in the Makefile, the byte-correct build (`build/src/.../*.c.o`) takes the `#else` branch…
 - [INSN_PATCH entry silently no-ops when added to the wrong .c.o's list](#feedback-insn-patch-wrong-co-list-silent-noop) — _When you add an INSN_PATCH entry to the wrong per-.c.o list in the Makefile (e.g. `gl_func_0002D130` to `game_libs_tail.c.o`'s list when the function lives in `game_libs_post.c.o`), the build silently doesn't apply the patch — no error, no warning. Sanity-check via `make ... 2>&1 | grep "patch-insn: <funcname>"` — if absent, the entry is in the wrong list. Caught 2026-05-16 on gl_func_0002D130._
+- [A Makefile-only INSN_PATCH change does NOT rebuild the .c.o — `rm` the object first or the patch silently no-ops](#feedback-insn-patch-makefile-only-change-needs-o-rebuild) — _Adding/editing an INSN_PATCH entry touches only the Makefile, not the `.c` source, so `make` does not re-trigger the per-`.c.o` recipe — the post-cc patch step never runs, byte-verify still shows the un-patched mismatch and there is no `patch-insn:` line. Fix: `rm build/src/<seg>/<unit>.c.o` (or `touch` the `.c`) then rebuild. Distinct from the wrong-list no-op: here the entry is correct but the object is stale. Verified 2026-05-18 on gl_func_00001134._
 - [INSN_PATCH offsets are body-dependent — drop C-only crutches before applying a ported patch](#feedback-insn-patch-offsets-body-dependent) — _When porting an INSN_PATCH from a sibling worktree, the patch's word offsets reference positions WITHIN the function as it's emitted.
 - [INSN_PATCH on R_MIPS_HI16/LO16 reloc instructions makes build/.o vs expected/.o byte_verify FAIL even though post-link ROM bytes match](#feedback-insn-patch-on-reloc-instructions-breaks-byte-verify) — _When INSN_PATCH targets the lui/lw pair of an extern symbol access (e.g., `lui t0, %hi(D_X); lw t0, %lo(D_X)(t0)`), it bakes the post-resolution bytes (0x3C08A404, 0x8D080010 for D_A4040010) directly into the .o.
 - [INSN_PATCH can strip stale HI16/LO16 relocs when target expected bytes are raw `.word` code](#feedback-insn-patch-strip-raw-word-jumptable-relocs) — _When C emits a local jump-table in `.rodata` with HI16/LO16 relocs but expected/.o comes from raw `.word` USO asm with literal `lui at,0; lw tN,IMM(at)` and no reloc entries, patch the `lui` as a same-word entry plus patch the `lw` to the target immediate. `patch-insn-bytes.py` strips both orphan relocs, making build/.o byte-equal to expected/.o._
@@ -2459,3 +2460,42 @@ _When the target asm is a 4x (or Kx) loop body that processes K elements per ite
 **Diagnostic:** built C is 24/24 insns at correct shape; 2 mismatched insns are BOTH `addiu rN, *, K_or_NK` where the immediates differ by factor of K (4 here).
 
 **Generalizes to:** any auto-unrolled small-trip-count loop where target's K-stride differs from IDO's K-stride choice. INSN_PATCH the two `addiu` insns to flip the encoding. Body shape (lwc1/swc1/div/store offsets) is preserved.
+
+## A Makefile-only INSN_PATCH change does NOT rebuild the .c.o — rm the object or it silently no-ops
+<a name="feedback-insn-patch-makefile-only-change-needs-o-rebuild"></a>
+
+**Symptom.** You add a correct INSN_PATCH entry to the right
+`build/src/<seg>/<unit>.c.o: INSN_PATCH := …` list, run
+`make RUN_CC_CHECK=0`, and byte-verify STILL shows the un-patched
+mismatch. `make … 2>&1 | grep patch-insn` shows no line for your
+function — looks identical to the wrong-`.c.o`-list no-op.
+
+**Cause.** The patch is applied by a post-cc step inside the per-
+`.c.o` build recipe. Editing the Makefile changes no `.c`/`.h`
+prerequisite of that object, so make considers `<unit>.c.o`
+up-to-date and skips the recipe entirely — the patch step never runs.
+(GNU make does not treat the Makefile itself as a prerequisite of
+targets unless explicitly declared.)
+
+**Fix.** Force the object to rebuild:
+
+```
+rm build/src/<seg>/<unit>.c.o      # e.g. build/src/game_libs/game_libs.c.o
+make RUN_CC_CHECK=0
+make … 2>&1 | grep "patch-insn: <func>"   # confirm "patched N/N insns"
+```
+
+(`touch src/<seg>/<unit>.c` works too.) After the rebuild the
+`patch-insn: <func> patched N/N insns (@0xNN=0x…)` line appears and
+byte-verify matches.
+
+**Distinguishing from the wrong-list no-op**
+(`#feedback-insn-patch-wrong-co-list-silent-noop`): both show no
+`patch-insn:` line. If the entry is in the correct `.c.o` list (the
+one whose unit actually defines the function) but still silent, it's
+THIS staleness case — `rm` the `.o`. If `rm`+rebuild still silent,
+the entry is in the wrong list.
+
+Verified 2026-05-18 promoting `gl_func_00001134` (game_libs.c,
+1-word IDO delay-slot-fill cap, patched `0x38=0x24E400E4`): the
+Makefile-only edit no-op'd until `rm build/src/game_libs/game_libs.c.o`.
