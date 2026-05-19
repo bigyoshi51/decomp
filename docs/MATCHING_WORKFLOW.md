@@ -90,6 +90,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 ### alias handling
 
 - [.NON_MATCHING alias-removal scales bulk — scan whole segment FIRST, batch-fix all candidates in one commit](#feedback-alias-removal-bulk-scan-first) — _The .NON_MATCHING alias-removal recipe (per feedback_structurally_locked_wrap_may_be_bytes_already_correct.md) is per-function in the docs but scales N-to-1 when bulk-applied.
+- [Near-exact USO NM body with a single .o-vs-.o word diff at a lui/addiu pair = flat-extern-vs-local-label symbol-form mismatch (look for a ~0x10 %hi-carry delta)](#feedback-flat-extern-vs-local-label-symbol-form) — _When a USO NM body builds same-count but `build/.o` vs `expected/.o` differ at exactly one `addiu rD,rD,0` word: the body passes a flat `extern &D_XXXX` (→ reloc, placeholder 0 in `.o`) where the target's `.s` uses `%hi/%lo` of an intra-segment LOCAL label `.LXXXXXXXX` (assembled-in, value baked, no reloc). Tell-tale: baked `%lo` differs from the symbol's nominal address by ~0x10 (lui/addiu `%hi`-carry of a local-label pair). Fix: reference the segment-local data symbol at the carry-adjusted value, not the flat extern. Diff word carries a reloc → INSN_PATCH-unsafe. Seen 2026-05-18 on func_000083D0._
 - [DO NOT REMOVE the `nonmatching` macro from .s files — it's the mechanism that excludes INCLUDE_ASM placeholders from the matched-progress metric](#feedback-alias-removal-is-metric-pollution-do-not-use) — _Past sessions wrote memos endorsing `.NON_MATCHING` alias removal as a legitimate way to lift "scoring noise" 0% wraps to 100%.
 
 ### episode / discover
@@ -5375,3 +5376,52 @@ commit — prefer it over reverting another agent's byte-exact work.
 `make` reproduces the break (`clean-main ERR=1`) — confirms it is
 pre-existing, not your edit. `git log -S'<sym>' -- src/` finds the
 introducing commit. Add the defs, rebuild to ERR=0, push.
+
+## Near-exact USO NM body, single .o-vs-.o word diff at lui/addiu = flat-extern-vs-local-label symbol-form mismatch
+<a name="feedback-flat-extern-vs-local-label-symbol-form"></a>
+
+**Symptom.** A USO `#ifdef NON_MATCHING` body builds with the SAME
+instruction count as target, raw-`.s` compare looks ~93-98%, but the
+authoritative `build/.o` vs `expected/.o` compare differs at EXACTLY
+ONE word — an `addiu rD, rD, 0x0` (e.g. build `24A50000`) vs a baked
+immediate in expected (e.g. `24A57FC4`).
+
+**Cause.** The NM body passes a **flat external symbol** —
+`extern char D_00007FD4; … &D_00007FD4` (defined in
+`undefined_syms_auto.txt` as `D_00007FD4 = 0x00007FD4;`). IDO emits a
+`lui %hi / addiu %lo` pair with R_MIPS_HI16/LO16 **relocations**, so
+the `.o` holds placeholder 0 in the addiu. But the target's `.s` for
+that arg uses `%hi/%lo` of an **intra-segment LOCAL label**
+(`%hi(.L00007FD4)` / `%lo(.L00007FD4)`). A local label in the same
+section is resolved at **assembly time** — `expected/.o` (built from
+the INCLUDE_ASM `.s`) bakes the final value with **no reloc**.
+Reloc-placeholder-0 ≠ baked-value → byte_verify fails on that one
+word.
+
+**Tell-tale: the ~0x10 delta.** The baked `%lo` is NOT the symbol's
+nominal address. `.L00007FD4` (nominal 0x7FD4) bakes as
+`addiu …,0x7FC4` — a 0x10 difference. That delta is the
+`lui`/`addiu` **`%hi`-carry**: when `%lo`'s 16-bit field is treated
+as signed and the true low bits would be ≥ 0x8000, the assembler
+adjusts `%lo` down and `%hi` up by 1 (0x10000), so the pair sums
+correctly. A flat 16-bit extern (`addiu rD,rD,SYM`) never shows this
+carry; a real local-label `%hi/%lo` pair does. Seeing a ~0x10 (or
+0x10000-related) offset between the symbol name's hex and the baked
+`%lo` is the fingerprint of "this should be a local-label pair, not
+a flat extern."
+
+**Fix.** Reference the **segment-local data symbol** so IDO emits a
+matching local `%hi/%lo` pair (or define the `D_` symbol at the
+carry-adjusted address that bakes the exact `%lo`), instead of the
+flat `extern`. The differing word carries a reloc, so **INSN_PATCH
+is unsafe** here (it would bake post-resolution bytes and break
+`build/.o` vs `expected/.o` — see
+`#feedback-insn-patch-on-reloc-instructions-breaks-byte-verify`).
+
+**Triage value.** When sweeping high-fuzzy USO NM bodies for
+INSN_PATCH-promotable 1-word caps: a 1-word diff that lands on a
+`lui`/`addiu` symbol-load is NOT an INSN_PATCH candidate — it's this
+symbol-form cap. Only same-count diffs on **non-reloc** words
+(register/scheduling) are clean INSN_PATCH material. Verified
+2026-05-18 on `func_000083D0` (bootup_uso; w5 `.L00007FD4` local
+label vs `&D_00007FD4` extern; w12 `&D_00007FDC` was correct).
