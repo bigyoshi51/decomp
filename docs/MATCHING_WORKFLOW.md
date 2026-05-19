@@ -97,6 +97,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [feedback_episodes](#feedback-episodes) — Always log episodes after an exact match, using the canonical helper and schema (updated 2026-04-19)
 - [Backfill episodes for splat's auto-generated empty functions](#feedback-splat-auto-empty-episodes) — _Splat writes `void f(void) {}` (not INCLUDE_ASM) for every `jr $ra; nop` leaf in its initial C stub.
 - **Tool: `scripts/find-nm-wraps-without-episodes.py`** — Walks `src/**/*.c` for NM-wrapped functions lacking `episodes/<name>.json`, annotated with fuzzy% from `report.json`. Use as the entry point for source-1-style sweep work. Does NOT auto-log — caveats in the docstring point at `feedback-include-asm-tautology-trap` so future agents don't repeat the false-positive episode-logging pattern.
+- [Land-script per-function .o byte_verify passes for a function that references UNDEFINED symbols — the full ELF link still breaks main](#feedback-land-byte-verify-misses-undefined-symbol-link-break) — _A "byte-exact 100%" landed commit can break main: the relocatable `.o` is byte-correct with the symbol kept as an unresolved relocation, so per-function byte_verify passes, but `mips-linux-gnu-ld` fails with `undefined reference`. Always run a full `make` (link) after introducing any new `extern` symbol; define USO-relocated data args in `undefined_syms_auto.txt` as `= 0x00000000;` (the `gl_data_*` / `D_*_X` convention). Hit 2026-05-18 (gl_func_0000B868/B8E0 broke main; 8 missing `gl_data_BXXX_arg`)._
 
 ### other
 
@@ -5333,3 +5334,44 @@ def mask_imm(insns):
 - Preserves struct field offsets (the underlying types are shared)
 
 **Caveat:** Each distinct OS-global symbol needs its OWN alias (e.g., `D_6F534_run` for `__osRunningThread`, `D_6F534_runq` for `__osRunQueue`). The 2-alias setup is the typical complexity; high-arity libreultra wrappers may need more.
+
+## Land-script per-function .o byte_verify passes for undefined-symbol refs — full ELF link still breaks main
+<a name="feedback-land-byte-verify-misses-undefined-symbol-link-break"></a>
+
+**Incident (2026-05-18).** Parallel-agent commit landed
+`gl_func_0000B868` / `gl_func_0000B8E0` as "byte-exact 100%". Their C
+referenced `extern int gl_data_B884_arg, gl_data_B89C_arg, …` (8
+symbols) but the commit did NOT add those to
+`undefined_syms_auto.txt`. `main` then failed at link for ALL agents:
+
+```
+mips-linux-gnu-ld: (.text+0x1cdc): undefined reference to `gl_data_B884_arg'
+make: *** [build/tenshoe.elf] Error 1
+```
+
+**Why the land script missed it.** `land-successful-decomp.sh`'s
+`byte_verify(name)` extracts the function's bytes from
+`build/<unit>.c.o` via symbol-table addr+size + `objcopy
+--only-section=.text` and compares to `expected/`. A relocatable `.o`
+is **byte-correct even when it references an undefined symbol** — the
+slot is zero/placeholder and carries a relocation entry; the symbol is
+only resolved at link. So per-function byte_verify is GREEN while the
+whole-program `ld` is RED. The land script does not run a full link.
+
+**Rule.** Any time you introduce a NEW `extern` symbol in a C body
+(USO data-arg, alias, cross-seg ref), run a full `make`
+(`RUN_CC_CHECK=0`) and confirm `ERR==0` from the LINK, not just the
+per-function byte check, before landing. A green objdiff/byte_verify
+is necessary but NOT sufficient when new externs are involved.
+
+**Fix convention.** USO-relocated data-arg symbols are defined in
+`undefined_syms_auto.txt` as `= 0x00000000;` (resolved by the USO
+loader at runtime), mirroring the existing `gl_data_00074_a`,
+`gl_data_6C9F4_devCfg`, `D_6F534_run` entries. Add one line per
+symbol. This is the non-destructive completion of an incomplete
+commit — prefer it over reverting another agent's byte-exact work.
+
+**Recovery shape.** `git rebase origin/main` then a clean-tree
+`make` reproduces the break (`clean-main ERR=1`) — confirms it is
+pre-existing, not your edit. `git log -S'<sym>' -- src/` finds the
+introducing commit. Add the defs, rebuild to ERR=0, push.
