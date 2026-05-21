@@ -115,7 +115,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Splat sometimes folds an unknown rodata reloc into the nearest preceding function symbol — `func_X + 0xN` references reading INSIDE another function's body](#feedback-splat-folds-unknown-reloc-into-nearest-func-symbol) — _When splat encounters a `lui+lwc1`/`lui+lw` pair targeting an address with no symbol, it falls back to the nearest preceding symbol (often a function) and adds the byte offset.
 - [Splat's "func_NAME + 0xNN" notation is a data symbol at FUNC+OFFSET, not a call into mid-function](#feedback-splat-func-plus-offset-data) — _In 1080's USO asm, spimdisasm/splat sometimes emits `%hi(func_00000008 + 0x28)` / `%lo(…)($at)` relocations.
 - [Splat-regenerated `.s` files can add a `nonmatching <name>, <size>` header that silently clobbers 100%-exact functions to fuzzy=None](#feedback-splat-nonmatching-header-silently-clobbers-100pct) — _When splat regenerates an asm/nonmatchings/<seg>/<func>.s file, it may add a leading `nonmatching <func>, <size>` declaration where the previous version had none.
-- [Splat sometimes emits duplicate function symbols (1-insn prefix of an adjacent function's prologue) that are pure cruft — safe to delete](#feedback-splat-orphan-duplicate-symbol-pruning) — _When splat misidentifies a function boundary, it can produce TWO `.s` files at adjacent addresses where the smaller (e.g. `func_800005D8.s`, 1 insn = single `addiu sp,sp,-N` prologue) is a strict prefix of the larger…
+- [Splat sometimes emits duplicate function symbols (1-insn prefix of an adjacent function's prologue) that are pure cruft — safe to delete](#feedback-splat-orphan-duplicate-symbol-pruning) — _When splat misidentifies a function boundary, it can produce TWO `.s` files at adjacent addresses where the smaller (e.g. `func_800005D8.s`, 1 insn = single `addiu sp,sp,-N` prologue) is a strict prefix of the larger… **Variant — SUFFIX_BYTES-absorbed orphan**: a 2-4-insn `.s` whose bytes exactly match a predecessor's `SUFFIX_BYTES := <pred>=...` words AND whose owning `.c.o` is TRUNCATE_TEXT'd below the orphan's VRAM. The predecessor's text+SUFFIX_BYTES already covers the address range in the linked binary; the orphan's INCLUDE_ASM is dead. Delete the `.s` and the dead INCLUDE_ASM. Don't try empty-body C decomp — the C compiles fine in isolation but the bytes get truncated away in the owning unit. Verified 2026-05-21 on `game_libs_func_00066200` (gl_func_000661D8 SUFFIX_BYTES)._
 - [Splat mis-boundary direction 4 — successor's prologue stolen by predecessor (reverse merge)](#feedback-splat-prologue-stolen-by-predecessor) — When a function's prologue is `lui $reg, 0; addiu $reg, $reg, 0` loading a base pointer BEFORE the `addiu $sp, $sp, -N` stack adjust, splat can't see those 2 insns as part of the function and appends them to the…
 - [Re-running splat clobbers tenshoe.ld and include_asm.h](#feedback-splat-rerun-gotchas) — _splat regenerates tenshoe.ld and include/include_asm.h from scratch every run, destroying hand-tuned per-file ordering and asm-processor macros.
 - [A 1-word "function" (size 0x4) containing a single arg-load is the stolen HEAD of the next function](#feedback-splat-size4-arg-load-is-next-func-head) — _Splat sometimes peels the first 1-2 instructions (pre-prologue arg loads or USO-placeholder loads) off a function into their own tiny symbol (size 0x4 or 0x8).
@@ -3842,6 +3842,33 @@ If all 4 hold: pure splat cruft. Delete the orphan `.s`. The `undefined_syms_aut
 **Verified case**: 1080's `func_80001CB0.s`, `func_80001CF0.s`, `func_800091F0.s` (kernel/). All three are jump targets inside parents (`func_80001ADC` size 0x214 covers the first two; `func_80009148` size 0xB8 covers the third). Deleted in commit 0ae7a2ed; kernel_000.c.o and kernel_054.c.o both 0-byte diff before vs after.
 
 These tend to surface as the smallest candidates in size-sort rolls because their .s files contain only 1-3 insns. Recognizing them up-front saves a wasted /decompile run picking them as "small unstarted" candidates.
+
+**Variant: SUFFIX_BYTES-absorbed orphan (predecessor's recipe already emits these bytes)**
+
+When a predecessor function has a SUFFIX_BYTES recipe that emits the trailing bytes for what splat surfaced as a separate "function," the orphan `.s` is pure metric noise. The build doesn't reference the orphan's `.s` at all — the predecessor's `.text` (with SUFFIX_BYTES appended) covers the orphan's address range in the linked binary. Common signal: orphan lives at predecessor_addr + predecessor_size, has 2-4 insns matching exactly the `SUFFIX_BYTES := <predecessor>=...` words in the Makefile, and the parent's source file is TRUNCATE_TEXT'd at an offset *below* the orphan's VRAM (so even the INCLUDE_ASM that brings the orphan in is dropped before link).
+
+**Detection**:
+
+```bash
+# 1. Compute the predecessor address (orphan_vram - 0x4..0x40 by walking back in the asm dir):
+ls asm/nonmatchings/<seg>/<seg>/ | sort | grep -B1 <orphan_vram>
+
+# 2. Check the predecessor has a SUFFIX_BYTES recipe whose words match the orphan's bytes:
+grep "SUFFIX_BYTES.*<predecessor>" Makefile
+# build/src/<seg>/<unit>.c.o: SUFFIX_BYTES := ... <predecessor>=0xWORD1,0xWORD2,...
+
+# 3. Confirm the orphan's bytes match those SUFFIX_BYTES words exactly.
+# 4. Confirm the orphan's source-file declares it past TRUNCATE_TEXT (the
+#    INCLUDE_ASM is dead anyway):
+grep "TRUNCATE_TEXT" Makefile | grep <orphan_owning_file>
+# build/src/<seg>/<file>.c.o: TRUNCATE_TEXT := 0xN  # where N < orphan_offset
+```
+
+If all 4 hold: pure SUFFIX_BYTES-absorbed orphan. Delete the `.s` and remove the dead INCLUDE_ASM in the truncated `.c` (replace with a comment pointing to the predecessor's SUFFIX_BYTES recipe).
+
+**Verified case**: 1080 `game_libs_func_00066200.s` (2 insns: `jr ra; sw a0,0(sp)`) is the first 2 of 4 SUFFIX_BYTES words on `gl_func_000661D8` in `game_libs_post.c.o`. The matching INCLUDE_ASM lived in `game_libs.c` past TRUNCATE_TEXT=0x8944 (dead). Deleted 2026-05-21; no build delta.
+
+**Anti-pattern caught**: trying to "decompile" the orphan as an empty `void f(int a) {}` to match the `jr ra; sw a0,0(sp)` shape. The C body would compile correctly in isolation (see `func_80001494` in kernel) but emit zero useful bytes in the orphan's source unit because of the TRUNCATE_TEXT cap. Time wasted before recognizing the orphan was already covered by the predecessor's SUFFIX_BYTES.
 
 **Related**:
 - `feedback_splat_fragment_via_register_flow.md` — different fragment class (uses uninitialized regs from caller-pre-load)
