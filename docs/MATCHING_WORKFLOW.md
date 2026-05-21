@@ -3882,6 +3882,28 @@ If all 4 hold: pure SUFFIX_BYTES-absorbed orphan. Delete the `.s` and remove the
 
 **Detection-script pitfall — orphan INCLUDE_ASMs can live in the parent's own `.c`**: when scripting orphan detection, an obvious filter `r != f'src/{seg}/{seg}.c'` (to exclude self-references) is WRONG — that's exactly where the orphan's INCLUDE_ASM tends to live (the same `.c` file as the predecessor, just past it in source order). The right filter is to exclude *only* the orphan's own `.s` file path, not its containing `.c`. Symptom of getting this wrong: deletion of the `.s` causes `cfe: Error: Cannot open file GLOBAL_ASM:asm/nonmatchings/<...>` because the build still INCLUDE_ASMs it. Always `grep -rn '\bORPHAN_SYM\b' src/ Makefile undefined_syms_auto.txt symbol_addrs.txt` before deletion — accept zero hits OR only hits that are doc comments (not INCLUDE_ASM lines). Verified 2026-05-21 on 1080 `mgrproc_uso_func_00000194` (INCLUDE_ASM was in mgrproc_uso.c line 1357, which the bad filter had skipped).
 
+**Byte-hash sibling sweep — companion vein to orphan-prune**: after exhausting the orphan-prune candidates, a second automated vein is *sibling-via-byte-hash*: md5-hash the `.word` byte sequences of every `.s` file, group by hash, and find groups where at least one sibling has a 100%-matched C body. The SAME C body will byte-match the other siblings (trivially, since the bytes are identical). Detection script (inline in commit `f71d3bec7` for 1080):
+
+```python
+import hashlib, re, os
+from collections import defaultdict
+by_bytes = defaultdict(list)
+for root, _, files in os.walk('asm/nonmatchings'):
+    for f in files:
+        if not f.endswith('.s'): continue
+        words = []
+        with open(os.path.join(root, f)) as fp:
+            for line in fp:
+                m = re.search(r'\.word (0x[0-9A-Fa-f]+)', line)
+                if m: words.append(m.group(1).upper())
+        if words:
+            by_bytes[hashlib.md5(','.join(words).encode()).hexdigest()].append(os.path.join(root, f))
+for h, paths in by_bytes.items():
+    if len(paths) > 1: print(len(paths[0]), 'words:', [os.path.basename(p) for p in paths])
+```
+
+Verified 2026-05-21 on 1080: 39 byte-identical groups found, several with 6+ siblings. Example: empty 4-arg stubs (`sw a0,0(sp); sw a1,4(sp); sw a2,8(sp); jr ra; sw a3,0xC(sp)`) shared between game_libs and timproc_uso_b5 — 7 functions in the group, 2 already C-bodied at 100% match, 5 still INCLUDE_ASM. Converting the 5 to `void f(int,int,int,int) {}` produces byte-exact via `objdump -d` verification. **Do NOT log episodes** for these — the match is tautological (you chose the C body BECAUSE the bytes already match a known sibling), so episodes would train on a circular signal. Skip logic for `_post.c` orchestrator-bundle siblings inside `#ifdef NON_MATCHING`/`#else INCLUDE_ASM` blocks — those can't be replaced standalone without a re-split (the `gl_func_*` parent's C-emit absorbs the trailing leaves; documented in the bundle-comment).
+
 **Variant — orphan's vram BELOW its TRUNCATE_TEXT cap but still phantom**: the simple "vram > TRUNCATE_TEXT" heuristic misses some cases. If the predecessor's recipe-extended symbol size (body + SUFFIX_BYTES) covers the orphan's vram entirely WITHIN the predecessor's symbol range, the orphan is phantom even though its vram is below the truncate cap. Diagnostic: `objdump -t` shows the orphan symbol value at exactly the `TRUNCATE_TEXT` cap address (e.g. `0x8944` on a `TRUNCATE_TEXT := 0x8944` rule) with size 0 — the INCLUDE_ASM bytes were emitted past the cap and clipped, leaving only the zero-size symbol entry. The byte coverage is sound (predecessor's recipe-extended range already covers orphan's vram). Verified 2026-05-21 on 1080 `game_libs_func_00008668` (vram 0x8668, cap 0x8944): orphan at `.o` offset 0x8944 size 0; predecessor `gl_func_000085B0` (vram 0x85B0, .o size 0xC4 covering 0x85B0-0x8674) had a 3-word SUFFIX_BYTES `0x3C030000,0x24630000,0x8C620028` exactly matching the orphan's 3 bytes at vram 0x8668-0x8673.
 
 **Anti-pattern caught**: trying to "decompile" the orphan as an empty `void f(int a) {}` to match the `jr ra; sw a0,0(sp)` shape. The C body would compile correctly in isolation (see `func_80001494` in kernel) but emit zero useful bytes in the orphan's source unit because of the TRUNCATE_TEXT cap. Time wasted before recognizing the orphan was already covered by the predecessor's SUFFIX_BYTES.
