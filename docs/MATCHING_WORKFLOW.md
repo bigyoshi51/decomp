@@ -3868,6 +3868,8 @@ If all 4 hold: pure SUFFIX_BYTES-absorbed orphan. Delete the `.s` and remove the
 
 **Verified case**: 1080 `game_libs_func_00066200.s` (2 insns: `jr ra; sw a0,0(sp)`) is the first 2 of 4 SUFFIX_BYTES words on `gl_func_000661D8` in `game_libs_post.c.o`. The matching INCLUDE_ASM lived in `game_libs.c` past TRUNCATE_TEXT=0x8944 (dead). Deleted 2026-05-21; no build delta.
 
+**Variant — one SUFFIX_BYTES recipe absorbs MULTIPLE adjacent orphans**: a single long recipe (e.g. 25 words) can cover two or three back-to-back orphan symbols whose `.s` bytes form non-overlapping contiguous ranges of the recipe. Detection extends naturally: concatenate the orphans' bytes in address order and compare against the predecessor's recipe words. Verified 2026-05-21 in 1080 arcproc_uso: `arcproc_uso_func_00000EBC`'s 25-word recipe covers `00000EEC` (9 words) + `00000F10` (16 words) — combined match. Same recipe handled `arcproc_uso_func_00001170` (27 words) absorbing `000011F0` (14) + `00001228` (13). Don't stop at the first orphan; check all consecutive orphans before the next real (non-truncated) function.
+
 **Anti-pattern caught**: trying to "decompile" the orphan as an empty `void f(int a) {}` to match the `jr ra; sw a0,0(sp)` shape. The C body would compile correctly in isolation (see `func_80001494` in kernel) but emit zero useful bytes in the orphan's source unit because of the TRUNCATE_TEXT cap. Time wasted before recognizing the orphan was already covered by the predecessor's SUFFIX_BYTES.
 
 **Related**:
