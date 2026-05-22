@@ -10294,3 +10294,23 @@ Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (copies
 `(*(D+0x134))->0x84/0x80/0x8C` into `a0->0x2C/0x30/0x34` plus `a0->0x3C=0`):
 writing `a0->0x3C=0` third emitted it at insn 8 (hoisted into the gap after a
 `lw`); writing it last emitted it at insn 11, matching the target.
+
+## Indirect call: inline the call expression to get $t9 (not a named fn-ptr local → $v0)
+<a name="feedback-ido-indirect-call-inline-for-t9"></a>
+
+When a function calls through a pointer, IDO emits the computed-call register
+`$t9` (`lw $t9, off(base); jalr $t9`). But if you stage the pointer in a named
+local first, the local gets a normal allocno register (`$v0`) and you get
+`lw $v0; jalr $v0` — a 2-insn register mismatch.
+
+```c
+/* MISMATCH — fn gets $v0 */
+void f(int *a0) { void (*fn)(void) = (void(*)(void))a0[1]; fn(); }
+/* MATCH — inline call uses $t9 */
+void f(int *a0) { ((void (*)(void))a0[1])(); }
+```
+
+Inline the cast-and-call as a single expression. Verified byte-exact
+2026-05-22 on `gl_func_00069C94` (9-insn indirect-call thunk):
+named-local form emitted `lw $v0,4(a0); jalr $v0`; inline form emitted
+`lw $t9,4(a0); jalr $t9` matching the target.
