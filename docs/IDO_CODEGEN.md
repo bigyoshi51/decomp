@@ -85,6 +85,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 global s-register allocator is NOT driven by local declaration order](#feedback-ido-sreg-order-not-decl-driven) — _`feedback_ido_local_ordering.md` covers STACK OFFSETS (first-declared → highest sp offset).
 - [Drop the `int *s2 = a0;` alias when `a0` is deeply used across calls — alias forces IDO to allocate TWO distinct $s regs](#feedback-ido-arg-alias-doubles-s-reg-when-used-across-calls) — _When `a0` is referenced both as the loop-base AND passed unchanged as an arg to inner calls, an explicit `int *s2 = a0;` alias makes IDO allocate $s2 for the alias AND $s3 for the original `a0` ($s3 = a0 spill, retained for the post-call passthrough). Drop the alias and use `a0` directly throughout — IDO collapses to a single $s register, saving 3 spill insns. Counters the older "alias is DCE'd at -O2" claim from `feedback-ido-3save-vs-2save-arg-preserve` (different live-range shape). Verified 2026-05-08 on `gl_func_00068524` (88.72% → 100% with this + entry-test type fix)._
 - [Identical C body in different .c files can emit DIFFERENT frame sizes — file-context affects IDO's spill-slot allocator](#feedback-ido-file-context-affects-frame-size) — _Three siblings (eddproc_uso_func_000003BC, arcproc_uso_func_00002334, mgrproc_uso_func_00003358) share IDENTICAL C body (same volatile-ptr-to-arg lever, same control flow, same cross-call shape). eddproc matches at 100 % with frame 0x28; arcproc and mgrproc both land at ~89 % with frame 0x20. Only difference is which .c file the function lives in. The 8-byte frame discrepancy can't be closed with C-level levers — OPT_FLAGS are nominally identical, and the volatile-ptr lever is already applied. Suspect file-level state (other functions' codegen perturbing IDO's allocator pseudo-numbering or live-range analysis). When you see this pattern, NM-wrap and document; don't grind. Verified 2026-05-08 across three functions._
+- [Indexed double-deref accessor (`return base[idx*4+K]->[J]`) — all-$t-temporary target is a register-allocation cap from C](#feedback-ido-indexed-double-deref-allt-cap) — _Tiny leaf accessor chaining 2-3 indexed pointer loads with no named result. Target keeps every intermediate in `$t` temporaries; named C locals get `$v1/$a1/$a2` instead, and full inlining gets all-`$t` but with a 1-register swap flipping the first addu's operands. Same structure/count, pure register-number diffs, no C lever. Recognize on sight (2-3 `lw X(a0)` feeding sll+addu chains into a final `lw v0,K(last)`), decode for the NM wrap, don't grind. Verified caps 2026-05-22: timproc_uso_b5_func_00008C1C (2-load) + _00008AD4 (3-load)._
 
 ### constant fold / immediate / CSE
 
@@ -10235,3 +10236,36 @@ un-CSE'd per-store address recompute).
 Verified 2026-05-19 byte-exact on `gl_func_000503A4` (game_libs
 4×u16 record-append, 40/40, 6-arg with 2 stack args). Same family:
 `gl_func_00044CE8` and other append+assert functions.
+
+## Indexed double-deref accessor (`return base[idx*4+K]->[J]`) — all-$t-temporary target is a register-allocation cap from C
+
+<a name="feedback-ido-indexed-double-deref-allt-cap"></a>
+
+**Shape.** Tiny leaf accessor that chains two indexed pointer loads, no named result:
+
+```
+return *(int*)(*(int*)((char*)a0[B/4] + (a0[I/4] << 2) + 0x40) + (a0[J/4] << 2) + 0x3C);
+```
+
+Target asm keeps EVERY intermediate (the input loads, the shifts, the
+addus, the inner deref) in `$t` temporaries — e.g. `lw $t7,I(a0);
+lw $t6,B(a0); lw $t1,J(a0); sll $t8,$t7,2; addu $t9,$t6,$t8;
+lw $t0,0x40($t9); sll $t2,$t1,2; addu $t3,$t0,$t2; jr ra;
+lw $v0,0x3C($t3)`.
+
+**Cap.** Writing it with named C locals (`int i = a0[I/4]; int *base =
+…; int j = …;`) makes IDO assign those locals to `$v1/$a1/$a2`
+(arg/return-family) instead of the target's `$t7/$t6/$t1`. Fully
+inlining (no locals) gets all-`$t` but with a 1-register *swap* in the
+first two loads (e.g. idx→`$t6` vs target idx→`$t7`), flipping the
+first addu's operand order. Either way: same instruction count, same
+structure, pure register-number diffs — no C-level lever reliably
+reproduces the exact `$t` numbering. The permuter is the only remaining
+lever, and per `project_1080_permuter_F444_running.md` the 1080 caps are
+permuter-immune, so these stay NON_MATCHING.
+
+**Action.** Recognize the family on sight (2-3 `lw X(a0)` loads feeding
+sll+addu chains into a final `lw v0, K(last)`); decode the C body for
+the NM wrap (it documents the field offsets) but don't burn build cycles
+chasing the register numbers. Verified caps 2026-05-22:
+`timproc_uso_b5_func_00008C1C` (2-load), `_00008AD4` (3-load).
