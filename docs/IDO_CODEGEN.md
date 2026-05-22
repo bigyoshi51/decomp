@@ -10314,3 +10314,24 @@ Inline the cast-and-call as a single expression. Verified byte-exact
 2026-05-22 on `gl_func_00069C94` (9-insn indirect-call thunk):
 named-local form emitted `lw $v0,4(a0); jalr $v0`; inline form emitted
 `lw $t9,4(a0); jalr $t9` matching the target.
+
+## Two-flag dispatch: `if (A<0 || B<0)` emits bltz-then + bgez-else (not && of >=0)
+<a name="feedback-ido-or-of-negatives-bltz-bgez"></a>
+
+When a function branches on two sign-bit flag tests and calls one of two
+callees, match the asm `bltz tA, THEN; bgez tB, ELSE` with an **OR of the
+negative tests**, putting the THEN callee first:
+
+```c
+/* asm: bltz t6, then;  bgez t7, else;  then: A();  else: B(); */
+if ((v0 << 12) < 0 || (v0 << 8) < 0) { A(); } else { B(); }
+```
+
+The short-circuit `||` makes the first test a `bltz` that jumps INTO the
+then-block (taken = condition true), and the second a `bgez` that jumps to
+the else-block (taken = NOT the second negative). Writing the logically-
+equivalent `if ((v0<<12)>=0 && (v0<<8)>=0) B(); else A();` instead emits TWO
+`bltz` (both branching to the else/A block) — wrong branch offset AND an
+inverted second test (`bltz` where the target has `bgez`). Verified byte-exact
+2026-05-22 on `gl_func_00056FF4` (bit19||bit23 flag dispatch): the `||`-of-
+negatives form matched 18/18; the `&&` form had 2 diffs.
