@@ -5494,3 +5494,19 @@ symbol-form cap. Only same-count diffs on **non-reloc** words
 (register/scheduling) are clean INSN_PATCH material. Verified
 2026-05-18 on `func_000083D0` (bootup_uso; w5 `.L00007FD4` local
 label vs `&D_00007FD4` extern; w12 `&D_00007FDC` was correct).
+
+**IDO cfe is C89 — declarations MUST precede statements in a block, or the whole .c.o fails to build (and blocks the land gate for everyone)**: IDO 7.1's cfe rejects a declaration that appears after a statement in the same block:
+```c
+void f(int *a0) {
+    *out = a0->x;                       /* statement */
+    void *p = *(void**)(a0 + 0x2B8);    /* cfe: Error: line N: Syntax Error */
+}
+```
+Move every declaration to the TOP of its block (before the first statement):
+```c
+void f(int *a0) {
+    void *p = *(void**)(a0 + 0x2B8);    /* decls first */
+    *out = a0->x;                        /* then statements */
+}
+```
+This is mostly an issue in NM bodies (where `#ifdef NON_MATCHING` C is hand-written). Because the whole `<unit>.c.o` compiles as one translation unit, ONE decl-after-statement NM body anywhere in the file fails the entire `non_matching_objects` build — which is exactly what `land-successful-decomp.sh` builds for its byte_verify gate. So a parallel agent's C89-dirty NM body blocks YOUR unrelated land. Symptom: `cfe: Error: src/<seg>/<unit>.c, line N: Syntax Error` pointing at a `T x = ...;` line mid-function. Fix the offending decl (often not your function — grep the file for `void *p =` / `int x =` after statements). Verified 2026-05-22: two FP-clamp-family siblings (timproc_uso_b5 func_0000B8E0, func_0000C0D4) broke the build and blocked a game_libs land until their decls were hoisted. Relates to [feedback-nm-gate-must-build-non-matching-path].
