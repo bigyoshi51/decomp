@@ -3630,6 +3630,10 @@ Quick decode lookup (instruction word `0xOOOOIIII` where `IIII` is the 16-bit of
 
 **Verified case (2026-05-07):** `timproc_uso_b5_func_0000CB40` (0x90) + suspected fragment `0000CBD0` (0x34) — both raw `.word` USO. Parent's `bc1f $f, 0xE` at 0xCBC0 decodes to target `0xCBC0 + 4 + 0xE*4 = 0xCBFC`, which lies inside the 0xCBD0..0xCC04 fragment range — proof of cross-fragment branch. Also `bc1f $f, 0x10` at 0xCB90 → target 0xCBD4 (also inside fragment). Merged into 0xC4 unified function; build/.o byte-equal expected/.o (modulo pre-existing upstream 12-byte drift).
 
+**Family extension (2026-05-22):** timproc_uso_b5 has FIVE such parent+tail pairs all matching the same FP slew-limiter shape — `(B850→B8E0, C044→C0D4, C710→C7B4, CB40→CBD0, CD24→CDC8)`. All five tails are 0x34, start with `lwc1 $f4, 0($a1)` (`0xC4640000`), and follow the parent's `bc1f offset=0x0E` at parent-end-0x14 (which lands at tail+0x2C = the tail's jr ra). Two pairs (C710+C7B4, CD24+CDC8) had been documented as "logical merges" in the src/.c NM-wrap headers; the other three were missed and had false-positive standalone NM-wraps written for the tails (treating them as independent "FP delta-write + clamp" functions with caller-set $v1/$f12 — but $v1/$f12 are parent-locals, not args). The standalone NM-wraps were corrected on 2026-05-22 to plain INCLUDE_ASM + structural-tail comments.
+
+**False-positive trap (2026-05-22):** if a short (≤0x40) USO `.s` file has NO prologue, starts with caller-pattern lwc1/lw using register positions that aren't standard args (e.g. `$v1` as a base, or `$f12` mid-function-body), DON'T NM-wrap it as a standalone function. First check the IMMEDIATELY-PRECEDING function's tail for `bc1f offset=0x0E` (or similar small forward offset) crossing the declared boundary. The "function" is almost certainly the branch-target-replicated epilogue of the parent's branch-likely emit.
+
 ---
 
 ---
