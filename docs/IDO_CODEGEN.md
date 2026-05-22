@@ -76,6 +76,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot](#lift-unconditional-loop-counter-init-out-of-the-if-body-to-claim-the-branchs-delay-slot--leaves-the-result-init-before-the-branch) — _When target has `or v1, a0, 0` (result=sum) BEFORE `beq len, 0` and `or v0, 0, 0` (i=0) IN the delay slot, but built emits `result=sum` in delay slot, lift `unsigned int i = 0;` OUT of the if-body. Both inits become unconditional and IDO picks i=0 for the slot. Generalizes the cap-class previously labeled "no C-level lever"._
 - [When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C](#feedback-ido-target-larger-preemptive-set-nop-delay) — _Diagnostic for the inverse-of-bloat cap: when built `.o` is SHORTER than target by exactly 1 insn (a preemptive `or v0, v1, 0` BEFORE a sltu/bnez that the natural emit folds INTO the branch's delay slot), suspect this scheduling cap. IDO never picks the longer "preemptive + nop" form. Tested early-exit, goto-out, and early-set-clear variants all produce the same shorter natural emit. NM-wrap. Verified 2026-05-08 on kernel/func_800000B0 (91.15% fuzzy)._
 - [Leaf load-hoist-above-aliasing-store: don't cache the first deref in a named local](#feedback-ido-leaf-load-hoist-no-named-temp) — _When a no-frame leaf's target hoists `lw t6, off(aN)` ABOVE a preceding `sw aM, 0(a0)` (aliasing store) AND uses transient `$t6/$t7` for two un-CSE'd derefs of the same `aN[k]`, write the load-bearing statement FIRST in source with NO named temp. A named `int t = aN[k];` both mis-allocates the value ($v0 instead of $t6) and CSEs the second deref to one load. Verified byte-exact 2026-05-18 on `game_libs_func_000664D4` (7-insn doubly-linked-list splice)._
+- [A no-dependency constant store (`field = 0`) gets hoisted into an earlier load-delay gap — write it LAST in source order to pin it at the end](#feedback-ido-zero-store-write-last-to-prevent-hoist) — _When a function copies several loaded fields into the object AND also writes a constant (e.g. `obj->K = 0`), IDO's scheduler hoists the zero-store (no value dependency) up to fill a load-delay gap, landing it earlier than the target. Writing the constant store as the LAST statement keeps it after the dependent loads, matching the target's late placement (typically just before the jr-delay store). Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (3 global-table field copies + one `a0->0x3C=0`): zero-store written 3rd → emitted at pos 8 (hoisted); written last → pos 11 (matches)._
 - [Reference `*a2` twice in the C source when target loads it twice across a jal — IDO scheduler picks the second load to fill the jal delay slot](#feedback-ido-double-deref-fills-jal-delay-slot) — _When target asm loads a pointer dereference (`lw t6, 0(a2)`) early, then loads it AGAIN (`lw t8, 0(a2)`) right before a jal whose delay slot is `sw t8, OFFSET(sp)` (store of the second-loaded value), the C body must reference `*a2` twice. Write two assignments (e.g. `b60_1 = *a2; ...; b70 = *a2;`) rather than caching the value in one local — IDO's scheduler picks the second source-level read to fill the delay slot. Caching `int t = *a2;` and writing `b60_1 = t; b70 = t;` produces a single-load form with an unfilled delay slot. Verified pattern 2026-05-15 on `gl_func_0003F2B8` — duplicate-deref produces the expected scheduler emit, though that function caps at 83.4% NM due to the separate unused-arg-spill family (sw a0, 0xB8(sp) + sw a2, 0x68(sp))._
 
 ### $s register allocation
@@ -10269,3 +10270,27 @@ sll+addu chains into a final `lw v0, K(last)`); decode the C body for
 the NM wrap (it documents the field offsets) but don't burn build cycles
 chasing the register numbers. Verified caps 2026-05-22:
 `timproc_uso_b5_func_00008C1C` (2-load), `_00008AD4` (3-load).
+
+## A no-dependency constant store gets hoisted into a load-delay gap — write it LAST in source order
+<a name="feedback-ido-zero-store-write-last-to-prevent-hoist"></a>
+
+**Shape.** A small accessor copies several loaded fields into the object and also writes a constant:
+
+```c
+obj->A = g->x;   obj->B = g->y;   obj->C = g->z;   obj->K = 0;
+```
+
+**Trap.** A constant store like `obj->K = 0` (`sw $zero, K(obj)`) has no value
+dependency, so IDO's scheduler is free to hoist it up to fill a load-delay
+gap between two dependent `lw`s. If you write it before the last field copy,
+it lands *earlier* than the target (which emits it just before the
+jr-delay-slot store).
+
+**Fix.** Write the constant store as the LAST statement of the function. With
+nothing after it but the implicit return, IDO keeps it at the end (the final
+real store before the jr-delay store).
+
+Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (copies
+`(*(D+0x134))->0x84/0x80/0x8C` into `a0->0x2C/0x30/0x34` plus `a0->0x3C=0`):
+writing `a0->0x3C=0` third emitted it at insn 8 (hoisted into the gap after a
+`lw`); writing it last emitted it at insn 11, matching the target.
