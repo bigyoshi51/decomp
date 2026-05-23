@@ -35,6 +35,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Target asm with `mfc1 $aN, $f12` (float-bits-to-int-reg) is hard to reproduce from IDO C](#feedback-ido-mfc1-from-c) — When the target has a single `mfc1 aN, $f12` instruction converting a float arg's bits to an int register for passing as arg, IDO's C compiler emits a stack round-trip (swc1 + lw) instead — at least 14 C variants tried…
 - [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — _In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum — shifts IDO's FPU register allocation and instruction order across the WHOLE…
 - [IDO -O2 needs named float locals to load-batch all loads before stores; inlined float derefs interleave load/store](#feedback-ido-named-float-locals-enable-load-batching) — When asm shows `lwc1 f14; lwc1 f12; lwc1 f2; lwc1 f0; swc1 f14; swc1 f12; swc1 f2; swc1 f0` (4 loads then 4 stores), the C source MUST have 4 named float locals.
+- [Float-const register choice ($f0 vs $f2) follows C SOURCE order of the constants' first use, not asm store order — reorder to flip](#feedback-ido-float-const-reg-by-source-order) — _A multi-const float-init (e.g. identity matrix: 1.0f on the diagonal, 0.0f elsewhere) where the target puts one constant in $f0 and the other in $f2. IDO assigns $f0 to whichever constant's stores appear FIRST in C source, then reorders the actual stores during scheduling. So if the target has 1.0f in $f0 but stores 0.0f first in asm, write the 1.0f stores first in C — IDO still emits the 0.0f stores first but keeps 1.0f in $f0. Flips the "float-register-swap (f0 vs f2)" cap. Verified 2026-05-23 game_libs_func_0005E83C (3x4 identity init, 14/16 → byte-exact)._
 - [O32 passes floats in $aN when preceded by a non-float arg — use `mtc1 aN, fM` reconstruction](#feedback-ido-o32-float-in-int-reg) — _When a function signature is `(int_like, float, ...)`, MIPS O32 passes the float in $a1 (the int register), not $f14.
 - [o32 mixed-mode ABI — when first arg is int, a float second-arg passes in $a1 (int reg) not $f14, triggering `mtc1 $a1, $f12` at function entry](#feedback-ido-o32-mixed-mode-float-in-a1) — _o32 reserves $f12/$f14 for floats only when ALL leading args are floats.
 - [IDO target `swc1 $f0, N(sp)` x4 at entry WITHOUT preceding `mtc1 $0, $f0` — $f0 inherited from caller](#feedback-ido-swc1-f0-without-mtc1) — Some functions store $f0 to multiple stack slots at entry (e.g. `swc1 $f0, 0x34..0x40(sp)` for a 4-float out-buffer) without any `mtc1 $0, $f0` to initialize $f0 first.
@@ -2012,6 +2013,41 @@ When you see `swc1 $f0, N(sp)` as the first FPU op with no prior $f0 setter, rec
 ## IDO -O2 always folds `return 0.0f` paths through $f0 directly — `mtc1 $0, $f2; mov.s $f0, $f2` unreachable from C
 
 _Target 4-insn leaves that return 0.0f via an intermediate ($fN != $f0) like `mtc1 $0,$f2; nop; jr $ra; mov.s $f0,$f2` cannot be reproduced from any tested IDO-O2 C body — literal, local var, volatile local (→stack spill), negate, cast, union punning, arg-ignore. Don't grind; NM-wrap with partial C._
+
+## Float-const register choice ($f0 vs $f2) follows C source order of the constants' first use — reorder to flip
+<a id="feedback-ido-float-const-reg-by-source-order"></a>
+
+For a multi-constant float-init (the classic case: an identity matrix — 1.0f on
+the diagonal, 0.0f on the off-diagonals), the target picks ONE constant for $f0
+and the other for $f2:
+
+```
+mtc1  zero, $f2        # 0.0f -> $f2  (computed first in asm)
+lui   at, 0x3F80
+mtc1  at, $f0          # 1.0f -> $f0
+swc1  $f2, 4(a0)       # 0.0f stores...
+... swc1 $f2 ...
+swc1  $f0, 0(a0)       # 1.0f stores (diagonal)
+```
+
+The register a constant lands in is decided by **which constant's stores come
+FIRST in C source order**, NOT by the asm store order. IDO assigns $f0 to the
+first-used constant, then its scheduler reorders the actual `swc1`s. So when the
+target keeps 1.0f in $f0 but emits the 0.0f stores first in asm, write the
+**1.0f stores first** in the C body:
+
+```c
+void f(float *a0) {
+    a0[0] = 1.0f; a0[5] = 1.0f; a0[10] = 1.0f;   /* 1.0f first -> owns $f0 */
+    a0[1] = 0.0f; a0[2] = 0.0f; /* ... rest 0.0f -> $f2 */
+}
+```
+
+IDO still emits the 0.0f stores before the 1.0f stores in the final asm, but
+1.0f stays in $f0. Writing the 0.0f stores first gives the reversed (capped)
+allocation. This **flips the "float-register-swap (f0 vs f2)" cap** — it's a
+C-source reorder, not a permanent cap. Verified 2026-05-23 on
+`game_libs_func_0005E83C` (3x4 affine identity init, 14/16 → byte-exact).
 
 **Pattern:** function body is 4 words, returning zero via a non-$f0 intermediate register:
 ```
