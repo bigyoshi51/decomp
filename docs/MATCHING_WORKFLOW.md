@@ -699,6 +699,25 @@ Don't trust a raw-word MATCH for these. Verified 2026-05-23 — deferred
 `game_libs_func_0003{8B94,487C}` / `_000{666F0,44CB0}` rather than risk a
 wrong-symbol episode.
 
+**BUT for the decomp % (a plain-C build path, NOT an episode), a reloc'd
+symbol ref is fine when there is exactly ONE distinct symbol — use
+`&D_00000000` (the segment base) + the discriminating offset/index.** It builds
+byte-exact (the base resolves to addr 0, like every `gl_func_00000000`/
+`D_00000000` placeholder), counts for the %, and gets NO episode (reloc-blind).
+Promote to a PLAIN definition (drop the `#else INCLUDE_ASM`) when the function
+has real logic beyond the bare ref — a used arg, an index, arithmetic:
+- `return *(int*)((char*)&D_00000000 + a0*4);` (343E0, indexed) ✓
+- `*(int*)&D_00000000 = a0;` (666E4, setter with arg) ✓
+- bare `return *(int*)&D_00000000;` (38B94) — leave INCLUDE_ASM (hollow, no logic)
+
+The hard block is **multiple DISTINCT globals**: a function with two separate
+`lui 0` bases (e.g. 6170C: `count = *D_a; return D_b[count-1]` — two distinct
+symbols, NOT offsets off one base) can't be written, because writing both as
+`&D_00000000` CSEs them to ONE base (≠ the target's two). Distinct-symbol names
+live only in the USO reloc sidecar (not in the raw-word .s). Detect: two+ `lui 0`
+with offset-0 dependents → defer. (Offsets off ONE base — like 11A4's D_+0x64 /
+D_+0x54 — are fine; that's one symbol, multiple offsets.) Verified 2026-05-23.
+
 ---
 
 ---
