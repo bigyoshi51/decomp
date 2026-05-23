@@ -10598,3 +10598,25 @@ A volatile store has identical encoding to a plain `sw`, so the bytes match; vol
 **Do NOT make the whole pointer volatile** (`volatile int *a0`): that forces EVERY `a0[...]` access to a fresh, un-CSE'd load, adding many extra loads and reordering the merge — it over-applied to 22 diffs on gl_func_00031784 (vs the targeted cast's 0 structural diffs). The single-store cast is surgical; the whole-pointer qualifier is a sledgehammer.
 
 **Origin:** 2026-05-23, game_libs_func_00031784 (ring-buffer push state machine). Targeted volatile took it 26→27 insns (correct length); 5 residual register-renumber insns in the increment block were INSN_PATCHed → byte-exact, reloc-free, episode logged. (Cf. the related but distinct volatile levers: caller-slot spill via `volatile T *p=&arg`, N-fold reload via `volatile T **`, scoped-volatile early-exit shape.)
+
+---
+
+<a id="feedback-ido-multiuse-nonpow2-mult-shares-multu"></a>
+## Multi-use non-power-of-2 constant multiply → IDO shares `li N`+`multu`; single-use strength-reduces to shifts
+
+For a stride/size like `*6` (`*3`, `*12`, …), IDO -O2 strength-reduces a SINGLE
+use to shifts (e.g. `x*6` → `sll t,x,2; subu t,t,x; sll t,t,1`). But when the
+SAME constant multiply appears 2-3+ times in one function, IDO instead
+materializes the constant once (`li a3, 6`) and emits `multu x,a3; mflo t` per
+use (sharing the `a3` constant). If the target was compiled to inline the shift
+sequences per-use (no shared `multu`), the multi-use C cannot reproduce it —
+neither plain `x*6`, explicit `(x*4-x)<<1`, nor struct/array indexing
+(`((Struct6*)p)[i]`) avoids the shared-multu once there are 3 uses. This is a
+codegen cap for such functions.
+
+Verified 2026-05-23: `game_libs_func_0005318C` (single `a1*6`) matched
+byte-exact with shifts, but its sibling `game_libs_func_0005313C` (three `*6`:
+`a1*6` lookup + `idx*6` + `a1*6` epilogue) forced shared `li 6`+multu → NM-wrap
+cap. Diagnostic: built `.o` shows `li <N>,<reg>` + `multu`/`mflo` where target
+shows `sll/subu/sll`. No C lever found; the function stays NM (or needs a
+flag/opt-level split if the original used a different setting).
