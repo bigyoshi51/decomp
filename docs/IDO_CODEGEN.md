@@ -77,6 +77,8 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C](#feedback-ido-target-larger-preemptive-set-nop-delay) — _Diagnostic for the inverse-of-bloat cap: when built `.o` is SHORTER than target by exactly 1 insn (a preemptive `or v0, v1, 0` BEFORE a sltu/bnez that the natural emit folds INTO the branch's delay slot), suspect this scheduling cap. IDO never picks the longer "preemptive + nop" form. Tested early-exit, goto-out, and early-set-clear variants all produce the same shorter natural emit. NM-wrap. Verified 2026-05-08 on kernel/func_800000B0 (91.15% fuzzy)._
 - [Leaf load-hoist-above-aliasing-store: don't cache the first deref in a named local](#feedback-ido-leaf-load-hoist-no-named-temp) — _When a no-frame leaf's target hoists `lw t6, off(aN)` ABOVE a preceding `sw aM, 0(a0)` (aliasing store) AND uses transient `$t6/$t7` for two un-CSE'd derefs of the same `aN[k]`, write the load-bearing statement FIRST in source with NO named temp. A named `int t = aN[k];` both mis-allocates the value ($v0 instead of $t6) and CSEs the second deref to one load. Verified byte-exact 2026-05-18 on `game_libs_func_000664D4` (7-insn doubly-linked-list splice)._
 - [A no-dependency constant store (`field = 0`) gets hoisted into an earlier load-delay gap — write it LAST in source order to pin it at the end](#feedback-ido-zero-store-write-last-to-prevent-hoist) — _When a function copies several loaded fields into the object AND also writes a constant (e.g. `obj->K = 0`), IDO's scheduler hoists the zero-store (no value dependency) up to fill a load-delay gap, landing it earlier than the target. Writing the constant store as the LAST statement keeps it after the dependent loads, matching the target's late placement (typically just before the jr-delay store). Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (3 global-table field copies + one `a0->0x3C=0`): zero-store written 3rd → emitted at pos 8 (hoisted); written last → pos 11 (matches)._
+- [jr-epilogue double-store: delay-pick + emit-order + temp-reg# all couple to source order, so some target combos are unreachable (cap)](#feedback-ido-jr-epilogue-double-store-coupling-cap) — _A 5-insn `compute;compute;sw;jr;sw` leaf with two independent stores of differently-computed values: the delay-slot store (always the FIRST source store), the emit order, and the temp-reg numbering (first-computed value → lower temp) are all locked to source order. If the target's delay store uses the second-computed value while the first-computed value lands in the lower temp, no source order produces both — NM-wrap/defer. jr analogue of the jal swap-stores recipe, but the jr case couples reg# too so the swap that fixes the delay store breaks the reg. Verified 2026-05-23 game_libs_func_000478D8._
+- [getc-style post-increment: deref `**a0` (not a named pointer local) keeps the pointer in $a1 and forces lbu-before-addiu](#feedback-ido-getc-deref-form-keeps-a1) — _For `c = *(*pp)++` (read byte, post-increment caller's pointer), write `unsigned char v = **a0; *a0 = *a0 + 1; return v;`. The double-deref keeps the loaded pointer in $a1 and emits `lbu` before the `addiu`/`sw`-in-delay. A named `p = *a0; v = *p; *a0 = p+1;` mis-allocates to $v1 and reorders to increment-first/lbu-in-delay. Verified byte-exact 2026-05-23 game_libs_func_0002A9A4._
 - [Reference `*a2` twice in the C source when target loads it twice across a jal — IDO scheduler picks the second load to fill the jal delay slot](#feedback-ido-double-deref-fills-jal-delay-slot) — _When target asm loads a pointer dereference (`lw t6, 0(a2)`) early, then loads it AGAIN (`lw t8, 0(a2)`) right before a jal whose delay slot is `sw t8, OFFSET(sp)` (store of the second-loaded value), the C body must reference `*a2` twice. Write two assignments (e.g. `b60_1 = *a2; ...; b70 = *a2;`) rather than caching the value in one local — IDO's scheduler picks the second source-level read to fill the delay slot. Caching `int t = *a2;` and writing `b60_1 = t; b70 = t;` produces a single-load form with an unfilled delay slot. Verified pattern 2026-05-15 on `gl_func_0003F2B8` — duplicate-deref produces the expected scheduler emit, though that function caps at 83.4% NM due to the separate unused-arg-spill family (sw a0, 0xB8(sp) + sw a2, 0x68(sp))._
 
 ### $s register allocation
@@ -10294,6 +10296,75 @@ Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (copies
 `(*(D+0x134))->0x84/0x80/0x8C` into `a0->0x2C/0x30/0x34` plus `a0->0x3C=0`):
 writing `a0->0x3C=0` third emitted it at insn 8 (hoisted into the gap after a
 `lw`); writing it last emitted it at insn 11, matching the target.
+
+## jr-epilogue double-store: delay-pick + emit-order + temp-reg# all couple to source order (some target combos unreachable)
+<a name="feedback-ido-jr-epilogue-double-store-coupling-cap"></a>
+
+**Shape.** A no-frame leaf does exactly two *independent* stores of
+differently-computed values, then `jr $ra`:
+
+```c
+*(int*)(a0 + 0x1F4) = 1;          /* value 1   */
+*(char**)(a0 + 0xE0) = a0 + 0x60; /* value a0+0x60 */
+```
+
+**Trap.** Three things are all locked to source order and cannot be tuned
+independently:
+1. **temp-reg number** follows the order each store's *value* is computed
+   (first-computed value → lower temp, e.g. `$t6`);
+2. **emit order** of the two `sw`s;
+3. **which store fills the jr delay slot** — IDO consistently puts the
+   *first*-source store into the delay slot, emitting the second one first.
+
+So if the target shows `li t6,1; addiu t7,a0,0x60; sw t6,0x1F4; jr; sw t7,0xE0`
+— i.e. value `1`→`$t6` (computed first) AND the `0xE0` store in the delay slot
+— it's **unreachable from C**: getting `0xE0` into the delay requires it to be
+the first source store, which forces `a0+0x60`→`$t6` (wrong reg); getting
+`1`→`$t6` requires the `0x1F4` store first, which puts `0x1F4` (not `0xE0`) in
+the delay. The (delay-store, reg-number) pair the target wants is the one
+combination source order can't produce. Five variants (natural, swapped,
+explicit-temp-decoupled both ways, inline-address) all confirmed.
+
+**How to apply.** Recognize a 5-insn `compute;compute;sw;jr;sw` leaf where the
+target's delay-slot store uses the *second*-computed value AND the
+first-computed value lands in the lower temp. NM-wrap/defer; don't grind. This
+is the jr-epilogue analogue of the jal-delay `feedback-ido-swap-stores-for-jal-delay-fill`
+recipe — but unlike the jal case (where you *can* pick the delay store by
+swapping source order), the jr case couples the reg# too, so the swap that
+fixes the delay store breaks the reg. Verified 2026-05-23 on
+`game_libs_func_000478D8`. The clean siblings in the same sweep DID match
+(`0001D754`/`0001D858` gbi builders, `00067AA0` field-zero, `0002A9A4` getc).
+
+## getc-style post-increment: deref `**a0` (not a named pointer local) keeps the pointer in $a1, and lbu must precede the addiu
+<a name="feedback-ido-getc-deref-form-keeps-a1"></a>
+
+**Shape.** `unsigned char c = *(*pp)++;` — read a byte, post-increment the
+caller's pointer. Target:
+
+```
+lw   a1, 0(a0)      # p = *pp
+lbu  v0, 0(a1)      # c = *p   (BEFORE the increment)
+addiu t6, a1, 1     # p+1
+jr   ra
+sw   t6, 0(a0)      # *pp = p+1  (delay slot)
+```
+
+**Fix.** Write it with the double-deref `**a0` form and read-before-write:
+
+```c
+unsigned char f(unsigned char **a0) {
+    unsigned char v = **a0;   /* lbu first */
+    *a0 = *a0 + 1;            /* increment + store-in-delay */
+    return v;
+}
+```
+
+**Trap.** A named pointer local — `unsigned char *p = *a0; v = *p; *a0 = p+1;`
+— allocates the loaded pointer to `$v1` (not `$a1`) and reorders to
+`addiu;sw;lbu(delay)` (increment first, byte-read in the delay slot), which is
+the wrong shape. The `**a0` double-deref keeps the pointer in `$a1` and forces
+the `lbu` to precede the `addiu`. Verified byte-exact 2026-05-23 on
+`game_libs_func_0002A9A4`.
 
 ## Indirect call: inline the call expression to get $t9 (not a named fn-ptr local → $v0)
 <a name="feedback-ido-indirect-call-inline-for-t9"></a>
