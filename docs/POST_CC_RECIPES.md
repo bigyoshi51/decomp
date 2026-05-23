@@ -27,6 +27,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [NM-wrap docs predicting "INSN_PATCH at offset 0xN" can drift over time — re-measure offsets at apply time](#feedback-predicted-insn-patch-offsets-drift) — _Wrap docs that predict an exact patch recipe ("3-word INSN_PATCH at func+0x38/0x68/0x6C") can have offsets drift by 8-16 bytes due to upstream changes (decl reordering, different compiler version, frame-size…
 - [PREFIX_BYTES + INSN_PATCH combo can break "permanently locked" caps when C-emit shape differs from target by N leading + 1 trailing insn](#feedback-prefix-bytes-plus-insn-patch-breaks-documented-caps) — _A documented "permanently locked" NM cap (e.g. cross-function tail-share, IDO scheduling unflippables) can sometimes be broken by combining PREFIX_BYTES (inject N leading bytes that C can't produce) + INSN_PATCH…
 - [inject-prefix-bytes.py whitelist broadened 2026-05-04 — leaf-arithmetic entries now accepted](#feedback-prefix-bytes-refuses-leaf-functions) — _HISTORICAL — inject-prefix-bytes.py used to refuse functions whose first insn wasn't addiu sp / jr ra / opcode 0x09.
+- [INSN_PATCH alone does NOT count in report.json/decomp.dev — report builds the non_matching tree, so pair it with NON_MATCHING_INSN_PATCH](#feedback-insn-patch-needs-non-matching-pair-to-count) — _scripts/refresh-report.sh runs `make non_matching_objects` and objdiff.json's base_path points at build/non_matching/. Default-build INSN_PATCH leaves that tree UNPATCHED, so an INSN_PATCH'd function is byte-exact in the ROM (land byte_verify passes via build/.o) but scores < 100 / uncounted in the metric. To make it count, add a paired `build/non_matching/src/<seg>/<file>.c.o: NON_MATCHING_INSN_PATCH += <func>=<off>:<word>,...` line (cf. 31784, 6AD68, gui_uso). CAVEAT: line-30 frames INSN_PATCH-on-non_matching as "metric-cheating" (injects bytes C-emit can't produce) — but for pure register-renumber (C is the correct decomp, only allocation differs) the ROM IS byte-exact and practice does pair it. Strategic note: tiny (2-3 insn) register-renumber INSN_PATCH is LOW value (+~12 bytes, lots of machinery, contested) — prefer clean fuzzy-match accessors. Verified 2026-05-23 on game_libs_func_000274E0 (1495→1496 only after the paired line + `rm` the stale .o)._
 - [PROLOGUE_STEALS belongs on the non_matching Makefile rule too — it's not metric-cheating like other post-cc recipes](#feedback-prologue-steals-belongs-on-non-matching-too) — _The non_matching build rule (`build/non_matching/src/%.c.o`) was originally written to skip ALL post-cc recipes (PROLOGUE_STEALS / PREFIX_BYTES / SUFFIX_BYTES / INSN_PATCH / TRUNCATE_TEXT) under the rationale "those…
 - [PROLOGUE_STEALS strips setup insns but cannot rename registers in the BODY — when the body references different regs than predecessor's stolen tail conventions, the splice produces a binary that reads uninitialized regs at runtime](#feedback-prologue-steals-cant-fix-register-name-mismatch-in-body) — _When predecessor's stolen tail sets convention regs (e.g. $v0=8, $at=&D) but C-emit's body picks IDO -O2's natural choices (e.g. $v1 for value, $v0 for address), splicing setup leaves body insns referencing uninitialized regs. C-level register-pin is blocked (IDO rejects register-T-x-asm). Cap stays NM with INCLUDE_ASM. Verified 2026-05-07 on `gl_func_0002D7D0`._
 - [PROLOGUE_STEALS and INSN_PATCH compose cleanly on the same function — strip prefix bytes first, then patch mid-function caps](#feedback-prologue-steals-plus-insn-patch-compose) — _Both recipes operate post-cc on the .o file.
@@ -2547,3 +2548,43 @@ this way: **`game_libs_func_00020DF4`** (swap `li a0,8`↔`move v0,0`) and
 INSN_PATCH'd. Don't defer a register-exact-but-reordered near-match; measure the
 swap and patch it. (Prereqs: function not TRUNCATE_TEXT'd out, and no swapped
 insn carries a reloc.)
+
+---
+
+<a id="feedback-insn-patch-needs-non-matching-pair-to-count"></a>
+## INSN_PATCH alone does NOT count in report.json/decomp.dev — pair it with NON_MATCHING_INSN_PATCH
+
+`scripts/refresh-report.sh` runs `make non_matching_objects` and `objdiff.json`'s
+`base_path` points at `build/non_matching/`. A default-build INSN_PATCH
+(`build/src/.../*.c.o: INSN_PATCH += ...`) leaves the non_matching tree
+UNPATCHED. Result for an INSN_PATCH'd function:
+
+- **land byte_verify PASSES** (it compares `build/.o`, which is patched, vs `expected/.o`) → the function lands and the ROM is byte-exact.
+- **report.json / decomp.dev does NOT count it** — the metric compares the non_matching `.o` (still IDO's raw emit, e.g. `$t6`) vs `expected/.o` (`$t1`) → mismatch.
+
+Symptom: you land an INSN_PATCH'd function, the land succeeds, but
+`refresh-report` shows the same function/byte count as before.
+
+**Fix:** add a paired non_matching patch line with identical offsets/words:
+```makefile
+build/src/seg/file.c.o:            INSN_PATCH            += func=0x0:0xWORD,0x8:0xWORD
+build/non_matching/src/seg/file.c.o: NON_MATCHING_INSN_PATCH += func=0x0:0xWORD,0x8:0xWORD
+```
+Then `rm build/non_matching/src/seg/file.c.o` (a Makefile-var change does NOT
+rebuild the `.o`) and rebuild + `refresh-report`. The function now counts.
+
+**Caveat / tension:** [#feedback-prologue-steals-belongs-on-non-matching-too]
+frames INSN_PATCH-on-non_matching as "metric-cheating" (it injects bytes IDO
+can't emit from C). That's the right caution for *structural* INSN_PATCH. For a
+pure **register-renumber** (the C is the correct decompilation; only the
+allocator's register choice differs) the ROM genuinely IS byte-exact, and
+practice DOES pair it (31784, 6AD68, gui_uso line 43). Use judgment.
+
+**Strategic:** a tiny (2-3 insn) register-renumber INSN_PATCH is LOW value —
+~12 bytes, two Makefile lines, a baseline/`.o` rebuild dance, and it's
+contested. Prefer clean `fuzzy==100` accessor matches (getters return into
+`$v0`, setters store an arg directly — no temp register, so no renumber). Only
+reach for register-renumber INSN_PATCH on larger functions where the rest of the
+body is a genuine match. Verified 2026-05-23 on `game_libs_func_000274E0`
+(byte-copy `a0[3]=a1[4]`, $t6→$t1): counted only as 1495→1496 after the paired
+line.
