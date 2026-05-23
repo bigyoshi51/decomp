@@ -46,6 +46,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [byte_verify against build/.o is circular for NM-wrapped functions — use build/non_matching/.o](#feedback-include-asm-tautology-trap) — _The land script's `byte_verify` globs `build/.o` and compares to `expected/.o`. For any function wrapped in `#ifdef NON_MATCHING / #else INCLUDE_ASM`, both paths contain the same ROM bytes by construction (default build takes the `#else`, expected/ is generated via INCLUDE_ASM) — the comparison is trivially true regardless of whether the C body matches. Combined with `ensure_not_include_asm` silently passing when rg isn't on PATH (Claude Code agent sessions have rg as a shell function, not a binary), false-positive episodes accumulated. Fixed 2026-05-06: byte_verify routes to build/non_matching/ when src has INCLUDE_ASM for the function; ensure_not_include_asm uses POSIX grep -r; new `scripts/validate-episodes.sh` re-runs the full gate as defense-in-depth._
 - [Land script byte_verify symbol-table parser had two latent bugs (single-letter type field + .NON_MATCHING alias collision)](#feedback-land-script-byte-verify-objdump-parse-bugs) — _scripts/land-successful-decomp.sh's byte_verify hit two parsing bugs that silently truncated extracted bytes — single-letter 'F'/'O' type field gets parsed as size=15/24 hex, AND .NON_MATCHING aliased symbols get…
 - [refresh-expected-baseline.py regex picks only the FIRST `INCLUDE_ASM` in a multi-INCLUDE_ASM `#else` block — drops the rest](#feedback-refresh-baseline-only-keeps-first-include-asm-in-else) — _When you batch N split-fragment functions into one shared #ifdef NON_MATCHING block with N C-bodies and N INCLUDE_ASMs in the #else, only the first INCLUDE_ASM survives in expected/.o. Use per-function wraps (one #ifdef per function) instead. Verified 2026-05-10 on C2D4-bundle split._
+- [Exact-match C body left inside a parent's NM-wrap `#else` block won't land — move it OUTSIDE the wrap](#feedback-exact-match-c-body-trapped-in-parent-else-block) — _A split-off child's INCLUDE_ASM is appended inside the parent's `#else` block when the parent is NM-wrapped (per feedback_split_fragments_parent_in_nm_wrap_fallback). Replacing it with an exact-match C body IN PLACE leaves the body inside `#else`, so it's compiled ONLY in the default build — absent from non_matching/baseline. Land byte_verify fails with "not present in report.json and byte-verify failed (refresh expected/ baseline?)" even though the default-build objdump is byte-exact. Fix: move the exact-match C body OUTSIDE the wrap (after `#endif`). Verified 2026-05-23 on game_libs_func_0003582C (setter, child of NM-wrapped gl_func_000356FC)._
 - [objdiff reports 100% for every INCLUDE_ASM-only .c file — baseline swap is a no-op](#feedback-objdiff-include-asm-only-file-bogus-100pct) — _`refresh-expected-baseline.py` prevents build==expected contamination for files with decomp C by swapping bodies to INCLUDE_ASM before regenerating expected.
 - [`fuzzy_match_percent: null` in objdiff report does NOT mean 100 % match — it means "not in the tracked diff set"](#feedback-objdiff-null-percent-means-not-tracked) — _When `jq '.units[].functions[] | select(...) | .fuzzy_match_percent'` on report.json returns `null`, it means objdiff didn't produce a fuzzy-match entry for that function — NOT that the function is exact.
 - [objdiff tolerates different-symbol-same-target relocations (D_NNNN vs func_MMM+offset)](#feedback-objdiff-reloc-tolerance) — _If the target .o has a relocation `R_MIPS_LO16 func_NAME` with immediate 0x40, and your build has `R_MIPS_LO16 D_NNNN` with immediate 0 (both resolving to the same absolute address after link), objdiff reports these as…
@@ -5582,3 +5583,69 @@ void f(int *a0) {
 }
 ```
 This is mostly an issue in NM bodies (where `#ifdef NON_MATCHING` C is hand-written). Because the whole `<unit>.c.o` compiles as one translation unit, ONE decl-after-statement NM body anywhere in the file fails the entire `non_matching_objects` build — which is exactly what `land-successful-decomp.sh` builds for its byte_verify gate. So a parallel agent's C89-dirty NM body blocks YOUR unrelated land. Symptom: `cfe: Error: src/<seg>/<unit>.c, line N: Syntax Error` pointing at a `T x = ...;` line mid-function. Fix the offending decl (often not your function — grep the file for `void *p =` / `int x =` after statements). Verified 2026-05-22: two FP-clamp-family siblings (timproc_uso_b5 func_0000B8E0, func_0000C0D4) broke the build and blocked a game_libs land until their decls were hoisted. Relates to [feedback-nm-gate-must-build-non-matching-path].
+
+---
+
+<a id="feedback-exact-match-c-body-trapped-in-parent-else-block"></a>
+## Exact-match C body left inside a parent's NM-wrap `#else` block won't land — move it OUTSIDE the wrap
+
+When a small function is split off from a parent that is itself NM-wrapped,
+`split-fragments.py` appends the child's `INCLUDE_ASM` line *inside the parent's
+`#else` block* (per `feedback_split_fragments_parent_in_nm_wrap_fallback` —
+there's no standalone slot for it). The source looks like:
+
+```c
+#ifdef NON_MATCHING
+... parent C body ...
+#else
+INCLUDE_ASM("asm/nonmatchings/seg/seg", parent_func);
+
+INCLUDE_ASM("asm/nonmatchings/seg/seg", child_func);   /* <-- child lives here */
+#endif
+```
+
+If you decompile `child_func` to a byte-exact match and replace its `INCLUDE_ASM`
+line IN PLACE, the C body ends up inside the `#else` block:
+
+```c
+#else
+INCLUDE_ASM("asm/nonmatchings/seg/seg", parent_func);
+
+void child_func(...) { ... }   /* <-- WRONG: only compiled when NON_MATCHING is undefined */
+#endif
+```
+
+**Symptom:** the default build (`#else` taken) compiles the body and objdump
+shows it byte-exact — but `make non_matching` and `refresh-expected-baseline.py`
+take the `#ifdef NON_MATCHING` path, which has NEITHER the C body NOR the
+INCLUDE_ASM for the child → the child symbol is absent from
+`build/non_matching/*.o` AND `expected/*.o`. `land-successful-decomp.sh` fails:
+
+```
+land-successful-decomp: child_func: not present in report.json and byte-verify failed (refresh expected/ baseline?)
+```
+
+Diagnostic: `objdump -t expected/.../seg.c.o | grep child_func` returns nothing.
+
+**Fix:** an exact match needs no NM wrap — move the C body OUTSIDE the parent's
+wrap, after the `#endif`, so it compiles in every build path:
+
+```c
+#else
+INCLUDE_ASM("asm/nonmatchings/seg/seg", parent_func);
+#endif
+
+void child_func(...) { ... }   /* compiled in default + non_matching + baseline */
+```
+
+Then `refresh-expected-baseline.py` (which swaps it back to INCLUDE_ASM for the
+baseline) emits the child symbol, and byte_verify finds it. Commit the refreshed
+`expected/` baseline BEFORE landing (per
+[feedback-split-then-land-needs-separate-baseline-commit] — the land's
+stash-rebase drops an uncommitted baseline).
+
+Contrast: a child whose INCLUDE_ASM was already *standalone* (outside any wrap)
+has no such issue — replacing it in place lands cleanly. Verified 2026-05-23:
+`game_libs_func_00035988` (standalone getter) landed in-place; its sibling
+`game_libs_func_0003582C` (setter, trapped in `gl_func_000356FC`'s `#else`)
+needed the move.
