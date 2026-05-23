@@ -39,6 +39,7 @@ _20 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [INSN_PATCH bnel→bne demotion + delay-slot nopping when the pulled insn already lives at the bne-taken target](#feedback-insn-patch-bnel-demote-with-delay-nop) — _When IDO -O2 emits `bnel rN, rM, +K; <insn>` and target uses `bne rN, rM, +K-1; nop`, INSN_PATCH can swap the branch opcode + nop the delay slot AS LONG AS the same `<insn>` is duplicated at the bne-taken target offset (so it stays live post-patch). Verified 2026-05-16 on gl_func_0006AF0C (linked-list walk, 4-insn patch)._
 - [Screen INSN_PATCH candidates by op-mismatch count — register-rename (op-mismatch=0, always patchable) vs structural divergence (high op-mismatch, tautology trap, defer)](#feedback-insn-patch-screen-by-opmismatch-count) — _Before unwrapping a SAME-LEN near-exact wrap for INSN_PATCH, align expected vs build insns and count how many diffs have a different mnemonic. 0 = pure register/imm (logic-safe). Small+paired = independent-insn schedule swap (still safe). High (e.g. 25/37) = the C decode structurally diverges — INSN_PATCH would fake the logic; defer with a negative finding. Verified 2026-05-16: gl_func_00062E10 (12/2→exact) vs timproc_uso_b1_func_00001130 (37/25→deferred)._
 - [INSN_PATCH rewrites $a-reg args to hidden $v0/$v1 — unlocks "C can't name these regs" caps](#feedback-insn-patch-rename-args-to-hidden-vregs) — _Functions with alt-entry-fragment patterns using caller-set $v0/$v1 (no C-level expressible param) ARE INSN_PATCHable: declare ordinary 3+ args (mapped to $a-regs by IDO), then INSN_PATCH the affected register fields to rewrite a1/a2→v0/v1 at fixed offsets. The C body provides structure (insn count, opcode sequence); INSN_PATCH renames bytes. Verified 2026-05-16 on gl_func_00008674 (3 patches → exact). Refines the prior "GP-reg inheritance, NO EPISODE" rule: when divergence is ONLY register names at same insn count, INSN_PATCH closes it and episodes are valid._
+- ["Register-exact but instructions REORDERED" (delay-slot fill / scheduling swap) is an INSN_PATCH swap — don't defer it as TU-divergence](#feedback-insn-patch-register-exact-but-reordered-is-a-swap) — _When a near-match has the IDENTICAL instruction set (every opcode + register matches) but a few insns appear in a different ORDER (IDO fills a branch delay slot with a different independent insn, or schedules two setup insns the other way), it's a size-preserving reloc-free positional swap → INSN_PATCH each moved insn to its target offset. NOT a cap. Verified 2026-05-23 game_libs_func_0005B5FC (mask `ori` vs `sum=0` move in the beq delay slot, 2-insn swap → byte-exact). Behavior correction: the "matches standalone, in-tree reorders setup insns" deferrals (game_libs_func_00020DF4, _00009B60) are register-exact swaps and ARE landable this way. Prereqs: not TRUNCATE_TEXT'd out, no swapped insn carries a reloc._
 - [INSN_PATCH for auto-unrolled loop counter-step encoding (target i++ to N vs IDO i+=K to N*K)](#feedback-insn-patch-auto-unrolled-loop-counter-step) — _When IDO -O2 auto-unrolls `for(i=0;i<N*K;i++)` to step-K bound N*K but target has step-1 bound N (same body shape, different counter encoding), the 2 differing `addiu` insns (bound-init + step) are same-length → INSN_PATCH applicable. Verified 2026-05-17 on `game_libs_func_0005BDC0` (4x4 reciprocal copier): 99.92% C body → 100% via `0xC:0x24040004,0x1C:0x24420001`._
 
 
@@ -2499,3 +2500,38 @@ the entry is in the wrong list.
 Verified 2026-05-18 promoting `gl_func_00001134` (game_libs.c,
 1-word IDO delay-slot-fill cap, patched `0x38=0x24E400E4`): the
 Makefile-only edit no-op'd until `rm build/src/game_libs/game_libs.c.o`.
+
+<a id="feedback-insn-patch-register-exact-but-reordered-is-a-swap"></a>
+## "Register-exact but instructions REORDERED" (delay-slot fill / scheduling swap) is an INSN_PATCH swap — do NOT defer it as TU-divergence
+
+**The class.** You get a near-match where the **instruction SET is identical**
+(every opcode + every register matches) but a few instructions appear in a
+**different order** between build and target — typically because IDO fills a
+branch delay slot with a different (equally-valid) independent instruction, or
+schedules two independent setup insns in the other order. The classic tell:
+the diff is a pure *positional swap* of N instructions, no opcode/operand/reloc
+changes.
+
+**This is INSN_PATCH territory, not a cap.** A positional swap is
+size-preserving and reloc-free (assuming neither swapped insn is a jal/lui/lw
+of a symbol — see the reloc-strip caveats). Patch each moved instruction to its
+target position: `func=0xA:<word_that_belongs_at_A>,0xB:<word_that_belongs_at_B>`.
+
+**Verified 2026-05-23 on `game_libs_func_0005B5FC`** (circular-list sum,
+`sum += (node->0 & 0xFFFFFF) << 4`). Inlining `*p` (not a named local) made all
+14 instructions register-exact; the *only* residual was the `beq` delay slot —
+IDO keeps the `lui+ori` mask construction adjacent and fills the delay with
+`sum=0` (`move v1,0`), where the target splits the mask and fills the delay with
+`ori a1,a1,0xFFFF`. Identical insns, 2 traded positions →
+`game_libs_func_0005B5FC=0x8:0x00001825,0x10:0x34A5FFFF` → byte-exact, episode
+logged. (At `.o` offset 0x3EC00, within the `0x588F0` TRUNCATE_TEXT, so it
+lands — always check the symbol's `.o` offset vs the truncation first.)
+
+**Behavior correction.** Several "matches STANDALONE but in-tree reorders 2-4
+setup insns — isolated-vs-full-TU divergence" deferrals are actually landable
+this way: **`game_libs_func_00020DF4`** (swap `li a0,8`↔`move v0,0`) and
+**`game_libs_func_00009B60`** (4 setup-move reorder) were left INCLUDE_ASM as
+"TU-divergence caps" — both are register-exact positional swaps and should be
+INSN_PATCH'd. Don't defer a register-exact-but-reordered near-match; measure the
+swap and patch it. (Prereqs: function not TRUNCATE_TEXT'd out, and no swapped
+insn carries a reloc.)
