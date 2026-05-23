@@ -10392,6 +10392,19 @@ operand order only. Pairs with the do-while strlen form
 (`if(*p) do{p++;}while(*p)` emits the `lbu 1(reg)` look-ahead that `while(*++p)`
 does not) — both verified the same day on the loop-leaf vein.
 
+**Does NOT generalize to `addu` (scaled-index pointer arith).** For
+`base + idx*4` (`addu v0, base, index`), the cast lever flips the *operand order*
+the same way — `(char*)a0 + idx*4` gives base-first `addu v0,a0,t7`, while the
+`int *` shared-base form (`&a0[idx]`, `a0+idx`) gives index-first `addu v0,t7,a0`
+— BUT the cast simultaneously couples the register allocation: the char* form
+moves the index to `$v0` and the result pointer to `$v1`, whereas the target
+wants index→`$t6`/result→`$v0`. So unlike `beq` (where the cast is a clean
+lever), for `addu` the base-first order and the correct temp-reg numbering are
+mutually exclusive — it's a genuine cap. Verified 2026-05-23 on
+`timproc_uso_b5_func_00008ABC` (6-insn `a0[idx]` copy, 1 operand-order diff, all
+4 cast/shared-base forms tried). Don't burn a tick trying the cast lever on an
+`addu`-operand-order wrap.
+
 ## Indirect call: inline the call expression to get $t9 (not a named fn-ptr local → $v0)
 <a name="feedback-ido-indirect-call-inline-for-t9"></a>
 
