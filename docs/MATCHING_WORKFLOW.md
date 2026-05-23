@@ -3673,6 +3673,14 @@ ADCD0028   sw    t5, 0x28(t6)     ; uses t5 and t6 from parent!
 
 **Origin:** 2026-04-20, kernel/func_80004E50 (-O1, kernel_003) absorbing func_80004EC0 (-O2, kernel_004). merge-fragments skill's `.L`-ref detector would have missed this — no cross-function labels exist between them.
 
+**Variant — LO/HI flow + no-prologue HEAD fragment (`multu`→`mflo` across the boundary):** The register-flow split can run the OTHER direction — the no-prologue/no-`jr` fragment is the *head* (entry), and the piece WITH the `addiu $sp` prologue is its continuation. This happens because IDO -O2 schedules early register-only computation (notably a `div`/`divu`/`multu`, which it issues early to hide the multi-cycle latency) BEFORE the stack-frame setup. Splat then cuts a new symbol at the `addiu $sp`, leaving a head fragment that has no prologue and no `jr $ra`.
+
+The decisive proof here is even stronger than tN-register flow: a **`multu`/`mult`/`div` in the head sets `LO`/`HI`, and an `mflo`/`mfhi` in the body reads it.** `LO`/`HI` cannot survive a function boundary (any intervening call clobbers them), so a `multu`(head)→`mflo`(body) pair is conclusive — they are one function. Same for `div`(head)→`mflo`/`mfhi`(body).
+
+Detection: head fragment ends mid-computation (`multu rA, rB` with no `mflo` of its own, no `jr`), and the next contiguous symbol's first `mflo`/`mfhi` consumes that product. Merge the body INTO the head (the head's address is the entry / the called symbol). For `game_libs` (raw-`.word` `INCLUDE_ASM`, no splat sidecar) just concatenate the `.word`s under the head's `glabel`, bump its `nonmatching SIZE`, delete the body `.s` + its `INCLUDE_ASM`; the merge is byte-neutral (verify ELF function bytes == original `.s` words, not the short ROM per [N64_FORENSICS rom-mismatch]). If anything `jal`s the body label, add `<body> = 0x<addr>;` to `undefined_syms_auto.txt` (none did for the example).
+
+**Origin (variant):** 2026-05-23, `game_libs_func_00000B94` (head: `div a1,60000; sll v0,4; multu v0,60000` — no prologue/jr) absorbing `gl_func_00000BAC` (body: `mflo t6` of B94's `multu`, `addiu sp,-0x40` prologue, sprintf-style time-formatter calls, epilogue) → one 0x1C8 function.
+
 **Variant for raw `.word` USO asm (no `.L` labels emitted):**
 
 For USO segments that disassemble to raw `.word` directives (per `reference_uso_splat_setup.md`), the merge-fragments `.L`-ref detector can't fire — there are no labels at all, just hex bytes. The branch-target check still works but must be done by hand-decoding the conditional-branch instruction:
