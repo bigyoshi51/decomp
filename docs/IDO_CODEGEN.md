@@ -151,6 +151,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [1080 game_libs 67xxx libc-string family (strlen/strcat/strncpy/strstr) uses a two-pointer-lag + branch-likely idiom that clean C doesn't reproduce — recognize-and-NM-wrap](#feedback-1080-67xxx-string-lag-idiom) — _The ROM form per iteration is `move vL, cursor; lbu c, 0(vL); addiu cursor,1; bnezl c, loop` (a lag pointer vL copied from the live cursor each iter, char read via vL, plus branch-likely loop). Clean C (`while(*s++)`, `while(*d)d++`, separate-statement) emits a single-cursor `lbu c,0(cursor); addiu cursor,1` with plain branches — structurally off by the lag-copy + bnezl. Confirmed 2026-05-23 on 67FA4(strlen)/67C1C(strcat)/67C98(strncpy): all reloc-free, all NM-wrapped (recognized libc, byte-match deferred). Likely a compiler-version/idiom gap; a future focused pass could try `*p++`-with-saved-prev or permuter. NEGATIVE forms tried on 67FA4 strlen (2026-05-23, neither reproduces the `move vL,cursor; lbu 0(vL)` pointer-copy lag): (1) `while(*s++) n++;` → single-cursor `lbu 0(a0); addiu a0,1`; (2) `if(*s){do{s++;n++;}while(*s);}` → offset-fold `lbu 1(a0); addiu a0,1`. Both are 13/13 off (same opcodes, structure differs). So don't retry those two; the lag-copy likely needs a different idiom or compiler version. More family members confirmed: 67B04/67B40 (strcmp-variants, return 1 on mismatch), 67E28 (hash, but caller-set v0/v1 — separate cap)._
 - [Unrolled `multu`/`mflo` loops won't byte-match — this build omits the r4300 multiply-hazard nops the ROM has](#feedback-r4300-mult-hazard-nops-missing) — _A loop like `for(i=1;i<n;i++) x*=10;` makes IDO unroll-by-4 with a `(n-1)&3` remainder loop (reproducible exactly) BUT the ROM separates each `mflo` from the next `multu` with 2 hazard nops (r4300 mult-after-mflo erratum); this build (`-Wab,-r4300_mul`) emits the multu/mflo back-to-back (no nops), so the unrolled body is N nops short. The remainder loop matches (addiu+branch already separate multu/mflo). Not a per-fn C fix — detect (back-to-back multu/mflo in an unrolled loop) and NM-wrap. game_libs_func_000611E4 (pow10), 2026-05-23._
 - [Byte-RMW clear-mask: write the exact 16-bit `andi`-fitting form (`& 0xFF7F`), NOT `& ~0x80` — the negative form mis-emits `li -129` + register-`and`, evicting a reg and cascading the whole allocation](#feedback-ido-andi-fitting-mask-vs-negative) — _For `*(u8*)p &= ~0x80`, `~0x80` = 0xFFFFFF7F doesn't fit `andi`'s 16-bit immediate, so IDO materializes `li at,-129; and rd,rs,at` (2 insns + a consumed register), which shifts every subsequent `$t` assignment. Writing the equivalent `& 0xFF7F` (the low-16 mask, identical for a byte value) emits a single `andi rd,rs,0xFF7F` AND keeps the register allocation aligned. On game_libs_func_0001CF68 this single change dropped 15→14 diffs and, more importantly, removed the register cascade root. General rule: for any `x & MASK` where MASK has the high bits set (negative-looking), use the 16-bit-truncated positive literal that `andi` accepts._
+- [Reuse the parameter register as a loop counter: declare the param `int` and reassign it (→ `move aN,zero`), instead of a fresh local (→ `move v0,zero`)](#feedback-ido-reuse-param-reg-as-counter) — _When the target reuses a parameter's register as a loop counter after the param's last use (e.g. `lw v1,0x34(a0); move a0,zero` — a0 becomes the counter), a fresh `int i = 0` local lands in `$v0`/another temp instead. Fix: declare the param as `int` (not the pointer type) and reassign it: `int f(int a0, int a1){ int v1 = *(int*)(a0+0x34); a0 = 0; ... a0++ ...}`. IDO then reuses the param register for the counter = exact. Also: a `do { if (i==a1) break; ...; i++; } while (v1 != 0);` body-top break gives `beq i,a1 / bnez v1` (matching), where `while (i != a1) {...; if(v1==0)break;}` gives `beqz a1 / bnel` (off). Verified 2026-05-23 on game_libs_func_0003E0C0 (clean 12/12 episode, reloc-free linked-list walk)._
 - [`bgez v0; sra t, v0, 1; addiu at, v0, 1; sra t, at, 1` is IDO's signed `/2` lowering](#feedback-ido-signed-divide-2-idiom) — Signed-integer division by 2 in IDO doesn't become a single `sra`.
 - [`bgez x, +4 (DELAY: andi t, x, M-1); beq t, $0, +2; nop; addiu t, t, -M` is IDO's signed `x % POW2` lowering](#feedback-ido-signed-modulo-pow2-idiom) — _Signed remainder by a power-of-2 mask M (e.g. M=8 → mask=7) emits a fast-path / slow-path sequence: delay-slot ALWAYS computes `t = x & (M-1)`; if x>=0 jump straight to use (low bits ARE the remainder, 0..M-1); if x<0 AND those low bits are nonzero, subtract M to get a negative remainder (-(M-1)..-1). Write as `x % M` (signed int) in C. Spotted 2026-05-18 on gl_func_00009EBC's `(a2 % 8) << 3` grid-index computation._
 
@@ -5922,6 +5923,28 @@ sign-branch form. ANDI doesn't go through the sign-branch path.
 shapes are not interchangeable from C — pick based on what target emits.
 
 ---
+
+---
+
+<a id="feedback-ido-reuse-param-reg-as-counter"></a>
+## Reuse the parameter register as a loop counter (declare the param `int`, reassign it)
+
+When the target reuses a parameter's register as a loop counter — recognizable as `move aN, zero` (or `move aN, <init>`) right after the param's last real use — a fresh `int i = 0` local gets allocated to a *different* register (`$v0`/a temp), giving register-renumber diffs on every counter instruction.
+
+Fix: declare the parameter with the integer type you need and reassign it as the counter:
+```c
+int f(int a0, int a1) {           // a0 declared int, not int*
+    int v1 = *(int*)(a0 + 0x34);  // last use of a0-as-pointer (cast inline)
+    a0 = 0;                        // reuse a0's register as the counter → move a0,zero
+    do {
+        if (a0 == a1) break;
+        v1 = *(int*)(v1 + 0x84);
+        a0++;
+    } while (v1 != 0);
+    return v1;
+}
+```
+IDO reuses the param register for the counter = exact, where `int i=0` would not. Pair with the loop-shape rule: a `do { if (i==a1) break; ...; i++; } while (cond);` (break at body-TOP) emits `beq i,a1 / bnez cond`; the `while (i != a1) { ...; if (!cond) break; }` form emits `beqz a1 / bnel` instead. Verified 2026-05-23, `game_libs_func_0003E0C0` (clean 12/12 episode).
 
 ---
 
