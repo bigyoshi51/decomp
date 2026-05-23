@@ -10276,13 +10276,18 @@ Verified byte-exact 2026-05-23 on the whole family that was previously
 NM-wrapped as "permuter-class": `timproc_uso_b5_func_00008C1C/_00008AD4/
 _00008A38/_00008A64/_00008A90`. No INSN_PATCH needed.
 
-**Limit.** The lever works when the addu base is a LOADED value
-(`*(int*)(a0+B)`). When the base is the PARAMETER itself (`a0 + idx*4` where
-a0 is the arg, with an `(int)a0` cast), IDO forces index-first regardless of C
-order — that residual case (e.g. `timproc_uso_b5_func_00008ABC`,
-`game_libs_func_00067358`) is still a genuine cap. (Pointer-arith `(char*)a0 +
-idx*4` with the param written first CAN give base-first — see the 8A38 first
-deref — so try that before declaring a param-base addu capped.)
+**Param base — the `(int)a0` cast is the trap, not the operand order.** For a
+PARAMETER base, `(int)a0 + idx*4` (int-cast) forces index-first, BUT pointer
+arithmetic with the param written first — `(char*)a0 + idx*4 + K` — emits
+base-first and matches. `game_libs_func_00067358` (`return *(int*)((char*)a0 +
+a1*4 + 0x13C8)`) verified byte-exact this way 2026-05-23 (it had been deferred
+only because the earlier attempt used the `(int)a0` cast). So: always use
+`(char*)param + idx*4` pointer-arith, never `(int)param + idx*4`.
+
+**Genuine residual cap:** a SHARED address used for both a load and a store
+(`p = a0+idx*4; *p=…; …=*p;`) with a LOADED index — IDO CSEs it to one
+index-first addu regardless of C form (`timproc_uso_b5_func_00008ABC`). That one
+stays NM.
 
 ## A no-dependency constant store gets hoisted into a load-delay gap — write it LAST in source order
 <a name="feedback-ido-zero-store-write-last-to-prevent-hoist"></a>
