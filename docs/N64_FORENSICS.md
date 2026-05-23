@@ -11,6 +11,7 @@ _10 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches](#feedback-1080-rsp-ucode-not-f3dex2) — Spiked 2026-05-04.
 - [game_libs absolute-address data refs use `extern T *gl_ref_XXXXXXXX` + undefined_syms](#feedback-game-libs-gl-ref-data) — _For `lui $rN, %hi(SYM); lw $rN, %lo(SYM)($rN)` pairs in game_libs (USO) that load a pointer from a fixed absolute address, declare `extern T *gl_ref_ADDR;` in game_libs.c and add `gl_ref_ADDR = 0xADDR;` to…
 - [game_libs JAL targets are largely placeholders; use gl_func_00000000 for target=0, extern stubs for non-zero non-boundary targets](#feedback-game-libs-jal-targets) — _In game_libs (relocatable USO at VRAM=0), JAL targets in the ROM are runtime-patched placeholders, not real call targets.
+- [1080 game_libs small-function residue is exhausted-into-caps: the bare candidates left are cross-fn-merge / caller-set-reg / jump-table-undersized / 0x8-stolen-prologue-splat-gap families — recognize-and-skip](#feedback-1080-game-libs-small-fn-cap-families)
 - [GFX display-list data vs RSP microcode forensic — top-byte distribution is necessary but NOT sufficient; substring-match against public IMEM bins is the real check](#feedback-gfx-dl-data-vs-rsp-ucode-forensic-check) — _GFX-opcode top-byte counting at 8-byte alignment can give FALSE NEGATIVES on mixed blobs (CPU code + RSP IMEM concatenated together). 1080's `game_libs_text2` (originally renamed to `_dl_data` based on this heuristic)…
 - [HW address literal vs symbol encoding](#feedback-hw-addr-encoding) — _Both forms produce identical ROM bytes via asm-processor — don't chase objdiff's per-.o "diff" when comparing against an INCLUDE_ASM baseline_
 - [N64 RSP ucode data-section layout — id-string at fixed offset within 0x800 block, used as fingerprint anchor](#feedback-n64-ucode-data-section-layout-id-offset-signature) — _Stock Nintendo F3DEX 1.x gfx ucodes pack their banner ID string at offset 0x2B0 within a 0x800-byte DMEM data section; aspMain audio ucodes put it near the end (~0x7F0).
@@ -21,6 +22,18 @@ _10 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 
 ---
+
+<a id="feedback-1080-game-libs-small-fn-cap-families"></a>
+## 1080 game_libs small-function residue is exhausted-into-caps (recognize-and-skip)
+
+_2026-05-23. After landing the clean small leaves, a size-sorted sweep of the remaining BARE game_libs functions (sizes 0x8–0x40) found they are ALL one of four cap/boundary families. Recognize by shape in seconds; don't re-decode each:_
+
+- **0x8 stolen-prologue fragments with un-disassembled successors.** Two-insn `lui rX, 0; lw/lh/lhu/lwc1/mtc1 rX, OFF(rX)` (a USO global / FP-const load) with **no `jr`**. These are the prologue of the next function, but splat left a GAP after them (the successor at +8 is NOT in any `.s` file — e.g. `00001818`→gap→`00002540`, `00008508`→gap→`000086A0`). Can't merge (no successor to merge into) → needs a **refine-splat / re-extract pass** to disassemble the gap regions, NOT a decomp tick. Examples: `00001818` (1.0f→$f0), `00008508`, `0001FBCC`, `00020A20`, ~28 more at 0x8.
+- **Cross-function tail-merge (success path `b`/`bc1fl` past declared end into the next function).** e.g. `game_libs_func_0001FDF4` (bump allocator: align a1 up to 16, bounds-check `a0[0]+a0[2] < a0[1]+sz`, on success bump `a0[1]` and `b 0x40` INTO `0001FE34` which does `v0=v1; a0[3]++; jr`). The shared continuation is a separate symbol with its own `jr ra` → unmatchable from standalone C (can't `goto` into another function; inlining a copy ≠ the branch bytes). Same family as `57194`→`571E4`.
+- **Caller-set-reg finalizers.** The continuation symbols themselves (e.g. `0001FE34` starting `move v0, v1` with v1 uninitialized; `00023BC0` = `jr ra; lw v0, OFF(v0)`) take a value in `$v0`/`$v1`/`$t6` that IDO C can't express as a parameter (per the caller-set-int-reg cap).
+- **Jump-table dispatchers splat under-sized.** e.g. `timproc_uso_b5_func_000087F4` (`lw t6,0x3C8(a0); addiu -1; sltiu <8; beqz default-past-end; sll 2; lui 0; lw 0x1F4(at); jr t7`). The declared size (0x40) cuts off before the case bodies; the table is reloc'd. Needs boundary fix + table resolve, not a quick match.
+
+**Takeaway:** when source-3 (small-unstarted) rolls and the candidate is bare game_libs ≤0x40, classify it against these four shapes first. None are quick matches. The genuine remaining game_libs %-work is (a) a refine-splat pass on the 0x8-fragment gaps, (b) big-function first-pass wraps (`5721C` FPU, `578B4` 2423-insn), or (c) the permuter on the few structurally-exact reloc-free leaves (e.g. `27504`).
 
 <a id="feedback-1080-rsp-ucode-not-f3dex2"></a>
 ## 1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches
