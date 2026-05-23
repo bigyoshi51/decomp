@@ -6710,6 +6710,8 @@ All three let IDO pick `$v0` for `new_top` (the bounds-check operand), then put 
 
 **Diagnostic value:** When built is SHORTER than target by 1 insn, suspect this cap class — the issue isn't missing logic, it's IDO's scheduler being too efficient. Distinguish from the usual cap (built bigger than target = IDO over-emitting). NM-wrap with the natural shorter form; document the size delta.
 
+**Confirming instance — return-the-pointer-arg leaf cascade (2026-05-23, `game_libs_func_00003FF8`, reloc-free 4-field clamp-to-min, re-verified cap):** A leaf that returns its pointer arg `a0` unchanged AND uses it as the base for several field stores. Target (25 insns): `move v0,a0` EARLY (instr 2) → `$a0` dies after field 1 → `$v0` is the base for fields 2..N → final `jr ra` delay slot is a wasted `nop`. IDO's natural emit (24 insns): keeps `$a0` as base for ALL fields, parks the clamp constant in `$v0`, and fills the `jr ra` delay slot with `move v0,a0` (late return-move) — one insn shorter. Tested levers, ALL coalesced back to the 24-insn form: `int *v0=a0;` at top, `v0=a0` after field 1, all-accesses-via-`v0`, named-constant-var. The copy `v0=a0` is free (operands equal), so the scheduler always prefers (a0-base + delay-slot-fill) over (early-move + v0-base + nop-delay). Same root cause as the branch case above: the target wastes a delay slot to pre-establish a register, which IDO never chooses. Sibling `game_libs_func_00064124` (FP init cascade) is the same family + a distinct-`$f4`-for-0.0f blocker. Both reloc-free but permanently NM (no episode), unless a permuter/INSN_PATCH-insert mechanism appears.
+
 ---
 
 <a id="feedback-ido-swc1-f0-without-mtc1"></a>
