@@ -1342,6 +1342,8 @@ Lesson: this rule isn't limited to predicate functions returning literal 0/1 —
 
 **Rule of thumb:** if target has plain `bnez/beq` JUMPING TO a call-arm (non-call-arm in fallthrough delay slot), write `if (cond == 0) non_call_arm; else call();`. If target has `beql/bnezl` SKIPPING a call-arm, write `if (cond != 0) call(); else non_call_arm;`. The C arm that contains the JUMP-TARGET work is opposite to the C arm that contains SKIPPED work.
 
+**Multi-predicate `bc1fl`-to-shared-return chain (AABB/range tests) NOT reproduced by either form (2026-05-23, `game_libs_func_0003A158` point-in-AABB):** a 6-comparison float test `return (a1[0]<=a0[0] && a0[0]<=a1[3] && ...) ? 1 : 0` where the TARGET emits, for each check, `c.le.s; bc1fl SHARED_return0; lwc1 next_operand(annul delay)` — i.e. branch-likely-FALSE to ONE shared return-0 block, with the next comparison's operand load tucked in the annulled delay slot. Neither C form reproduces this: the `&&` single-if form → plain `bc1f` (38/38 same size, but bc1f not bc1fl + different load schedule); the negative-early-return form `if(!(a<=b)) return 0;`×6 → `bc1tl` with SEPARATE return-0 blocks (48 insns, bigger). The shared-return + annul-delay-load + branch-likely confluence is its own arm-choice cap — recognize the AABB/range-test family (game_libs 3A158/3A1F0/3A278/3A2FC/3A380/3A400/3A484/3A504, all reloc-free FP) and NM-wrap with the clean `&&` form; defer byte-match to a focused pass.
+
 ---
 
 ---
