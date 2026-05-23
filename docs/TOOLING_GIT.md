@@ -20,6 +20,7 @@ _13 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Bash `cd` into main worktree during land persists across later turns — run land from subshell](#feedback-shell-cwd-drift-in-worktree) — In 1080 parallel-agent worktree flow, the manual land fallback is `cd <main-worktree> && git merge --ff-only <agent-branch> && git push`.
 - [Recovering when another agent's process has mass-reverted your worktree's src/ files](#feedback-worktree-mass-revert-recovery) — _With multiple parallel agents on 1080-decomp, one agent's rebase/reset/splat-rerun can mass-revert another worktree's src/ .c files to all-INCLUDE_ASM, wiping your in-progress NM wraps and exact matches.
 - [`git rebase` silently leaves duplicate entries in multi-line Makefile variables when two agents add the same key](#feedback-rebase-duplicates-multiline-makefile-key) — _When parallel agents both add identical `<func>=…` entries to the same backslash-continued Makefile variable, rebase keeps both lines without conflict markers. Build passes, but the key is duplicated. After rebase, run `grep -oE '[a-zA-Z_]+=' Makefile | sort | uniq -c | awk '$1>1'` to spot duplicates._
+- [Backticks in a double-quoted `git commit -m "…"` body get command-substituted by bash — silently corrupts the message](#feedback-backticks-in-commit-message-command-substituted) — _A commit body like `needs \`int *a0\` (not int**)` passed via `git commit -m "…"` makes bash run `int *a0` as a command (`int: command not found`) and splice its empty stdout into the message → the message reads `needs  (not int**)`. The commit still lands (so it's easy to miss), but the content is mangled and worse, a backtick expression with side effects would EXECUTE. Use single quotes, a quoted heredoc (`-F`), or avoid backticks/`$()`/`$VAR` in `-m` bodies entirely._
 
 
 ---
@@ -693,5 +694,32 @@ _When agent-A and agent-B both add a Makefile recipe entry for the same function
 **General lesson:** any "list of named entries" file (Makefile multi-line vars, undefined_syms_auto.txt, splat YAML lists) is vulnerable. Periodically dedupe these as hygiene.
 
 ---
+
+<a id="feedback-backticks-in-commit-message-command-substituted"></a>
+## Backticks in a double-quoted `git commit -m "…"` body get command-substituted by bash
+
+When you write a multi-line commit message with `git commit -m "…body…"` and the
+body contains backticks (or `$(...)` or `$VAR`), **bash evaluates them before git
+ever sees the string**. A body like:
+
+```
+- needs `int *a0` (not int**); p!=a0 puts p in beq rs
+```
+
+makes bash try to run `int *a0` as a command. You'll see `int: command not found`
+on stderr, the backtick span is replaced by the command's (empty) stdout, and the
+commit lands anyway reading `needs  (not int**); …`. Because the commit succeeds
+and the error scrolls past, this is easy to miss — the message is silently
+corrupted. Worse: a backtick/`$()` expression that happened to be a real command
+would EXECUTE with side effects.
+
+**Fix.** For commit bodies that contain code/backticks/`$`:
+- prefer single quotes `git commit -m '…'` (no substitution inside `'…'`), OR
+- write the message to a file and use `git commit -F msg.txt`, OR
+- just avoid backticks, `$(`, and `$NAME` in `-m` bodies (use plain prose / quotes
+  like `'int *a0'`).
+
+Verified 2026-05-23 — a 4-match commit body lost its `` `int *a0` `` span this way
+(message still pushed, only cosmetically wrong, so no force-push to fix).
 
 ---

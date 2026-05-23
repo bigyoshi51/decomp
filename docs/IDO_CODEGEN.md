@@ -78,6 +78,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Leaf load-hoist-above-aliasing-store: don't cache the first deref in a named local](#feedback-ido-leaf-load-hoist-no-named-temp) — _When a no-frame leaf's target hoists `lw t6, off(aN)` ABOVE a preceding `sw aM, 0(a0)` (aliasing store) AND uses transient `$t6/$t7` for two un-CSE'd derefs of the same `aN[k]`, write the load-bearing statement FIRST in source with NO named temp. A named `int t = aN[k];` both mis-allocates the value ($v0 instead of $t6) and CSEs the second deref to one load. Verified byte-exact 2026-05-18 on `game_libs_func_000664D4` (7-insn doubly-linked-list splice)._
 - [A no-dependency constant store (`field = 0`) gets hoisted into an earlier load-delay gap — write it LAST in source order to pin it at the end](#feedback-ido-zero-store-write-last-to-prevent-hoist) — _When a function copies several loaded fields into the object AND also writes a constant (e.g. `obj->K = 0`), IDO's scheduler hoists the zero-store (no value dependency) up to fill a load-delay gap, landing it earlier than the target. Writing the constant store as the LAST statement keeps it after the dependent loads, matching the target's late placement (typically just before the jr-delay store). Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (3 global-table field copies + one `a0->0x3C=0`): zero-store written 3rd → emitted at pos 8 (hoisted); written last → pos 11 (matches)._
 - [jr-epilogue double-store: delay-pick + emit-order + temp-reg# all couple to source order, so some target combos are unreachable (cap)](#feedback-ido-jr-epilogue-double-store-coupling-cap) — _A 5-insn `compute;compute;sw;jr;sw` leaf with two independent stores of differently-computed values: the delay-slot store (always the FIRST source store), the emit order, and the temp-reg numbering (first-computed value → lower temp) are all locked to source order. If the target's delay store uses the second-computed value while the first-computed value lands in the lower temp, no source order produces both — NM-wrap/defer. jr analogue of the jal swap-stores recipe, but the jr case couples reg# too so the swap that fixes the delay store breaks the reg. Verified 2026-05-23 game_libs_func_000478D8._
+- [Commutative compare (beq/bne) operand order: don't cast the parameter — casting flips which operand becomes rs](#feedback-ido-beq-operand-order-param-cast) — _`while(p!=a0)`/`if(p!=a0)` against a param: no cast → loaded value p ($v0) is rs (`beq $v0,$a0`); casting the param (`p!=(int*)a0`, or `int**a0`+cast) makes the param rs (`beq $a0,$v0`) — reversed bytes. Source operand order (a0!=p vs p!=a0) does NOT change it; only the cast does. Declare the param at the type that avoids the cast to match a target whose freshly-loaded value is rs. Verified byte-exact 2026-05-23 game_libs_func_0005B73C._
 - [getc-style post-increment: deref `**a0` (not a named pointer local) keeps the pointer in $a1 and forces lbu-before-addiu](#feedback-ido-getc-deref-form-keeps-a1) — _For `c = *(*pp)++` (read byte, post-increment caller's pointer), write `unsigned char v = **a0; *a0 = *a0 + 1; return v;`. The double-deref keeps the loaded pointer in $a1 and emits `lbu` before the `addiu`/`sw`-in-delay. A named `p = *a0; v = *p; *a0 = p+1;` mis-allocates to $v1 and reorders to increment-first/lbu-in-delay. Verified byte-exact 2026-05-23 game_libs_func_0002A9A4._
 - [Reference `*a2` twice in the C source when target loads it twice across a jal — IDO scheduler picks the second load to fill the jal delay slot](#feedback-ido-double-deref-fills-jal-delay-slot) — _When target asm loads a pointer dereference (`lw t6, 0(a2)`) early, then loads it AGAIN (`lw t8, 0(a2)`) right before a jal whose delay slot is `sw t8, OFFSET(sp)` (store of the second-loaded value), the C body must reference `*a2` twice. Write two assignments (e.g. `b60_1 = *a2; ...; b70 = *a2;`) rather than caching the value in one local — IDO's scheduler picks the second source-level read to fill the delay slot. Caching `int t = *a2;` and writing `b60_1 = t; b70 = t;` produces a single-load form with an unfilled delay slot. Verified pattern 2026-05-15 on `gl_func_0003F2B8` — duplicate-deref produces the expected scheduler emit, though that function caps at 83.4% NM due to the separate unused-arg-spill family (sw a0, 0xB8(sp) + sw a2, 0x68(sp))._
 
@@ -10365,6 +10366,31 @@ unsigned char f(unsigned char **a0) {
 the wrong shape. The `**a0` double-deref keeps the pointer in `$a1` and forces
 the `lbu` to precede the `addiu`. Verified byte-exact 2026-05-23 on
 `game_libs_func_0002A9A4`.
+
+## Commutative compare (`beq`/`bne`) operand order: don't cast the parameter — casting flips which operand becomes `rs`
+<a name="feedback-ido-beq-operand-order-param-cast"></a>
+
+For a loop/guard comparing a loaded pointer-local against a parameter
+(`while (p != a0)` / `if (p != a0)`), `beq`/`bne` is commutative so either
+register order is semantically equal but **byte-different**. IDO's operand
+choice is driven by the parameter's declared type, NOT by source operand order:
+
+- **Param at its natural type, no cast** → the loaded value `p` (in `$v0`) is
+  `rs`: `beq $v0, $a0`. This matches targets whose first compare instruction
+  loads a field and tests it directly.
+- **Param cast at the compare** (`p != (int*)a0`, or declaring it `int **a0` and
+  casting) → the *parameter* becomes `rs`: `beq $a0, $v0` — reversed bytes.
+
+Flipping source order (`a0 != p` vs `p != a0`) does **not** change it; only the
+cast does.
+
+**How to apply.** If the target's `beq`/`bne` has the freshly-loaded value as
+`rs`, declare the parameter at the type that lets you compare WITHOUT a cast.
+Verified byte-exact 2026-05-23 on `game_libs_func_0005B73C` (circular-list
+counter): `int *a0` + `p != a0` matched; `int **a0` + `p != (int*)a0` missed by
+operand order only. Pairs with the do-while strlen form
+(`if(*p) do{p++;}while(*p)` emits the `lbu 1(reg)` look-ahead that `while(*++p)`
+does not) — both verified the same day on the loop-leaf vein.
 
 ## Indirect call: inline the call expression to get $t9 (not a named fn-ptr local → $v0)
 <a name="feedback-ido-indirect-call-inline-for-t9"></a>
