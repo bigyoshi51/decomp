@@ -132,6 +132,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Short-of-int extraction emits the WRONG halfword address: `(short)int_at_OFF` emits `lh OFF+2` (low half, big-endian), `*(short*)((char*)p + OFF)` emits `lh OFF` (direct halfword at byte offset). Same trap for `(unsigned short)*int_ptr` → `lhu +2` vs `*p & 0xFFFF` → `lw + andi 0xFFFF`](#feedback-ido-short-of-int-vs-direct-short-load) — _When target asm has `lh rT, OFFSET(rS)` reading a halfword at byte offset OFFSET inside a struct of ints, the natural C `(short)struct[OFFSET/4]` does NOT match. IDO -O2 emits `lh rT, OFFSET+2(rS)` for the int-cast form (low half of the 32-bit word, MIPS big-endian). To get the direct halfword load, use `*(short*)((char*)struct + OFFSET)`. Same trap for `(unsigned short)*int_ptr` (emits `lhu OFF+2(p)`) vs `*int_ptr & 0xFFFF` (emits `lw 0(p); andi rT, rT, 0xFFFF`). Verified 2026-05-14 on gl_func_00038C04: both forms fixed null fuzzy → 95.92%._
 - [`x & ~K` emits `andi rT,rS,0xFFFF-K` (sign-extended-complement form); `x & EXPLICIT_MASK` emits `andi rT,rS,EXPLICIT_MASK` (literal form)](#feedback-ido-andi-mask-bytewidth-depends-on-c-form) — _For an 8-bit char store like `*p = *p & ~2;` vs `*p = *p & 0xFD;`, both produce functionally-identical results (clear bit 1 of the low 8 bits) but IDO encodes the andi with a DIFFERENT 16-bit immediate: `~2` → `andi 0xFFFD` (0x31cffffd byte), `0xFD` → `andi 0x00FD` (0x31cf00fd byte). Match the target's literal — `andi 0xFFFD` means source used `~K`; `andi 0x00FD` means explicit mask. Verified 2026-05-14 on gl_func_0002D064. Same one-bit-different-byte issue as `ori vs addiu` for symbol-vs-literal constants._
 - [`volatile int low_pad[N];` declared BEFORE a `float buf[M]` grows the frame by 4N bytes AND pushes buf to a higher stack offset](#feedback-ido-volatile-int-array-low-pad-grows-frame-and-pushes-buf-up) — _When buf is offset 4N bytes too low vs target, a leading `volatile int low_pad[N]; low_pad[i]=0;` grows the frame by 4N AND pushes buf up by 4N (volatile-scalars-before-array layout rule). Verified 2026-05-14 on gl_func_00039A9C: 2-element low_pad moved buf sp+0x24 → sp+0x28. Cost: N visible `sw zero` insns; net regression unless paired with INSN_PATCH to elide them._
+- [Reproduce a target's DEAD store (store X to addr, then overwrite with Y, no intervening read) via a TARGETED volatile cast on just that one store](#feedback-ido-targeted-volatile-keeps-dead-store) — _When the target writes a field twice with no read between (e.g. `sw t3,0x40(a0)` then `andi t5,t3,0xF; sw t5,0x40(a0)` — first store dead), clean C `p[i]=t; p[i]=t&0xF;` lets IDO -O2 dead-store-eliminate the first (1 insn short, shifts branch offsets). Cast ONLY that store's lvalue: `((volatile T*)p)[i] = t; p[i] = t & 0xF;` — the volatile store can't be DCE'd, so both emit. Whole-pointer `volatile T *p` OVER-applies (forces every access to a fresh load — 22 diffs on gl_func_00031784); the targeted single-store cast is surgical. Verified 2026-05-23 on game_libs_func_00031784 (ring-buffer index `=t; =t&0xF`): 26→27 insns, then 5 residual register-renumber insns INSN_PATCHed → byte-exact + episode._
 - [Write-only `volatile int dummy = aN;` keeps an 8-byte frame allocated WITHOUT the dead-load artifact of `(void)dummy;`](#feedback-ido-write-only-volatile-keeps-frame-without-deadload) — _When `volatile int dummy;` is the only lever to keep IDO -O2 from collapsing a small stack frame, the default `(void)dummy;` use-site emits a trailing `lw zero, OFF(sp)` dead-load. Swap it for `dummy = aN;` (volatile-WRITE, no read): slot stays anchored, no trailing load emitted. Verified 2026-05-14 on `gl_func_0006AF0C` (79.28% → 86.78%, 16→14 insns)._
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
 - [IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C](#feedback-ido-o2-loop-array-strength-reduction) — When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 caches `s_reg = array + idx` and post-increments it. If target has the NON-strength-reduced form (per-iter `addu base, idx`), no C variant defeats it. Verified 2026-05-06 on gl_func_00055B44.
@@ -10505,3 +10506,30 @@ equivalent `if ((v0<<12)>=0 && (v0<<8)>=0) B(); else A();` instead emits TWO
 inverted second test (`bltz` where the target has `bgez`). Verified byte-exact
 2026-05-22 on `gl_func_00056FF4` (bit19||bit23 flag dispatch): the `||`-of-
 negatives form matched 18/18; the `&&` form had 2 diffs.
+
+<a id="feedback-ido-targeted-volatile-keeps-dead-store"></a>
+## Reproduce a target's DEAD store via a TARGETED volatile cast on just that one store
+
+Some 1080 game_libs functions write a field TWICE with no read between, leaving the first store dead:
+
+```
+lw    t2, 0x40(a0)        ; idx = a0->0x40
+addiu t3, t2, 1           ; t3 = idx + 1
+sw    t3, 0x40(a0)        ; a0->0x40 = idx+1     <- DEAD (overwritten next)
+andi  t5, t3, 0xF         ; t5 = (idx+1) & 0xF   (uses the REGISTER t3, not a reload)
+sw    t5, 0x40(a0)        ; a0->0x40 = (idx+1)&0xF
+```
+
+The natural C is `int t = a0->0x40 + 1; a0->0x40 = t; a0->0x40 = t & 0xF;` — but IDO -O2 **dead-store-eliminates** the first `a0->0x40 = t` (the field is overwritten with no intervening read), emitting one store. Result: 1 insn short, and every later branch offset shifts.
+
+**Fix — cast ONLY the dead store's lvalue to volatile:**
+```c
+int t = a0[0x40/4] + 1;
+((volatile int *)a0)[0x40/4] = t;   // volatile store: cannot be DCE'd -> emitted
+a0[0x40/4] = t & 0xF;                // normal store (the live one)
+```
+A volatile store has identical encoding to a plain `sw`, so the bytes match; volatile only blocks the dead-store elimination.
+
+**Do NOT make the whole pointer volatile** (`volatile int *a0`): that forces EVERY `a0[...]` access to a fresh, un-CSE'd load, adding many extra loads and reordering the merge — it over-applied to 22 diffs on gl_func_00031784 (vs the targeted cast's 0 structural diffs). The single-store cast is surgical; the whole-pointer qualifier is a sledgehammer.
+
+**Origin:** 2026-05-23, game_libs_func_00031784 (ring-buffer push state machine). Targeted volatile took it 26→27 insns (correct length); 5 residual register-renumber insns in the increment block were INSN_PATCHed → byte-exact, reloc-free, episode logged. (Cf. the related but distinct volatile levers: caller-slot spill via `volatile T *p=&arg`, N-fold reload via `volatile T **`, scoped-volatile early-exit shape.)
