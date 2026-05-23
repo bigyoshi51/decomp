@@ -41,6 +41,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 ### objdiff scoring quirks
 
 - [byte-verify functions via symbol-table addr+size + objcopy bytes, NOT objdump disasm-string compare](#feedback-byte-verify-via-objcopy-not-objdump-string) — _Comparing two .o files for byte-equality of a specific function via `mips-linux-gnu-objdump -d` BLOCK STRINGS (extracting `<func>:` to next blank line, then string-equality) is brittle: the disasm output contains the…
+- [Raw-word byte-compare is BLIND to reloc targets — a pure symbol-reference leaf (lui 0 / lw 0) byte-matches regardless of WHICH symbol the reloc points at](#feedback-byte-compare-blind-to-reloc-target) — _Comparing built `.text` words to the `.s` raw words can't verify reloc-bearing instructions: in both, the immediate of `lui %hi(SYM)`/`lw %lo(SYM)`/`addiu %lo(SYM)`/`jal SYM` is 0 (the linker/objdiff fills it). For a leaf whose ENTIRE content is a symbol reference with no discriminating literal offset — e.g. `return D_X` = `lui v0,0; jr ra; lw v0,0(v0)` — two functions referencing DIFFERENT globals produce IDENTICAL raw bytes. The recognizer reports MATCH but the reloc symbol may be wrong (false positive). When the function's only content is a reloc'd symbol ref with offset 0, verify the reloc target separately (`objdump -r`) or skip. Functions WITH a non-reloc'd discriminating offset (e.g. the lbu/sb `0x2C40` in the D_-table triplet) are safe — the offset confirms identity. Verified 2026-05-23 (deferred game_libs 38B94/666F0/3487C/44CB0)._
 - [1080's land script now accepts byte-verify against expected/.o as an alternative to fuzzy=100.0](#feedback-land-script-accepts-byte-verify-for-post-cc-recipes) — _As of commit bbc3b6e (2026-05-04), `scripts/land-successful-decomp.sh` lands a function if EITHER `fuzzy_match_percent == 100.0` OR `mips-linux-gnu-objdump` of the function's disasm in build/<unit>.c.o equals…
 - [byte_verify against build/.o is circular for NM-wrapped functions — use build/non_matching/.o](#feedback-include-asm-tautology-trap) — _The land script's `byte_verify` globs `build/.o` and compares to `expected/.o`. For any function wrapped in `#ifdef NON_MATCHING / #else INCLUDE_ASM`, both paths contain the same ROM bytes by construction (default build takes the `#else`, expected/ is generated via INCLUDE_ASM) — the comparison is trivially true regardless of whether the C body matches. Combined with `ensure_not_include_asm` silently passing when rg isn't on PATH (Claude Code agent sessions have rg as a shell function, not a binary), false-positive episodes accumulated. Fixed 2026-05-06: byte_verify routes to build/non_matching/ when src has INCLUDE_ASM for the function; ensure_not_include_asm uses POSIX grep -r; new `scripts/validate-episodes.sh` re-runs the full gate as defense-in-depth._
 - [Land script byte_verify symbol-table parser had two latent bugs (single-letter type field + .NON_MATCHING alias collision)](#feedback-land-script-byte-verify-objdump-parse-bugs) — _scripts/land-successful-decomp.sh's byte_verify hit two parsing bugs that silently truncated extracted bytes — single-letter 'F'/'O' type field gets parsed as size=15/24 hex, AND .NON_MATCHING aliased symbols get…
@@ -657,6 +658,46 @@ bytes."
 - `feedback_land_script_accepts_byte_verify_for_post_cc_recipes.md` —
   the design rationale for byte-verify as a landing gate
 - `scripts/land-successful-decomp.sh` — the script (post-fix)
+
+<a id="feedback-byte-compare-blind-to-reloc-target"></a>
+## Raw-word byte-compare is BLIND to reloc targets — a pure symbol-reference leaf byte-matches regardless of which symbol
+
+The per-tick recognizer compares built `.text` words against the `.s` raw
+words. That compare **cannot see relocation targets**: for any reloc-bearing
+instruction the 16-bit immediate is `0` in BOTH the built `.o` and the `.s`
+disasm (the value is supplied later by the linker / is reloc-pending). So:
+
+```
+lui  v0, 0      # %hi(SYM) — reloc-pending, immediate 0
+jr   ra
+lw   v0, 0(v0)  # %lo(SYM) — reloc-pending, immediate 0
+```
+
+is the byte-identical emit for `return D_A`, `return D_B`, `return D_C`, …
+— **every** `return <some global>` produces the same six bytes. The ONLY
+differentiator is the relocation's target symbol, which the raw-word compare
+ignores. The recognizer prints `MATCH` but the symbol may be wrong → a false
+positive episode.
+
+**When this bites:** leaves whose entire content is a reloc'd symbol reference
+with **no discriminating literal**:
+- `return D_X;` (`lui;lw`) and `D_X = a0;` (`lui;sw`) with offset 0
+- a bare `jal target` thunk
+- two siblings with identical raw bytes (e.g. game_libs `38B94`/`666F0`,
+  `3487C`/`44CB0`) that actually reference different globals.
+
+**When it's safe:** the instruction carries a **non-reloc'd discriminating
+offset** baked into the literal — e.g. the `lbu/sb 0x2C40(v0)` in the D_-table
+guarded-write triplet (`22ED0`/`22F00`/`22F30`). The `0x2C40` is a real literal
+in both built and expected, so it confirms identity even though the `lui/addiu`
+of `&D_00000000` is reloc-pending.
+
+**How to apply.** Before logging an episode for a leaf whose only content is a
+reloc'd symbol reference at offset 0, verify the reloc target with
+`mips-linux-gnu-objdump -r build/.../<file>.c.o` against the original (or skip).
+Don't trust a raw-word MATCH for these. Verified 2026-05-23 — deferred
+`game_libs_func_0003{8B94,487C}` / `_000{666F0,44CB0}` rather than risk a
+wrong-symbol episode.
 
 ---
 
