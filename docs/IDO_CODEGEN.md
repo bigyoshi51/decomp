@@ -10284,10 +10284,17 @@ a1*4 + 0x13C8)`) verified byte-exact this way 2026-05-23 (it had been deferred
 only because the earlier attempt used the `(int)a0` cast). So: always use
 `(char*)param + idx*4` pointer-arith, never `(int)param + idx*4`.
 
-**Genuine residual cap:** a SHARED address used for both a load and a store
-(`p = a0+idx*4; *p=…; …=*p;`) with a LOADED index — IDO CSEs it to one
-index-first addu regardless of C form (`timproc_uso_b5_func_00008ABC`). That one
-stays NM.
+**The SHARED-address sub-case → 1-insn INSN_PATCH, not a cap.** When the same
+`p = a0+idx*4` feeds both a load and a store (`*(p+K1)=*(p+K2)`), IDO
+materializes ONE addu and emits it index-first (`addu v0,t7,a0`) regardless of
+C operand order — the `base + idx*4` ↔ `idx*4 + base` lever does NOT flip it
+here (confirmed across `&a0[idx]`, `(char*)a0+idx*4`, `idx*4+(char*)a0`,
+`(idx<<2)+(char*)a0` — all index-first). BUT every other byte matches, so the
+operand-order is a commutative 1-insn diff: keep the natural C body (`int *p =
+&a0[idx]; *(p+K1)=*(p+K2);`) and INSN_PATCH the single addu to base-first
+(`func=0x8:0x008F1021`). `timproc_uso_b5_func_00008ABC` promoted byte-exact this
+way 2026-05-23 (1/6, well under the ≤half episode-fidelity bar). So the shared-
+address shape is NOT a permanent cap — it's a guaranteed 1-insn patch.
 
 ## A no-dependency constant store gets hoisted into a load-delay gap — write it LAST in source order
 <a name="feedback-ido-zero-store-write-last-to-prevent-hoist"></a>
