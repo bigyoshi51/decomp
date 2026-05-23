@@ -148,6 +148,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Named `unsigned char c = *p;` forces $v0; inline `*p` in the comparison keeps the load in $t6](#feedback-ido-named-char-v0-vs-t6) — When the target has `lbu $t6, 0($sN)` for a char loaded from memory and compared immediately, declaring it as a local (`unsigned char c = *p`) forces IDO to allocate $v0 for the load instead.
 - [IDO -O2 picks bgez vs srl+beqz for sign-test based on C form — `(unsigned)x>>31` forces 2-insn srl+beqz](#feedback-ido-sign-test-form-choice) — For `if (x < 0) {...}`, IDO -O2 emits the 1-insn `bgez x, .Lend` form (branch if non-negative, skipping the body).
 - [Test arbitrary bit-N (N != 31) by `((unsigned)x << (31-N)) >> 31` — emits `sll + bgezl/bltzl`](#feedback-ido-bit-N-test-via-sll-bgezl) — _When target uses `sll t, x, K; bltzl/bgezl t, ...` to test bit N (where K = 31-N), the natural `andi+bnez` form won't match. Write `((unsigned)x << K) >> 31` to force the SLL+sign-branch form. Verified 2026-05-14 on h2hproc_uso_func_000015F0 bit-16 test (94.31% first try)._
+- [Byte-RMW clear-mask: write the exact 16-bit `andi`-fitting form (`& 0xFF7F`), NOT `& ~0x80` — the negative form mis-emits `li -129` + register-`and`, evicting a reg and cascading the whole allocation](#feedback-ido-andi-fitting-mask-vs-negative) — _For `*(u8*)p &= ~0x80`, `~0x80` = 0xFFFFFF7F doesn't fit `andi`'s 16-bit immediate, so IDO materializes `li at,-129; and rd,rs,at` (2 insns + a consumed register), which shifts every subsequent `$t` assignment. Writing the equivalent `& 0xFF7F` (the low-16 mask, identical for a byte value) emits a single `andi rd,rs,0xFF7F` AND keeps the register allocation aligned. On game_libs_func_0001CF68 this single change dropped 15→14 diffs and, more importantly, removed the register cascade root. General rule: for any `x & MASK` where MASK has the high bits set (negative-looking), use the 16-bit-truncated positive literal that `andi` accepts._
 - [`bgez v0; sra t, v0, 1; addiu at, v0, 1; sra t, at, 1` is IDO's signed `/2` lowering](#feedback-ido-signed-divide-2-idiom) — Signed-integer division by 2 in IDO doesn't become a single `sra`.
 - [`bgez x, +4 (DELAY: andi t, x, M-1); beq t, $0, +2; nop; addiu t, t, -M` is IDO's signed `x % POW2` lowering](#feedback-ido-signed-modulo-pow2-idiom) — _Signed remainder by a power-of-2 mask M (e.g. M=8 → mask=7) emits a fast-path / slow-path sequence: delay-slot ALWAYS computes `t = x & (M-1)`; if x>=0 jump straight to use (low bits ARE the remainder, 0..M-1); if x<0 AND those low bits are nonzero, subtract M to get a negative remainder (-(M-1)..-1). Write as `x % M` (signed int) in C. Spotted 2026-05-18 on gl_func_00009EBC's `(a2 % 8) << 3` grid-index computation._
 
@@ -5917,6 +5918,17 @@ sign-branch form. ANDI doesn't go through the sign-branch path.
 shapes are not interchangeable from C — pick based on what target emits.
 
 ---
+
+---
+
+<a id="feedback-ido-andi-fitting-mask-vs-negative"></a>
+## Byte-RMW clear-mask: use the 16-bit `andi`-fitting literal (`& 0xFF7F`), not `& ~0x80`
+
+For `*(u8*)p &= ~0x80`: `~0x80` = `0xFFFFFF7F` does NOT fit `andi`'s 16-bit immediate, so IDO materializes `li at, -129; and rd, rs, at` — TWO instructions plus a consumed register, which shifts every subsequent `$t` allocation in the function. Write the equivalent low-16 mask `& 0xFF7F` (identical result for a byte-width value): IDO emits a single `andi rd, rs, 0xFF7F` and the register allocation stays aligned.
+
+Verified 2026-05-23 on `game_libs_func_0001CF68` (a bit-7-clear loop over a 2D global table): `& ~0x80` → 15 diffs incl. a stray `li a1,-129` in a branch-delay slot + a cascading `$t`-renumber; `& 0xFF7F` → 14 diffs and removed the cascade root (the remaining 14 were the loop's own `$t`-renumber, permuter-resistant).
+
+**General rule:** for any `x & MASK` where MASK reads negative / has high bits set, use the 16-bit-truncated positive literal that `andi` accepts whenever the operand width makes them equivalent. Same family as the `lui+ori` vs `lui+addiu` constant-form distinctions.
 
 ---
 
