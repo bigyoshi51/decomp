@@ -34,6 +34,8 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### FPU / float specifics
 
+- [FP read-modify-write: use compound `dst *= src` NOT expanded `dst = dst * src` — the expanded form swaps the operand load order ($f-reg diffs)](#feedback-ido-fp-compound-assign-load-order) — _For `dst OP= src` on floats (matrix/vector scale etc.), the compound assignment loads `dst` into the low $f-reg FIRST (matching IDO's target order); the expanded `dst = dst * src` loads `src` first → every `lwc1` base swaps (arg0↔arg1) and the whole function shows ~half its insns as $f-reg/load-order diffs even though it's byte-count-exact. Verified 2026-05-24 game_libs_func_0005E8B0 (9× mul.s matrix scale): expanded = 18 diffs, `*=` = byte-exact. Cracks the FP-interplay load-order residual for the RMW subclass._
+
 - [IDO -O2 folds `/2.0f` to `*0.5f` (different opcode); -mips2 schedules across mtc1 load-delays while -mips1 emits strict nops](#feedback-ido-div-2-mul-fold-and-mtc1-load-delay-nops) — _Two IDO codegen rules surfaced on bootup_uso func_000102A4. (1) `expr / 2.0f` compiles to `mul.s ..., 0.5f` (lui 0x3F000000, mtc1, mul.s) instead of `div.s ..., 2.0f` (lui 0x40000000, mtc1, div.s).
 - [IDO -O2 emits double return into $f0+$f1 pair, not $f0+$f2 — kills "force $f2 via double-trick" theory](#feedback-ido-double-return-uses-f0-f1-not-f2) — For `double f(void){return 0;}`, IDO -O2 emits `mtc1 zero,$f1; mtc1 zero,$f0; jr ra; nop` — upper-half lands in $f1 (o32 paired-register convention), NOT $f2.
 - [Function reads $f0 at entry without setting it — caller-context "implicit zero" pattern](#feedback-ido-f0-implicit-zero-at-entry) — Some IDO -O2 functions store $f0 (float return reg, NOT a standard arg) to memory at the start of the body.
@@ -1715,6 +1717,11 @@ This cap may need permuter to break.
 ---
 
 ---
+
+<a id="feedback-ido-fp-compound-assign-load-order"></a>
+## FP read-modify-write: compound `dst *= src` matches; expanded `dst = dst * src` swaps the operand load order
+
+_For float RMW (`dst OP= src`), IDO loads the **dst** operand into the lower `$f` register FIRST. The compound assignment `dst *= src` produces that order; the expanded `dst = dst * src` loads **src** first, swapping every `lwc1` base (arg0↔arg1) and the `mul.s` operand regs — byte-count stays exact but ~half the instructions differ. Verified 2026-05-24 on `game_libs_func_0005E8B0` (per-axis matrix scale, 9× `mul.s`): expanded form = 18 diffs, `*=` form = byte-exact match. Applies to `+= -= *= /=` float RMW. The arg1 component is reloaded per operation (no caching)._
 
 <a id="feedback-ido-div-2-mul-fold-and-mtc1-load-delay-nops"></a>
 ## IDO -O2 folds `/2.0f` to `*0.5f` (different opcode); -mips2 schedules across mtc1 load-delays while -mips1 emits strict nops
