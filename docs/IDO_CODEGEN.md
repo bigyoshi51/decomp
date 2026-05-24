@@ -10652,3 +10652,12 @@ Diagnostic: align built vs target; if the sole real diff is one extra
 `lw v0,K(sp)` immediately before the epilogue, this is it. Verified 2026-05-23
 `gl_func_00034C7C` (94.7→100, reloc-blind %-mover). Check the other Δ+1
 count-mismatch near-misses for the same shape before reaching for a regalloc grind.
+
+**Companion Δ-1 (built shorter): in-place pointer increment vs separate walk
+pointer.** When a loop derefs+increments a pointer arg directly (`...*src...; src++;`)
+but the target keeps the original arg in a saved reg and walks a COPY, built is
+Δ-1. Add an explicit copy `p = src; ...*p...; p++;` → count matches, and what
+remains is usually a clean `s0<->s1` swap (counter vs pointer) closeable by
+`NON_MATCHING_INSN_PATCH` (register-field-only). The C copy is the count lever;
+the twin closes the residual renumber. Verified 2026-05-23 `gl_func_0005C784`
+(95.2→100; 32/33 Δ-1 → 33/33 with 6 register-field-only diffs → twin). Reloc-blind.
