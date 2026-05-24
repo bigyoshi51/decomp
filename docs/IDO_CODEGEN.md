@@ -236,6 +236,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [`volatile int saved_arg = aN;` forces IDO to spill aN to a LOCAL stack slot instead of the caller's outgoing-arg slot](#feedback-ido-volatile-unused-local-forces-local-slot-spill) — _When target has `sw $aN, 0x24(sp)` (local-slot offset) but your IDO build emits `sw $aN, 0xBC(sp)` (caller's outgoing-arg slot at sp+frame_size+slot), the difference is whether IDO treats the saved arg as "live local"…
 - [`(void)a; (void)b; (void)c;` after the call forces IDO to spill ALL incoming args to caller's outgoing-arg-shadow](#feedback-ido-void-cast-arg-spill) — _Multi-arg forwarder pattern: `f(a, b, c) { callee(&D); (void)a; (void)b; (void)c; }` emits `sw $a0,0x18(sp); sw $a1,0x1c(sp); sw $a2,0x20(sp)` (varargs-prologue-style) instead of register-shifting args. Sister technique to `volatile int saved` but for many args._
 - [Signed `%` (and `/`) on a memory-loaded divisor emits a `break 7` (÷0) AND a `break 6` (INT_MIN/−1 overflow) guard pair — C-unsuppressible](#feedback-ido-signed-mod-break-pair) — _A C `(a + b) % n` where `n` is loaded from memory compiles to `div $zero,t4,t5; mfhi tP; bnez t5,+2; nop; break 7` THEN (for the result use) `addiu at,$zero,-1; bne t5,at,+2; lui at,0x8000; bne t4,at,+2; nop; break 6`. The `break 7` is the divide-by-zero trap; the `break 6` is the signed INT_MIN/−1 overflow trap MIPS HW can't represent. Both are emitted for signed `/` and `%` whenever the divisor isn't a compile-time-known nonzero constant — there is NO C form that suppresses them (they're part of IDO's signed-div lowering, not optimizer-removable). A ring-buffer index `idx=(first+count)%max` (inlined osSendMesg shape) therefore caps <100 from plain C unless `max` is a literal. Verified 2026-05-17 func_800044CC (libultra PI-event callback). Use `unsigned` operands to drop to `divu` + only `break 7` (no overflow guard), or post-cc INSN_PATCH if the target really uses signed div._
+- [Trailing `lw v0,saved(sp)` reload (Δ+1 vs target) = `return saved_var` where the target returns the last call's result — change to `return last_call(...)`](#feedback-ido-return-saved-var-trailing-reload) — _A wrapper `r = cb(1); cb(...); cb(...); cb(r); return r;` spills `r` to stack (passed to the last call), then `return r` adds a trailing `lw v0,saved(sp)` reload → Δ+1 / ~95% vs a target that has no v0 reload before the epilogue. The target returns the LAST call's value (v0 already live), so write `return cb(r);` (or `return last_call(...)`) to drop the reload. Quick diagnostic: align built vs target; if the ONLY real diff is one extra `lw v0,K(sp)` right before `addiu sp` / `jr ra`, it's this. Verified 2026-05-23 gl_func_00034C7C (94.7→100). Likely the same shape for several of the Δ+1 count-mismatch near-misses._
 
 
 ---
@@ -10620,3 +10621,34 @@ byte-exact with shifts, but its sibling `game_libs_func_0005313C` (three `*6`:
 cap. Diagnostic: built `.o` shows `li <N>,<reg>` + `multu`/`mflo` where target
 shows `sll/subu/sll`. No C lever found; the function stays NM (or needs a
 flag/opt-level split if the original used a different setting).
+
+---
+
+<a id="feedback-ido-return-saved-var-trailing-reload"></a>
+## Trailing `lw v0,saved(sp)` reload (Δ+1) = `return saved_var`; return the last call instead
+
+A multi-call wrapper that saves an early result and returns it:
+
+```c
+int f(void *a0, void *a1) {
+    int r = cb(1);     /* spilled to K(sp) */
+    cb(a0, a1);
+    cb(a0, a1);
+    cb(r);             /* a0 = lw K(sp) in the jal delay slot */
+    return r;          /* <-- adds a trailing `lw v0, K(sp)` reload */
+}
+```
+
+emits one extra instruction vs the target (Δ+1, ~95%): the `return r` forces a
+final `lw v0, K(sp)` because `r` was spilled (it's live across the calls). The
+target has NO v0 reload before `addiu sp / jr ra` — it returns the **last call's**
+result, which is already in `v0`. Fix:
+
+```c
+    return cb(r);      /* v0 already holds it — no reload, byte-exact */
+```
+
+Diagnostic: align built vs target; if the sole real diff is one extra
+`lw v0,K(sp)` immediately before the epilogue, this is it. Verified 2026-05-23
+`gl_func_00034C7C` (94.7→100, reloc-blind %-mover). Check the other Δ+1
+count-mismatch near-misses for the same shape before reaching for a regalloc grind.
