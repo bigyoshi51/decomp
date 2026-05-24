@@ -2588,3 +2588,30 @@ reach for register-renumber INSN_PATCH on larger functions where the rest of the
 body is a genuine match. Verified 2026-05-23 on `game_libs_func_000274E0`
 (byte-copy `a0[3]=a1[4]`, $t6→$t1): counted only as 1495→1496 after the paired
 line.
+
+---
+
+<a id="feedback-fp-load-operand-order-insn-patchable"></a>
+## FP load-operand / $f-reg-order "interplay caps" are often INSN_PATCH-able (op-mismatch=0 + commutative ops = logic-preserving)
+
+A common "FP-interplay cap": the C computes the right math (cross product, dot,
+etc.) but IDO loads the operands into $f registers in a different ORDER than the
+target within each `a*b` product, and/or commutes a final `add.s`. Don't write
+these off as caps. Check: align built vs target instruction-by-instruction and
+count OP-MISMATCHES (different mnemonic). If the diffs are all SAME-opcode
+(lwc1↔lwc1 with different operand, add.s↔add.s commuted) — op-mismatch=0 — and
+the operations are commutative (a*b==b*a, a+b==b+a), then INSN_PATCH-ing the
+differing words is **logic-preserving**: the products/sums are identical
+regardless of which $f reg holds which operand, so patching the loads to the
+target's order just byte-aligns them. Instruction COUNT must match (no add/remove).
+
+This holds even at higher diff counts than the usual register-renumber (the
+swaps are independent + paired). Pair the default `INSN_PATCH` with a
+`NON_MATCHING_INSN_PATCH` so it counts (report builds the non_matching tree).
+
+Verified 2026-05-23: `game_libs_func_0005D588` (Vec3 cross+dot, 40 insns) had
+9 same-opcode FP load/commuted-add diffs (op-mismatch=0) → 9-word INSN_PATCH →
+byte-exact, episode landed. It had been NM-wrapped as an "FP-interplay cap";
+it was INSN_PATCH-able all along. **Workflow: on any near-miss, measure
+op-mismatch + count BEFORE declaring a cap** — count-match + op-mismatch=0 ⇒
+INSN_PATCH; count-mismatch ⇒ grind C structure / permuter.
