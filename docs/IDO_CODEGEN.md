@@ -245,7 +245,43 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [`(void)a; (void)b; (void)c;` after the call forces IDO to spill ALL incoming args to caller's outgoing-arg-shadow](#feedback-ido-void-cast-arg-spill) — _Multi-arg forwarder pattern: `f(a, b, c) { callee(&D); (void)a; (void)b; (void)c; }` emits `sw $a0,0x18(sp); sw $a1,0x1c(sp); sw $a2,0x20(sp)` (varargs-prologue-style) instead of register-shifting args. Sister technique to `volatile int saved` but for many args._
 - [Signed `%` (and `/`) on a memory-loaded divisor emits a `break 7` (÷0) AND a `break 6` (INT_MIN/−1 overflow) guard pair — C-unsuppressible](#feedback-ido-signed-mod-break-pair) — _A C `(a + b) % n` where `n` is loaded from memory compiles to `div $zero,t4,t5; mfhi tP; bnez t5,+2; nop; break 7` THEN (for the result use) `addiu at,$zero,-1; bne t5,at,+2; lui at,0x8000; bne t4,at,+2; nop; break 6`. The `break 7` is the divide-by-zero trap; the `break 6` is the signed INT_MIN/−1 overflow trap MIPS HW can't represent. Both are emitted for signed `/` and `%` whenever the divisor isn't a compile-time-known nonzero constant — there is NO C form that suppresses them (they're part of IDO's signed-div lowering, not optimizer-removable). A ring-buffer index `idx=(first+count)%max` (inlined osSendMesg shape) therefore caps <100 from plain C unless `max` is a literal. Verified 2026-05-17 func_800044CC (libultra PI-event callback). Use `unsigned` operands to drop to `divu` + only `break 7` (no overflow guard), or post-cc INSN_PATCH if the target really uses signed div._
 - [Trailing `lw v0,saved(sp)` reload (Δ+1 vs target) = `return saved_var` where the target returns the last call's result — change to `return last_call(...)`](#feedback-ido-return-saved-var-trailing-reload) — _A wrapper `r = cb(1); cb(...); cb(...); cb(r); return r;` spills `r` to stack (passed to the last call), then `return r` adds a trailing `lw v0,saved(sp)` reload → Δ+1 / ~95% vs a target that has no v0 reload before the epilogue. The target returns the LAST call's value (v0 already live), so write `return cb(r);` (or `return last_call(...)`) to drop the reload. Quick diagnostic: align built vs target; if the ONLY real diff is one extra `lw v0,K(sp)` right before `addiu sp` / `jr ra`, it's this. Verified 2026-05-23 gl_func_00034C7C (94.7→100). Likely the same shape for several of the Δ+1 count-mismatch near-misses._
+- [Split a `<<16` shift into `(x<<15)<<1` to renumber the temps IDO allocates for a multi-field word-pack](#feedback-ido-split-shift-temp-renumber) — _A 2-word GBI command packer `a0[0]=((a1&0xFF)<<16)|CMD|(arg4&0xFFFF); a0[1]=(a2<<16)|(a3&0xFFFF);` compiles with the second word's temps numbered one lower than the target (t2/t3/t4 vs t3/t4/t5) — a register-renumber residual that doesn't byte-match. Writing the shift as `(a2<<15)<<1` (two shift insns folded back to one `sll ,16` by the optimizer, but the extra RTL node bumps the temp numbering) makes IDO allocate t3/t4/t5 → byte-exact. Permuter-discovered; matched 3 siblings (game_libs_func_0001D624/D770/D7A4). Try it when the ONLY diff is a uniform +1/−1 `$t` renumber on a shift-heavy expression and plain forms won't budge._
 
+
+---
+
+<a id="feedback-ido-split-shift-temp-renumber"></a>
+## Split a `<<16` into `(x<<15)<<1` to renumber the temps IDO allocates for a multi-field word-pack
+
+Symptom: a function that packs several bit-fields into a 32-bit word (GBI-style
+display-list command builders are the canonical case) compiles to the right
+instructions in the right order, but every `$t` register in one of the words is
+numbered one off from the target — e.g. built uses `t2/t3/t4` where the target
+uses `t3/t4/t5`. Plain C variations (reorder, extra locals, `(x & 0xFFFF) << 16`
+vs `x << 16`) don't move the numbering; it's a uniform register-renumber
+residual, not a logic diff.
+
+```c
+// 2-word command packer. word0 already matches; word1's temps are off by 1.
+void packer(int *a0, int a1, int a2, int a3, int arg4) {
+    a0[0] = (((a1 & 0xFF) << 16) | 0x0E000000) | (arg4 & 0xFFFF);
+    a0[1] = (a2 << 16) | (a3 & 0xFFFF);          // built: t2/t3/t4
+    a0[1] = ((a2 << 15) << 1) | (a3 & 0xFFFF);   // FIX:   t3/t4/t5  -> byte-exact
+}
+```
+
+The optimizer folds `(a2 << 15) << 1` back to a single `sll ,16` (same final
+instruction), but the extra shift node in the RTL bumps IDO's pseudo-register
+numbering for that sub-expression, shifting the whole word's temp allocation up
+by one to match the target.
+
+This was permuter-discovered (the kind of "nonsensical but it works" result the
+permuter is good at), then confirmed reusable: it byte-matched **three** sibling
+packers in game_libs — `game_libs_func_0001D624`, `_0001D770`, `_0001D7A4` —
+each a 13-insn 2-word GBI command builder for a different command byte. When you
+hit a word-pack whose only residual is a uniform `$t` renumber on a shift-heavy
+expression, try splitting the shift before reaching for the permuter. Verified
+2026-05-24.
 
 ---
 
