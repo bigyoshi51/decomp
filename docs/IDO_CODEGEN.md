@@ -1952,6 +1952,15 @@ The prologue-less variant (no frame, home to caller sp+4) appears on
 the "arg-home cap" as CRACKABLE; re-grind any function NM-wrapped with a single
 `sw aN,off(sp)` residual using `&param`.**
 
+**SECOND EFFECT (2026-05-24): `&param` also fixes "global load hoisted to $v0
+BEFORE the sp-adjust".** When the target has `addiu sp; lui/lw global(t6); sw ra;
+...` but your C emits `lui/lw global(v0); addiu sp; ...` (the independent global
+load scheduled before the prologue), adding `int *p = &aN;` forces aN into the
+prologue's home stores, which anchors the sp-adjust FIRST and keeps the global
+load after it. Verified gl_func_00035188: 79.2% -> 98.4% (the lever fixed BOTH
+the missing a0-home AND the pre-sp global hoist in one shot; only a v0-vs-t6/t7
+register-renumber on the global remained, permuter 75->55 not 0).
+
 <a id="feedback-ido-empty-body-do-while-emits-branch-likely"></a>
 ## IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay
 
