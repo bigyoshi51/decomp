@@ -139,6 +139,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup](#feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware) — _objdiff's reloc-aware scoring (treats `jal SYMBOL + R_MIPS_26 reloc` as equivalent to `jal pre-baked-addr-to-same-symbol`) lets you remove redundant INSN_PATCH-for-jal recipes. But the LINKER still needs the symbol resolved — `func_7C860 = 0x7C860;` in `undefined_syms_auto.txt` is the linker-side resolution, not a matching artifact. Removing it as "redundant" breaks the build with `undefined reference to func_7C860`. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory)._
 - [Complex function peaks <80%: keep INCLUDE_ASM but embed the verified decode as an in-source resume-comment](#feedback-sub80-complex-embed-decode-resume-comment) — _CLAUDE.md's ≥80% NM-wrap threshold means sub-80 complex functions stay plain INCLUDE_ASM, but discarding the partial decode wastes the iteration. The sub-80 forward-progress artifact = INCLUDE_ASM + a structured comment recording peak %, the verbatim candidate C, and the precise residual + suspected codegen lever, so the next tick resumes from the peak (not scratch). Verified 2026-05-16 gl_func_0003D7F8 (26→30→73%, residual isolated to one bnel + a3 home double-reload)._
 - [Alias-extern via `undefined_syms_auto.txt` unblocks typed redecl that conflicts with file-scope K&R prototype](#feedback-alias-extern-via-undefined-syms) — _Add `gl_func_00000000_<suffix> = 0x00000000;` as a sibling alias symbol, then declare the alias with a typed prototype in block scope. Linker resolves both names to the same address. Unlocks (a) direct `jal` vs fn-ptr-cast `lui+addiu+jalr` (saves 2 insns) and (b) single-precision swc1 float-arg stores vs K&R double-promote sdc1. Verified 2026-05-17 promoting gl_func_00042338._
+- [Per-function `-O0` opt override inside a Yay0-compressed USO: `REPLACE_FUNC_BODY` donor-object splice (NOT a patch)](#feedback-replace-func-body-o0-donor) — _A Yay0 USO block is extracted from ONE `.c.o`'s `.text`, so you can't just put an `-O0` function in a separately-linked file. Mechanism (template: timproc_uso_b1): (1) donor `src/<seg>/<seg>_o0_<off>.c` with the function as a plain def + externs; (2) `filter-out` the donor from `C_FILES`; (3) `build/...<seg>_o0_<off>.c.o ...: OPT_FLAGS := -O0`; (4) `build/src/...<seg>.c.o build/non_matching/...<seg>.c.o: REPLACE_FUNC_BODY := <fn>=<donor.o>` → `scripts/replace-function-body.py` splices the donor's genuine `-O0` bytes into the main `.o` (both build paths). Legitimate (real compiler output at the correct opt level, not instruction-forcing). Detect the need: function builds at the file's `-O2` with a pure delay-slot-order diff (e.g. `return 0` → `jr;move` 2 insns vs target `move;jr;nop` 3 insns = `-O0` unfilled). CAVEAT: precedent logs NO episode for donor'd funcs (two-stage build; report-only match). Region-boundary care needed — `-O0` runs can contain cross-fn shared-epilogue tangles (mgrproc 0x140 `bne`→0x15C). Focused-session task, not a 60s tick._
 
 
 ---
@@ -5740,3 +5741,57 @@ Verified 2026-05-23: `game_libs_func_00060FFC` (+`00061018`, `p=a0+0x18;
 if(a1) *p|=4 else *p&=~4`) → 13/13 byte-exact, episode landed. `0001FDF4`
 (+`0001FE34`, arena bump-allocator) merged (still needs a branch-likely grind
 post-merge). ~13 clean candidates remained in game_libs at time of writing.
+
+---
+
+<a id="feedback-replace-func-body-o0-donor"></a>
+## Per-function `-O0` opt override inside a Yay0-compressed USO: the `REPLACE_FUNC_BODY` donor-object splice
+
+A Yay0-compressed USO code block (`mgrproc_uso`, `game_uso`, `timproc_uso_b{1,3,5}`,
+`map4_data_uso_b2`) is built by extracting `.text` from a **single** `.c.o`,
+crunch64-compressing it, and packing it as a block-bin (Makefile lines ~308-340).
+That single-`.text`-stream constraint means the usual decomp trick for a function
+that needs a different optimization level — put it in its own file with a per-file
+`OPT_FLAGS` override and let the linker place it — **doesn't work**: a second
+`.c.o` would land in the wrong text stream.
+
+The project's solution (template already in place for `timproc_uso_b1`):
+
+1. **Donor file** `src/<seg>/<seg>_o0_<off>.c` — the function as a *plain*
+   definition (no `#ifdef`), with whatever `extern`s it needs. This is real C.
+2. **Filter it out of `C_FILES`** so the generic rule doesn't build it into the
+   main stream: `$(filter-out src/<seg>/<seg>_o0_<off>.c,...)` (Makefile ~line 204).
+3. **Compile the donor at `-O0`:**
+   `build/src/<seg>/<seg>_o0_<off>.c.o build/non_matching/src/<seg>/<seg>_o0_<off>.c.o: OPT_FLAGS := -O0`
+4. **Splice it into the main object** (both build paths so scoring sees it too):
+   `build/src/<seg>/<seg>.c.o build/non_matching/src/<seg>/<seg>.c.o: REPLACE_FUNC_BODY := <fn>=$(DONOR_O)`
+   The `.c.o` rules (Makefile ~254, ~291) then run
+   `scripts/replace-function-body.py <main.o> <fn> <donor.o>`, which copies the
+   donor's compiled bytes for `<fn>` into the main `.o` (and shifts later symbols
+   /relocs if the size changed).
+
+**This is legitimate, not instruction-forcing.** The spliced bytes are genuine
+IDO output of real C compiled at the correct opt level; the splice only exists
+to route around the single-`.text` packaging constraint (it's the moral
+equivalent of oot's per-file `-O0` + linker placement). Contrast with the banned
+INSN_PATCH, which fabricated/edited individual instruction words to fake a match
+([[feedback_no_instruction_forcing_matches_policy]]).
+
+**How to detect the need:** the function builds at the file's level (`-O2`) with
+a *pure delay-slot-order* diff — classically a tiny stub like `return 0` emitting
+`jr $ra; move v0,zero` (2 insns, filled) where the target is `move v0,zero; jr
+$ra; nop` (3 insns, unfilled `-O0`). Confirmed for `mgrproc_uso_func_0000015C`
+and `_00000188` (both raw-diff=3 at `-O2`, the delay-slot order).
+
+**Caveats / why it's a focused-session task, not a 60s tick:**
+- **No episode by precedent.** The timproc donor functions carry no
+  `episodes/*.json` — the two-stage build (compile main → splice donor) is a
+  report-only match, not a clean `source.c → bytes` training triple. If the loop's
+  goal is training episodes, donor splices add `report.json` count but no episode.
+- **Region boundaries are tangled.** An `-O0` run can contain cross-function
+  shared-epilogue merges: `mgrproc_uso_func_00000140`'s `bne` targets `0x15C`,
+  falling through into the return-0 stub's `jr` (see
+  [[feedback_leaf_branch_past_end_is_cross_fn_epilogue]]). Splicing the
+  self-contained stubs (`0x15C`, `0x188`) is safe (donor bytes == target, no
+  caller depends on their epilogue); the surrounding functions need per-function
+  analysis. Do the whole region in one deliberate pass, not piecemeal.
