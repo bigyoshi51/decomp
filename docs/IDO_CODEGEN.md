@@ -25,7 +25,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [bnel-likely with shared store-in-delay = `if (!cond) helper(); shared_store;`](#feedback-ido-bnel-shared-store-after-helper) — When asm shows `bnel ptr,zero,+N; sw <val>,off(reg) [delay-likely]; jal helper; ...; sw <val>,off(reg)` (same store on both paths), the C source is `if (cond == 0) helper(); store;` — the store happens both as…
 - [IDO bnel tail-merging routes the false-path epilogue through the true-path's register-restore tail (cosmetic, ~99 % cap)](#feedback-ido-bnel-tail-merge-register-restore) — When the function body is `if (cond) { several jal calls }` and the true path ends with reload-args-then-jal patterns like `lw a0,0x18(sp); jal; lw a1,0x1C(sp)`, IDO sets the bnel branch target to the MIDDLE of those…
 - [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
-- [Used incoming arg ALSO dead-spilled to its outgoing-shadow at the first call (`sw aN,off(sp)` in the jal delay) — recurring single-insn cap, permuter-class](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a `sw aN,off(sp)` (to aN's outgoing-arg shadow / caller slot) in that jal's delay slot, dead (never reloaded). At -O2 C the slot is a `nop` instead → exactly 1 insn short (~94-96%). NOT C-forceable: `(void)aN;` is DCE'd because aN is already used; `-g/-g1/-g2` add a full frame (worse); register/volatile-local hints miss the exact shadow offset. Distinct from the unused-arg `(void)a` spill (line above) and the 3-save preserve pattern — here the arg IS used. Single-insn residual ⇒ flag as permuter candidate, don't grind C. Seen 2026-05-24 on gl_func_0006A5B0 (96%) + game_libs_func_0002BA08 (prologue-less variant). Decode the if+spin-loop body as `if(call(aN)){ do{}while(call()); }` (do-while, not while — the while adds an extra leading beq)._
+- [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
 - [Annulled `bnel`/`beql` needs test-reg ≠ delay-load-base-reg — the enabler is IDO double-reloading a spilled pointer param into two regs; single reload (test==base) forces plain `bne`](#feedback-ido-branch-likely-needs-distinct-test-and-delay-base-regs) — _When target has `lw t8,off(sp); lw t9,off(sp); bnel t8,zero,L; lw t1,0(t9)` (same spilled param reloaded into TWO regs — t8 tests, t9 is the delay-slot load base), GCC reorg can annul-fill only because the branch-test reg ≠ the delay load's base reg. C that reloads the param once (test and deref share one reg) makes reorg emit a plain `bne` + no annul → exactly 1 insn short. The double-reload is an IDO regalloc/reorg artifact, NOT reachable by C restructuring (verified ineffective: EQUAL-in-if arm-swap, pointer-local CSE). Path forward is permuter or force-SAME-LEN-then-INSN_PATCH the bne→bnel. Verified 2026-05-16 gl_func_0003D7F8._
 - [Multi-case literal-dispatch bnel chain (sparse `if (c == X) c = Y` ladder) needs "modify-c-in-place + single masked return" + separate `int v` for the compare source](#feedback-ido-bnel-dispatch-modify-c-mask-return) — _`int v; c &= 0xFF; v = c; if (v == X1) c = Y1; else if (v == X2) c = Y2; ...; return c & 0xFF;` produces the bnel-chain pattern with `bne+move v0,a0` first compare and per-case `addiu a0; jr ra; andi v0,a0,0xFF` hit-handlers (matches USO entry-glyph dispatchers). Per-case `return CONST` form emits a shorter 4-insn-per-case chain without the `or v0,a0,$0` default-save. Cap ~95 % via the chain-source-register picker (a0 alias vs target's v0)._
@@ -1901,18 +1901,26 @@ void f(void *a0, ...) {
 ---
 
 <a id="feedback-ido-used-arg-dead-home"></a>
-## Used incoming arg ALSO dead-spilled to its outgoing-shadow at the first call — recurring single-insn cap (permuter-class)
+## Used incoming arg ALSO dead-spilled to its outgoing-shadow — CRACK with `int *p = &param; ...(*p)` (take the param's address)
 
-_A function that passes param `aN` to its first call sometimes also has `sw aN,off(sp)` (storing aN to its outgoing-arg shadow / caller home slot) in that jal's delay slot — a DEAD store (never reloaded). -O2 C of the same logic puts a `nop` there instead, so the build is exactly 1 instruction short (~94-96% byte-match)._
+_A function that passes param `aN` to its first call sometimes also has `sw aN,off(sp)` (storing aN to its outgoing-arg shadow / caller home slot) in that jal's delay slot — a DEAD store (never reloaded). Plain -O2 C puts a `nop` there instead, so the build is exactly 1 instruction short (~94-96%)._
 
-**Verified 2026-05-24** on `gl_func_0006A5B0` (poll-loop, 15/16 = 96%): target `jal gl_func_0001CA10; sw a0,0x18(sp)` (home in delay) vs built `jal …; nop`. The body decoded cleanly (`if (call(a0)) { do {} while (call()); } call(293);`) — the **do-while** (not `while`) was needed to avoid an extra leading `beq`.
+**THE LEVER (found by the permuter 2026-05-24, base 215 → 0): take the parameter's
+address.** `int *p = &aN; ... use *p` forces IDO to home `aN` to its stack slot
+(`sw aN,off(sp)`) — exactly the missing store. Verified on `gl_func_0006A5B0`:
+`if (gl_func_00000000(*p) != 0) { do {} while (gl_func_00000000()); } gl_func_00000000(293);`
+with `int *p = &a0;` → **byte-exact, report 100** (96 → 100). Use the **do-while**
+(not `while`) for an if+spin-loop to avoid an extra leading `beq`.
 
-**Not C-forceable (all tested):**
-- `(void)a0;` (the documented unused-arg spill-lever) is **DCE'd** here because a0 is already used by the first call — so it emits nothing. That lever only works for *unused* args.
-- `-g`/`-g1`/`-g2` add a full debug frame (19 insns, far worse).
-- register/volatile-local hints spill to a *local* slot, not aN's exact outgoing-shadow offset.
+**Earlier dead-ends (don't bother, go straight to `&param`):** `(void)aN;` is DCE'd
+when aN is already used (only works for *unused* args); `-g/-g1/-g2` add a full
+frame; register/volatile-local hints spill to a *local* slot, not aN's shadow.
 
-Single-instruction residual with correct logic ⇒ **flag as a permuter candidate, don't grind C shapes.** Distinct from the unused-arg `(void)a` spill and the 3-save arg-preserve pattern (there the arg is genuinely live across calls; here it's used once then dead-spilled). The prologue-less variant (no frame, home to caller sp+4) appears on `game_libs_func_0002BA08`.
+Distinct from the unused-arg `(void)a` spill and the 3-save arg-preserve pattern.
+The prologue-less variant (no frame, home to caller sp+4) appears on
+`game_libs_func_0002BA08` — try the same `&param` lever there. **This reclassifies
+the "arg-home cap" as CRACKABLE; re-grind any function NM-wrapped with a single
+`sw aN,off(sp)` residual using `&param`.**
 
 <a id="feedback-ido-empty-body-do-while-emits-branch-likely"></a>
 ## IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay

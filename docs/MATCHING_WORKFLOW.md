@@ -2926,6 +2926,18 @@ grep -cE "^(void|int|char|float) \w+\(" src/<path>.c    # 0 = pure INCLUDE_ASM
 
 Before reporting progress numbers from `refresh-report.sh` or `objdiff-cli report generate`, sanity-check against the memo-recorded baseline. If the number jumps by >10 percentage points between consecutive refreshes with no proportional commit activity, suspect contamination — check unit-by-unit breakdown and look for a unit with `matched_functions == total_functions` where the .c file is INCLUDE_ASM-only.
 
+**One-shot `objdiff-cli diff -1 expected -2 build <fn>` UNDER-scores reloc-blind
+placeholder jals — trust the REPORT, not the one-shot, for USO functions.** The
+one-shot lacks the project's symbol config, so it can't resolve the baked-`0c000000`
+intra-USO jals (calls to the `func_00000000`/`gl_func_00000000` placeholder) and
+reports `DIFF_ARG_MISMATCH | jal func_00000000` → ~99% even when the function is
+byte-exact. `scripts/refresh-report.sh` (the report objdiff, WITH config) resolves
+them and scores 100. Verified 2026-05-24: `gl_func_0006A5B0` one-shot=99.06 but
+report=100 (and the known-matched `gl_func_0003F218` one-shot=99.55, report=100).
+So: a one-shot 99.x on a function whose only diffs are `jal <placeholder>` is almost
+certainly a report-100 — confirm with refresh-report before NM-wrapping it as
+sub-100. (raw-diff==0 over the word range is the other quick confirmation.)
+
 **The committed `report.json` drifts STALE (under-counts) — `source=1`'s 80-99 list
 contains already-matched functions.** `decomp-preflight.sh` runs
 `git checkout HEAD -- report.json`, restoring the *tracked* copy; if recent landings
