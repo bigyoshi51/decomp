@@ -468,6 +468,16 @@ _1080 has a Ghidra project + MCP server, but reaching for Ghidra has cost (slowe
 
 _splat emits `.word 0xNNNNNNNN` for USO functions whose lui-relocations spimdisasm can't resolve; m2c then errors with "Function contains no instructions". Round-trip the .word values through `mips-linux-gnu-as` + `objdump -d -M no-aliases` to get readable mnemonics for hand-paste into a temp .s._
 
+**AUTOMATED 2026-05-24 — `scripts/disasm-func.py`.** No more hand round-trip:
+`python3 scripts/disasm-func.py <func> --m2c` looks up the function's `st_value`
+in `build/non_matching/**/*.c.o` (or `expected/**`), objdumps that byte range to
+mnemonics, reformats to m2c-ready `.s` (`glabel` + `.L<addr>:` labels for branch
+targets, operands joined), and pipes through `uv run m2c --target mips-ido-c`.
+Without `--m2c` it prints the `.s`. Validated on `game_libs_func_00060F90`
+(linked-list unlink) → clean pseudo-C. The function must already be built into a
+`.o` (it is, via INCLUDE_ASM). This unblocks medium-function decode grinds on every
+USO segment. (Manual round-trip below kept for reference.)
+
 **Symptom:** an asm file under `asm/nonmatchings/<uso>/<uso>/<func>.s` is all `.word 0x…` lines with no mnemonics. Running `uv run m2c --target mips-ido-c <file>.s` errors with:
 
 ```
