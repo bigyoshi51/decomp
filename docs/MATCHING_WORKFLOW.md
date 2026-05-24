@@ -1,5 +1,13 @@
 # Matching Workflow
 
+> **Note (2026-05-23):** any entry below that recommends INSN_PATCH /
+> NON_MATCHING_INSN_PATCH / PROLOGUE_STEALS / instruction-appending SUFFIX_BYTES
+> as the fix is **OBSOLETE** — that post-cc instruction-patching was removed as
+> match-faking. The IDO codegen *facts* (what C shape emits what asm) are still
+> valid and useful; just stop at "here's the C shape that produces it." If no C
+> shape matches, the function stays NON_MATCHING. See
+> `memory/feedback_no_instruction_forcing_matches_policy.md`.
+
 > Operational recipes for the matching workflow: NM wraps, fragment merging, objdiff scoring quirks, expected/ baseline care, file split mechanics, build hygiene.
 
 _73 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._

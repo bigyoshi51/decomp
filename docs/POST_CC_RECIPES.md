@@ -1,5 +1,17 @@
 # Post Cc Recipes
 
+> **⛔ DEPRECATED 2026-05-23 — DO NOT USE THE INSTRUCTION-PATCHING RECIPES BELOW.**
+> Post-compile patching of instructions to force a byte-match (INSN_PATCH,
+> INSN_RELOC_PATCH, PROLOGUE_STEALS, instruction-appending SUFFIX_BYTES /
+> *_FORCE / *_UNTIL_SIZE / POST_INSN_SUFFIX) was **removed** as match-faking and
+> the scripts/Makefile machinery deleted. **A match means C compiles to the
+> target bytes**; if it can't, leave the function `#ifdef NON_MATCHING` / `#else
+> INCLUDE_ASM`. The only mechanisms still allowed are genuine non-instruction
+> data/alignment: all-zero **padding** SUFFIX, **USO-header** PREFIX_BYTES,
+> TRUNCATE_TEXT / TEXT_CLIP_KEEP_ALIGN file boundaries. Everything below about
+> instruction patching is kept only for historical context — do not act on it.
+> Policy: `memory/feedback_no_instruction_forcing_matches_policy.md`.
+
 > Last-resort byte-patch recipes when IDO codegen can't reach byte-exact: PROLOGUE_STEALS, INSN_PATCH, SUFFIX_BYTES, PREFIX_BYTES, TRUNCATE_TEXT.
 
 _20 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._

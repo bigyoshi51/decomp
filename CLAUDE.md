@@ -28,7 +28,7 @@ This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-d
   - `docs/IDO_CODEGEN.md` — IDO 7.1 codegen quirks (~115 entries)
   - `docs/PATTERNS.md` — asm-shape pattern recipes (~145 entries)
   - `docs/MATCHING_WORKFLOW.md` — NM wraps, fragment merging, objdiff, expected/, build hygiene (~70 entries)
-  - `docs/POST_CC_RECIPES.md` — PROLOGUE_STEALS, INSN_PATCH, SUFFIX_BYTES, PREFIX_BYTES (~20 entries)
+  - `docs/POST_CC_RECIPES.md` — **DEPRECATED 2026-05-23.** Instruction-byte patching (INSN_PATCH / PROLOGUE_STEALS / instruction-appending SUFFIX_BYTES) was removed as match-faking. **A match = C compiles to the target bytes; if it can't, leave it `#ifdef NON_MATCHING` — do not fake it.** Only genuine data/alignment mechanisms remain (all-zero padding SUFFIX, USO-header PREFIX_BYTES, TRUNCATE_TEXT). Policy: `~/.claude/.../memory/feedback_no_instruction_forcing_matches_policy.md`.
   - `docs/N64_FORENSICS.md` — RSP ucode, splat config, 1080-specific
   - `docs/TOOLING_GIT.md` and `docs/TOOLING_DECOMP.md` — git/gh and m2c/Ghidra/permuter gotchas
   - Each doc has an Index at the top — skim, then jump to the relevant section. Don't load whole docs.
