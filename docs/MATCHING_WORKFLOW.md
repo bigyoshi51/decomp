@@ -5843,3 +5843,19 @@ The only real fix is making expected/.o reloc-aware (spimdisasm USO-reloc
 migration) or defining `D_xxxx` data symbols at their addresses in the .o symtab
 so objdiff resolves them — infrastructure, not a per-function tick. Until then,
 these donor functions are at their honest ceiling; leave them.
+
+**A donor splice that CHANGES the function's size breaks a packed mixed
+INCLUDE_ASM/C file — only splice when donor size == in-place compiled size.**
+`replace-function-body.py` shifts later symbols by the size delta, but in a big
+file where most functions are `INCLUDE_ASM` placed at exact offsets (e.g.
+`game_libs_post.c`), growing one function cascades: every downstream function's
+intra-`.text` branch/`jal` target moves, so they all drop 100→99.x%. Verified
+2026-05-24: a `-O2 -g3` donor for 3 scattered return-const stubs (each `0x8` at
+`-O2` → `0xc` at `-g3`) broke **60** downstream functions (net 1475→1418);
+reverted. The timproc `-O0` donors are safe only because the `-O0` body is the
+SAME size as the in-place `-O2` body. For functions whose correct opt level
+yields a DIFFERENT size (the `-g3` unfilled-delay class), the donor splice is the
+wrong tool — use a CONTIGUOUS-region file split (`OPT_FLAGS := -O2 -g3` +
+`TRUNCATE_TEXT` + reduced `sh_addralign`, the working `bootup_uso_tail*`
+precedent), which requires the target functions to be contiguous in `.text`
+(scattered stubs need splat re-extraction first). Focused-session, not a tick.
