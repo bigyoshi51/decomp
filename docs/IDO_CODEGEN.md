@@ -10661,3 +10661,20 @@ remains is usually a clean `s0<->s1` swap (counter vs pointer) closeable by
 `NON_MATCHING_INSN_PATCH` (register-field-only). The C copy is the count lever;
 the twin closes the residual renumber. Verified 2026-05-23 `gl_func_0005C784`
 (95.2→100; 32/33 Δ-1 → 33/33 with 6 register-field-only diffs → twin). Reloc-blind.
+
+---
+
+<a id="feedback-ido-float-div-pow2-strength-reduced-to-mul"></a>
+## Float `/2^n` strength-reduced to `mul.s` by reciprocal — INSN_PATCH-safe (exact reciprocal)
+
+`(float)v / 1024.0f` (loop-invariant power-of-2 divisor) → IDO -O2 hoists the
+reciprocal `0x3a800000` (1/1024) and emits `mul.s $fd,$fs,$frecip`. Some targets
+instead keep `div.s` by the literal `1024.0f` (`lui at,0x4480; mtc1; div.s`),
+capping the C-body twin at ~98-99% on TWO words: the hoisted constant
+(`lui ...,0x3a80` vs `0x4480`) and `mul.s` vs `div.s`. No clean C lever found to
+suppress the strength reduction (writing `/1024.0f` already triggers it; a
+`volatile` divisor adds a memory load the target doesn't have). BUT since
+`1/1024` is exactly representable (2^-10), `x*(1/1024) == x/1024` bit-for-bit, so
+forcing the target's two words via `NON_MATCHING_INSN_PATCH` (twin-only when the
+default build is INCLUDE_ASM) is value-safe. Verified 2026-05-23 sibling pair
+`gl_func_0005B764` / `gl_func_0005B848` (98.8-98.9→100, reloc-blind %-movers).
