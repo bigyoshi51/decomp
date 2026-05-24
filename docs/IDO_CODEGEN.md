@@ -6426,6 +6426,18 @@ obj-in-a2 = byte-exact EXCEPT the residual spill-slot pick (0x18 vs 0x20, the ca
 above; permuter floored at base 10). So: arg-register-via-extra-param fixes the
 FRAME size; the surviving 0x18-vs-0x20 slot pick is the still-uncrackable cap.
 
+**RECURRING HIGH-VALUE CAP — "reuse dead-arg's home slot for a cross-call spill".**
+The same residual now blocks ≥2 game_libs fns at 99.9% (gl_func_00066514: a2
+spilled 0x18-target vs 0x20-built; gl_func_00037FAC: a1 spilled 0x18-target vs
+0x1C-built). Pattern: a value live across a jal is spilled; the TARGET reuses an
+EARLIER arg's home slot (a0's, since a0 died after `li a0,K` for the call args),
+but IDO-from-C spills to the SPILLED VALUE'S OWN home slot. Cracking this single
+allocator behavior would convert a whole cluster of 99.9% NM-wraps to matches —
+worth a focused investigation (decompiler-flag? slot-allocation order?). Both reach
+99.9% via the same levers: 2nd/3rd-param-as-working-reg + goto-to-shared-epilogue,
+then re-grinding the OLD documented sub-70% caps (this session's levers postdate
+those comments — old "cap" %s are stale, re-grind them).
+
 ---
 
 ---
