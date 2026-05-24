@@ -140,6 +140,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Complex function peaks <80%: keep INCLUDE_ASM but embed the verified decode as an in-source resume-comment](#feedback-sub80-complex-embed-decode-resume-comment) — _CLAUDE.md's ≥80% NM-wrap threshold means sub-80 complex functions stay plain INCLUDE_ASM, but discarding the partial decode wastes the iteration. The sub-80 forward-progress artifact = INCLUDE_ASM + a structured comment recording peak %, the verbatim candidate C, and the precise residual + suspected codegen lever, so the next tick resumes from the peak (not scratch). Verified 2026-05-16 gl_func_0003D7F8 (26→30→73%, residual isolated to one bnel + a3 home double-reload)._
 - [Alias-extern via `undefined_syms_auto.txt` unblocks typed redecl that conflicts with file-scope K&R prototype](#feedback-alias-extern-via-undefined-syms) — _Add `gl_func_00000000_<suffix> = 0x00000000;` as a sibling alias symbol, then declare the alias with a typed prototype in block scope. Linker resolves both names to the same address. Unlocks (a) direct `jal` vs fn-ptr-cast `lui+addiu+jalr` (saves 2 insns) and (b) single-precision swc1 float-arg stores vs K&R double-promote sdc1. Verified 2026-05-17 promoting gl_func_00042338._
 - [Per-function `-O0` opt override inside a Yay0-compressed USO: `REPLACE_FUNC_BODY` donor-object splice (NOT a patch)](#feedback-replace-func-body-o0-donor) — _A Yay0 USO block is extracted from ONE `.c.o`'s `.text`, so you can't just put an `-O0` function in a separately-linked file. Mechanism (template: timproc_uso_b1): (1) donor `src/<seg>/<seg>_o0_<off>.c` with the function as a plain def + externs; (2) `filter-out` the donor from `C_FILES`; (3) `build/...<seg>_o0_<off>.c.o ...: OPT_FLAGS := -O0`; (4) `build/src/...<seg>.c.o build/non_matching/...<seg>.c.o: REPLACE_FUNC_BODY := <fn>=<donor.o>` → `scripts/replace-function-body.py` splices the donor's genuine `-O0` bytes into the main `.o` (both build paths). Legitimate (real compiler output at the correct opt level, not instruction-forcing). Detect the need: function builds at the file's `-O2` with a pure delay-slot-order diff (e.g. `return 0` → `jr;move` 2 insns vs target `move;jr;nop` 3 insns = `-O0` unfilled). CAVEAT: precedent logs NO episode for donor'd funcs (two-stage build; report-only match). Region-boundary care needed — `-O0` runs can contain cross-fn shared-epilogue tangles (mgrproc 0x140 `bne`→0x15C). Focused-session task, not a 60s tick._
+- [Donor functions touching a `D_xxxx` data global cap at ~99.9% (reloc-blind residual — do NOT re-attack)](#feedback-replace-func-body-o0-donor) — _`replace-function-body.py` drops the donor's relocs in the spliced range. For `jal gl_func_00000000` (symbol@0) the baked `jal 0` matches; but a data store `D_0000014C = x` keeps the 0x14C in the (dropped) reloc's symbol value, so the spliced `%lo` field stays 0 while reloc-blind expected/.o has 0x14C baked → one-insn diff, 99.95%. Verified dead-ends (timproc_uso_b1_func_0000065C, 2026-05-24): symbol form = 2 insns field 0 (best, 99.95%); `&D_00000000+0x14C` = 3 insns at -O0; `*(int*)0x14C` = 1 insn zero-relative; keeping the reloc = 99.67% (objdiff resolves undefined `D_xxxx` to 0, not 0x14C — reloc-aware equivalence only fires for *defined* symbols like `func_X`). Real fix = reloc-aware expected (spimdisasm USO migration), not a tick._
 
 
 ---
@@ -5795,3 +5796,31 @@ and `_00000188` (both raw-diff=3 at `-O2`, the delay-slot order).
   self-contained stubs (`0x15C`, `0x188`) is safe (donor bytes == target, no
   caller depends on their epilogue); the surrounding functions need per-function
   analysis. Do the whole region in one deliberate pass, not piecemeal.
+
+**Donor functions that touch a `D_xxxx` data global cap at ~99.9% (reloc-blind
+residual — NOT crackable, do not re-attack).** `replace-function-body.py` *drops*
+the donor's relocations in the spliced range (`fix_relocations` keeps only relocs
+outside `[old_start, old_limit)`). For a `jal gl_func_00000000` this is harmless —
+the symbol resolves to address 0, so the baked `jal 0` matches expected's
+reloc-blind `jal 0`. But a data store like `D_0000014C = x` (symbol at 0x14C)
+emits `lui at,%hi; sw rt,%lo(at)` where the **0x14C lives in the symbol value**,
+applied by the (now-dropped) `R_MIPS_LO16` reloc — so the spliced field stays `0`
+while the reloc-blind expected/.o has `0x14C` **baked into the instruction field**.
+Result: exactly one instruction differs (the `%lo` field), → 99.95%.
+Verified dead-ends (timproc_uso_b1_func_0000065C, 2026-05-24):
+- `extern int D_0000014C; D_0000014C = x;` → 2 insns, field `0` (offset in symbol
+  value). Best form, but field≠0x14c. **99.95%.**
+- `*(int*)((char*)&D_00000000 + 0x14C) = x;` → **3 insns** at `-O0` (`lui;addiu;sw`
+  — base materialized separately, displacement folded). Worse.
+- `*(int*)0x14C = x;` → **1 insn** `sw rt,0x14c(zero)` (zero-relative, lui dropped).
+  Worse.
+- Keeping the donor reloc (un-spliced donor object) scores **99.67% < 99.95%**:
+  objdiff flags the `lui`+`sw` reloc-vs-no-reloc on *two* instructions because
+  `D_0000014C` is **undefined (value 0)** in the .o symtab, so objdiff resolves it
+  to 0, not 0x14C — the reloc-aware "jal SYMBOL ≡ baked addr" equivalence only
+  fires when the symbol *resolves* to the baked address (true for defined `func_X`
+  via the symtab, false for undefined `D_xxxx` data globals).
+The only real fix is making expected/.o reloc-aware (spimdisasm USO-reloc
+migration) or defining `D_xxxx` data symbols at their addresses in the .o symtab
+so objdiff resolves them — infrastructure, not a per-function tick. Until then,
+these donor functions are at their honest ceiling; leave them.
