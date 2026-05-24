@@ -5651,6 +5651,35 @@ has no such issue — replacing it in place lands cleanly. Verified 2026-05-23:
 `game_libs_func_0003582C` (setter, trapped in `gl_func_000356FC`'s `#else`)
 needed the move.
 
+**Variant — UNWRAPPING a C-body func whose `#else` ALSO holds a sibling
+INCLUDE_ASM (sibling absent from the `#ifdef` path).** The asymmetric shape is:
+
+```c
+#ifdef NON_MATCHING
+extern int gl_func_00000000();  extern int D_00000000;   /* externs ONLY here */
+void target_func(...) { ... }            /* C body — no sibling in this arm */
+#else
+INCLUDE_ASM("...", target_func);
+INCLUDE_ASM("...", sibling_func);        /* sibling lives ONLY in #else */
+#endif
+```
+
+When you promote `target_func` (INSN_PATCH → byte-exact) and want it
+unconditional, a naive "splice the `#ifdef`-arm inner, drop `#else`..`#endif`"
+unwrap **deletes `sibling_func`'s INCLUDE_ASM** → cfe dies later with
+`An if directive is not terminated properly` (unbalanced) and the sibling symbol
+vanishes. Two extra fixups beyond the move:
+1. **Preserve the sibling INCLUDE_ASM unconditionally** — re-emit
+   `INCLUDE_ASM("...", sibling_func);` after the now-unconditional `target_func`.
+2. **Make the externs unconditional** — `extern int D_00000000;` /
+   `extern int gl_func_00000000();` were inside the `#ifdef` arm, so the default
+   build (which now compiles `target_func`) wouldn't see them. Repeating
+   `extern int` is legal; keep them right above the function. (Watch the
+   `int` vs `char` type-clash trap — match the file's other file-scope decls.)
+
+Verified 2026-05-23: `gl_func_0001FEC8` (reloc-blind %-mover, shared `#else`
+with `game_libs_func_0001FF28`).
+
 ---
 
 <a id="feedback-branch-past-end-unshared-epilogue-merge"></a>
