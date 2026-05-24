@@ -82,6 +82,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 ### scheduling / delay slot
 
 - [IDO folds prologue sw ra into early-return beq's delay slot](#feedback-ido-early-return-ra-delay-slot) — When `if (a0 == 0) return;` is the first statement, IDO moves the prologue `sw ra` into the beq's delay slot — write the C naturally and the scheduler handles it
+- [TU-CONTEXT-SENSITIVE scheduling: a standalone-byte-exact function can mis-schedule IN-TREE (reverse of the standalone-false-cap trap)](#feedback-ido-tu-context-sensitive-scheduling) — _Same C, same cc, same flags, but the full translation unit schedules a tiny leaf differently than the isolated standalone compile. `game_uso_func_0000C3E8` (`return *(int*)&D`): standalone -O2 = target byte-exact (dead a0 homed in jr-delay as a free filler); in the full game_uso.c TU the home/load swap (home before jr, load in delay). NOT lower-opt, NOT a C-form issue, NOT permuter-crackable — the TU perturbs the list scheduler's delay-slot pick. When standalone matches but in-tree doesn't, suspect this; it's a genuine cap (2026-05-24)._
 - [IDO `-g3` disables delay-slot filling while keeping -O2 optimization — unfilled-`sw; jr; nop` IS matchable](#feedback-ido-g3-disables-delay-slot-fill) — _Compiling with `-O2 -g3` produces unfilled-delay-slot epilogues (`sw; jr ra; nop` instead of `sw; jr ra; sw(delay)`).
 - [IDO -g does NOT suppress delay-slot fill (unlike KMC GCC -g2) — don't borrow the Glover technique](#feedback-ido-g-flag-does-not-suppress-delay-slot-fill) — _KMC GCC -g2 disables delay-slot reordering (per project_compiler_findings.md).
 - [IDO -O1 target `lw $sN, spill(sp)` in jal delay slot — can't force via explicit C assignment](#feedback-ido-o1-delay-slot-s-reload) — rmon-style -O1 funcs spill arg `a0` to caller slot, then fill the first jal's delay slot with `lw $s0, SPILL(sp)` to promote msg into a callee-saved reg for later use.
@@ -841,6 +842,17 @@ If you see arg-3 setup and your decoded C call only has 2 args, your call is mis
 ---
 
 ---
+
+<a id="feedback-ido-tu-context-sensitive-scheduling"></a>
+## TU-context-sensitive scheduling — a standalone-byte-exact function can mis-schedule in-tree
+
+_The usual trap is the reverse (`feedback_standalone_compile_false_cap_verify_in_tree`: standalone diverges, in-tree matches). This is the OTHER direction: standalone MATCHES byte-exact, but the same function in the full translation unit does not._
+
+**`game_uso_func_0000C3E8`** — `int f(int a0){ return *(int*)&D_00000000; }`:
+- **Standalone** `cc -G 0 -non_shared -Xcpluscomm -Wab,-r4300_mul -O2 -mips2 -32 -I include -I src -DNON_MATCHING` → `lui v0; lw v0,0(v0); jr ra; sw a0,0(sp)` = **the target, byte-exact**. (Note: the dead `a0` is homed in the jr delay slot automatically — IDO uses the arg-home as a free delay-slot filler when nothing else is available; no `&param`/`volatile` lever needed.)
+- **In-tree** (compiled as part of the full `game_uso.c`, identical cc + flags via asm_processor) → `lui v0; sw a0,0(sp); jr ra; lw v0,0(v0)` — the home and the load are **swapped**: IDO's list scheduler fills the `lui→lw` gap with the independent home store, pushing `lw` into the delay slot.
+
+Same compiler, same flags, same preprocessed C body — only the surrounding TU differs. This is NOT lower-opt (-O1/-g3 don't reproduce it), NOT a C-form issue (tried volatile `*p=&a0`, `*p=a0` self-store, statement reorder, volatile global load — all give the in-tree order or worse), and NOT permuter-crackable (the scheduler state is TU-wide). **Diagnostic:** when a function matches standalone but the in-tree `report.json` shows it not matching, verify the in-tree `.o` with objdump — if the only diff is delay-slot/scheduling order, it's this cap. Genuine cap; keep INCLUDE_ASM. (2026-05-24)
 
 <a id="feedback-ido-arg-save-to-sreg-in-bne-delay"></a>
 ## IDO schedules arg-save `or sN, aN, zero` into bne delay slot when an immediate `if (aN == 0)` test follows the prologue
