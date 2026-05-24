@@ -6412,6 +6412,20 @@ _When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWES
 
 **Origin:** 2026-04-20, agent-a, game_libs/gl_func_0004E180 (tiny wrapper: store ptr, call callback, store ptr again).
 
+**LEVER (2026-05-24, complementary): a call-surviving LOCAL spills to a fresh
+local slot (bigger frame); force it into an ARG register instead so it spills to
+the arg-home area (smaller frame).** If a local `obj` is live across ≥1 jal, IDO
+puts it in a caller-saved reg and spills to a NEW local slot — growing the frame.
+If you declare an extra trailing param and use THAT name as the variable (e.g.
+`int f(int a0, int a1, int a2){ a2 = a0; ... }` where `a2` is your working var),
+IDO keeps `obj` in the `a2` arg register and spills it to the arg-home area
+(no new local slot) — shrinking the frame to match a target that does the same.
+Verified gl_func_00066514: this lever (+ goto-to-shared-epilogue for the
+`beqz v0,epilogue` exit) took it from frame -0x20/obj-in-v1 to frame -0x18/
+obj-in-a2 = byte-exact EXCEPT the residual spill-slot pick (0x18 vs 0x20, the cap
+above; permuter floored at base 10). So: arg-register-via-extra-param fixes the
+FRAME size; the surviving 0x18-vs-0x20 slot pick is the still-uncrackable cap.
+
 ---
 
 ---
