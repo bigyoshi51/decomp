@@ -394,19 +394,20 @@ The permuter randomly modifies C source to find versions that match the target b
 ```bash
 cd projects/Glover\ \(USA\)/
 
-# 1. Write your best C attempt into the source file (replace INCLUDE_ASM)
+# 1. Put your best C in the function's #ifdef NON_MATCHING block (keep #else INCLUDE_ASM).
 
-# 2. Import the function for permutation:
-python3 /home/dan/Documents/code/decomp/tools/decomp-permuter/import.py \
-    src/<file>.c asm/nonmatchings/<segment>/<func>.s RUN_CC_CHECK=0
-
-# 3. IMPORTANT: Fix the generated compile.sh — import.py creates a broken
-#    one-liner. Split the export and gcc onto separate lines:
-#    Before: export COMPILER_PATH=tools/gcc_2.7.2/linux '&&' tools/gcc_2.7.2/linux/gcc ...
-#    After:
-#      export COMPILER_PATH=tools/gcc_2.7.2/linux
-#      tools/gcc_2.7.2/linux/gcc ...
+# 2. Import (WORKING invocation — run from the project worktree dir).
+#    permuter_settings.toml (compiler_type=ido) is already committed.
+#    The quoted CPPFLAGS is MANDATORY:
+#      -DNON_MATCHING  -> compile the #ifdef C body (else it builds INCLUDE_ASM = nothing to permute)
+#      -I include -I src -> headers (a bare CPPFLAGS=-DNON_MATCHING clobbers includes -> common.h not found)
+python3 ../../tools/decomp-permuter/import.py \
+    src/<seg>/<file>.c asm/nonmatchings/<seg>/<sub>/<func>.s \
+    'CPPFLAGS=-I include -I src -DNON_MATCHING'
 ```
+See `docs/TOOLING_DECOMP.md#feedback-permuter-working-setup-2026-05-23`. (The
+old "fix the broken compile.sh / gcc_2.7.2" workaround is obsolete — that was the
+misconfigured setup behind the 0/6 result.)
 
 ### Running
 

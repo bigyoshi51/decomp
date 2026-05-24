@@ -11,6 +11,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 - [m2c on .word-only USO asm — assemble + objdump round-trip to get mnemonics](#feedback-m2c-word-only-asm) — splat emits `.word 0xNNNNNNNN` for USO functions whose lui-relocations spimdisasm can't resolve; m2c then errors with "Function contains no instructions". Round-trip the bytes through `mips-linux-gnu-as` + `objdump -d -M no-aliases` to get readable mnemonics for hand-paste into a temp .s.
 - [Scanning NM wraps for near-misses: compare the LINKED elf, not the unlinked .o (jal/symbol immediates are 0 in the .o → false diffs)](#feedback-nm-wrap-scan-use-linked-elf) — _2026-05-23. To auto-find promotable NM wraps, building `build/non_matching/.../<file>.c.o` and diffing each function's words against `asm/.../<func>.s` reports a FALSE 1-diff for every resolved-call/symbol-ref function: in the unlinked .o, `jal target` is `0C000000` and `lui/addiu/lw` symbol immediates are 0, while the asm shows the resolved values. So `gl_func_00024080` (already episode'd, calls `gl_ref_00037F80`) shows as "1/8 regonly JAL" — a false positive. Only RELOC-FREE functions (no jal, no symbol lui/addiu) give a valid .o-vs-asm comparison; for everything else, link first and diff `build/tenshoe.elf` (default path) or the linked non_matching elf. Also: cross-check `ls episodes/<func>.json` — the scan resurfaces already-done functions whose `.NON_MATCHING` alias artifact looks like a near-miss._
 - [decomp-permuter `import.py` needs a C body under `#ifdef NON_MATCHING` — bare `INCLUDE_ASM` invisible](#feedback-permuter-import-requires-ifdef-non-matching-body) — _When you intend to grind a function via permuter, the verified decode MUST be wrapped in `#ifdef NON_MATCHING / #else INCLUDE_ASM` (even at sub-80% fuzzy where the `/decompile` skill normally says "keep plain INCLUDE_ASM"). `import.py` parses C source for a function DEFINITION; `INCLUDE_ASM(funcname)` alone registers no function. Discovered 2026-05-16 via parallel-agent commits restoring DBEC/DDC0 C bodies as permuter seeds._
+- [WORKING permuter setup (2026-05-23): `permuter_settings.toml` (compiler_type=ido) + import with full `CPPFLAGS=-I include -I src -DNON_MATCHING`](#feedback-permuter-working-setup-2026-05-23) — _The 0/6 F444 failure was a MISCONFIG, not a permuter limitation: no settings file and the import lacked `-DNON_MATCHING` (so it compiled the `#else INCLUDE_ASM` path, no C body) and `-I include -I src` (headers). Fixed; validated gl_func_0005C784 base 75→35 with 0 errors. This is the sanctioned last-mile match tool now that INSN_PATCH is banned._
 - [CI / decomp.dev compares fresh build/.o vs committed expected/.o — `make expected` results MUST be git-committed for changes to show on the dashboard](#feedback-expected-must-be-committed-for-decomp-dev) — The land script and `scripts/refresh-report.sh` do NOT run `make expected`.
 - [Ghidra struct annotation does NOT auto-propagate across xrefs — each function in a family needs its own prototype set](#feedback-ghidra-struct-annotation-doesnt-auto-propagate) — _Validated 2026-05-04 on 1080's rmon family.
 - [Permuter scores ≥1000 genuinely mean "structural issue, no match possible" — stop grinding (BUT 2026-05-23 refinement: it CAN crack record-append/pointer-arith $t-class register-renumber via shape-changing mutations — 2 episodes; resists loops/delay-slot/cursor/unfilled-delay/$s-$a-class)](#feedback-permuter-1000-plus-structural) — _Ran decomp-permuter random mode for ~3 minutes on `n64proc_uso_func_00000014` (12k+ iterations).
@@ -531,3 +532,46 @@ The `#else INCLUDE_ASM` keeps the default build byte-exact via ROM bytes; the `#
 **Discovered 2026-05-16** when a parallel agent (per main commit `4c5f7158`) restored `game_libs_func_0003DBEC`'s C body under NON_MATCHING explicitly as a "permuter seed" — same gotcha as `game_libs_func_0003DDC0`. The verified-decode-as-INCLUDE_ASM-only pattern blocked permuter setup until the body was restored.
 
 **Caveat (false-positive-episode risk):** the project-wide classifier flagged ~140 episodes as tautology-trap candidates because they were logged against NM-wrapped functions where the C body was 19–78% but the wrap inflated reported match. Permuter seeds DO NOT and SHOULD NOT log episodes — they're scaffold, not ground truth. Episode-logging guard remains "exact match only, via build/non_matching/.o byte-verify against expected/.o."
+
+---
+
+<a id="feedback-permuter-working-setup-2026-05-23"></a>
+## WORKING permuter setup (2026-05-23) — the 0/6 was misconfiguration
+
+The permuter is the **sanctioned last-mile match tool** (INSN_PATCH and all
+instruction-byte patching were removed 2026-05-23 — see
+`memory/feedback_no_instruction_forcing_matches_policy`). It only helps functions
+already CLOSE (count-match, register-allocation/scheduling/branch-order diffs);
+structural diffs (count-mismatch, wrong fields) need a C fix first.
+
+Earlier runs scored 0/6 not because the permuter can't do it, but because it was
+run **unconfigured**. Two fixes:
+
+1. **`projects/1080-*/permuter_settings.toml`** (committed):
+   ```toml
+   compiler_type = "ido"
+   [weight_overrides]
+   perm_temp_for_expr = 100
+   ```
+   Without `compiler_type = "ido"` the permuter uses generic weights ill-suited
+   to IDO codegen.
+
+2. **Import with the FULL CPPFLAGS** (from the project worktree dir):
+   ```bash
+   python3 ../../tools/decomp-permuter/import.py \
+       src/<seg>/<file>.c asm/nonmatchings/<seg>/<sub>/<func>.s \
+       'CPPFLAGS=-I include -I src -DNON_MATCHING'
+   python3 ../../tools/decomp-permuter/permuter.py nonmatchings/<func> --stop-on-zero
+   ```
+   - `-DNON_MATCHING` is MANDATORY: functions are `#ifdef NON_MATCHING { C } #else
+     INCLUDE_ASM #endif`. Without it the build takes the `#else` (INCLUDE_ASM) path
+     and there is **no C body to permute** (this silently broke old runs).
+   - `-I include -I src` is MANDATORY (the PERMUTER make rule uses `$(CPPFLAGS)`;
+     passing a bare `CPPFLAGS=-DNON_MATCHING` *clobbers* the include paths →
+     `common.h: No such file`). Pass all three as one quoted arg.
+
+When the permuter reaches **score 0**, the matching C is in
+`nonmatchings/<func>/output-0-*/source.c`. Put that C into the function's
+`#ifdef NON_MATCHING` block in src, rebuild, verify byte-exact against the `.s`
+(`raw-diff=0`), and it's a **real match** — no patch, episode-worthy. `nonmatchings/`
+is gitignored. Score bands still apply (≥1000 ≈ structural, stop and fix the C).
