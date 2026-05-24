@@ -276,10 +276,14 @@ numbering for that sub-expression, shifting the whole word's temp allocation up
 by one to match the target.
 
 This was permuter-discovered (the kind of "nonsensical but it works" result the
-permuter is good at), then confirmed reusable: it byte-matched **three** sibling
-packers in game_libs — `game_libs_func_0001D624`, `_0001D770`, `_0001D7A4` —
-each a 13-insn 2-word GBI command builder for a different command byte. When you
-hit a word-pack whose only residual is a uniform `$t` renumber on a shift-heavy
+permuter is good at), then confirmed reusable across the whole family: it
+byte-matched **six** sibling packers in game_libs — `game_libs_func_0001D594`
+(cmd 0x0C), `_0001D5E0` (0x08), `_0001D624`, `_0001D694` (0x12), `_0001D770`
+(0x0E), `_0001D7A4` (0x19) — each a 13-insn 2-word GBI command builder for a
+different command byte (`a0[0]=((a1&0xFF)<<16)|CMD|(a2&0xFFFF);
+a0[1]=((a3<<15)<<1)|(a4&0xFFFF)`). Permuter found it on the first one; the rest
+were a mechanical hand-application of the lever (one edit each, no permuter). When
+you hit a word-pack whose only residual is a uniform `$t` renumber on a shift-heavy
 expression, try splitting the shift before reaching for the permuter. Verified
 2026-05-24.
 
