@@ -1923,6 +1923,17 @@ with `int *p = &a0;` → **byte-exact, report 100** (96 → 100). Use the **do-w
 when aN is already used (only works for *unused* args); `-g/-g1/-g2` add a full
 frame; register/volatile-local hints spill to a *local* slot, not aN's shadow.
 
+**`&param` with an UNUSED `p` (no `*p` deref) ALSO works — IF the function does
+other pointer stores/loads.** `int *p = &aN;` then never using `p` normally gets
+DCE'd (the address-take is elided — see the `volatile` workaround at
+`#feedback-ido-volatile-param-spill`). BUT when the function ALSO writes/reads
+through *other* pointers (e.g. `*a1 = X; *a2 = Y;`), IDO can't prove they don't
+alias `&aN`, so it conservatively homes `aN` — the same barrier `volatile` gives,
+for free. Verified `game_libs_func_00034BDC` (`*a1=D_A; *a2=D_B;` + dead `a0`):
+plain `int *p = &a0;` (unused) → byte-exact `sw a0,0(sp)` home, report 100. So:
+pure leaf with no aliasing ops → need `volatile int *p`; function with pointer
+stores → plain `int *p` suffices. (2026-05-24)
+
 Distinct from the unused-arg `(void)a` spill and the 3-save arg-preserve pattern.
 The prologue-less variant (no frame, home to caller sp+4) appears on
 `game_libs_func_0002BA08` — try the same `&param` lever there. **This reclassifies
