@@ -2926,6 +2926,25 @@ grep -cE "^(void|int|char|float) \w+\(" src/<path>.c    # 0 = pure INCLUDE_ASM
 
 Before reporting progress numbers from `refresh-report.sh` or `objdiff-cli report generate`, sanity-check against the memo-recorded baseline. If the number jumps by >10 percentage points between consecutive refreshes with no proportional commit activity, suspect contamination — check unit-by-unit breakdown and look for a unit with `matched_functions == total_functions` where the .c file is INCLUDE_ASM-only.
 
+**The committed `report.json` drifts STALE (under-counts) — `source=1`'s 80-99 list
+contains already-matched functions.** `decomp-preflight.sh` runs
+`git checkout HEAD -- report.json`, restoring the *tracked* copy; if recent landings
+didn't refresh + commit it (the land script's refresh can be skipped on manual
+per-function lands), the tracked copy lags reality. Symptom: `source=1` rolls a
+function sitting at 99.9x% that is *actually* byte-exact — you waste a tick
+"cracking" something already done. **Before grinding a high-% source-1 candidate,
+byte-verify `build/non_matching/<unit>.c.o` vs `expected/<unit>.c.o` for that
+function** (raw-diff over the symbol's word range); if raw-diff=0 it's already
+matched and the report is just stale. Fix the whole report in one shot with
+`scripts/refresh-report.sh` (rebuilds objects, re-scores vs the FIXED expected/,
+regenerates `report.json`) — verified 2026-05-24 correcting 1458→1471 funcs
+(13 genuinely-landed-but-stale matches: char-pad `func_800012BC`, the 0001D5xx
+GBI-packer split-shift family, inline-regalloc levers). Then re-verify the
+newly-100 set is byte-exact (guard against the parallel-build race that fabricates
+false-100s — [[project_1080_permuter_now_working_2026-05-23]] BUILD GOTCHA) and
+commit `report.json` (+ regenerate the README table from `report.json`'s
+`categories` key; it has no generator script and drifts independently).
+
 ---
 
 ---
