@@ -8700,8 +8700,18 @@ Only reach for the split when the target's asm clearly uses TWO separate scratch
 ---
 
 <a id="feedback-ido-extern-vs-literal-pointer-encoding-cap"></a>
-## `&extern_symbol` vs `(int*)0xNNNN` literal: lui+addiu (with reloc) vs lui+ori (no reloc) — when target has lui+addiu without relocs, neither C form reaches it
+## `&extern_symbol` vs `(int*)0xNNNN` literal: lui+addiu vs lui+ori — SOLVED 2026-05-24 by `&D_00000000 + offset` (the body below is the obsolete "cap" analysis)
 
+**SOLVED (2026-05-24, supersedes the entire cap analysis below).** When the target has `lui+addiu` and expected/.o has the bytes INLINE (no relocs), the fix is to address through the **DEFINED** base symbol `D_00000000` (at USO offset 0) plus the byte offset, NOT an UNDEFINED `&gl_ref_NNNN` extern:
+```c
+(char *)&D_00000000 + 0xNNNNN     /* asm-processor RESOLVES this reloc INLINE -> lui+addiu, no reloc, matches expected */
+&gl_ref_0003F020                  /* UNDEFINED extern -> lui+addiu WITH R_MIPS_HI16/LO16 relocs -> expected lacks them -> mismatch */
+(int*)0x0003F020                  /* literal -> lui+ori (wrong opcode) */
+```
+The key: `D_00000000` is a **defined** symbol (offset 0), so asm-processor bakes `%hi/%lo(D+0xNNNNN)` into the instruction bytes (inline, no reloc), exactly matching the reloc-blind expected/.o. An undefined extern can't be resolved, so its reloc survives and mismatches. Cracked `gl_func_00061E58` byte-exact (was the ~65% example in this very entry) — change `&gl_ref_0003F020`→`(char*)&D_00000000 + 0x3F020`, `&gl_ref_00022038`→`+ 0x22038`. **This is the same lever as `feedback-return-const-lui-addiu-vs-lui-ori` / `feedback-ido-magic-arg-via-symbol-not-literal`; it applies to ANY lui+addiu-with-inline-expected (a whole vein of `&gl_ref_*`-using functions is now matchable — grep `&gl_ref_` in src/).** Caveat: works at -O2 (where `+offset` folds into the %lo via $at-fusion); at **-O0** the `+offset` materializes the base separately (3 insns) and does NOT fold — leave -O0 functions as-is.
+
+---
+_OBSOLETE ANALYSIS (kept for archaeology — concluded "cap", now wrong):_
 _When the target ROM has a constant pointer materialised via `lui rX, HI16; addiu rX, rX, LO16(signed-extending)` BUT expected/.o has NO relocation entries (bytes are inline), neither natural C form reaches the exact byte sequence:_
 
 - **`extern T sym;` declared in `undefined_syms_auto.txt`** → IDO emits `lui+addiu` (correct shape) BUT also emits `R_MIPS_HI16` / `R_MIPS_LO16` relocations against `sym`. Result at .o level: `lui rX, 0; addiu rX, rX, 0` + reloc table entries. Linker resolves at link-time to the right bytes.
