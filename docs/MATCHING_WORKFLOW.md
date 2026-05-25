@@ -17,6 +17,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 ### NM wrap mechanics
 
 - [asm-processor auto-wraps C bodies in #ifdef NON_MATCHING when sibling _pad.s exists; symbol disappears, objdiff returns null %](#feedback-asmproc-auto-nm-wrap-kills-objdiff-pct) — _When you replace `INCLUDE_ASM(<func>); #pragma GLOBAL_ASM(<func>_pad.s)` with a bare C function body (no source-level #ifdef), asm-processor outputs `#ifdef NON_MATCHING / [your C] / #else / void…
+- ["bare function" scans give FALSE POSITIVES when a long doc-comment sits between `#else` and `INCLUDE_ASM` — check NM-wrap membership by preprocessor-block state, not the immediately-preceding line](#feedback-bare-scan-comment-between-else-and-include-asm) — _An already-NM-wrapped function whose `#else`/`INCLUDE_ASM` are separated by a multi-line `/* ... */` looks "bare" to a heuristic that only inspects the prior non-blank line. 2026-05-24: both game_uso "bare" candidates were already wrapped._
 - [redeclaring `extern char D_00000000` in NM wrap blocks NM-build when file already has it as `extern int`](#feedback-extern-redeclaration-blocks-nm-build) — _IDO cfe rejects extern redeclarations with conflicting types.
 - [Inline NM-wrap match-percent comments rot — re-measure before trusting](#feedback-inline-nm-percentages-rot) — _Old match % claims in #ifdef NON_MATCHING comment blocks can silently go stale when the toolchain changes.
 - [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — _Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined NULL, stray apostrophes) compile fine by default but break the moment anyone…
@@ -500,6 +501,23 @@ The aliased-pointer is the cheapest knob — try it first.
 ---
 
 ---
+
+<a id="feedback-bare-scan-comment-between-else-and-include-asm"></a>
+## "bare function" scans give false positives when a doc-comment sits between `#else` and `INCLUDE_ASM`
+
+When looking for not-yet-decompiled functions, the natural heuristic is "an `INCLUDE_ASM(...)` line whose immediately-preceding non-blank line is **not** `#else` is bare." That over-reports: a properly NM-wrapped function often has a long `/* ... */` comment in the `#else` branch *before* the `INCLUDE_ASM`, so the prior non-blank line is the comment's `*/`, not `#else`.
+
+```c
+#ifdef NON_MATCHING
+... real C body ...
+#else
+/* multi-line doc comment about the cap ...
+ * ... spanning many lines ... */
+INCLUDE_ASM("...", func);   // <-- prev non-blank line is `*/`, looks "bare"
+#endif
+```
+
+**Detect membership by preprocessor-block state, not the previous line.** Walk `#ifdef NON_MATCHING` / `#else` / `#endif` with a stack (or reuse `scripts/find-nm-wraps-without-episodes.py`, which already tracks this) and treat any `INCLUDE_ASM` reached *after* the `#else` of an open `#ifdef NON_MATCHING` as wrapped. 2026-05-24: an ad-hoc prev-line scan flagged two game_uso functions as bare; both were already NM-wrapped (one a genuine cap, one improvable — so re-checking still paid off, but the "bare" count was inflated).
 
 <a id="feedback-asmproc-auto-nm-wrap-kills-objdiff-pct"></a>
 ## asm-processor auto-wraps C bodies in #ifdef NON_MATCHING when sibling _pad.s exists; symbol disappears, objdiff returns null %
