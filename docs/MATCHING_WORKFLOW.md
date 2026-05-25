@@ -522,6 +522,8 @@ Then read each 1–2-word diff with `objdump -d`. Recurring quick wins found thi
 
 Always confirm the fix with the in-tree per-symbol compare (NOT standalone — see next entry). Genuine 2-word caps (FP-reg alloc, spill-slot offset, mtc1/mfc1, counter strength-reduction) also show up in the 1–2-word list; recognize and skip those.
 
+**Vein-exhaustion status (2026-05-24, agent-e):** the 1–2-word batch scan has been run across the major files — game_libs_post.c, game_libs.c, game_libs_tail.c, game_libs_mid.c, game_uso.c, gui_uso.c, mgrproc_uso.c, arcproc_uso.c, n64proc_uso.c, eddproc_uso.c, h2hproc_uso.c, titproc_uso.c, timproc_uso_b1.c, timproc_uso_b3.c, timproc_uso_b5.c, bootup_uso.c — and the C-reachable 1–2-word diffs are worked through (symbol-decode `&D+offset`, decode bugs, inverted conditions, the struct-copy/array-index/reuse-param register levers). What REMAINS at 1–2 words is now dominated by genuine caps: FP-reduction operand order, spill-slot/prologue scheduling, array-append count-store-vs-array-addr, single-temp $t-renumber, mtc1/mfc1, reloc-blind (`D_NNNN` undefined-extern at -O0), and bootup_uso INCLUDE_ASM extraction noise. Don't re-scan these files expecting fresh easy wins; pivot to: (a) **deferred plumbing** (per-fn -O0 file splits — batches of -O0 functions; spimdisasm USO-reloc migration — unlocks reloc-blind), (b) **medium structural NM-wraps** (multi-tick %-movers on bare functions), (c) **targeted permuter runs** on straight-line $t-renumber near-misses. Re-scan a file only after it gains new NM wraps (which add new 1–2-word candidates).
+
 <a id="feedback-standalone-false-convergence-verify-in-tree"></a>
 ## Standalone compile can FALSELY MATCH — full-TU scheduling differs; verify in-tree before promoting
 
