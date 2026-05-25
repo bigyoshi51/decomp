@@ -691,11 +691,27 @@ Declaring the .text function symbol as a float struct is type-punning but
 harmless (the linker is type-agnostic; the reloc resolves to the same
 module address the target uses). For f64 pools use `double` fields; for
 mixed/`+0x4` strided pools (the func_0000098C / func_000008?? families)
-size the struct to the exact offsets. **So func_0000E270 / func_0000D900 /
-func_0000E2D0 (0x990 pool via func_0000098C) and func_00010C8C (0xC10
-pool, but ALSO -g3-capped) are now candidate matches via this technique —
-not deferred caps.** Retry them. The .rodata symbolization is still nice
-for readability but is NOT required to land the match.
+size the struct to the exact offsets.
+
+**CAVEAT — the fold needs the struct DECLARED, which collides if the
+fold-target is a function defined in the SAME .c (2026-05-25):** the
+struct-field fold ONLY works when you can write `extern struct{...} sym;`.
+If `sym` is a real function defined in the current TU (e.g. func_0000098C
+is defined at bootup_uso.c:264), you CANNOT also declare it a struct
+(type clash), and the pointer-cast fallback `*(float*)((char*)&sym+N)`
+does NOT fold even at -O2 (it materializes `&sym` into a $t reg, +4 insns,
+wrong shape — verified on func_0000E270). func_0001016C worked because its
+target func_00000C10 is NOT defined in o0_100F0.c. So the 0x990-pool trio
+(func_0000E270/D900/E2D0, all in bootup_uso.c WITH func_0000098C) need a
+**file-split** first — move them to a new .c where func_0000098C is just
+`extern struct{...}` — before the fold applies. func_00010C8C lives in
+tail3a.c (func_00000C10 NOT defined there → no clash) so its pool load is
+fold-able in place, but it's separately -g3-capped. The float-3rd-arg
+passing (target `mfc1 $a2,$f0`, one move not a K&R double-promote pair)
+is fixable WITHOUT a split via a fn-ptr cast:
+`((void(*)(void*,void*,float))func_00000000)(a,b,ratio)`. Net: the
+technique is real and landed one match; the rest are file-split-gated, not
+deferred-symbolization-gated.
 
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
