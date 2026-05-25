@@ -383,6 +383,28 @@ Naming `offset` changes the scheduling: `$v0` (the call result `r`) is held as f
 
 **Origin:** 2026-04-19 game_libs gl_func_00023B08. Inline `r + a1 * 16` → 99.33 % (only `addu` operand order off). Split `int offset = a1 << 4; r + offset` → 100 %.
 
+## Two independent register-inits at entry: C source order controls which IDO emits first
+
+_When a function opens with two independent setup assignments to saved/temp regs
+(e.g. a loop counter `i = 0` and a base pointer `entry = a0 + 0x18`), IDO emits
+them in the order they appear in the C source. If your build has them swapped vs
+the target (`addiu s1,a0,0x18` then `move s0,zero` where the target wants
+`move s0,zero` first), reorder the C so the target's-first init appears first._
+
+**Common trap:** a `for (i = 0; i < N; i++)` loop puts `i = 0` in the for-init,
+which the compiler sequences AFTER any earlier declaration-initializer. So
+`int i; char *entry = base; for (i = 0; ...)` emits `entry`-init first. To emit
+`i`-init first, initialize `i` at its declaration and empty the for-init:
+```c
+int i = 0;                 /* i-init now precedes entry-init in source */
+char *entry = base;
+for (; i < N; i++) { ... }
+```
+**Verified** 2026-05-25 game_libs gl_func_0000A4D0: 92.86 % (entry/i pair-swap) →
+byte-exact after moving `i = 0` to its declaration. Replaced a banned 2-insn
+INSN_PATCH. Same family as the `addu` operand-order and float-const-order levers
+above — all "C source order controls IDO scheduling of independent ops."
+
 **Addendum (2026-04-19, bootup_uso/func_00002774):** Array-indexing form `((T*)base)[i + offset]` gives `addu rd, base, idx` (BASE first), while the arithmetic form `*(T*)(base + i*sizeof(T) + offset*sizeof(T))` gives `addu rd, idx, base` (OFFSET first). Same semantic access, different operand order at the byte level.
 
 **Addendum (2026-05-08, game_libs_func_00031580):** Indexing-form `base + i*N + offset` repeated at every loop body store (vs advancing-pointer `p += N; *(p-N+offset)`) RAISES i's ref count above base's ref count. When i and base compete for $v0/$v1, the higher-ref-count variable wins $v0. So switching to the indexed form flips i→$v0, base→$v1 (matching loops where target asm has `or v0, zero, zero` for the counter init and `lui v1, ...` for the base). Net effect on game_libs_func_00031580: 83.52% → 88.23% (regalloc gap closed; remainder is reloc-pre-resolution alias scoring artifact, byte-exact post-link).
