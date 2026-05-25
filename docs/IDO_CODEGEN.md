@@ -8556,6 +8556,13 @@ The productive inverse of the SR-blocked case above. Many small game_libs loops 
 
 ---
 
+<a id="feedback-ido-o0-byte-masked-stack-vars-are-unsigned-char"></a>
+## -O0 body-tuning: a stack var masked to 0xFF each iteration is `unsigned char` (sb/lbu), not int
+
+When reverse-engineering an **-O0** function body for an -O0 file split, match the stack-slot WIDTH first. At -O0 every local is a stack slot reloaded on each use, so the load/store width is visible: `sb`/`lbu` to a byte slot = `unsigned char`; `sh`/`lhu` = `unsigned short`; `sw`/`lw` = `int`. A loop accumulator that the algorithm masks to `& 0xFF` every iteration is stored as a **byte** in the target → declare it `unsigned char` (and drop the explicit `& 0xFF`, since the `sb` store truncates). Verified 2026-05-25 on `gl_func_00070194` (CRC-5): `int out` → 184 bytes vs target 176; `unsigned char out` → 180 (1 insn off). **Caveats that did NOT help (regressed):** splitting one expression into separate `out<<=1; out|=bit; out^=tmp;` statements (more reloads, 188); `unsigned char` *return type* (184). The stubborn residual on this one is the -O0 RETURN structure: the target emits `(x & 0x1f) & 0xff` via temp+move pairs with an interleaved sp-restore and no double-`b epilogue`, while `return x & 0x1F` (int return) emits an in-place `andi` + a redundant double branch — an -O0 return-codegen idiom still being reverse-engineered. General lesson: -O0 carves are NOT just plumbing; each body needs per-function -O0 codegen tuning (stack-slot widths, intermediate-store order, return idiom) before the carve pays off.
+
+---
+
 <a id="feedback-ido-inline-call-arg-ptr-vs-named-local-treg"></a>
 ## Inline a computed pointer into the call (no named local) to keep it in the $t-sequence instead of $v0
 
