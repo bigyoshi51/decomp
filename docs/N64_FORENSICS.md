@@ -668,14 +668,34 @@ and add/route the reloc to a separate `.rodata` pool symbol. Mechanism
 not yet confirmed against the USO reloc table — verify which section the
 reloc's symIdx actually targets before acting (offset +0 at a valid
 function prologue is the tell that "delete the spurious symbol" is wrong).
-func_0001016C is left a real NM-wrap C body (`extern float
-D_FP_POOL_0C10[]` placeholder for the 3 loads; rest byte-clean) pending
-this fix. **The 0xC10 pool is SHARED (confirmed 2026-05-25):**
-`func_00010C8C` also loads `func_00000C10 + 0xC` (lwc1, the 4th pool f32)
-into its temp Vec4 record. So the symbolization MUST emit ONE shared
-`.rodata` pool symbol that both func_0001016C and func_00010C8C (and any
-further referrers — grep `func_00000C10 + 0x` across asm/) resolve to —
-NOT a per-function inline pool. Both are NM-wrapped pending the fix.
+**BREAKTHROUGH 2026-05-25 — these pool loads are MATCHABLE NOW, no
+symbolization / re-extract needed. func_0001016C LANDED (56/56 byte+reloc
+exact, count 1555→1556).** The whole "deferred splat-config pass" framing
+above was wrong for MATCHING (it's only needed for semantic cleanliness).
+The target's reloc IS against the splat-assigned symbol (here
+`func_00000C10`); referencing that symbol directly in C reproduces the
+exact `lui $at,%hi(sym+N); lwc1 %lo(sym+N)($at)` bytes + the exact
+R_MIPS_HI16/LO16 reloc against `sym` — verified by `objdump -dr` of build
+vs expected/.o (NOT the name-blind report). This is the SAME principle as
+placeholder calls referencing `func_00000000`: use the symbol splat gave
+the reloc, not an invented one. **C shape:** declare the fold-target as a
+typed global and use DIRECT FIELD/struct access (which folds the +offset
+into `%lo(sym+N)($at)`); a `(char*)&sym + N` cast or `sym_arr[i]`
+indexing does NOT fold at -O0 (materializes the base in a reg first):
+```c
+extern struct { float f0, f1, f2; } func_00000C10;   /* the fold-target */
+q[0] = func_00000C10.f0;  /* -> lwc1 %lo(func_00000C10+0)($at) */
+q[1] = func_00000C10.f1;  /* -> lwc1 %lo(func_00000C10+4)($at) */
+```
+Declaring the .text function symbol as a float struct is type-punning but
+harmless (the linker is type-agnostic; the reloc resolves to the same
+module address the target uses). For f64 pools use `double` fields; for
+mixed/`+0x4` strided pools (the func_0000098C / func_000008?? families)
+size the struct to the exact offsets. **So func_0000E270 / func_0000D900 /
+func_0000E2D0 (0x990 pool via func_0000098C) and func_00010C8C (0xC10
+pool, but ALSO -g3-capped) are now candidate matches via this technique —
+not deferred caps.** Retry them. The .rodata symbolization is still nice
+for readability but is NOT required to land the match.
 
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
