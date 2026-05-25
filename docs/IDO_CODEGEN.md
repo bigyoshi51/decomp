@@ -677,6 +677,19 @@ Note this is a tiny straight-line leaf where the permuter has no mutation surfac
 
 **Generalizes to the varargs `&param`-pointer regalloc case** (game_uso_func_0000D5BC, 2026-05-24): a function that homes `a1,a2` via `&a1` and copies them to an adjacent dest had the `&a1` pointer stuck in `$v0` (a `volatile int *p = &a1; dst[0]=p[0]; dst[1]=p[1]` form) where the target uses `$t6`. Writing it as `*(Pair2*)(dst) = *(Pair2*)&a1` homes the args, takes `&a1` into `$t6`, and emits the lw/sw/lw/sw via the pointer in the target registers — byte-exact. So struct-copy fixes both the adjacent-field $t-swap AND the `&param`-pointer `$v0`-vs-`$t6` choice. (Verify in-tree, not just standalone — see `MATCHING_WORKFLOW.md#feedback-standalone-false-convergence-verify-in-tree`.)
 
+<a id="feedback-ido-array-append-count-store-vs-array-addr-schedule-cap"></a>
+## Array-append (load count / store count+1 / store array[idx]) — count-store-vs-array-addr schedule is an in-tree cap; detect-and-skip
+
+The recurring "append to a count+entries list" idiom:
+```c
+int idx = obj->count;          /* lw */
+obj->count = idx + 1;          /* sw count+1 */
+obj->entries[idx] = val;       /* sll idx; addu base; sw val */
+```
+has a fixed 2-word residual: the **target computes the array address (`addu base,idx*N`) BEFORE the count store (`sw count+1`), but IDO's full-TU scheduler emits the count store first** (the `idx+1` is ready before the `idx*N` shift). No C reorder flips it: array-store-first regresses (extra diffs), count-store-first is the 2-word cap. **It also false-converges** — a standalone compile schedules the array-addr first (looks like a match) but the in-tree (full-TU) build puts the count store first; always verify in-tree.
+
+This is a **cap class**, not a one-off — confirmed identical on `timproc_uso_b5_func_0000A95C` (0x3C/0x40), `bootup_uso func_00002088` (0x104/0x108), `func_000020AC` (0xC0/0xC4/0xC8). Recognize the shape and leave NM (~75-90%); don't burn ticks reordering or trusting a standalone zero. (Permuter is the only lever that might reach it — A95C floored, untried on the others.)
+
 <a id="feedback-ido-array-index-vs-charptr-spill-packing"></a>
 ## Array-index addressing packs stack spills tighter than char*-pointer-arith (fixes frame-size / spill-offset residuals)
 
