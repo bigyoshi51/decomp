@@ -8556,6 +8556,13 @@ The productive inverse of the SR-blocked case above. Many small game_libs loops 
 
 ---
 
+<a id="feedback-ido-inline-call-arg-ptr-vs-named-local-treg"></a>
+## Inline a computed pointer into the call (no named local) to keep it in the $t-sequence instead of $v0
+
+When a computed pointer is passed as a (stack-spilled) call argument, declaring it as a **named local** (`char *p = base + idx*K; f(..., p, ...)`) makes IDO assign it `$v0` (a free caller-save return reg), which then cascades the *next* temp (e.g. a constant arg) down a register too. If the target instead continues the natural temp sequence (`...t6/t7/t8/$t9`), **inline the expression directly into the call**: `f(..., base + idx*K, ...)`. With no named local, IDO allocates the addu result as the next temp (`$t9` after `$t8`), matching the target, and the cascade resolves. Verified 2026-05-24 on `timproc_uso_b5_func_0000CCC8`: named `char *p` → `addu $v0` + `li $t9` (4 register diffs); inlined → `addu $t9` + `li $t0` (0 real diffs). This is the **complement** to the usual "use a named local to force a value into $s/$v" advice — for call-arg pointers you often want the *opposite* (inline to stay in $t). Cracked a regalloc "cap" that had previously been forced with the now-banned INSN_PATCH, so re-test ex-INSN_PATCH regallocs with this lever (see `project_1080_ex_insn_patch_regrind_vein`).
+
+---
+
 <a id="feedback-ido-o32-int-a0-float-f12-cap"></a>
 ## o32 ABI CAP: a function receiving int in $a0 AND float in $f12 simultaneously is not C-reachable
 
