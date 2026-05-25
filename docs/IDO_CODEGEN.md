@@ -203,6 +203,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [New -O0 .c file split needs FOUR config touches; objdiff.json is the easy-to-miss one](#feedback-o0-file-split-objdiff-json-step) — _When carving an -O0 function out of its parent .c into a dedicated `<seg>_o0_<offset>.c` file, you need (1) Makefile per-file `OPT_FLAGS := -O0` and `TRUNCATE_TEXT`, (2) tenshoe.ld entry, (3) source split itself, AND…
 - [Loop reloads ALL locals from sp every iteration = -O0 codegen signal](#feedback-ido-o0-loop-stack-reload-signal) — _When a function's loop body starts with `lw tA, X(sp); lw tB, Y(sp); lw tC, Z(sp)` for variables that have no `volatile` or address-taken reason, it's almost certainly -O0 compiled. -O2 keeps loop-carried values in registers (only ra + callee-saves spill). Detection signal: before writing C, check if the loop body's first 3 insns are `lw` from sp-relative offsets matching the function's own prologue spills — if yes, abandon -O2 attempts and either (a) file-split to per-function OPT_FLAGS=-O0, or (b) accept INCLUDE_ASM. Verified 2026-05-14 on gl_func_00071864 (16-bit byte-sum checksum, 23 insns): straightforward -O2 C body produced 5.4% match because target reloads p/accum/i from sp every iteration._
 - [-O0 variant of the int-reader accessor template — 19 insns / 0x4C bytes vs the standard -O2 template's 16 insns / 0x40 bytes](#feedback-o0-int-reader-template-variant) — _When scanning USO accessor templates, also check 0x4C-byte / 19-instruction variants — these are -O0 compiles of the SAME body.
+- [Stack-residency does NOT imply -O0 — `residency + FILLED delay slots` is an -O1 build with original register-pressure spill, NOT reproducible by the project cc](#feedback-ido-stack-residency-plus-filled-slots-is-o1-not-o0) — _Refines `#feedback-ido-o0-loop-stack-reload-signal`: loop-reloads-all-locals is necessary but NOT sufficient for -O0. -O0 ALSO leaves delay slots UNFILLED (b;nop / jr;nop). If the target reloads locals from sp every use AND has its delay slots FILLED (≈0-1 nops), it is NOT -O0 — it is an -O1 object whose original register pressure spilled those locals while the assembler still filled slots. The project cc can't emit that combo: -g1/-g2 force residency but leave slots unfilled; plain -O1/-O2 fill slots but register-allocate the locals away. Permuter can't help (can't add assembler-level slot filling); a `volatile` base adds a reload the target lacks. Genuine cap. Verified 2026-05-25 on gl_func_00070194/000718C0/0003D914 (previously mis-tagged "-O0 carve candidates")._
 
 ### indirect / function pointer
 
@@ -10950,3 +10951,56 @@ suppress the strength reduction (writing `/1024.0f` already triggers it; a
 forcing the target's two words via `NON_MATCHING_INSN_PATCH` (twin-only when the
 default build is INCLUDE_ASM) is value-safe. Verified 2026-05-23 sibling pair
 `gl_func_0005B764` / `gl_func_0005B848` (98.8-98.9→100, reloc-blind %-movers).
+
+<a id="feedback-ido-stack-residency-plus-filled-slots-is-o1-not-o0"></a>
+## Stack-residency + FILLED delay slots = -O1 register-pressure spill, NOT -O0 (un-reproducible cap)
+
+**The trap:** `#feedback-ido-o0-loop-stack-reload-signal` says "loop reloads all
+locals from sp every iteration ⇒ -O0." That signal is **necessary but not
+sufficient.** Two distinct builds both reload locals from the stack:
+1. **-O0** — every local on the stack, AND branch/jr delay slots **UNFILLED**
+   (`b X; nop`, `jr ra; nop`, `beqz r,X; nop`). Existing project -O0 matches
+   prove this: `gl_func_00008944` disassembles with `nop` in every fillable
+   slot. Reproducible via `OPT_FLAGS := -O0` file-split.
+2. **-O1 with original register pressure** — the optimizer spilled *some* locals
+   (the ones under pressure) to the stack with reload-every-use, BUT kept others
+   (e.g. a short-lived loop temp) in a register, AND the delay slots are **FILLED**
+   (≈0-1 nops; the only nop is an un-fillable one like a `beqz` whose delay can't
+   be safely filled). This is **not -O0**.
+
+**Decisive test:** count `nop`s in the target and check whether a short-lived
+local stays in a register.
+- target nops ≈ 0-1 AND some local in a register ⇒ case 2 (-O1 pressure spill).
+- target nops = "one per branch/jr" AND every local on stack ⇒ case 1 (-O0).
+
+**Why case 2 is an un-reproducible cap with the project cc:** residency and
+full delay-slot filling are mutually exclusive across the available flags.
+- `-O1`/`-O2` (no `-g`): the scheduler **fills** delay slots, but the register
+  allocator keeps the locals in registers (no residency) — wrong shape, wrong
+  instruction count.
+- `-O1`/`-O2` `-g1`/`-g2`: `-g` forces locals to the stack (debug residency),
+  but **suppresses** full delay-slot filling — leaves multiple `nop`s the target
+  doesn't have.
+- `-g3` either register-allocates (`-O1 -g3`) or unrolls (`-O2 -g3`).
+
+The original 1080 object got both because its *real* register pressure (from the
+true source, which had whatever live ranges it had) spilled exactly those locals
+at plain `-O1` while the assembler still filled slots. You can't recreate that
+pressure from a minimal re-derived body, and:
+- The **permuter cannot help** — it mutates C/AST; it cannot add assembler-level
+  delay-slot filling, and from a `-g2` base (residency, unfilled) there is no
+  C-level move that fills the slots.
+- A **`volatile` base is structurally wrong** — volatile forces a reload on
+  *every* read, but the target reuses a just-stored value for its final RMW
+  (e.g. `out = out ^ tmp` reads the pre-store `(out|bit)&0xff` rather than
+  reloading), which volatile forbids. So a volatile base always carries ≥1
+  extra reload vs the target → can never reach score 0.
+
+**Verdict:** keep `INCLUDE_ASM`; write a clean, readable NM body for
+documentation. Verified 2026-05-25 on three game_libs_post functions that an
+earlier session had queued as "-O0 carve candidates" but are actually this cap:
+`gl_func_00070194` (44-insn CRC-5, heavy residency), `gl_func_000718C0`
+(26-insn dual checksum, 0 nops), `gl_func_0003D914` (38-insn list walk, 0 nops).
+The hand-derived C gets the frame, control flow (do-while, no top guard), and
+instruction count exact, but the per-local spill decision and the filled slots
+are not jointly reachable.
