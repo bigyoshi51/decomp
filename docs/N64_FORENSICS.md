@@ -651,6 +651,27 @@ symbolization pass is per-USO: every relocatable USO segment
 enumerate-folded-sites + suppress-spurious-`func_`-symbols + re-extract
 pass. Budget the focused session accordingly (it's N segments, not 1).
 
+**Some fold-targets are GENUINELY-COMPLETE functions — do NOT delete them
+(added 2026-05-25):** the "suppress the spurious code symbol" fix above
+assumes the `func_` at the fold base is bogus (data misdisassembled as
+code). That is NOT universal. `func_0001016C` (bootup_uso) loads
+`func_00000C10 + {0x0, 0x4, 0x8}` via lwc1 as 3 f32 consts — but
+`func_00000C10` is a *real, complete* 0x90-byte function (clean
+prologue→jal-loop→epilogue, verified). The reloc points at offset **+0**
+(the function's very first word), not past its tail, so this is NOT the
+pool-trails-code shape; it looks like a per-section module-offset
+collision (a `.rodata` pool at module-offset 0xC10 resolved against the
+`.text` symbol at the same numeric offset 0xC10 — USO sections carry
+independent module offsets). For this sub-class the corrective action is
+the OPPOSITE of the func_0000098C recipe: KEEP the `.text` func_ symbol,
+and add/route the reloc to a separate `.rodata` pool symbol. Mechanism
+not yet confirmed against the USO reloc table — verify which section the
+reloc's symIdx actually targets before acting (offset +0 at a valid
+function prologue is the tell that "delete the spurious symbol" is wrong).
+func_0001016C is left a real NM-wrap C body (`extern float
+D_FP_POOL_0C10[]` placeholder for the 3 loads; rest byte-clean) pending
+this fix.
+
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
 won't be clean — verify per-function via linked ELF/objdiff). DEFERRED to a
