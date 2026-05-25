@@ -670,7 +670,12 @@ reloc's symIdx actually targets before acting (offset +0 at a valid
 function prologue is the tell that "delete the spurious symbol" is wrong).
 func_0001016C is left a real NM-wrap C body (`extern float
 D_FP_POOL_0C10[]` placeholder for the 3 loads; rest byte-clean) pending
-this fix.
+this fix. **The 0xC10 pool is SHARED (confirmed 2026-05-25):**
+`func_00010C8C` also loads `func_00000C10 + 0xC` (lwc1, the 4th pool f32)
+into its temp Vec4 record. So the symbolization MUST emit ONE shared
+`.rodata` pool symbol that both func_0001016C and func_00010C8C (and any
+further referrers — grep `func_00000C10 + 0x` across asm/) resolve to —
+NOT a per-function inline pool. Both are NM-wrapped pending the fix.
 
 **Status:** multi-file re-extraction = high blast radius (and 1080 has the
 known preexisting tenshoe.z64 0x550 ROM-tail mismatch, so a full-ROM diff
