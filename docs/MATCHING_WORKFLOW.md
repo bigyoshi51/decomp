@@ -5945,3 +5945,23 @@ wrong tool — use a CONTIGUOUS-region file split (`OPT_FLAGS := -O2 -g3` +
 `TRUNCATE_TEXT` + reduced `sh_addralign`, the working `bootup_uso_tail*`
 precedent), which requires the target functions to be contiguous in `.text`
 (scattered stubs need splat re-extraction first). Focused-session, not a tick.
+
+## Verify gotcha: objdump `-d` elides zero/nop runs as `...` → false byte-exact on padded stubs
+
+`objdump -d` collapses a run of identical words (e.g. `00000000` nop-padding) into
+a single `...` line. An insn-line diff (`grep '^\s+[0-9a-f]+:'` then compare) drops
+the `...` line entirely, so a build that emits `jr ra; sw a0` (8B) "matches" an
+expected `nop; nop; jr ra; sw a0` (16B) — both show only `jr ra` + `sw a0` after
+elision. This bites boundary-PADDED tiny stubs: splat sometimes labels a function
+0x8 bytes early, swallowing 2 nops of inter-function alignment, so the declared
+size (e.g. 0x10) is 8B larger than the real 2-insn body and the leading nops are
+NOT C-emittable. Symptom: a hand `objdump`-insn diff says byte-exact but the land
+script rejects with `fuzzy_match_percent=50.0`.
+**Rule: never trust a hand objdump-insn diff for a match claim — the land script's
+raw byte_verify is the authority (it compares actual `.text` bytes including zero
+runs).** For a pre-check, compare DECLARED size (`.s` header `nonmatching FN, 0xNN`)
+against your C's emitted byte count, or use `objdump -s` (raw hex, no elision).
+A leading-nop expected body (`nop;nop;jr;...`) is a splat boundary bug, not a
+stub to match — fix the boundary (or skip), don't write C for it.
+Verified 2026-05-25 on game_libs_func_0004DD0C (`void f(int a0){}` gave 8B; target
+was 16B `nop nop jr ra sw a0`; insn-diff false-positived, land script caught it).
