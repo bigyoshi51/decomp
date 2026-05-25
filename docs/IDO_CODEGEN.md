@@ -8556,6 +8556,18 @@ The productive inverse of the SR-blocked case above. Many small game_libs loops 
 
 ---
 
+<a id="feedback-ido-o32-int-a0-float-f12-cap"></a>
+## o32 ABI CAP: a function receiving int in $a0 AND float in $f12 simultaneously is not C-reachable
+
+Recognition: target prologue uses an incoming integer arg from `$a0` (e.g. `andi a0,a0,0xff`) AND an incoming float arg from `$f12` (e.g. `mfc1 a1,$f12` / `swc1 $f12,N(sp)` / `cvt`/`mul.s` on `$f12`) — both in the same function. Under the **o32** ABI (`-32`), floating-point and integer arguments **share** the four argument slots, so you can never get this combination from a C prototype:
+
+- `f(int a0, float a2)` → a0 in `$a0`, a2 in **`$a1`** (a 2nd-position float *after* an int goes to the integer register, NOT `$f12`/`$f14`).
+- `f(float a2, int a0)` → a2 in **`$f12`**, but a0 in **`$a1`** (the float reserved slot 0, pushing the int to slot 1).
+
+Neither yields int-`$a0` + float-`$f12`. That independent allocation (FP args in `$f12`/`$f14` regardless of preceding int args) is the **n32/n64** convention, which `-32` does not use. Verified 2026-05-24 by standalone-compiling both signatures (see `gl_func_0002DF68`, a 1-diff near-miss whose only diff is our stack-roundtrip `sw a1` vs the target's `mfc1 a1,$f12`). This is the float sibling of the caller-set-integer-register cap (`feedback_caller_set_int_reg_cap_1080_game_libs`). **Detect and leave INCLUDE_ASM** — no C signature reproduces it. (The target was likely built from a different ABI/hand-written, or the caller sets `$f12` directly.)
+
+---
+
 <a id="feedback-ido-rtl-operand-eval-pointer-reg"></a>
 ## GCC 2.7.2 evaluates binary-operator operands right-to-left — swap commutative operands to control pointer-IV register assignment
 
