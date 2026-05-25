@@ -60,6 +60,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
 - [Reuse the PARAMETER as the object (not a fresh local) → IDO arg-saves to the caller slot (small frame) instead of an in-frame spill slot (+8 frame)](#feedback-ido-reuse-param-as-object-caller-slot-spill) — _In an alloc-or-given constructor `obj = a0 ? a0 : alloc(N)` whose object must survive ≥1 jal, a fresh `int obj;` local spills to an IN-FRAME slot (frame grows +8, all spill offsets shift). Assigning back into the PARAMETER instead (`if (a0==0){ a0=alloc(N); … } … use a0 … return a0;`) makes IDO spill via the ARG-SAVE-to-caller-slot convention (`sw a0, framesize(sp)`), keeping the minimal frame and matching the target's spill offsets. Erased the final 6 frame-size diffs on gl_func_00041524 (→ byte-exact 32/32, pure C). Try this whenever the only residual is `addiu sp,-N` / spill-offset off by a constant and the object is param-derived._
+- [Array-index addressing (`int** a0; a0[a1 + K]`) packs stack spills tighter than char*-pointer-arith (`a0 + a1*4`) — fixes frame-size/spill-slot-offset residuals](#feedback-ido-array-index-vs-charptr-spill-packing) — _When the only diff is frame size / spill-slot offsets off by a constant (e.g. -0x28 with a 4-byte gap vs target -0x20), and the base is a param indexed by another param: express the access as typed array indexing (`int** a0; obj = a0[a1 + 0x14]`, 0x14 = byteoff/4) rather than char* arithmetic (`(char*)a0 + a1*4` then `[0x50/4]`). The array-index form makes IDO pack the pointer spills with no gap. Byte-exact gl_func_0002A50C 2026-05-24._
 - [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO spill a0 early and reload via a fresh temp ($t6).
 - [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes a0 as a parameter and passes it through unchanged
 - [IDO picks $a1 (not $a3) to save an arg across a jal — can't reliably flip from C](#feedback-ido-arg-save-reg-pick) — _When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; sw a1, N(sp); ...jal...; lw a1, N(sp)`.
@@ -655,6 +656,35 @@ body that populates a Vec3 in `out`.
 ---
 
 ---
+
+<a id="feedback-ido-array-index-vs-charptr-spill-packing"></a>
+## Array-index addressing packs stack spills tighter than char*-pointer-arith (fixes frame-size / spill-offset residuals)
+
+When a function's only residual is a **frame-size / spill-slot-offset** difference off by a constant — the target uses a smaller frame and your build leaves a gap between spill slots — and the addressed base is a parameter scaled by another parameter, the **way you write the address computation** changes IDO's spill-slot packing.
+
+**Symptom (gl_func_0002A50C, 2026-05-24, obj-deinit helper, 2 pointers spilled across 2 jals):**
+```
+mine  : addiu sp,sp,-0x28 ; ... ; sw v0,0x1c(sp) ; sw a2,0x20(sp)   (gap at 0x18)
+target: addiu sp,sp,-0x20 ; ... ; sw v0,0x18(sp) ; sw a2,0x1c(sp)   (packed)
+```
+Everything else byte-identical; only the frame size and the two spill offsets differ.
+
+**char*-pointer-arith form (gap, frame -0x28):**
+```c
+int *obj_slot = (int*)((char*)a0 + a1 * 4);
+int *obj = (int*)obj_slot[0x50/4];
+... obj_slot[0x50/4] = 0;
+```
+
+**typed array-index form (packed, frame -0x20, BYTE-EXACT):**
+```c
+void f(int **a0, int a1) {          // a0 typed as int** (element size 4)
+    int *obj = a0[a1 + 0x14];        // 0x14 = 0x50/4; gives a0 + a1*4 + 0x50
+    ...
+    a0[a1 + 0x14] = 0;
+}
+```
+The array-index form (base typed so the element size matches, index = `param + byteoff/4`) makes IDO pack the pointer spills with no inter-slot gap, matching the target's minimal frame. Reusing the parameter in place (`#feedback-ido-reuse-param-as-object-caller-slot-spill`) did NOT fix it here — the lever was the addressing *form*, not param-reuse. **Watch the scaling:** `a0[a1*4 + K]` on an `int**` double-scales to `a1*16` (`sll 0x4`); you want `a0[a1 + K]` to get `a1*4` (`sll 0x2`). Args that need byte offsets into a `char`-typed extern (e.g. `&D_00000000 + 0x5368`) can stay as `(char*)&D_00000000 + 0x5368` — only the spilled-base access needs the typed-index form.
 
 <a id="feedback-ido-arg-deref-before-a0-overwrite"></a>
 ## Pull `a0->field` into a named local when the same call overwrites $a0 with a new address
