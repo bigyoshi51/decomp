@@ -6019,3 +6019,37 @@ A leading-nop expected body (`nop;nop;jr;...`) is a splat boundary bug, not a
 stub to match — fix the boundary (or skip), don't write C for it.
 Verified 2026-05-25 on game_libs_func_0004DD0C (`void f(int a0){}` gave 8B; target
 was 16B `nop nop jr ra sw a0`; insn-diff false-positived, land script caught it).
+
+## TICK-DOABLE boundary correction for too-big-tail near-misses (sanctioned, replaces banned SUFFIX_BYTES/PROLOGUE_STEALS)
+
+Many 90-99% "structural" near-misses are splat BOUNDARY artifacts, not codegen
+caps — the C is already correct. The **too-big-tail** subclass is landable in a
+single tick (proven `timproc_uso_b5_func_00003F18` 1556->1557, 2026-05-25):
+
+**Detect:** `objdump -d` build vs expected — build C matches the target's first N
+insns exactly, expected has 1+ EXTRA trailing insns *past* the function's
+`jr ra; nop` (unreachable). That orphan is the successor's mis-attributed
+prologue / a dead boundary word. Confirm the successor doesn't use the orphan's
+dest reg (grep its `.s`).
+
+**Fix (the proper replacement for the removed SUFFIX_BYTES splice):**
+1. Parent `.s`: delete the trailing orphan `.word`(s); shrink the `nonmatching
+   NAME, 0xSIZE` header. (`asm/nonmatchings/*.s` ARE git-tracked despite the
+   gitignore-pattern hint; `git add <path>` stages them.)
+2. Successor `.s`: prepend the orphan `.word`(s) after its glabel; grow its
+   header. ROM byte sequence is preserved (parent_shrink+successor_grow = same).
+3. `rm` parent+successor expected/build `.o`, run
+   `scripts/refresh-expected-baseline.py`, then rebuild the FULL non_matching tree
+   (`make $(find build/src -name '*.c.o' | sed 's#build/src/#build/non_matching/src/#')`)
+   — refresh leaves build/non_matching incomplete.
+4. `git checkout -- expected/src/<other-segments>/` — the full refresh side-effects
+   OTHER expected/.o with count-neutral churn; keep only your target's.
+5. `objdiff-cli report generate`; diff matched-set pre/post → confirm clean +1.
+6. Promote the parent NM-wrap to a plain def; log-exact-episode; land.
+
+**Caveat:** the fix lives in the committed `.s`; a future `make extract` would
+regenerate+revert it (the generate-uso-asm boundary source isn't updated). Rare,
+so fine for normal builds; permanence needs the boundary source updated.
+**Still focused-session:** the stolen-prologue subclass (leading orphan belonging
+to the PREDECESSOR, e.g. gl_func_00027548) needs predecessor-side edits.
+Full recipe: `memory/project_1080_boundary_correction_tick_recipe.md`.
