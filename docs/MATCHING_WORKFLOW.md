@@ -53,6 +53,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 ### objdiff scoring quirks
 
 - [byte-verify functions via symbol-table addr+size + objcopy bytes, NOT objdump disasm-string compare](#feedback-byte-verify-via-objcopy-not-objdump-string) — _Comparing two .o files for byte-equality of a specific function via `mips-linux-gnu-objdump -d` BLOCK STRINGS (extracting `<func>:` to next blank line, then string-equality) is brittle: the disasm output contains the…
+- [`objdiff-cli report generate` is reloc-NAME-BLIND; only `objdiff-cli diff` is name-aware — the report/land gate CANNOT validate a USO call target, even with symbolized expected](#feedback-objdiff-report-name-blind-vs-diff-name-aware) — _Controlled proof: a wrong R_MIPS_26 target symbol scores 99.17% under `objdiff diff` but 100.0 under `report generate` (and the land `byte_verify` is also name-blind: jal 0 == jal 0). Symbolizing expected does NOT un-fool the gate. Validate USO targets against the ROM reloc table (`scripts/uso-reloc-encode.py` extractor vs decoded TextReloc), never objdiff. Refutes the "symbolize expected → genuine 100" rollout recipe; 2026-05-25._
 - [Raw-word byte-compare is BLIND to reloc targets — a pure symbol-reference leaf (lui 0 / lw 0) byte-matches regardless of WHICH symbol the reloc points at](#feedback-byte-compare-blind-to-reloc-target) — _Comparing built `.text` words to the `.s` raw words can't verify reloc-bearing instructions: in both, the immediate of `lui %hi(SYM)`/`lw %lo(SYM)`/`addiu %lo(SYM)`/`jal SYM` is 0 (the linker/objdiff fills it). For a leaf whose ENTIRE content is a symbol reference with no discriminating literal offset — e.g. `return D_X` = `lui v0,0; jr ra; lw v0,0(v0)` — two functions referencing DIFFERENT globals produce IDENTICAL raw bytes. The recognizer reports MATCH but the reloc symbol may be wrong (false positive). When the function's only content is a reloc'd symbol ref with offset 0, verify the reloc target separately (`objdump -r`) or skip. Functions WITH a non-reloc'd discriminating offset (e.g. the lbu/sb `0x2C40` in the D_-table triplet) are safe — the offset confirms identity. Verified 2026-05-23 (deferred game_libs 38B94/666F0/3487C/44CB0)._
 - [1080's land script now accepts byte-verify against expected/.o as an alternative to fuzzy=100.0](#feedback-land-script-accepts-byte-verify-for-post-cc-recipes) — _As of commit bbc3b6e (2026-05-04), `scripts/land-successful-decomp.sh` lands a function if EITHER `fuzzy_match_percent == 100.0` OR `mips-linux-gnu-objdump` of the function's disasm in build/<unit>.c.o equals…
 - [byte_verify against build/.o is circular for NM-wrapped functions — use build/non_matching/.o](#feedback-include-asm-tautology-trap) — _The land script's `byte_verify` globs `build/.o` and compares to `expected/.o`. For any function wrapped in `#ifdef NON_MATCHING / #else INCLUDE_ASM`, both paths contain the same ROM bytes by construction (default build takes the `#else`, expected/ is generated via INCLUDE_ASM) — the comparison is trivially true regardless of whether the C body matches. Combined with `ensure_not_include_asm` silently passing when rg isn't on PATH (Claude Code agent sessions have rg as a shell function, not a binary), false-positive episodes accumulated. Fixed 2026-05-06: byte_verify routes to build/non_matching/ when src has INCLUDE_ASM for the function; ensure_not_include_asm uses POSIX grep -r; new `scripts/validate-episodes.sh` re-runs the full gate as defense-in-depth._
@@ -801,6 +802,59 @@ symbols, NOT offsets off one base) can't be written, because writing both as
 live only in the USO reloc sidecar (not in the raw-word .s). Detect: two+ `lui 0`
 with offset-0 dependents → defer. (Offsets off ONE base — like 11A4's D_+0x64 /
 D_+0x54 — are fine; that's one symbol, multiple offsets.) Verified 2026-05-23.
+
+---
+
+<a id="feedback-objdiff-report-name-blind-vs-diff-name-aware"></a>
+## `objdiff-cli report generate` is reloc-NAME-BLIND; only `objdiff-cli diff` is name-aware — so the report/land gate CANNOT validate a USO call target, even with symbolized expected
+
+**The trap (refutes the "symbolize expected → genuine 100" recipe).** A recurring
+idea for USO matching is: the per-function score is "fooled" only because the
+`expected/.o` is raw-`.word` (no relocs), so symbolize the expected `.s` too and
+then objdiff will genuinely compare reloc symbols (right target → 100, wrong → <100).
+**This is false for the gate that actually matters.** objdiff has two scoring paths
+and they disagree on reloc names:
+
+- **`objdiff-cli diff -1 T -2 B <sym>`** (per-symbol, interactive/one-shot): **name-AWARE.**
+  A wrong reloc symbol is a `DIFF_ARG_MISMATCH` and lowers the score.
+- **`objdiff-cli report generate` → `report.json` `fuzzy_match_percent`** (what the
+  land script + the decomp % gate on): **name-BLIND.** It scores by the *resolved
+  relocation value*. Two undefined externs both resolve to 0, so `jal 0 == jal 0`
+  and `lui 0 == lui 0` regardless of the symbol name.
+
+**Controlled proof (2026-05-25, agent-e).** Two `.o` differing only in one R_MIPS_26
+target symbol (`usosym_1268` vs `usosym_9999`), both undefined:
+
+```
+                                 objdiff diff   report generate
+  tgt vs base (SAME symbol)        100.0           100.0
+  tgt vs base (WRONG symbol)        99.17          100.0     ← report ignores the name
+```
+
+Confirmed end-to-end in-tree on `gl_func_0002A50C`: symbolizing its `.s` + the
+`expected/.o` and then pointing the C at a deliberately **wrong** `usosym` still
+produced `report.json fuzzy=100.0`. (The memo "OBJDIFF INTEGRATION MECHANISM
+VALIDATED" measured the `diff` path and wrongly generalized it to `report`.)
+
+**Consequence.** For USO functions whose calls/data are runtime-relocated (ROM holds
+`jal 0` / `lui 0` placeholders — verified e.g. `gl_func_0002A50C` ROM bytes are
+`0x0C000000`×2 + `lui $a0,0`), **no per-function objdiff/report score and no land
+`byte_verify` (also name-blind: `jal 0 == jal 0`) can distinguish a correct call
+target from a wrong one.** Symbolizing expected does NOT help — it only changes the
+name-aware `diff` view, not the gate. So:
+
+- **Do NOT roll out the "symbolize expected" recipe for a match-count / episode win.**
+  It would land episodes whose call targets the gate never checked (the same class
+  as the reverted `gl_func_0002A50C`-with-a-guessed-target false episode).
+- **The only ground truth for a USO target is the ROM reloc table.** Validate a USO
+  match by (a) `.text` placeholder bytes byte-exact AND (b) the C's compiler-emitted
+  relocs (`mips-linux-gnu-objdump -r build/.../<file>.c.o`, mapped symIdx/kind/offset)
+  matching the decoded ROM `TextReloc` entries for that function's offset range
+  (`scripts/uso-reloc-encode.py` extractor + decoder). That is per-function, needs no
+  build refactor, and never trusts objdiff for the target.
+
+Verified 2026-05-25. See `memory/project_1080_uso_spimdisasm_migration_todo.md`
+(recipe (4b) is REFUTED) and `scripts/uso-reloc-encode.py`.
 
 ---
 
