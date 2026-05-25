@@ -61,6 +61,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
 - [Reuse the PARAMETER as the object (not a fresh local) → IDO arg-saves to the caller slot (small frame) instead of an in-frame spill slot (+8 frame)](#feedback-ido-reuse-param-as-object-caller-slot-spill) — _In an alloc-or-given constructor `obj = a0 ? a0 : alloc(N)` whose object must survive ≥1 jal, a fresh `int obj;` local spills to an IN-FRAME slot (frame grows +8, all spill offsets shift). Assigning back into the PARAMETER instead (`if (a0==0){ a0=alloc(N); … } … use a0 … return a0;`) makes IDO spill via the ARG-SAVE-to-caller-slot convention (`sw a0, framesize(sp)`), keeping the minimal frame and matching the target's spill offsets. Erased the final 6 frame-size diffs on gl_func_00041524 (→ byte-exact 32/32, pure C). Try this whenever the only residual is `addiu sp,-N` / spill-offset off by a constant and the object is param-derived._
 - [Array-index addressing (`int** a0; a0[a1 + K]`) packs stack spills tighter than char*-pointer-arith (`a0 + a1*4`) — fixes frame-size/spill-slot-offset residuals](#feedback-ido-array-index-vs-charptr-spill-packing) — _When the only diff is frame size / spill-slot offsets off by a constant (e.g. -0x28 with a 4-byte gap vs target -0x20), and the base is a param indexed by another param: express the access as typed array indexing (`int** a0; obj = a0[a1 + 0x14]`, 0x14 = byteoff/4) rather than char* arithmetic (`(char*)a0 + a1*4` then `[0x50/4]`). The array-index form makes IDO pack the pointer spills with no gap. Byte-exact gl_func_0002A50C 2026-05-24._
+- [Copy adjacent fields as a STRUCT, not separate field-copies, to flip a $t-register-renumber residual](#feedback-ido-struct-copy-vs-field-copy-treg-order) — _When two (or more) adjacent words are copied `dst.f0=src.f0; dst.f1=src.f1;` and the only diff is the loads/stores using swapped $t regs (t6/t7 vs t7/t6), replace the separate copies with a single struct-typed copy (`*(Pair*)(dst)=*(Pair*)(src)`). The struct copy emits lw/lw/sw/sw in a fixed order that often matches the target's. Byte-exact game_uso_func_0000D438 2026-05-24 (was a banned INSN_PATCH)._
 - [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO spill a0 early and reload via a fresh temp ($t6).
 - [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes a0 as a parameter and passes it through unchanged
 - [IDO picks $a1 (not $a3) to save an arg across a jal — can't reliably flip from C](#feedback-ido-arg-save-reg-pick) — _When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; sw a1, N(sp); ...jal...; lw a1, N(sp)`.
@@ -656,6 +657,23 @@ body that populates a Vec3 in `out`.
 ---
 
 ---
+
+<a id="feedback-ido-struct-copy-vs-field-copy-treg-order"></a>
+## Copy adjacent fields as a STRUCT (not separate field-copies) to flip a $t-register-renumber residual
+
+When a function copies two (or more) **adjacent** words and the only residual is the load/store temps using swapped $t registers — e.g. you emit `lw t6,lo(a0); lw t7,hi(a0); … sw t6; sw t7` but the target has `lw t7; lw t6; … sw t7; sw t6` — replace the separate field-copies with a single **struct-typed copy**. The struct copy emits the `lw/lw/sw/sw` block in a fixed canonical order that frequently matches the target's register assignment, whereas separate `*(int*)…=*(int*)…` statements let the allocator pick the opposite order.
+
+**Worked example (game_uso_func_0000D438, 2026-05-24 — was a banned INSN_PATCH):**
+```c
+/* separate copies -> loads in t6/t7 (target wants t7/t6): 2-reg diff */
+*(s32*)(a0 + 0xC8) = *(s32*)(a0 + 0xC0);
+*(s32*)(a0 + 0xCC) = *(s32*)(a0 + 0xC4);
+
+/* struct copy -> lw/lw/sw/sw in target order: BYTE-EXACT */
+typedef struct { int a, b; } Pair;
+*(Pair*)(a0 + 0xC8) = *(Pair*)(a0 + 0xC0);
+```
+Note this is a tiny straight-line leaf where the permuter has no mutation surface (per `TOOLING_DECOMP.md`, ≤8-insn leaves resist) — the struct-copy form is the deterministic fix. A `double` copy (`*(double*)=*(double*)`) is NOT equivalent: it emits ldc1/sdc1 (FP path), diverging entirely. Reuse an existing `struct{int a,b;}` typedef in the file to avoid a redefinition (this codebase has `Pair2`).
 
 <a id="feedback-ido-array-index-vs-charptr-spill-packing"></a>
 ## Array-index addressing packs stack spills tighter than char*-pointer-arith (fixes frame-size / spill-offset residuals)
