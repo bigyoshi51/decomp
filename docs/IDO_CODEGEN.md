@@ -37,7 +37,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 - [FP read-modify-write: use compound `dst *= src` NOT expanded `dst = dst * src` — the expanded form swaps the operand load order ($f-reg diffs)](#feedback-ido-fp-compound-assign-load-order) — _For `dst OP= src` on floats (matrix/vector scale etc.), the compound assignment loads `dst` into the low $f-reg FIRST (matching IDO's target order); the expanded `dst = dst * src` loads `src` first → every `lwc1` base swaps (arg0↔arg1) and the whole function shows ~half its insns as $f-reg/load-order diffs even though it's byte-count-exact. Verified 2026-05-24 game_libs_func_0005E8B0 (9× mul.s matrix scale): expanded = 18 diffs, `*=` = byte-exact. Cracks the FP-interplay load-order residual for the RMW subclass._
 
-- [IDO -O2 folds `/2.0f` to `*0.5f` (different opcode); -mips2 schedules across mtc1 load-delays while -mips1 emits strict nops](#feedback-ido-div-2-mul-fold-and-mtc1-load-delay-nops) — _Two IDO codegen rules surfaced on bootup_uso func_000102A4. (1) `expr / 2.0f` compiles to `mul.s ..., 0.5f` (lui 0x3F000000, mtc1, mul.s) instead of `div.s ..., 2.0f` (lui 0x40000000, mtc1, div.s).
+- [IDO -O2 folds `/const` float-divide to `*reciprocal` (mul.s) — but a NAMED-LOCAL divisor flips it back to `div.s`; also -mips2 schedules across mtc1 load-delays](#feedback-ido-div-2-mul-fold-and-mtc1-load-delay-nops) — _`x / 1024.0f` (literal) compiles to `lui 0x3A80; mul.s` (reciprocal); `float d=1024.0f; x/d` compiles to `lui 0x4480; div.s` (target form). Verified gl_func_0005B764 2026-05-24 — supersedes the old "no lever" claim. (1) `expr / 2.0f` compiles to `mul.s ..., 0.5f` instead of `div.s ..., 2.0f`._
 - [IDO -O2 emits double return into $f0+$f1 pair, not $f0+$f2 — kills "force $f2 via double-trick" theory](#feedback-ido-double-return-uses-f0-f1-not-f2) — For `double f(void){return 0;}`, IDO -O2 emits `mtc1 zero,$f1; mtc1 zero,$f0; jr ra; nop` — upper-half lands in $f1 (o32 paired-register convention), NOT $f2.
 - [Function reads $f0 at entry without setting it — caller-context "implicit zero" pattern](#feedback-ido-f0-implicit-zero-at-entry) — Some IDO -O2 functions store $f0 (float return reg, NOT a standard arg) to memory at the start of the body.
 - [IDO -O2 always folds `return 0.0f` paths through $f0 directly — `mtc1 $0, $f2; mov.s $f0, $f2` unreachable from C](#feedback-ido-f2-intermediate-unreproducible) — Target 4-insn leaves that return 0.0f via an intermediate ($fN != $f0) like `mtc1 $0,$f2; nop; jr $ra; mov.s $f0,$f2` cannot be reproduced from any tested IDO-O2 C body — literal, local var, volatile local (→stack…
@@ -1811,17 +1811,24 @@ div.s f_dst, f_src, fN
 
 **Why**: IDO's float optimizer recognizes power-of-2 divisors and
 strength-reduces div→mul (multiply by reciprocal). Faster on MIPS R4300
-because div.s is multi-cycle (~30 cycles) vs mul.s (~5 cycles). C
-source has no lever to disable this — `/ 2.0f` and `* 0.5f` produce
-identical bytes.
+because div.s is multi-cycle (~30 cycles) vs mul.s (~5 cycles).
 
-**Match path**: original ROM was built without this optimization (or
-the compiler version differed). To hit byte-equivalence at runtime,
-you'd need to either (a) compile this file with a different IDO option
-that disables the fold, OR (b) accept it as a structural NM cap, OR
-(c) `INSN_PATCH` the 3 affected insns (lui imm, no — but actually
-INSN_PATCH would work here for the lui+mul opcode if we got the size
-right).
+**LEVER (verified 2026-05-24, supersedes the old "no lever" claim): a NAMED
+LOCAL divisor prevents the fold and emits `div.s`.** The fold only fires when
+the divisor is a compile-time LITERAL in the division expression. Pull the
+constant into a named `float` variable first:
+```c
+float d = 1024.0f;          /* materialized as lui 0x4480; mtc1 -> $fN */
+float f = (float)v / d;     /* div.s f, v, $fN  (NOT mul.s by reciprocal) */
+```
+IDO still materializes the constant (lui+mtc1) but no longer reciprocal-folds
+the division — exactly the target's `div.s` form. `volatile float d` over-does
+it (forces a stack roundtrip). Verified on gl_func_0005B764: the literal
+`/1024.0f` gave `lui 0x3A80; mul.s` (reciprocal); `float d=1024.0f; v/d` gave
+`lui 0x4480; div.s` (target opcodes). NOTE: a hoisted named divisor can shift
+the entry register-save / prologue order (a secondary cap on some functions),
+so byte-verify in-tree — but for the FP opcode itself this is the fix.
+(`INSN_PATCH` is banned; do not use it for this.)
 
 **Rule 2 — mtc1 load-delay nops**:
 
