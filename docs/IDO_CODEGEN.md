@@ -675,6 +675,8 @@ typedef struct { int a, b; } Pair;
 ```
 Note this is a tiny straight-line leaf where the permuter has no mutation surface (per `TOOLING_DECOMP.md`, ≤8-insn leaves resist) — the struct-copy form is the deterministic fix. A `double` copy (`*(double*)=*(double*)`) is NOT equivalent: it emits ldc1/sdc1 (FP path), diverging entirely. Reuse an existing `struct{int a,b;}` typedef in the file to avoid a redefinition (this codebase has `Pair2`).
 
+**Generalizes to the varargs `&param`-pointer regalloc case** (game_uso_func_0000D5BC, 2026-05-24): a function that homes `a1,a2` via `&a1` and copies them to an adjacent dest had the `&a1` pointer stuck in `$v0` (a `volatile int *p = &a1; dst[0]=p[0]; dst[1]=p[1]` form) where the target uses `$t6`. Writing it as `*(Pair2*)(dst) = *(Pair2*)&a1` homes the args, takes `&a1` into `$t6`, and emits the lw/sw/lw/sw via the pointer in the target registers — byte-exact. So struct-copy fixes both the adjacent-field $t-swap AND the `&param`-pointer `$v0`-vs-`$t6` choice. (Verify in-tree, not just standalone — see `MATCHING_WORKFLOW.md#feedback-standalone-false-convergence-verify-in-tree`.)
+
 <a id="feedback-ido-array-index-vs-charptr-spill-packing"></a>
 ## Array-index addressing packs stack spills tighter than char*-pointer-arith (fixes frame-size / spill-offset residuals)
 
