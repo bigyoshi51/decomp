@@ -1845,6 +1845,13 @@ it (forces a stack roundtrip). Verified on gl_func_0005B764: the literal
 the entry register-save / prologue order (a secondary cap on some functions),
 so byte-verify in-tree — but for the FP opcode itself this is the fix.
 (`INSN_PATCH` is banned; do not use it for this.)
+**SCOPE MATTERS (2026-05-25, gl_func_0005B848):** the named divisor must be at
+FUNCTION scope. An in-LOOP `float d = 1024.0f;` (declared inside the do/while
+that uses it) gets const-propagated per iteration and RE-FOLDS to `mul.s` — the
+fix silently fails. Hoist the decl above the loop (as gl_func_0005B764 does).
+Confirmed: in-loop decl → `lui 0x3A80; mul.s`; same decl hoisted → `lui 0x4480;
+div.s` byte-exact. Two functions in the float-format-log family (0005B764 matched,
+0005B848 matched this way); look for more 0005B* siblings with the same /1024.0f.
 
 **Rule 2 — mtc1 load-delay nops**:
 
