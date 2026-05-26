@@ -1455,6 +1455,9 @@ Something in the pipeline changed between when (1)-(6) were measured and now —
 <a id="feedback-land-script-accepts-byte-verify-for-post-cc-recipes"></a>
 ## 1080's land script now accepts byte-verify against expected/.o as an alternative to fuzzy=100.0
 
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
+
 _As of commit bbc3b6e (2026-05-04), `scripts/land-successful-decomp.sh` lands a function if EITHER `fuzzy_match_percent == 100.0` OR `mips-linux-gnu-objdump` of the function's disasm in build/<unit>.c.o equals expected/<unit>.c.o. The byte-verify fallback (which previously only fired for fuzzy=None) now ALSO fires for any fuzzy < 100. This unblocks landing for functions that are byte-correct in the actual ROM build via post-cc recipes (PREFIX_BYTES, INSN_PATCH, SUFFIX_BYTES, PROLOGUE_STEALS) but show < 100% fuzzy because the dual-build design intentionally excludes post-cc tricks from build/non_matching/. Mainstream practice (oot/papermario/sm64): bytes match → matched, period. The fuzzy score is an advisory partial-progress metric, not a landing gate._
 
 **Before this change**:
@@ -1575,6 +1578,9 @@ All three defenses had silent-fail modes. After the fix, each is independently s
 
 <a id="feedback-land-script-byte-verify-objdump-parse-bugs"></a>
 ## Land script byte_verify symbol-table parser had two latent bugs (single-letter type field + .NON_MATCHING alias collision)
+
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
 
 _scripts/land-successful-decomp.sh's byte_verify hit two parsing bugs that silently truncated extracted bytes — single-letter 'F'/'O' type field gets parsed as size=15/24 hex, AND .NON_MATCHING aliased symbols get picked before the real symbol. Fixed 2026-05-04. Both bugs only surface when an INSN_PATCH-promoted function still has a `nonmatching` macro in its .s file._
 
@@ -2563,6 +2569,9 @@ Not a merge conflict — my rebase onto origin/main had already resolved cleanly
 <a id="feedback-nm-wrap-99pct-may-be-silently-exact"></a>
 ## 99% NM wraps may have silently become byte-exact — try unwrapping first
 
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
+
 _Before applying complex recipes (INSN_PATCH, make-expected refresh) for a 99% wrap, just remove the wrap and rebuild — the C body may already match expected_
 
 NM wrap doc claims like "99.19% NM, remaining reloc-form diffs require
@@ -2674,6 +2683,9 @@ If `fuzzy_match_percent` is 100.0 — promote to exact:
 
 <a id="feedback-nm-wrap-doc-pct-drifts"></a>
 ## NM-wrap doc % drifts in either direction over time due to unrelated parallel-agent commits
+
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
 
 _When picking up an NM wrap whose comment says "X% cap", re-measure the build BEFORE grinding. The documented % is point-in-time and can drift down OR up (5-10pp range) when sibling code, externs, or build infra changes affect register allocation or instruction scheduling._
 
@@ -3269,6 +3281,9 @@ resolves both forms to identical final ROM bytes.
 <a id="feedback-objdiff-report-caches-stale-per-function-state"></a>
 ## objdiff report.json caches per-function state — `rm -f report.json` before regen if a function "stays unmatched" after expected/.o refresh
 
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
+
 _After cp'ing build/.o to expected/.o (per-file refresh), `objdiff-cli report generate` keeps the prior report.json's per-function fuzzy_match_percent values for affected symbols. Forcing a fresh report requires deleting report.json first. Confirmed on arcproc_uso_func_0000247C (showed fuzzy=None even after .o files were byte-identical, until report.json was deleted)._
 
 **Symptom (verified 2026-05-04):**
@@ -3457,6 +3472,9 @@ the skip-list invariant.
 
 <a id="feedback-prefix-byte-inject-unblocks-uso-trampoline"></a>
 ## PREFIX_BYTES Makefile var + scripts/inject-prefix-bytes.py — unblocks USO entry-0 trampoline funcs
+
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
 
 _Mirror of PROLOGUE_STEALS for the leading-prefix case. Post-cc inserts N bytes at func_addr in .c.o, grows st_size, shifts symbols/relocs. Unlocks USO func_00000000 trampoline candidates that feedback_prefix_sidecar_symbol_collision.md previously declared blocked. Built 2026-05-03; first beneficiary arcproc_uso_func_00000000 (100%)._
 
@@ -5170,6 +5188,9 @@ git add -A && git commit -m "Revert split of <X> bundle + refresh expected/"
 <a id="feedback-reverify-bundle-blocked-claims"></a>
 ## Re-verify "USO bundle blocked" claims in NM-wrap comments — the cited blocker may not currently apply
 
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
+
 _When an NM-wrap comment says "Bundle stays INCLUDE_ASM (per feedback_uso_split_fragments_breaks_expected_match.md)" or similar, mechanically check the BLOCKER CONDITION before accepting it. The blocker only applies when the predecessor has an existing SUFFIX_BYTES/PREFIX_BYTES/PROLOGUE_STEALS recipe in the Makefile. If the immediate predecessor and successor have NO Makefile recipes, the case is "genuinely fresh" and split-fragments.py is the right tool._
 
 **The check:**
@@ -5226,6 +5247,9 @@ The second build is what CI does. If it errors on redeclaration / unused-extern 
 
 <a id="feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware"></a>
 ## objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup
+
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
 
 _objdiff's reloc-aware scoring (which lets you remove redundant INSN_PATCH-for-jal recipes) is NOT a substitute for the linker's symbol resolution. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory). Removing `func_X = 0xADDR;` from `undefined_syms_auto.txt` because "objdiff handles relocs" breaks the linker._
 

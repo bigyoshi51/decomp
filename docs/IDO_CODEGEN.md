@@ -2069,6 +2069,9 @@ register-renumber on the global remained, permuter 75->55 not 0).
 <a id="feedback-ido-empty-body-do-while-emits-branch-likely"></a>
 ## IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay
 
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
+
 _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot. Restructure to `int r; do { r = func(); } while (r & MASK)` (call in body) to get plain beqz/bnez + nop delay slot. For surrounding if-then-skip-loop guards, IDO ALSO uses branch-likely + hoists the post-loop instruction — INSN_PATCH the 2-word `branch+nop` pair._
 
 **Verified 2026-05-04 on func_8000487C (kernel RSP status poller):**
@@ -10981,6 +10984,9 @@ the twin closes the residual renumber. Verified 2026-05-23 `gl_func_0005C784`
 
 <a id="feedback-ido-float-div-pow2-strength-reduced-to-mul"></a>
 ## Float `/2^n` strength-reduced to `mul.s` by reciprocal — CRACKED 2026-05-24 by named-divisor at function scope (was INSN_PATCH-twin)
+
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. Non-recipe content (recognition patterns, debug tips, byte-level analysis) is still useful; just don't treat any "→ INSN_PATCH" / "→ PROLOGUE_STEALS" advice as a fix.
+
 
 > **DEPRECATED-FRAMING 2026-05-23.** The original recipe used a banned
 > NON_MATCHING_INSN_PATCH twin; INSN_PATCH was removed as match-faking. The
