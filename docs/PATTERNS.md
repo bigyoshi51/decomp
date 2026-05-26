@@ -1888,9 +1888,15 @@ If the symbol size is LARGER than `4 * (real-instruction-count including jr+dela
 ---
 
 <a id="feedback-fuzzy-pct-overestimates-byte-exactness"></a>
-## objdiff fuzzy_match_percent dramatically overestimates byte-exactness on structurally-locked wraps — count word-diffs before reaching for INSN_PATCH
+## objdiff fuzzy_match_percent dramatically overestimates byte-exactness on structurally-locked wraps — count word-diffs before assuming a near-match
 
-_A wrap doc citing 74.49% fuzzy match can have 57 of 59 word diffs (~3% byte-exact) when the divergence is structural (basic-block layout, jal ordering, epilogue shape). Always count actual word-diffs against expected/.o before deciding INSN_PATCH is viable. INSN_PATCH is for ≤10 word patches, NOT 50+ word rewrites._
+> **The INSN_PATCH framing is DEPRECATED 2026-05-23** (INSN_PATCH removed as
+> match-faking — see `feedback_no_instruction_forcing_matches_policy`). The
+> fuzzy-pct overestimate gotcha itself is still relevant: count actual word-
+> diffs to distinguish a true near-miss (1-2 word diffs → permuter / C-form
+> change) from a structurally-locked wrap (50+ word diffs → accept NM).
+
+_A wrap doc citing 74.49% fuzzy match can have 57 of 59 word diffs (~3% byte-exact) when the divergence is structural (basic-block layout, jal ordering, epilogue shape). Always count actual word-diffs against expected/.o before deciding the function is "close" to landing. Historical context: INSN_PATCH was the old fix for ≤10-word patches; it's now removed — use the permuter for register/scheduling diffs and accept NM wraps for structural divergence._
 
 **The gap:** objdiff's `fuzzy_match_percent` measures *structural similarity*
 (same instruction TYPES in similar positions, fuzzy-matching across small
