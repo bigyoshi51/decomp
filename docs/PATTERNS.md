@@ -4021,6 +4021,14 @@ Where `&D_00000000 + N` is the USO format-string offset (or just `0x21B6C` in no
 <a id="feedback-prologue-stolen-avoid-named-local-for-first-use"></a>
 ## PROLOGUE_STEALS successors must INLINE the stolen-prologue value's first use; a named local assigns it to $v0, not the predecessor's $tN
 
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS was removed as match-faking (see
+> `feedback_no_instruction_forcing_matches_policy`). The shape-recognition is
+> still valid (a function whose first insns implicitly consume a predecessor's
+> tail-loaded register), but the FIX is no longer a post-cc splice — either
+> leave `#ifdef NON_MATCHING` / `#else INCLUDE_ASM`, or do a focused-session
+> splat boundary correction so the prefix bytes belong to the successor's
+> symbol natively. Historical content below kept for archeology.
+
 _When a function uses PROLOGUE_STEALS=8 (the predecessor's tail emits `lui $tN, 0; lw $tN, OFF($tN)` for this function), the FIRST use of that loaded value in C must be inlined — not assigned to a named local. A named local like `int t6 = *(int*)((char*)&D + OFF);` makes IDO emit `lui $v0, 0; lw $v0, OFF($v0); srl t6, v0, ...`, where t6 is allocated to $v0 (per `feedback_ido_v0_reuse_via_locals.md`). After the splice strips the leading 8 bytes, the remaining op uses $v0 — but the predecessor set $tN (typically $t6), NOT $v0. Inlining the access keeps the value flowing through $tN naturally._
 
 **Pattern (verified 2026-05-02 on gl_func_0002DEA4):**
@@ -4214,6 +4222,9 @@ swc1 $f0, 0x40($sp)
 <a id="feedback-prologue-stolen-function-shape-must-be-stable"></a>
 ## PROLOGUE_STEALS=8 splices off the FIRST 8 bytes of the C-emitted prologue; any C refactor that changes IDO's prologue layout (extra local, captured rc, register pressure shift) makes the splice cut the WRONG 8 bytes → byte-level garbage
 
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS removed as match-faking. This
+> fragility note is now historical only — no recipe uses PROLOGUE_STEALS.
+
 _PROLOGUE_STEALS is a blind 8-byte byte-offset splice from the start of the function's emit. It assumes the FIRST 8 bytes of IDO's emit are exactly the redundant `lui+lw` (or `lui+addiu`) that duplicate the predecessor's stolen prologue. If you refactor the C in a way that changes what IDO emits in the first 8 bytes, the splice corrupts the function (regression to ~0 %). Refactors that look semantically harmless can break it: `int rc = f(...); if (rc != 0)` instead of `if (f(...) != 0)`, adding a local that takes priority allocation, etc._
 
 **Verified 2026-05-02 on `timproc_uso_b3_func_00002240`** (97.58 % cap, prologue-stolen):
@@ -4268,6 +4279,12 @@ When grinding a PROLOGUE_STEALS-using NM wrap to push the cap higher:
 
 <a id="feedback-prologue-stolen-misdiagnosis"></a>
 ## Before applying PROLOGUE_STEALS, verify the prefix is actually in the PREDECESSOR's symbol — not just at the start of THIS function's .s
+
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS removed as match-faking. The
+> diagnostic still has value as a SHAPE-RECOGNITION lesson (.s with bytes
+> immediately after `glabel` belong to THIS function, not a predecessor —
+> useful when assessing whether a function is a real splat boundary error or
+> just a normal leaf), but no recipe applies PROLOGUE_STEALS anymore.
 
 _A NM-wrap doc may claim "prologue-stolen successor — predecessor X ends with lui+lw setting tN=...". Don't trust it blindly. Check the .s file: if `glabel <func>` is followed IMMEDIATELY by the lui+lw, those bytes are inside THIS function's symbol (size includes them). PROLOGUE_STEALS=8 will then strip 8 bytes that legitimately belong to the function and regress the match._
 
