@@ -2,6 +2,14 @@
 
 > Asm-shape pattern recipes: how to recognize an asm idiom and the C source that produces it.
 
+> **Note (2026-05-23):** any entry below that recommends INSN_PATCH /
+> NON_MATCHING_INSN_PATCH / PROLOGUE_STEALS / instruction-appending SUFFIX_BYTES
+> as the fix is **OBSOLETE** — that post-cc instruction-patching was removed as
+> match-faking. The asm-shape *recognition* and the C-source side of each entry
+> are still valid; just stop at "here's the C shape that produces it." If no C
+> shape matches, the function stays NON_MATCHING. See
+> `memory/feedback_no_instruction_forcing_matches_policy.md`.
+
 _145 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Quick reference by sub-topic
