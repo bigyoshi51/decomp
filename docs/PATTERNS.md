@@ -835,6 +835,9 @@ to catch any layout variants the previous pass missed.
 <a id="feedback-byte-correct-match-via-include-asm-not-c-body"></a>
 ## A "byte-correct .o matches expected" check on an `#ifdef NON_MATCHING` wrap is an INCLUDE_ASM tautology, not C-body validation
 
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. The non-INSN_PATCH content (recognition patterns, debug tips) is still useful; just don't treat any "→ INSN_PATCH" advice as a fix.
+
+
 _When you wrap a function `#ifdef NON_MATCHING { body } #else INCLUDE_ASM(...); #endif`, the byte-correct build path (build/src/.../*.c.o) compiles the #else branch — i.e. INCLUDE_ASM resolves the original .s file. So `objcopy --only-section=.text` of the byte-correct .o will ALWAYS match expected/.o for that function (modulo TRUNCATE_TEXT/INSN_PATCH bridging asm-processor glue padding). Don't mistake this for "my C body matches." The only meaningful match check for the C body is against build/non_matching/.../*.c.o (which compiles with -DNON_MATCHING and so takes the #ifdef branch). Verified 2026-05-04 on func_0000F6C4: byte-correct .o = 0 diffs vs expected (INCLUDE_ASM + TRUNCATE_TEXT 0xA8), but non_matching .o had 31 diffs / 42 insns and fuzzy_match_percent = 91.31 %._
 
 **The trap (verified 2026-05-04 on func_0000F6C4)**:
@@ -5288,6 +5291,9 @@ Both valid for verification, but `refresh-expected-baseline.py` is what CI/decom
 <a id="feedback-split-fragments-includes-leading-nops"></a>
 ## split-fragments.py includes leading inter-function nops in the split-off symbol — making it unmatchable from C
 
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. The non-INSN_PATCH content (recognition patterns, debug tips) is still useful; just don't treat any "→ INSN_PATCH" advice as a fix.
+
+
 _When the original .s has trailing nops AFTER a `jr ra` + delay-slot nop (alignment between functions), `find_split_point()` returns `i+2` (immediately after the delay slot) WITHOUT skipping the leading nop run. The split-off function's symbol then begins with N alignment nops + real code. C-emit produces only the real code (4 insns vs target's 4+N), so it's stuck at <100% with no clean recipe to add leading nops (PROLOGUE_STEALS only removes; pad-sidecar only appends trailing)._
 
 **Verified 2026-05-02 on `game_libs_func_000040EC`** (split off from `gl_func_000040BC`):
@@ -5942,6 +5948,9 @@ a codegen cap; it's a chain-of-stolen-prologues.
 
 <a id="feedback-titproc-state-allocator-sibling-family"></a>
 ## titproc_uso state-allocator sibling family — same shape, varying state-N constant
+
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. The non-INSN_PATCH content (recognition patterns, debug tips) is still useful; just don't treat any "→ INSN_PATCH" advice as a fix.
+
 
 _titproc_uso has 6 sibling state-allocator wrappers (1E4/230/28C/2D8/32C/380). Same 19-insn body — just the state-N constant + unique D_NNN_A extern differ. All require PROLOGUE_STEALS=8 (predecessor absorbs the lui+addiu prologue)._
 
@@ -8279,6 +8288,9 @@ The discriminator is the GOAL:
 
 <a id="feedback-wrap-doc-codegen-cap-may-mask-logic-bug"></a>
 ## An NM-wrap doc claiming "logic verified correct, IDO codegen cap" may actually be hiding a wrong-dereference bug
+
+> **DEPRECATED-MENTIONS 2026-05-23.** This section mentions INSN_PATCH/PROLOGUE_STEALS; those mechanisms were REMOVED as match-faking — see `feedback_no_instruction_forcing_matches_policy`. The non-INSN_PATCH content (recognition patterns, debug tips) is still useful; just don't treat any "→ INSN_PATCH" advice as a fix.
+
 
 _A wrap doc that names a specific IDO codegen pattern as the "cap" (e.g. "&D base-register form not C-flippable") and says "logic verified correct" can be wrong. The wrong dereference (e.g. `v = D[0x48]` when asm reads `v = a0->0x48`) can produce a structural diff that LOOKS like a codegen cap but is actually the C reading from a totally different memory location. Verify the structural decode against the asm's actual operands BEFORE accepting a "codegen cap" diagnosis. Verified 2026-05-04 on h2hproc_uso_func_000009F8 (83.00→100% via correcting `D[0x48]`→`a0->0x48` + INSN_PATCH)._
 
