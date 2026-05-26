@@ -4864,6 +4864,40 @@ _When carving a verified-O0 function out of an -O2 file, and the verified functi
 
 **How to apply:** When the next /decompile pass verifies one of the still-NM stubs at -O0 (e.g., `func_00011CA4`'s C body matches at -O0), simply replace that file's `INCLUDE_ASM("...", func_00011CA4);` line with the verified C body. No Makefile or linker changes needed — the `.o` size is already accounted for, the file's OPT_FLAGS already says -O0, and the linker position is unchanged.
 
+## -g3 unfilled-jr-delay batch: the unfilled-epilogue "caps" are -O2 -g3 functions (~515 in game_libs alone)
+
+_A large class of 1080 "caps" are functions whose target `.s` ends with the epilogue UNFILLED: `addiu sp,sp,+N; jr ra; nop` (the stack-restore is NOT in the jr-ra delay slot). The default `-O2` build FILLS the slot (`jr ra; addiu sp,sp,+N`), so any C body diverges by the last 2 instructions — they can never match at -O2. They were NOT a real cap: they're `-g3`-compiled functions._
+
+**VALIDATED 2026-05-25** with the IDO 7.1 compiler on `int f(void){return -1;}`:
+- `-O2`        → `jr ra; li v0,-1`        (filled — DEFAULT, mismatches unfilled target)
+- `-O2 -g3`    → `li v0,-1; jr ra; nop`   (UNFILLED — byte-identical to target game_libs_func_00027348)
+- `-O0`        → unfilled but with extra leading nops (different — not this class)
+
+So `-g3` (NOT `-g2`, NOT `-O0`) is the flag. `-g2` still fills.
+
+**BATCH SIZE:** scan `asm/nonmatchings/<seg>/<seg>/*.s` for functions whose last 3
+words are `[27BD.... (addiu sp,+N), 03E00008 (jr ra), 00000000 (nop)]`. In
+game_libs: ~1019 total, of which **402 already fuzzy=100 and ~515 are unmatched
+(fuzzy<100) or INCLUDE_ASM (fuzzy=None)**. (NOTE: not ALL unfilled-epilogue fns
+need -g3 — some -O2 functions are naturally unfilled when the last insn has a
+dependency that blocks the fill. Verify per-function: does `-O2 -g3` produce the
+target's exact bytes and `-O2` not?) Still a large unlock across all USOs.
+
+**THE MECHANISM ALREADY EXISTS:** per-file `OPT_FLAGS := -O2 -g3` overrides in the
+Makefile (see `bootup_uso_tail2`, `bootup_uso_tail3a`, `bootup_uso_tail3a_bot`).
+Plus the **sandwich-INCLUDE_ASM-stubs** file-split technique above applies verbatim
+to -g3 (INCLUDE_ASM is opt-level-independent), so you get ONE -g3 file per cluster,
+not one per function.
+
+**PLUMBING (focused session, NOT a 60s tick):** the -g3 functions are scattered
+mid-file in -O2 `.c`s, so a split needs: (1) a new `src/<seg>/<seg>_g3_<addr>.c`
+with the -g3 function(s) as C + still-NM neighbours as INCLUDE_ASM; (2) a splat
+subsegment c-entry at the function's ROM addr (splitting the parent into
+part1/g3/part2 by VRAM); (3) `OPT_FLAGS := -O2 -g3` Makefile line; (4) re-extract
+or hand-edit the linker order. WATCH: `make setup` regenerates tenshoe.ld and
+clobbers per-segment .o split customizations (see that entry above). This is the
+single highest-value remaining batch at the 45% plateau — prioritize it.
+
 **Verified case (2026-05-07):** bootup_uso 0x11C70..0x11D40 cluster split. `func_00011C70` had verified -O0 body; `func_00011CA4` and `func_00011CD8` were NM-wrapped (not yet verified at -O0). Layout chosen:
 - `bootup_uso_o0_11C70.c` (-O0): `func_00011C70` C body + `INCLUDE_ASM` stubs for 11CA4, 11CD8.
 - `bootup_uso_o0_11D40.c` (-O0): `func_00011D40` C body alone (sibling cluster end).
