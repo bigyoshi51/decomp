@@ -1909,10 +1909,19 @@ epilogue shape have shifted. The fuzzy metric stays high because the
 instruction *kinds* (lui/sw/jal/etc.) align even when the bytes don't.
 
 **Why this matters:** When you re-evaluate an 80-99%-fuzzy wrap to see
-if INSN_PATCH can promote it, "74.49%" sounds like a few-word fix. It
+if a few-word "fix" is feasible, "74.49% fuzzy" sounds shallow. It
 isn't, if the divergence is structural.
 
-**How to apply (always, before adding an INSN_PATCH entry):**
+> **Tombstone (2026-05-23):** INSN_PATCH and instruction-appending
+> SUFFIX_BYTES were REMOVED as match-faking (see
+> `feedback_no_instruction_forcing_matches_policy`). The word-diff
+> measurement and "structural vs few-word" diagnosis below still apply
+> — they tell you whether a C-shape iteration is plausible — but the
+> "→ INSN_PATCH" outputs of the decision rule no longer apply. Treat
+> "≤5 word diffs" as "worth trying more C shapes / the permuter";
+> treat "30+ word diffs" as "documented cap, stays NM."
+
+**How to apply (always, before deciding whether to iterate on a near-miss):**
 
 ```bash
 # Build the NM body (CPPFLAGS=-DNON_MATCHING) and compute exact word diffs:
