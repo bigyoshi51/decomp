@@ -204,6 +204,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Loop reloads ALL locals from sp every iteration = -O0 codegen signal](#feedback-ido-o0-loop-stack-reload-signal) — _When a function's loop body starts with `lw tA, X(sp); lw tB, Y(sp); lw tC, Z(sp)` for variables that have no `volatile` or address-taken reason, it's almost certainly -O0 compiled. -O2 keeps loop-carried values in registers (only ra + callee-saves spill). Detection signal: before writing C, check if the loop body's first 3 insns are `lw` from sp-relative offsets matching the function's own prologue spills — if yes, abandon -O2 attempts and either (a) file-split to per-function OPT_FLAGS=-O0, or (b) accept INCLUDE_ASM. Verified 2026-05-14 on gl_func_00071864 (16-bit byte-sum checksum, 23 insns): straightforward -O2 C body produced 5.4% match because target reloads p/accum/i from sp every iteration._
 - [-O0 variant of the int-reader accessor template — 19 insns / 0x4C bytes vs the standard -O2 template's 16 insns / 0x40 bytes](#feedback-o0-int-reader-template-variant) — _When scanning USO accessor templates, also check 0x4C-byte / 19-instruction variants — these are -O0 compiles of the SAME body.
 - [Stack-residency does NOT imply -O0 — `residency + FILLED delay slots` is an -O1 build with original register-pressure spill, NOT reproducible by the project cc](#feedback-ido-stack-residency-plus-filled-slots-is-o1-not-o0) — _Refines `#feedback-ido-o0-loop-stack-reload-signal`: loop-reloads-all-locals is necessary but NOT sufficient for -O0. -O0 ALSO leaves delay slots UNFILLED (b;nop / jr;nop). If the target reloads locals from sp every use AND has its delay slots FILLED (≈0-1 nops), it is NOT -O0 — it is an -O1 object whose original register pressure spilled those locals while the assembler still filled slots. The project cc can't emit that combo: -g1/-g2 force residency but leave slots unfilled; plain -O1/-O2 fill slots but register-allocate the locals away. Permuter can't help (can't add assembler-level slot filling); a `volatile` base adds a reload the target lacks. Genuine cap. Verified 2026-05-25 on gl_func_00070194/000718C0/0003D914 (previously mis-tagged "-O0 carve candidates")._
+- [-O0 RETURN-VALUE functions get a DEAD second `b epilogue; nop` after the return's branch — our ido-static-recomp cc emits it, the original 1080 toolchain didn't; not C-fixable (TOOLCHAIN-BINARY GAP, blocks all -O0 return fns)](#feedback-ido-o0-return-value-dead-double-b) — _A frame-having -O0 function ending in `return X;` compiles to `lw v0,off(sp); b epi; nop; b epi; nop; <epilogue>` — TWO unconditional branches to the epilogue (the return's, then a dead/unreachable closing-brace one). The 1080 target has only ONE. Proven a toolchain-binary codegen gap, NOT a C-structure issue: the trivial `int f(int*a0){int x=a0[0];g();return x;}` reproduces the double-b. Full matrix (IDO 7.1 AND 5.3): -O0/-O0-g/g1/g2/g3 and -O1-g/-O1-g2 all give b=2 with full -O0 reloads; -O1-g3/-O2/-O2-g3 give b=0 (over-optimized, registers cached, breaks the -O0 reload structure). NO setting yields the target's "b=1 + full reloads". VOID -O0 functions are unaffected (no return → the single closing-brace b is LIVE and matches — that's why void -O0 fns DO land, e.g. gl_func_000093DC). Blocks ALL -O0 return-value fns project-wide (func_00011B5C, arcproc_uso_func_0000012C, gl_func_000092F4, etc.). Removing the dead b post-cc would be match-faking (BANNED). Only real fix = the exact original 1080 IDO cc binary that elides it (focused acquisition, not a tick). Verified 2026-05-25._
 
 ### indirect / function pointer
 
@@ -11045,3 +11046,66 @@ earlier session had queued as "-O0 carve candidates" but are actually this cap:
 The hand-derived C gets the frame, control flow (do-while, no top guard), and
 instruction count exact, but the per-local spill decision and the filled slots
 are not jointly reachable.
+
+<a id="feedback-ido-o0-return-value-dead-double-b"></a>
+## -O0 return-value functions emit a DEAD second `b epilogue` — toolchain-binary gap, not C-fixable
+
+This is the definitive characterization of the "-O0 return-codegen idiom still
+being reverse-engineered" hinted at under `#feedback-ido-stack-residency...` (the
+`gl_func_00070194` note) and the per-function double-`b` residual seen on every
+remaining -O0 **return-value** near-miss.
+
+**Symptom.** A frame-having -O0 function ending in `return X;` compiles to:
+```
+lw    v0, off(sp)     # load return value
+b     .epi            # the return's branch   <-- target has THIS one
+nop
+b     .epi            # DEAD closing-brace branch (unreachable)  <-- target lacks it
+nop
+.epi: lw ra ...; addiu sp ...; jr ra; nop
+```
+The 1080 ROM target has exactly ONE `b .epi`; our build emits TWO. The second is
+unreachable (control already left via the first), so the built `.o` is +2 words
+(8 bytes) long and every downstream offset shifts — the function never matches.
+
+**Proven a TOOLCHAIN-BINARY codegen gap, NOT a C-structure issue.** The most
+trivial possible return function reproduces it:
+```c
+extern int g();
+int f(int *a0) { int x = a0[0]; g(); return x; }   /* -> double-b */
+```
+No source restructuring removes it (fall-through, explicit-else, `for`/`while`/
+`do-while`, guard placement, early return, separate blocks — all still emit it).
+
+**Full flag matrix (tested on IDO 7.1 AND 5.3, both identical):**
+
+| flags | uncond `b` count | sp-reloads (caching?) |
+|---|---|---|
+| -O0, -O0 -g, -g1, -g2, -g3 | **2** | full (no caching) |
+| -O1 -g, -O1 -g2 | **2** | full (no caching) |
+| -O1 -g3, -O2, -O2 -g3 | 0 | cached (registers) |
+
+The target needs **b=1 with full -O0 reloads** — a combination NO available
+setting produces. Our cc gives either the dead double-`b` (every -O0/-O1-g
+setting that preserves -O0's per-use stack reloads) or zero `b` with register
+caching (every setting optimized enough to drop the dead branch also caches the
+loads, which breaks the -O0 reload structure the target has).
+
+**Why VOID -O0 functions are unaffected** (and DO land — e.g.
+`gl_func_000093DC`, `gl_func_00008DAC`): with no `return`, the function emits a
+single closing-brace `b .epi` that is LIVE (reachable, the only exit branch) and
+present in both our build and the target. The divergence is specific to the
+return's-branch + dead-closing-brace-branch pair.
+
+**This blocks ALL -O0 return-value functions project-wide** — `func_00011B5C`
+(bootup_uso_tail3a_mid.c), `arcproc_uso_func_0000012C`, `gl_func_000092F4`,
+`gl_func_00008C3C`, and the rest of the o0 return-value near-misses. Do NOT
+re-grind them from C; the residual is always this dead `b`.
+
+**Not fixable within policy.** Stripping the dead branch post-cc would be
+instruction-byte patching (match-faking, BANNED — see
+`feedback_no_instruction_forcing_matches_policy`). The only legitimate fix is the
+exact original 1080 IDO `cc` binary that elides the dead branch (our
+ido-static-recomp 5.3/7.1 do not). That's a focused toolchain-acquisition task,
+not a loop tick. Until then these are honest `INCLUDE_ASM`/NM caps. Verified
+2026-05-25 (full matrix + trivial-repro on `func_00011B5C`).
