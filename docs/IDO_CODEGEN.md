@@ -10980,7 +10980,16 @@ the twin closes the residual renumber. Verified 2026-05-23 `gl_func_0005C784`
 ---
 
 <a id="feedback-ido-float-div-pow2-strength-reduced-to-mul"></a>
-## Float `/2^n` strength-reduced to `mul.s` by reciprocal — INSN_PATCH-safe (exact reciprocal)
+## Float `/2^n` strength-reduced to `mul.s` by reciprocal — CRACKED 2026-05-24 by named-divisor at function scope (was INSN_PATCH-twin)
+
+> **DEPRECATED-FRAMING 2026-05-23.** The original recipe used a banned
+> NON_MATCHING_INSN_PATCH twin; INSN_PATCH was removed as match-faking. The
+> recognition pattern is still valid, but the CURRENT fix is the named-divisor
+> at function scope (see `#feedback-ido-div-2-mul-fold-and-mtc1-load-delay-nops`):
+> `float d = 1024.0f; ... x / d;` at function-scope (not in-loop) emits the
+> target's `div.s` (lui 0x4480) instead of the reciprocal `mul.s` (lui 0x3a80).
+> Verified gl_func_0005B848 landed 2026-05-24 via this lever. Historical text
+> below.
 
 `(float)v / 1024.0f` (loop-invariant power-of-2 divisor) → IDO -O2 hoists the
 reciprocal `0x3a800000` (1/1024) and emits `mul.s $fd,$fs,$frecip`. Some targets
@@ -10991,7 +11000,7 @@ suppress the strength reduction (writing `/1024.0f` already triggers it; a
 `volatile` divisor adds a memory load the target doesn't have). BUT since
 `1/1024` is exactly representable (2^-10), `x*(1/1024) == x/1024` bit-for-bit, so
 forcing the target's two words via `NON_MATCHING_INSN_PATCH` (twin-only when the
-default build is INCLUDE_ASM) is value-safe. Verified 2026-05-23 sibling pair
+default build is INCLUDE_ASM) was value-safe. Verified 2026-05-23 sibling pair
 `gl_func_0005B764` / `gl_func_0005B848` (98.8-98.9→100, reloc-blind %-movers).
 
 <a id="feedback-ido-stack-residency-plus-filled-slots-is-o1-not-o0"></a>
