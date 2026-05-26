@@ -5867,7 +5867,15 @@ not the right metric to track for this class of wrap.
 ---
 
 <a id="feedback-three-recipe-combo-prologue-stolen-predecessor-plus-bundled-trailer"></a>
-## 3-entry recipe combo for prologue-stolen-PREDECESSOR + bundled-TRAILER (each function in a chain has ITS OWN stolen-prologue role)
+## 3-entry recipe combo for prologue-stolen-PREDECESSOR + bundled-TRAILER — DEPRECATED 2026-05-23
+
+> **DEPRECATED 2026-05-23.** The 3-recipe combo (PROLOGUE_STEALS +
+> instruction-appending SUFFIX_BYTES) was removed as match-faking — see
+> `feedback_no_instruction_forcing_matches_policy`. The pattern fingerprint
+> (function reads uninit reg + has dead-code trailing past jr-ra) is still
+> valid for RECOGNIZING the splat-boundary issue, but the FIX is now a focused-
+> session splat boundary correction (not a post-cc combo). Only all-zero
+> SUFFIX_BYTES (data padding) and USO-header PREFIX_BYTES survive.
 
 _Some USO functions need THREE Makefile recipe entries to byte-match — SUFFIX_BYTES on the predecessor (injects stolen prologue for current func), PROLOGUE_STEALS on the current func (strips C-body's emitted prefix), and SUFFIX_BYTES on the current func (injects stolen prologue for successor). Recognize when a function reads a register uninit AND has dead-code trailing past its jr-ra._
 
