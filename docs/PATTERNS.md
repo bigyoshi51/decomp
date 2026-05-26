@@ -4124,6 +4124,8 @@ After splice: `srl t7, t6, 0x1F; beqz t7` — $t6 is exactly what the predecesso
 <a id="feedback-prologue-stolen-chain-scanner"></a>
 ## Scan for prologue-stolen reverse-merge candidates across all .s files in one pass
 
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS removed as match-faking (see `feedback_no_instruction_forcing_matches_policy`). shape-recognition only. Historical content below.
+
 _Prologue-stolen boundary bugs (feedback_splat_prologue_stolen_by_predecessor.md) often appear in CHAINS — consecutive functions in a segment where each one's `lui $v0; addiu $v0` prologue is attributed to its predecessor's trailing bytes. A single Python scan across `asm/nonmatchings/**/*.s` finds the whole chain at once._
 
 **Rule:** When you find one prologue-stolen case, run the scanner — most titproc/timproc segments have chains of 3-5 consecutive stolen prologues (static initializers/dispatchers sharing the same `$v0 = &D_00000000` entry convention).
@@ -4176,6 +4178,8 @@ Tune: `0x3C02` is `lui $v0`; `0x2442` is `addiu $v0, $v0, N`. For `$v1`-based ch
 
 <a id="feedback-prologue-stolen-float-constant-variant"></a>
 ## Prologue-stolen can be a float constant setup, not just a data pointer — `lui $at, 0x3F80; mtc1 $at, $f0`
+
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS removed as match-faking (see `feedback_no_instruction_forcing_matches_policy`). shape-recognition only. Historical content below.
 
 _Classic prologue-stolen is `lui $v0; addiu $v0, 0x0` (base pointer to D_XXX). But splat can also mis-attribute a float-constant setup `lui $at, 0x3F80; mtc1 $at, $f0` (= 1.0f in $f0) as predecessor trailing bytes when the successor uses that constant pre-prologue. Look for `mtc1` or `mfc1` as a variant tag._
 
@@ -4340,6 +4344,8 @@ If the tail IS lui+something with the same `tN` register that this function's bo
 <a id="feedback-prologue-stolen-pad-sidecar-alternative"></a>
 ## Prologue-stolen boundary bug — pad sidecar is a cheaper fix than reverse-merge
 
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS removed as match-faking (see `feedback_no_instruction_forcing_matches_policy`). sanctioned pad-sidecar mechanism still works for data padding only; the PROLOGUE_STEALS combo is gone. Historical content below.
+
 _`feedback_splat_prologue_stolen_by_predecessor.md` prescribes reverse-merge (rename successor 8 bytes earlier, prepend the 2 stolen insns). For cases where the PREDECESSOR is the one being decompiled and the stolen insns are purely leaf/no-caller code, you can skip the rename: shrink the predecessor .s by 8 bytes and pad-sidecar those 2 insns back with `.word 0xHHHHHHHH`. Leaves the successor's glabel name unchanged — no ripple through INCLUDE_ASM/C code._
 
 **When pad-sidecar is the right call vs reverse-merge:**
@@ -4377,6 +4383,8 @@ Use **pad-sidecar** when:
 
 <a id="feedback-prologue-stolen-predecessor-no-recipe"></a>
 ## Prologue-stolen PREDECESSOR class — SUFFIX_BYTES + PROLOGUE_STEALS combo (recipe BUILT 2026-05-03)
+
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS removed as match-faking (see `feedback_no_instruction_forcing_matches_policy`). recipe entirely removed. Historical content below.
 
 _Mirror of PROLOGUE_STEALS for the predecessor side. Combine PROLOGUE_STEALS (splice IDO's start prologue) + SUFFIX_BYTES (append the dead stolen-prologue bytes at the tail) on the SAME predecessor + unique-extern for the &D load + refresh-expected for the reloc-form diff. Verified 100% on titproc_uso_func_00000194. inject-suffix-bytes.py + SUFFIX_BYTES Makefile var now exist._
 
@@ -4461,6 +4469,8 @@ Wired via Makefile: `SUFFIX_BYTES := <pred_func>=0x3C020000,0x24420000`
 
 <a id="feedback-prologue-stolen-successor-no-recipe"></a>
 ## Prologue-stolen SUCCESSOR — splice-function-prefix.py + Makefile PROLOGUE_STEALS unlocks these
+
+> **DEPRECATED 2026-05-23.** PROLOGUE_STEALS removed as match-faking (see `feedback_no_instruction_forcing_matches_policy`). recipe entirely removed. Historical content below.
 
 _Originally documented as "no recipe" (2026-05-01). Same day, built a post-link splicer (scripts/splice-function-prefix.py) that removes the duplicate lui+addiu prefix from a C-emitted function's .o; integrated into Makefile via `build/<seg>/<file>.c.o: PROLOGUE_STEALS := <func>=<bytes>`. Splices .text, shifts symbols, fixes relocations, adjusts section file offsets. Verified on titproc_uso_func_000001E4 (byte-verify pass, link succeeds). Estimated 30+ unlocks across timproc_uso_b1/b3, arcproc_uso, mgrproc_uso, game_uso._
 
