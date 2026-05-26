@@ -678,6 +678,13 @@ This re-syncs your worktree to the last landed state. Any uncommitted local edit
 <a id="feedback-rebase-duplicates-multiline-makefile-key"></a>
 ## `git rebase` silently leaves duplicate entries in multi-line Makefile variables when two agents add the same key
 
+> **Specific INSN_PATCH context HISTORICAL (INSN_PATCH was removed 2026-05-23 —
+> see `feedback_no_instruction_forcing_matches_policy`).** The GENERAL LESSON
+> remains: any multi-line list-of-named-entries file (REPLACE_FUNC_BODY,
+> SUFFIX_BYTES, PREFIX_BYTES variables, undefined_syms_auto.txt, splat YAML
+> lists, .gitignore, etc.) is vulnerable to the same rebase-merge-keeps-both
+> failure mode. Periodically dedupe.
+
 _When agent-A and agent-B both add a Makefile recipe entry for the same function name (e.g. `gl_func_X=...`) to the SAME backslash-continued variable (`INSN_PATCH := ... \`), `git rebase origin/main` resolves the textual conflict by KEEPING BOTH lines. Both are syntactically valid; make uses one of them (typically the last); build/byte_verify still pass. But the Makefile now carries a duplicate that wastes a `patch-insn:` cycle and confuses readers._
 
 **Symptom:** After `git rebase origin/main`, your Makefile has the same `<funcname>=...` entry twice in a multi-line variable. `make` doesn't error. Build artifacts are correct. But `grep -c <funcname>=` shows 2 hits.
