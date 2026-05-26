@@ -685,7 +685,9 @@ This re-syncs your worktree to the last landed state. Any uncommitted local edit
 > lists, .gitignore, etc.) is vulnerable to the same rebase-merge-keeps-both
 > failure mode. Periodically dedupe.
 
-_When agent-A and agent-B both add a Makefile recipe entry for the same function name (e.g. `gl_func_X=...`) to the SAME backslash-continued variable (`INSN_PATCH := ... \`), `git rebase origin/main` resolves the textual conflict by KEEPING BOTH lines. Both are syntactically valid; make uses one of them (typically the last); build/byte_verify still pass. But the Makefile now carries a duplicate that wastes a `patch-insn:` cycle and confuses readers._
+_When agent-A and agent-B both add a Makefile recipe entry for the same function name (e.g. `gl_func_X=...`) to the SAME backslash-continued variable (historically `INSN_PATCH := ... \`; today applies to surviving variables — SUFFIX_BYTES, PREFIX_BYTES, REPLACE_FUNC_BODY, NON_MATCHING_SUFFIX_BYTES_FORCE, etc.), `git rebase origin/main` resolves the textual conflict by KEEPING BOTH lines. Both are syntactically valid; make uses one of them (typically the last); build/byte_verify still pass. But the Makefile now carries a duplicate that wastes a `patch-insn:` cycle (or equivalent) and confuses readers._
+
+> **Note (2026-05-23):** INSN_PATCH itself was REMOVED as match-faking (see `feedback_no_instruction_forcing_matches_policy`). The example below uses it as historical context; the rebase-merge-keeps-both failure mode applies identically to the surviving multi-line list variables above.
 
 **Symptom:** After `git rebase origin/main`, your Makefile has the same `<funcname>=...` entry twice in a multi-line variable. `make` doesn't error. Build artifacts are correct. But `grep -c <funcname>=` shows 2 hits.
 
