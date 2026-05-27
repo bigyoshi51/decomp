@@ -1145,11 +1145,23 @@ arg-ignore — none produce the two-step shape.
 - Don't try `register float r asm("$f2")` — IDO rejects (per
   `feedback_ido_no_gcc_register_asm.md`).
 
----
-
----
-
-<a id="feedback-episodes"></a>
+**3-way OR-test variant (2026-05-27, game_libs CA78+CAEC+CB5C):** the same
+cross-fn tail-share mechanism also appears as a TRIPLE splat-split when the
+source is `return test_A(...) || test_B(...);` and both phases are inlined
+by the compiler with a single shared `return 0` tail. Pattern:
+- Phase 1 fn (e.g. CA78) does 6 short-circuit `slt`/`beql`-likely comparisons;
+  each failure-beql targets +4 INTO the phase-2 fn's body (skipping its first
+  insn, which is a redundant register reload).
+- Phase 2 fn (e.g. CAEC) re-tests 6 different conditions; each failure-beql
+  targets the `jr ra` of a TINY shared 0-return tail fn (e.g. CB5C: 3 insns
+  `move v0,zero; jr ra; nop`), with the beql's delay-slot `move v0,zero`
+  doing the actual zero-set (annulled on fall-through within phase 2).
+- Phase 2 standalone has the caller-set-v1 cap (its second insn uses v1
+  before re-loading it).
+Splat sees three `glabel`s because nothing branches DIRECTLY to either phase's
+first insn — only cross-fn beqls into mid-body. The three are one source
+function. Same blocker as the 2-way case: clean fix needs splat-YAML +
+`.s` regeneration to emit ONE bundled glabel covering all three.
 ## feedback_episodes
 
 _Always log episodes after an exact match, using the canonical helper and schema (updated 2026-04-19)_
