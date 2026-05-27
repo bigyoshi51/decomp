@@ -1878,6 +1878,18 @@ Confirmed: in-loop decl → `lui 0x3A80; mul.s`; same decl hoisted → `lui 0x44
 div.s` byte-exact. Two functions in the float-format-log family (0005B764 matched,
 0005B848 matched this way); look for more 0005B* siblings with the same /1024.0f.
 
+**EXACT-RECIPROCAL EXCEPTION (2026-05-27, func_000102A4):** the named-local lever
+FAILS for divisors whose reciprocal is an EXACT power-of-2 float (2.0f→0.5f,
+4.0f→0.25f, 8.0f→0.125f, etc.). IDO's optimizer recognizes the exact-reciprocal
+case earlier in the pipeline (before const-propagation through locals) and folds
+unconditionally. `float d = 2.0f; expr / d` STILL emits `lui 0x3F00 (=0.5f); mul.s`.
+`static const float two_f = 2.0f` produces `div.s` via memory-load (`lui at, hi;
+lwc1 fN, lo(at)`) but the load-form diverges from target's lui+mtc1 immediate
+shape. For exact-power-of-2 divisors, the only way to match `lui 0x4000; mtc1;
+div.s` is if the original C had a non-divisor expression that incidentally
+emits as 2.0f at the asm level — there's no C lever from the simple `/2.0f`
+form. Defer to permuter or leave NM.
+
 **Rule 2 — mtc1 load-delay nops**:
 
 After `mtc1 rN, fM`, the float register fM has a 1-cycle load-delay
