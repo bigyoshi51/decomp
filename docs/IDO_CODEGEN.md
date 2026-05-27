@@ -7981,6 +7981,14 @@ int gl_func_0000A130(char *a0) {
 ```
 Bytes 25/25. Previous comment claimed "decl-order swap REGRESSES" — true for DECL order; the source-assignment-order swap is the working lever.
 
+**Narrow generalization (2026-05-27 probes negative):** the two-step lever applies cleanly to FLAT-loop functions with EXACTLY 2 init-to-0 vars (e.g. counter + index). It does NOT apply to:
+- Functions with 3+ init-to-0 vars where one needs to thread through a bnel-delay (gl_func_0000B310, 92.93% — IDO's `or v0, s2, 0` delay-slot insertion is a separate cap).
+- Nested-loop functions with both inner/outer index vars (game_libs_func_0005DFE4, 95.26%, 12-register cascade).
+- Dispatchers with bit-flag tests (game_libs_func_00034CC8, 89.75%).
+- Multi-args-args dispatchers with > 3 a-reg moves (game_uso_func_00007ACC, 90.08%).
+
+Recognize: if the diff is purely 2 swapped `or sX, zero, zero` insns at the prologue, this lever cracks. Anything broader is a different cap class.
+
 **Placement matters when there's a LEADING function call:** if the function body starts with a `func();` call BEFORE any non-trivial body, the `i = 0;` first-assignment must come AFTER that call, NOT before. Pre-call placement caused a regression on gl_func_0002D064 (89.47% → 87.67%, -1.8pp); post-call placement gave +2.35pp (89.47% → 91.82%). Reasoning: the leading call kills caller-save registers, and IDO re-evaluates allocator weights post-call. Placing `i = 0;` PRE-call assigns it to a transient that's killed; POST-call assigns it to a callee-save slot.
 
 ```c
