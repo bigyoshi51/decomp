@@ -4875,6 +4875,53 @@ print(f'{match_words}/{len(e)//4} = {100*match_words/(len(e)//4):.1f}% byte-exac
 
 **Origin:** discovered 2026-05-07 on bootup_uso/func_0000F2EC. The pre-existing wrap claimed 84.61% (fuzzy) as the "tightest reachable"; replacing with the post-jal-init form jumped byte-exact from 41.5% to 78.0% despite fuzzy dropping. Closes the gap toward INSN_PATCH-eligible territory.
 
+**Extreme case (2026-05-27, gl_func_0000CB9C):** the report.json mnemonic-fuzzy
+80.10% turned out to be 21.57% operand-level. report.json's fuzzy can be ~4×
+the operand-level match for small functions where the mnemonic mix is similar
+but every register/offset operand is differently allocated. **When source=1 in
+/decompile picks a "80-99%" candidate, the in-file fuzzy claim and report.json
+fuzzy are both mnemonic-class — re-measure operand-level (`objdiff-cli diff
+-1 expected -2 build/non_matching <fn> -o file.json`, inspect `arg_diff`)
+BEFORE committing to grind. A "easy 80→100" can really be "22→100" with two
+stacked caps." Don't let the report's fuzzy decoy you.
+
+---
+
+<a id="feedback-dead-vestigial-target-insn"></a>
+## Target asm contains a dead vestigial instruction unreachable from any clean C source
+
+_Some target .s files contain an instruction that no incoming control-flow edge reaches — left over from an earlier optimizer pass that tail-merged a return path away. The dead insn occupies bytes but never executes. From C, no source shape recreates it; treat as a permanent NM cap unless paired with an INSN_PATCH-class fix (banned 2026-05-23) or a splat-boundary repair if the dead insn is actually segment-tail data._
+
+**Symptom:** disassembly trace shows EVERY branch target accounted for, EVERY
+fall-through accounted for, and N bytes worth of instruction(s) between a
+`b epilogue; <delay>` and the actual epilogue with no edge reaching them.
+Common forms:
+- `move v0, zero` between a `b .EPILOGUE; li v0, 1` (delay) and the epilogue —
+  vestige of a null-pointer-check return-0 path the optimizer tail-merged
+- A single `nop` past a `jr ra; nop` epilogue
+- A short cluster (2-4 insns) past the apparent end of the function
+
+**Verified case (2026-05-27, gl_func_0000CB9C):** at offset +0x40 the target has
+`or v0, zero, zero` (= `move v0, zero`) reachable from NOTHING. Before it: `b
+EPILOGUE` (target = +0x44) with delay `li v0, 1`. After it: epilogue. The C
+source for null-ptr path returns 1 (= `li v0, 1`), not 0; the `move v0, zero`
+is the abandoned 0-return path the optimizer tail-merged with the 1-return.
+
+**Differentiate from splat-segment-tail-data (`feedback-splat-last-function-includes-segment-tail-data`):**
+- Splat-tail-data: trailing bytes look like data (zero, ASCII, float pool); no
+  valid instruction interpretation; usually past `jr ra; nop`.
+- Dead-vestigial-insn: bytes ARE a valid instruction; preceded by `b` or
+  `jr ra` with full delay; mid-function-not-tail.
+
+**How to apply:**
+- When operand-level objdiff shows N "ghost" instructions you can't reproduce,
+  trace every branch target. If a stretch is unreachable, document the cap +
+  move on — no C shape will emit a dead `move v0, zero` followed by useful
+  code (compilers DCE).
+- The fix path requires either the permuter generating a structurally-rare
+  intermediate that happens to leave a dead insn (low odds), or hand-asm.
+  Neither is in scope for a /decompile tick. Accept as documented NM cap.
+
 ---
 
 <a id="feedback-o0-cluster-include-asm-sandwich"></a>
