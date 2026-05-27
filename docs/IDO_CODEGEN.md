@@ -7956,6 +7956,31 @@ Built: `or s0, zero, zero` (s0 = i), `or s1, a0, zero` (s1 = iter) — matches t
 
 **Verified 2026-05-14 on `gl_func_0004ED0C`:** 96.07% → 97.68% (+1.6pp final-mile).
 
+**Refinement — source-order of multiple `=0` inits controls EMIT ORDER of the `or sX, zero, zero` insns** (2026-05-27, gl_func_0000A130 byte-exact 25/25):
+
+If two locals BOTH initialized to 0 compete (e.g. `int i = 0; int count = 0;`), the first-assignment-order lever above picks which one gets $s0. BUT the C source order of the two `=0` statements ALSO controls the emit order of the corresponding `or sX, zero, zero` insns. When target's prologue has `or s2, zero, zero; or s0, zero, zero` (s2 init BEFORE s0), the C must write `count = 0; i = 0;` (count first) — even though i goes to s0 (allocno-priority based on use-count), the init insn for s2 is emitted FIRST per source order.
+
+Two-step lever recipe:
+1. Pull the for-init `i = 0` OUT of the for-statement and place it before the for-loop. This wins $s0 for i (matching target).
+2. Reorder the two assignments by source order so the `or sX, zero, zero` insns emit in the target's order.
+
+C source for gl_func_0000A130 (cracked):
+```c
+int gl_func_0000A130(char *a0) {
+    int i, count;
+    char *p;
+    count = 0;        /* emits `or s2, zero, zero` first */
+    i = 0;            /* emits `or s0, zero, zero` second; i wins $s0 by allocno */
+    p = a0 + 0x18;
+    for (; i != 24; i += 8) {
+        if (gl_func_00000000(p) != 0) count++;
+        p += 8;
+    }
+    return count;
+}
+```
+Bytes 25/25. Previous comment claimed "decl-order swap REGRESSES" — true for DECL order; the source-assignment-order swap is the working lever.
+
 **Placement matters when there's a LEADING function call:** if the function body starts with a `func();` call BEFORE any non-trivial body, the `i = 0;` first-assignment must come AFTER that call, NOT before. Pre-call placement caused a regression on gl_func_0002D064 (89.47% → 87.67%, -1.8pp); post-call placement gave +2.35pp (89.47% → 91.82%). Reasoning: the leading call kills caller-save registers, and IDO re-evaluates allocator weights post-call. Placing `i = 0;` PRE-call assigns it to a transient that's killed; POST-call assigns it to a callee-save slot.
 
 ```c
