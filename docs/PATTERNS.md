@@ -49,6 +49,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Recognizing FPU spline-basis-function evaluators by their constant-load fingerprint](#feedback-fpu-basis-function-signatures) — _1080's game_uso has at least one FPU leaf that evaluates the 4 cubic B-spline basis weights for parameter t.
 - [Prologue-stolen can be a float constant setup, not just a data pointer — `lui $at, 0x3F80; mtc1 $at, $f0`](#feedback-prologue-stolen-float-constant-variant) — _Classic prologue-stolen is `lui $v0; addiu $v0, 0x0` (base pointer to D_XXX).
 - [USO callee receives float directly in $f4 (no mtc1 at entry) — non-O32 intra-USO convention](#feedback-uso-float-in-f4-callee) — _A USO function whose first real insn is `swc1 $f4, offset($aN)` with no `mtc1 $aN, $f4` preceding is being called with a non-O32 float convention where the caller passed the float value already in FPU register $f4.
+- [N-component normalize recognizer — `lwc1; mul.s squared; add.s sum; jal sqrtf; div.s 1.0/result; mul.s; swc1`](#feedback-normalize-recognizer-sqrtf) — _Recognition pattern for in-place N-component vector normalize functions. Reloc-free `jal 0x0` is the sqrtf thunk._
 
 ### epilogue / tail / cross-function
 
@@ -8859,3 +8860,67 @@ Verified 2026-05-18 on `gl_func_000444B4` (1080-agent-i): 96.56% → 100% via th
 **See also:**
 - `feedback_knr_def_for_inconsistent_arg_callers.md` (K&R required for mixed-arity)
 - `feedback_unrolled_loop_via_c_macro_for_decomp.md` (macro form for longer unrolls)
+
+
+## N-component normalize recognizer — `lwc1; mul.s squared; add.s sum; jal sqrtf; div.s 1.0/result; mul.s; swc1` <a id="feedback-normalize-recognizer-sqrtf"></a>
+
+Many 1080 game_libs functions are in-place N-component normalize routines.
+Recognition fingerprint (in order):
+
+```
+lwc1 $f0,  0($a0)        ; load component 0
+lwc1 $f2,  4($a0)        ; load component 1
+lwc1 $fX,  8($a0)        ; load component 2
+mul.s $fA, $f0, $f0      ; component squared
+[ lwc1 $fY, 12($a0) ]    ; (optional) load component 3
+mul.s $fB, $f2, $f2
+add.s $fC, $fA, $fB
+mul.s $fD, $fX, $fX
+add.s $fE, $fC, $fD       ; sum of squares (length squared)
+[ optional: c.lt.s $fE, eps; bc1fl-with-mov.s-delay; degenerate fallback ]
+jal sqrtf                 ; reloc-free `jal 0` thunk
+[ mov.s $f12, $fE OR ]    ; arg setup for sqrtf
+lui $at, 0x3F80
+mtc1 $at, $fK             ; 1.0f
+div.s $fL, $fK, $f0       ; inv = 1.0 / sqrt
+mul.s ...; swc1 ...       ; per-component a[i] *= inv
+```
+
+C body (3-component with eps fallback, sibling of gl_func_0005C9BC):
+
+```c
+extern float sqrtf(float);
+extern int D_00000000;
+int normalize3_with_eps(float *a) {
+    float s = a[0]*a[0] + a[1]*a[1] + a[2]*a[2];
+    if (s < *(float*)((char*)&D_00000000 + EPS_OFFSET)) {
+        a[1] = 0.0f; a[0] = 0.0f; a[2] = 1.0f;
+        return 0;
+    }
+    {
+        float inv = 1.0f / sqrtf(s);
+        a[0] *= inv; a[1] *= inv; a[2] *= inv;
+    }
+    return 1;
+}
+```
+
+C body (4-component, sibling of gl_func_0005D4F8):
+
+```c
+extern float sqrtf(float);
+void normalize4(float *a) {
+    float len = sqrtf(a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[3]*a[3]);
+    float inv = 1.0f / len;
+    a[0] *= inv; a[1] *= inv; a[2] *= inv; a[3] *= inv;
+}
+```
+
+**Known cap**: standalone-cc matches byte-exact, but in-tree full-TU emits
+a different register-allocation order for the loaded floats (e.g. $f0,$f2,$f12
+in target vs $f2,$f12,$f0 in-tree). Documented `feedback-ido-tu-context-sensitive-scheduling`.
+Permuter-class for full byte-match. NM wrap at 97-98% is the achievable bound.
+
+**Found this session 2026-05-27**:
+- `gl_func_0005D4F8` (4-comp normalize): NM 97.22%
+- `gl_func_0005C9BC` (3-comp normalize w/ eps fallback): NM 98.40%
