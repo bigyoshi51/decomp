@@ -8180,6 +8180,8 @@ _When the target has `float buf` at sp+0xK and built emits it at sp+0xK-8 (or sp
 
 **Anti-pattern: don't use volatile arrays AFTER buf** — they get placed at the TOP of locals (highest offset), pushing buf DOWN, which is the OPPOSITE direction. Verified 2026-05-14 on 39B0C — `volatile int pad1, pad2;` declared AFTER buf went to sp+0x28..0x2F and buf stayed at sp+0x1C.
 
+**Addressing-mode coupling (2026-05-27, gl_func_00037D48 negative):** swapping the declaration order of `int tmp[3]` and `float fbuf[3]` ALSO changes which addressing-mode IDO picks for the stores. Original order (tmp first) produces `addiu v1, sp, X; sw via v1` (pointer-based stores), needed for the int→float ping-pong shape. Reversing the decl (fbuf first) flips IDO to `sw via sp+off` (direct), breaking the shape entirely (regressed 23/24 → 12/24). Recognize: decl-order changes don't ONLY affect slot positions; they can also flip addressing-mode choices that other parts of the function depend on. If the function uses a pointer-based access pattern (`addiu rN, sp, X; sw/lw via rN`), don't reorder declarations across the pointer scope.
+
 **Compare to:** `feedback-ido-file-context-affects-frame-size` (when the buf-offset gap isn't C-controllable AT ALL — different .c file context produces the gap). The low_pad recipe works on 39A9C because the frame-shape gap IS reachable from C; the file-context cap is for cases where it isn't.
 
 ---
