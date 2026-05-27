@@ -4936,6 +4936,37 @@ So the default build is fine and the bug is invisible. Only the NM build is brok
 
 **How to apply:** when adding a new NM-wrap, ALWAYS close the outer #ifdef before opening a new one. Never nest #ifdef NON_MATCHING blocks. When a "trailing INCLUDE_ASM" line lives after another function's wrap, check it's NOT inside any open #else by counting back.
 
+**Sub-class: duplicate-NM-body (2026-05-27, bootup_uso/func_00001F78).**
+The same dead-code pattern can occur with TWO separate NM bodies for the
+same function, both flagged with `#ifdef NON_MATCHING`. Pattern:
+
+```c
+#ifdef NON_MATCHING                    /* outer */
+void f(...) { ... }                    /* body A — unreachable when default builds */
+#else
+/* comment */
+  #ifdef NON_MATCHING                  /* inner — always FALSE in outer's #else */
+  void f(...) { ... }                  /* body B — UNREACHABLE in all paths */
+  #else
+  INCLUDE_ASM(..., f);
+  #endif
+#endif
+```
+
+When `-DNON_MATCHING`: outer takes #if branch → body A compiled.
+When default: outer takes #else, inner is FALSE → INCLUDE_ASM compiled.
+Body B is preprocessor-dead-code, never reached.
+
+Detection via grep (count `#ifdef NON_MATCHING` opening twice with the
+same function name in the body):
+```bash
+awk '/^#ifdef NON_MATCHING/ {nm++} /^#endif/ {if(nm>0) nm--} /^void|^int|^float/ && nm>=1 {match($0, /\\s+(\\w+)\\s*\\(/, m); if(seen[m[1]]) print FILENAME":"NR" DUPLICATE NM BODY: "m[1]; seen[m[1]]=1}' src/**/*.c
+```
+
+Fix: dedup to a single (outer #ifdef / NM body / #else / INCLUDE_ASM / #endif)
+structure, keeping the "intended" body (typically the inner one, which is
+the one actually compiled by the default path's NM build).
+
 Related: [[feedback_nm_gate_must_build_non_matching_path]] (NM build must run non_matching), [[feedback-nm-body-cpp-errors-silent]] (silent CPP errors in NM build).
 
 ---
