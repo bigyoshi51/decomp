@@ -8152,6 +8152,10 @@ Both expressions clear bit 1 of the low 8 bits, but the immediate stored in the 
 
 **Caveat — `~K` doesn't always emit `andi`** (verified 2026-05-15 on `gl_func_0002D2F4`): when `~K` evaluates to a value whose upper 16 bits aren't sign-consistent with the lower 16 (e.g., `~0x80` = `0xFFFFFF7F`), IDO emits a 3-insn sequence: `addiu temp, $zero, -129; and rT, rS, temp` (load-32-bit-then-AND) instead of a 1-insn `andi rT, rS, 0xFF7F`. Use the EXPLICIT 16-bit-fitting constant `0xFF7F` to force the andi-immediate form. The `~K` form only works cleanly when `K <= 0xFF` AND the bit-K position is in the LOW byte; for larger K or bit positions in the second byte, prefer the explicit narrow constant.
 
+**When `~K` DOES emit andi-with-FFXX (2026-05-27, `gl_func_00024B94`):** for `*(char*)p &= ~0x0C` where K=0x0C is small and the operand is `char`, IDO emits `andi rT, rS, 0xFFF3` (single insn). The explicit-literal form `*(char*)p &= 0xF3` emits `andi rT, rS, 0x00F3` instead. BOTH are semantically identical for a byte store (sb truncates), but the BYTE ENCODING differs (`3109FFF3` vs `310900F3`). When target uses the `0xFFFx`-immediate form, you MUST write the C as `~MASK` not as `LOW_BYTE_MASK` to match. Recognize: the lower 16 bits of `~0x0C` = `0xFFF3` fit andi's immediate (zero-extended), so IDO uses the 1-insn andi path. The 3-insn `addiu+and` materialization only kicks in when the constant CANNOT fit in 16 bits as andi-immediate (i.e., the value > 0xFFFF in absolute terms). Pick the C form to match target's chosen encoding:
+- target uses `andi 0x00F3`: write `*(char*)p &= 0xF3`
+- target uses `andi 0xFFF3`: write `*(char*)p &= ~0x0C`
+
 ---
 
 ---
