@@ -386,6 +386,8 @@ Naming `offset` changes the scheduling: `$v0` (the call result `r`) is held as f
 - If swapped: name one operand as a local and see.
 - If still swapped: name the OTHER operand instead. Empirically, whichever operand is "computed first" in the C source becomes `$rs`.
 
+**Scope limit (2026-05-27, game_libs_func_0005B5D8 negative):** the named-local lever fixes the SPECIFIC `addu` operand pair ($rs/$rt swap) but does NOT propagate to broader register-cascade renumbers in the surrounding lw/sll/and/sw chain. If the residual diff covers multiple insns (lw, sll, and, sw) all with renumbered operands — not just the addu — then renaming one operand to a named-local leaves the cascade unchanged. Recognize: the lever works for the "stuck at 99% with ONE addu/or/etc differing" case, not the "5+ insns all use the wrong registers" case. The latter is allocno-priority-driven and permuter-class.
+
 **Related:** `feedback_ido_v0_reuse_via_locals.md` and `feedback_ido_inline_deref_v0.md` cover the broader "inline vs named local" axis for register allocation. This memory is the narrow case for commutative-op operand ordering in the encoding itself.
 
 **Origin:** 2026-04-19 game_libs gl_func_00023B08. Inline `r + a1 * 16` → 99.33 % (only `addu` operand order off). Split `int offset = a1 << 4; r + offset` → 100 %.
