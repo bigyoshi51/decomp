@@ -726,6 +726,18 @@ makes IDO emit memcpy-style inline using an explicit dest-pointer register that 
 
 **Also generalizes to compound levers** (gl_func_00024B94, 2026-05-27): struct-assign for an inner 4-int copy (a0+0x20 ← v0[0..0xC]) PLUS `~0x0C` form for a byte-clear mask (`*(char*)v0 &= ~0x0C` emits `andi 0xFFF3` to match target's encoding, see feedback-ido-andi-fitting-mask-vs-negative for that lever). Combined: 97.55% → 99.83% (only remaining diff is alt-entry-jal reloc encoding — post-link byte-exact). Lesson: when triage shows MIXED diff classes, peel them apart and apply layered levers; sometimes the right combination cracks even when each lever individually falls short.
 
+**Scope limit: int→float reinterpret patterns** (2026-05-27, gl_func_0003D620 + gl_func_00037D48 negatives). When the target's shape REQUIRES a stack ping-pong (int stores into tmp + float reads from same tmp address), struct-assign skips the reinterpret. Example target asm:
+```
+sw t6, 0x24(sp)   ; tmp[0] = (int)p[0]
+sw t7, 0x28(sp)
+sw t8, 0x2C(sp)
+lwc1 f4, 0x24(sp) ; reinterpret tmp[0] as float
+lwc1 f6, 0x28(sp)
+lwc1 f8, 0x2C(sp)
+swc1 f4, 0x30(a0) ; *(float*)(a0+0x30) = tmp[0] bits
+```
+The "obvious" struct-assign collapse `*(struct ThreeF*)(a0+0x30) = *(struct ThreeF*)tmp` skips the int-load-then-float-store chain entirely, emitting direct int stores — regressed 26/27 → 11/27 on 0x3D620. Recognize: if the target asm has `sw` then `lwc1` of the SAME stack slot (int→float reinterpret via stack), the struct-assign lever does NOT apply. Keep the explicit `*(float*)&tmp[N]` casts.
+
 <a id="feedback-ido-array-append-count-store-vs-array-addr-schedule-cap"></a>
 ## Array-append (load count / store count+1 / store array[idx]) — count-store-vs-array-addr schedule is an in-tree cap; detect-and-skip
 
