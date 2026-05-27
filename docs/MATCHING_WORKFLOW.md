@@ -4887,6 +4887,59 @@ stacked caps." Don't let the report's fuzzy decoy you.
 
 ---
 
+<a id="feedback-nested-ifdef-non-matching-dead-code"></a>
+## Nested `#ifdef NON_MATCHING` inside another's `#else` branch is always FALSE — NM body becomes dead code; trailing siblings disappear from NM build
+
+_When the source has an outer `#ifdef NON_MATCHING ... #else ... #endif` wrap and a SECOND `#ifdef NON_MATCHING ... #else ... #endif` block is nested inside the outer's `#else` branch, the inner `#ifdef` is always FALSE (because we're already in the outer's #else, where NON_MATCHING is not defined). The inner's NM body becomes preprocessor-dead-code. AND any trailing siblings (INCLUDE_ASM lines, function defs) before the outer `#endif` are also conditionally-skipped when NON_MATCHING IS defined — they're missing from the NM build entirely._
+
+**Symptom:** a function's documented NM-wrap body is "active" in the source but its match % stays at "no fuzzy" (`fuzzy_match_percent: null` or matches the byte-for-byte INCLUDE_ASM path exactly). Looking at the source, the wrap is in place. Running `make build/non_matching/<file>.c.o` succeeds. But the NM-build's bytes for that function are NOT what your C body produces — they're (mysteriously) the same as the INCLUDE_ASM path. The cause: dead-code nesting.
+
+**Detection (grep):** scan files for nested NM blocks. A reliable heuristic is:
+```bash
+# Find suspicious nested #ifdef NON_MATCHING after a sibling #else
+awk '/^#ifdef NON_MATCHING/ {depth++} /^#else/ {if(depth>0) print FILENAME":"NR" "$0; in_else[depth]=1} /^#endif/ {if(depth>0 && in_else[depth]) in_else[depth]=0; depth--} /^#ifdef NON_MATCHING/ && in_else[depth-1] {print FILENAME":"NR" NESTED-IN-ELSE: "$0}' src/**/*.c
+```
+
+Or simpler: each `#ifdef NON_MATCHING / #else / #endif` triplet should be at top-level OR `#endif` immediately after the `#else`'s INCLUDE_ASM with no further sibling lines.
+
+**Verified case (2026-05-27, timproc_uso_b5):**
+
+```c
+#ifdef NON_MATCHING
+/* NM body for 32C8 */ void f_32C8(...) { ... }
+#else
+INCLUDE_ASM(..., f_32C8);
+
+  #ifdef NON_MATCHING            // ← always FALSE: nested in outer's #else
+  /* NM body for 3890 */ void f_3890(...) { ... }
+  #else
+  INCLUDE_ASM(..., f_3890);      // ← active when default builds; not in NM build
+  #endif
+
+INCLUDE_ASM(..., f_38B0);        // ← only present when NM is NOT defined
+#endif
+```
+
+Effect when `-DNON_MATCHING` is set:
+- f_32C8: NM body active (correct)
+- f_3890: nothing — neither branch of inner #ifdef reachable
+- f_38B0: nothing — outer's #else skipped
+
+Effect when `-DNON_MATCHING` is NOT set:
+- f_32C8: INCLUDE_ASM (correct)
+- f_3890: inner takes #else → INCLUDE_ASM (correct, hides the bug)
+- f_38B0: INCLUDE_ASM (correct, hides the bug)
+
+So the default build is fine and the bug is invisible. Only the NM build is broken — and because the NM build is rarely linked into ROM (it's just for objdiff), the bug only shows up as a missing-symbol link error or as "match % doesn't change despite NM body edits."
+
+**Fix:** close the outer `#endif` immediately after the outer's `#else INCLUDE_ASM` (no trailing siblings inside the outer #else). Move any siblings to top level.
+
+**How to apply:** when adding a new NM-wrap, ALWAYS close the outer #ifdef before opening a new one. Never nest #ifdef NON_MATCHING blocks. When a "trailing INCLUDE_ASM" line lives after another function's wrap, check it's NOT inside any open #else by counting back.
+
+Related: [[feedback_nm_gate_must_build_non_matching_path]] (NM build must run non_matching), [[feedback-nm-body-cpp-errors-silent]] (silent CPP errors in NM build).
+
+---
+
 <a id="feedback-dead-vestigial-target-insn"></a>
 ## Target asm contains a dead vestigial instruction unreachable from any clean C source
 
