@@ -61,6 +61,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
 - [Reuse the PARAMETER as the object (not a fresh local) → IDO arg-saves to the caller slot (small frame) instead of an in-frame spill slot (+8 frame)](#feedback-ido-reuse-param-as-object-caller-slot-spill) — _In an alloc-or-given constructor `obj = a0 ? a0 : alloc(N)` whose object must survive ≥1 jal, a fresh `int obj;` local spills to an IN-FRAME slot (frame grows +8, all spill offsets shift). Assigning back into the PARAMETER instead (`if (a0==0){ a0=alloc(N); … } … use a0 … return a0;`) makes IDO spill via the ARG-SAVE-to-caller-slot convention (`sw a0, framesize(sp)`), keeping the minimal frame and matching the target's spill offsets. Erased the final 6 frame-size diffs on gl_func_00041524 (→ byte-exact 32/32, pure C). Try this whenever the only residual is `addiu sp,-N` / spill-offset off by a constant and the object is param-derived._
+- [Drop the extra "working register" param — IDO routes the spill to the SOURCE param's home slot, not the working register's home slot](#feedback-ido-drop-working-reg-param-spill-follows-source-pseudo) — _When `obj = a0 ? a0 : alloc(N)`-shaped code is written with TWO params (`f(int a0, int a1)` + `a1 = a0;` to force the working pseudo into $a1), IDO -O2 spills $a1 across the second jal to **a1's own home slot 0x1C**. The same logic written with ONE param (`f(int a0)` + `a0 = alloc(N);` reusing the param) compiles to the SAME registers (working pseudo still in $a1 via the `or a1,a0,$0` copy) but the spill lands at **a0's home 0x18** — because IDO tracks the spill against the SOURCE pseudo (the param-named `a0`), not against the working register $a1. This is finer-grained than [arg-reuse-keeps-small-frame](#feedback-ido-reuse-param-as-object-caller-slot-spill): even with the same -0x18 frame and the same working register, the offset of the single spill flips by 4 bytes depending on which param the working pseudo descends from. Keep the goto-to-shared-epilogue (`goto L_end;` not `return 0;`) — `return 0;` adds 2 insns of `or v0,$0,$0` + jump to epilogue. Counter-trap: a fresh-local 1-arg form (`int r = a0;`) does NOT crack the spill — it bumps the frame to -0x20 with the working pseudo in $v1 (different registers entirely). The full lever is: 1-arg + reuse the param + goto-to-epilogue. Byte-exact gl_func_00037FAC 2026-05-27 (24 insns, prior 99.92%); generalizes to gl_func_00066514 (same shape, working in $a2 → spill flips 0x20 → 0x18)._
 - [Array-index addressing (`int** a0; a0[a1 + K]`) packs stack spills tighter than char*-pointer-arith (`a0 + a1*4`) — fixes frame-size/spill-slot-offset residuals](#feedback-ido-array-index-vs-charptr-spill-packing) — _When the only diff is frame size / spill-slot offsets off by a constant (e.g. -0x28 with a 4-byte gap vs target -0x20), and the base is a param indexed by another param: express the access as typed array indexing (`int** a0; obj = a0[a1 + 0x14]`, 0x14 = byteoff/4) rather than char* arithmetic (`(char*)a0 + a1*4` then `[0x50/4]`). The array-index form makes IDO pack the pointer spills with no gap. Byte-exact gl_func_0002A50C 2026-05-24._
 - [Copy adjacent fields as a STRUCT, not separate field-copies, to flip a $t-register-renumber residual](#feedback-ido-struct-copy-vs-field-copy-treg-order) — _When two (or more) adjacent words are copied `dst.f0=src.f0; dst.f1=src.f1;` and the only diff is the loads/stores using swapped $t regs (t6/t7 vs t7/t6), replace the separate copies with a single struct-typed copy (`*(Pair*)(dst)=*(Pair*)(src)`). The struct copy emits lw/lw/sw/sw in a fixed order that often matches the target's. Byte-exact game_uso_func_0000D438 2026-05-24 (was a banned INSN_PATCH)._
 - [Pull `a0->field` into a named local when the same call overwrites $a0 with a new address](#feedback-ido-arg-deref-before-a0-overwrite) — For calls like `func(&SYM, *(int*)(a0 + N), 0)` where $a0 is about to be reassigned to &SYM, inlining the `*(int*)(a0+N)` deref makes IDO spill a0 early and reload via a fresh temp ($t6).
@@ -707,6 +708,15 @@ typedef struct { int a, b; } Pair;
 Note this is a tiny straight-line leaf where the permuter has no mutation surface (per `TOOLING_DECOMP.md`, ≤8-insn leaves resist) — the struct-copy form is the deterministic fix. A `double` copy (`*(double*)=*(double*)`) is NOT equivalent: it emits ldc1/sdc1 (FP path), diverging entirely. Reuse an existing `struct{int a,b;}` typedef in the file to avoid a redefinition (this codebase has `Pair2`).
 
 **Generalizes to the varargs `&param`-pointer regalloc case** (game_uso_func_0000D5BC, 2026-05-24): a function that homes `a1,a2` via `&a1` and copies them to an adjacent dest had the `&a1` pointer stuck in `$v0` (a `volatile int *p = &a1; dst[0]=p[0]; dst[1]=p[1]` form) where the target uses `$t6`. Writing it as `*(Pair2*)(dst) = *(Pair2*)&a1` homes the args, takes `&a1` into `$t6`, and emits the lw/sw/lw/sw via the pointer in the target registers — byte-exact. So struct-copy fixes both the adjacent-field $t-swap AND the `&param`-pointer `$v0`-vs-`$t6` choice. (Verify in-tree, not just standalone — see `MATCHING_WORKFLOW.md#feedback-standalone-false-convergence-verify-in-tree`.)
+
+**Also generalizes to the dest-pointer-reuses-call-arg-register case** (gl_func_00037DA8, 2026-05-27): a function that copies 6 ints from `*src` into a local then calls `f(&D, &local, 24)`. Target has `addiu a1, sp, 0x18; lw t7, 0(a0); sw t7, 0(a1); lw t6, 4(a0); sw t6, 4(a1); …` — i.e. it computes `&local` ONCE into `a1` (which is also call-arg-2 = `&local`) and uses `a1` as the dest pointer for the 6 stores. The "obvious" C form `int local[6]; local[i] = a0[i];` lets IDO pick sp-direct stores (`sw rN, OFF(sp)`), missing the pointer-reuse pattern (95.83% NM cap). Writing it as
+```c
+struct Six { int a, b, c, d, e, f; };
+struct Six local;
+local = *a0;
+gl_func_00000000(&D_00000000, &local, 0x18);
+```
+makes IDO emit memcpy-style inline using an explicit dest-pointer register that the scheduler then unifies with the call-arg-2 register — byte-exact 23/23. The lever applies whenever the dest of the struct copy is also passed as an argument to the immediately-following call (and the size argument matches the struct size, so IDO recognizes the pointer-equality).
 
 <a id="feedback-ido-array-append-count-store-vs-array-addr-schedule-cap"></a>
 ## Array-append (load count / store count+1 / store array[idx]) — count-store-vs-array-addr schedule is an in-tree cap; detect-and-skip
@@ -10628,6 +10638,118 @@ frame-size diffs (frame 0x20 vs 0x18); switching to in-place `a0`
 reuse → **byte-exact 32/32, pure C, no post-cc recipe**. Decoded
 from a bare "Multi-pass decode pending" stub in one focused
 multi-pass session (36→34→32/7→32/6→MATCH).
+
+## Drop the extra "working register" param — IDO routes the spill to the SOURCE param's home slot, not the working register's home slot
+<a name="feedback-ido-drop-working-reg-param-spill-follows-source-pseudo"></a>
+
+**Context.** A finer-grained sibling of the param-reuse lever
+above (`#feedback-ido-reuse-param-as-object-caller-slot-spill`).
+Same family — alloc-or-given with the resource passed through ≥1
+`jal` — but the symptom is sharper: **frame size is already
+correct, only the offset of a single spill word is off by 4**.
+
+**Symptom.** 24/24 insns byte-exact except one pair:
+`sw $a1, 0x1C(sp)` / `lw $a1, 0x1C(sp)` (our build) vs target
+`sw $a1, 0x18(sp)` / `lw $a1, 0x18(sp)`. Frame is `-0x18`, ra at
+`0x14`, all branches/ops/registers identical. Permuter-immune
+(its scorer normalises sp-relative offsets, so it reports score 0
+on a pure spill-slot swap — do NOT log an episode off a permuter
+zero without a raw byte-compare).
+
+**Cause.** Even when IDO routes the working pseudo through a
+caller's home slot (the lever above), the *which slot* depends on
+the SOURCE pseudo, not on the current working register.
+
+When the function is written:
+
+```c
+int f(int a0, int a1) {       /* 2-param, a1 is the "working" param */
+    a1 = a0;                  /* copy param a0 into param a1 */
+    if (a0 == 0) {
+        a1 = alloc(N);
+        …
+    }
+    /* a1 spilled across the next jal */
+}
+```
+
+IDO assigns the working pseudo to `$a1` (the natural place — both
+the home for param-2 and a free arg-reg) and spills to `a1`'s home
+slot `0x1C`. The *value* spilled lives in `$a1` and the *pseudo*
+spilled is the one declared as `a1`.
+
+When the function is written:
+
+```c
+int f(int a0) {               /* 1-param, reuse a0 */
+    if (a0 == 0) {
+        a0 = alloc(N);
+        …
+    }
+    /* a0-pseudo, currently in $a1 after the param→a1 copy,
+       is spilled across the next jal */
+}
+```
+
+IDO STILL copies `$a0 → $a1` and uses `$a1` as the working register
+(same `or a1,a0,$0` insn — the register allocator's choice doesn't
+change). But the spill target is `a0`'s home slot `0x18`, not
+`a1`'s `0x1C`, because the live pseudo descends from the `a0`
+parameter — IDO tracks the spill against the source pseudo's home.
+
+**Fix.** Drop the extra working-register param. Use the single
+`a0` param and reassign back into it:
+
+```c
+int f(int a0) {
+    int v1;
+    if (a0 == 0) {
+        a0 = alloc(N);
+        if (a0 == 0) goto end;
+    }
+    v1 = a0;
+    if (a0 == 0) {            /* dead block — IDO can't prove !=0 */
+        v1 = alloc(N);
+        if (v1 == 0) goto skip_store;
+    }
+    *(int*)v1 = 0;
+skip_store:
+    *(int*)a0 = TAG;
+end:
+    return a0;
+}
+```
+
+Keep `goto end;` (not `return 0;`) — `return 0;` adds an explicit
+`or v0, $0, $0` (set v0 to 0) plus a forward branch to the
+epilogue, costing 2 insns over the natural `beq v0, $0, epilogue`
+shape.
+
+**Counter-trap.** A fresh-local 1-arg form does NOT crack this
+spill:
+
+```c
+int f(int a0) {
+    int r = a0;               /* fresh local, NOT param-reuse */
+    if (a0 == 0) { r = alloc(N); … }
+    …
+}
+```
+
+This bumps the frame to `-0x20` and puts the working pseudo in
+`$v1` (different registers entirely — spill at `0x18` but
+everything else shifts). Both legs of the lever are required: 1-arg
+**and** reuse the param directly.
+
+**When to reach for it.** Only residual is a single spill `sw/lw`
+pair at the working register's home (e.g. `0x1C` for `$a1`,
+`0x20` for `$a2`) that the target places at a lower arg-home slot
+(`$a0`'s `0x18`). Earlier docs may report "permuter-immune
+spill-slot offset cap" — that's this lever. Verified 2026-05-27
+on `gl_func_00037FAC` (24 insns, prior 99.92% / spill at 0x1C →
+byte-exact at 0x18). Generalizes directly to `gl_func_00066514`
+(same shape with the working pseudo in `$a2`; 3-param form spills
+at `0x20`, 1-param `a0`-reuse should spill at `0x18`).
 
 ## Append+overflow: hold `n = count+1` in a named temp; don't reload the just-stored counter for the bound test
 <a name="feedback-ido-append-overflow-count-temp"></a>
