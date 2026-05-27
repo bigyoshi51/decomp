@@ -19,6 +19,31 @@ USAGE:
 
 The --low mode scans more candidates (3-4x runtime) but surfaces additional
 struct-assign / reg-renumber opportunities.
+
+LEVER RECIPES BY CLASS (2026-05-27 session experience):
+
+  REG_RENUMBER_ONLY (≤8 diffs): try struct-assign for the $t-pair-swap
+    case (canonical alternation); decl-order swap for $s-priority flip.
+    Limits: tiny leaves overshoot to $v-class; multi-insn cascades are
+    permuter-class. See docs/IDO_CODEGEN.md
+    #feedback-ido-struct-copy-vs-field-copy-treg-order.
+
+  OFFSET_ONLY (≤4 diffs): typically frame-slot reshuffles. Try volatile-int
+    pad to grow frame; decl-order swap to push buf to higher offset.
+    Limit: decl-order changes can flip addressing-mode (sw-via-pointer ↔
+    sw-via-sp-direct); breaks if the function uses pointer-based access.
+
+  MIXED with INSN_DIFF=1: usually FPU operand-order or constant encoding.
+    Try `~K` form for byte-clear masks; right-to-left operand swap for
+    commutative ops. Often permuter-immune (fresh-temp mul.s class).
+
+  MIXED with JAL_RELOC: post-link byte-exact but objdiff-blind. Most cases
+    need spimdisasm USO migration. Some need undefined_syms aliases (alt-
+    entry-jal pattern).
+
+For new gotchas discovered while applying these levers, see
+docs/IDO_CODEGEN.md + docs/MATCHING_WORKFLOW.md (extended this session
+with the negative-result scope limits).
 """
 
 import json
