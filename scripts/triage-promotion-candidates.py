@@ -236,8 +236,11 @@ def main():
     from collections import Counter
 
     verdict_counts = Counter()
+    unit_counts = Counter()
     for r in results:
         v = r[3] if len(r) == 5 else r[3]
+        unit = r[-1]
+        unit_counts[unit] += 1
         if "JAL_ONLY" in v:
             verdict_counts["JAL_ONLY"] += 1
         elif "REG_RENUMBER_ONLY" in v:
@@ -253,6 +256,9 @@ def main():
     print("\nSummary by verdict class:")
     for v, n in sorted(verdict_counts.items(), key=lambda x: -x[1]):
         print(f"  {v:24} {n:>4}")
+    print("\nTop units by candidate count:")
+    for u, n in unit_counts.most_common(8):
+        print(f"  {u:40} {n:>4}")
 
     print("\nTop 30 promotion candidates by tractability:\n")
     print(f"{'PCT':>7} {'SIZE':>5} {'NAME':<40} {'VERDICT':<35} UNIT")
