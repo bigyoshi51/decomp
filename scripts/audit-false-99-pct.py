@@ -23,8 +23,13 @@ import re
 import subprocess
 
 
-def func_bytes(objfile, symbol, size):
-    """Extract a function's .text bytes from an .o by symbol address."""
+def func_bytes(objfile, symbol):
+    """Extract a function's .text bytes from an .o by symbol address+size.
+
+    Reads the size from the symbol table entry (skips UND entries with
+    size 0 — those would produce bogus byte slices using a callsite-
+    supplied size that doesn't correspond to a real function body).
+    Mirrors land-successful-decomp.sh's byte_verify size-discovery."""
     try:
         tab = subprocess.check_output(
             ["mips-linux-gnu-objdump", "-t", objfile], stderr=subprocess.DEVNULL
@@ -35,9 +40,21 @@ def func_bytes(objfile, symbol, size):
         parts = line.split()
         if not parts or parts[-1] != symbol:
             continue
+        if "*UND*" in line:
+            continue
         try:
             addr = int(parts[0], 16)
         except ValueError:
+            continue
+        size = None
+        for p in parts[2:]:
+            if len(p) != 8 or not all(c in "0123456789abcdef" for c in p):
+                continue
+            s = int(p, 16)
+            if 0 < s < 0x100000:
+                size = s
+                break
+        if size is None:
             continue
         try:
             text = subprocess.check_output(
@@ -103,10 +120,10 @@ def main():
             exp_o = os.path.join("expected", rel)
             if not os.path.exists(exp_o):
                 continue
-            ba = func_bytes(base_o, name, size)
+            ba = func_bytes(base_o, name)
             if ba is None:
                 continue
-            ea = func_bytes(exp_o, name, size)
+            ea = func_bytes(exp_o, name)
             if ea is None:
                 continue
             if ba == ea:
