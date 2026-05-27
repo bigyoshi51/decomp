@@ -232,6 +232,28 @@ def main():
 
     results.sort(key=tract)
 
+    # Summary stats by verdict class
+    from collections import Counter
+
+    verdict_counts = Counter()
+    for r in results:
+        v = r[3] if len(r) == 5 else r[3]
+        if "JAL_ONLY" in v:
+            verdict_counts["JAL_ONLY"] += 1
+        elif "REG_RENUMBER_ONLY" in v:
+            verdict_counts["REG_RENUMBER_ONLY"] += 1
+        elif "OFFSET_ONLY" in v:
+            verdict_counts["OFFSET_ONLY"] += 1
+        elif "JAL+REG" in v:
+            verdict_counts["JAL+REG"] += 1
+        elif "MIXED" in v:
+            verdict_counts["MIXED"] += 1
+        else:
+            verdict_counts["OTHER"] += 1
+    print("\nSummary by verdict class:")
+    for v, n in sorted(verdict_counts.items(), key=lambda x: -x[1]):
+        print(f"  {v:24} {n:>4}")
+
     print("\nTop 30 promotion candidates by tractability:\n")
     print(f"{'PCT':>7} {'SIZE':>5} {'NAME':<40} {'VERDICT':<35} UNIT")
     for r in results[:30]:
