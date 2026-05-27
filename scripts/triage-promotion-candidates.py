@@ -12,11 +12,19 @@ Runs objdiff against every 90-99% function and classifies the residual diffs:
 Heuristic for "easy": single diff class, small diff count, no scheduling reorder.
 
 Run from the project root (where report.json + expected/ live).
+
+USAGE:
+  python3 triage-promotion-candidates.py        # default: 90-99% candidates
+  python3 triage-promotion-candidates.py --low  # 80-99% candidates (broader)
+
+The --low mode scans more candidates (3-4x runtime) but surfaces additional
+struct-assign / reg-renumber opportunities.
 """
 
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 REPORT = Path("report.json")
@@ -149,6 +157,8 @@ def get_objdiff(unit_path, fn_name):
 
 
 def main():
+    low_mode = "--low" in sys.argv
+    pct_floor = 80 if low_mode else 90
     r = json.load(open(REPORT))
     candidates = []
     for u in r.get("units", []):
@@ -159,13 +169,13 @@ def main():
             n = fn.get("name", "")
             if fm is None:
                 continue
-            if 90 <= fm < 100 and 0x20 <= sz <= 0x100:
+            if pct_floor <= fm < 100 and 0x20 <= sz <= 0x100:
                 candidates.append((fm, sz, n, unit))
     candidates.sort(reverse=True)
     print(f"Scanning {len(candidates)} candidates...")
 
     results = []
-    for pct, sz, name, unit in candidates[:80]:
+    for pct, sz, name, unit in candidates[:200]:
         diff = get_objdiff(unit, name)
         if not diff:
             continue
