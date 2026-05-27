@@ -6059,6 +6059,23 @@ wrong tool — use a CONTIGUOUS-region file split (`OPT_FLAGS := -O2 -g3` +
 precedent), which requires the target functions to be contiguous in `.text`
 (scattered stubs need splat re-extraction first). Focused-session, not a tick.
 
+**Re-confirmed 2026-05-27 on `mgrproc_uso_func_0000015C`:** unaware of the
+2026-05-24 finding above, ran the same recipe — `-O2 -g3` donor for the
+3-insn `return 0` stub (0x8 at -O2 → 0xC at -g3). The `replace-function-body.py`
+splice succeeded (015C went 100% match), but **14 downstream mgrproc_uso functions
+dropped from 100% to fuzzy 96-99%** (18→4 matched in the unit) — the bytes were
+byte-identical between built and expected, but objdiff reported degradation because
+the .rel.text relocations were shifted by +4 and pointed mid-instruction in the
+disassembly view, causing objdiff to MIS-INTERPRET subsequent instructions as
+reloc-affected (`sw ra, 0x14(sp)` rendered as `sw ra, %hi(D_00000000+0x140000…)`).
+The .text section also gained 4 trailing zero bytes vs expected, which would alter
+the Yay0-compressed block size and cascade through the ROM layout. Reverted. The
+"size-changing donor breaks downstream packed offsets" cap is real even in non-mixed
+files (mgrproc_uso has NM-wraps but no scattered INCLUDE_ASM). **Always grep this
+doc for "donor splice" before attempting -g3 unblock recipes for size-change
+classes.** The path forward stays: contiguous-region file split (the
+`bootup_uso_tail*` precedent), not donor splice, for `-g3` unfilled-delay stubs.
+
 ## Verify gotcha: objdump `-d` elides zero/nop runs as `...` → false byte-exact on padded stubs
 
 `objdump -d` collapses a run of identical words (e.g. `00000000` nop-padding) into
