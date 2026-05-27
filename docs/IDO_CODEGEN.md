@@ -722,6 +722,10 @@ gl_func_00000000(&D_00000000, &local, 0x18);
 ```
 makes IDO emit memcpy-style inline using an explicit dest-pointer register that the scheduler then unifies with the call-arg-2 register — byte-exact 23/23. The lever applies whenever the dest of the struct copy is also passed as an argument to the immediately-following call (and the size argument matches the struct size, so IDO recognizes the pointer-equality).
 
+**Also generalizes to the MIRROR direction** (gl_func_00037CE0, 2026-05-27): a function that calls `f(&D, &local, N)` to POPULATE local THEN copies from local to `*a0`. The "obvious" `int buf[N]; a0[i] = buf[i];` form leaves a 4-insn gap because IDO uses caller-spilled-a3 reload pattern; the struct-assign form `struct N buf; func(&D, &buf, N); *a0 = buf;` unifies the dest pointer with the spilled-a0-reload register — byte-exact 26/26. So both DIRECTIONS of struct-copy-around-a-call benefit: src→local-then-call AND call-then-local→dst. Recognize: if the function has `int buf[N]; func(arg, buf, sizeof_N); for(i) dst[i]=buf[i];` (or the mirror), apply struct-assign.
+
+**Also generalizes to compound levers** (gl_func_00024B94, 2026-05-27): struct-assign for an inner 4-int copy (a0+0x20 ← v0[0..0xC]) PLUS `~0x0C` form for a byte-clear mask (`*(char*)v0 &= ~0x0C` emits `andi 0xFFF3` to match target's encoding, see feedback-ido-andi-fitting-mask-vs-negative for that lever). Combined: 97.55% → 99.83% (only remaining diff is alt-entry-jal reloc encoding — post-link byte-exact). Lesson: when triage shows MIXED diff classes, peel them apart and apply layered levers; sometimes the right combination cracks even when each lever individually falls short.
+
 <a id="feedback-ido-array-append-count-store-vs-array-addr-schedule-cap"></a>
 ## Array-append (load count / store count+1 / store array[idx]) — count-store-vs-array-addr schedule is an in-tree cap; detect-and-skip
 
