@@ -1109,6 +1109,12 @@ IDO can't generate a branch to a symbol it doesn't see as part of this function.
 
 **Origin:** 2026-04-20, agent-a, game_uso_func_00007A98 branches +0x28 to inside game_uso_func_00007ABC's body. Split-fragments had already separated them; the branch was real cross-function code-sharing, not a mis-split.
 
+**CAVEAT — "branch past end" is OFTEN a truncated-boundary bug, NOT a tail-share cap. CHECK FOR AN UNCOVERED GAP FIRST.** `generate-uso-asm.py` bounds USO functions by scanning for `addiu $sp,-N` prologues, which mis-bounds in two ways that both leave a region covered by NO `.s` file:
+- **truncated tail (too-small at END):** a leaf with no later prologue gets cut short; its own body (incl. the branch targets) past the cut is dropped. (titproc_uso_func_000016B8: declared 0x30 / 12 insns, actually 0x58 / 22 insns; its `bnel`/`bnez` targets landed in the dropped 0x16E8..0x170C region — all three branches resolve WITHIN the real function.)
+- **prologue-stolen start (too-small at START):** when the `lui rX; addiu rX` &D base-load precedes the `addiu $sp` prologue, the symbol is placed AFTER it, dropping the base-load into a gap before the symbol — the `.s` then uses `$v0`/`$tN` as a base it never set. (titproc_uso_func_0000028C: real entry 0x284 with `lui v0; addiu v0`; symbol was 8 bytes late at 0x28C. Renamed to 00000284, restored the 2 prefix words → byte-exact, mirroring matched sibling 00000230.)
+
+**Detection (do this BEFORE labeling a branch-past-end function a cap):** find regions between consecutive `.s` files that no `.s` covers. For a function at ROM R with declared size S, the next `.s`'s ROM start should equal R+S; if there's a gap, the function is truncated (extend it) OR the next function's prologue/base-load lives in the gap (prologue-stolen — move the symbol back). Dump the base ROM bytes for the gap and decode: if the branch targets resolve inside the (gap-included) function, it was NEVER a cross-fn cap. Confirm in the built `.c.o`: `st_value + st_size` of one function should equal the next's `st_value`; a shortfall = the gap is missing from the build (the segment is built short and everything after shifts early). Fix = rewrite the `.s` to the true size (and rename to the true entry if the start moved); refresh the segment's `expected/*.c.o`. 2026-05-28: two such bugs found+fixed in titproc_uso in one session — likely more across USO segments; a coverage-gap scan would batch-find them.
+
 ---
 
 ---
