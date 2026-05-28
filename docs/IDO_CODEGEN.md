@@ -241,6 +241,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO implicit decl conflicts with later explicit extern](#feedback-ido-implicit-decl-extern-conflict) — K&R-implicit `int func()` from a call BEFORE the explicit `extern void func()` declaration causes IDO cfe to error "Incompatible function return type"
 - [IDO places locals first-declared-highest; add leading pad local to shift scratch slot down](#feedback-ido-local-ordering) — If your local `scratch` ends up at sp+0x1C but the target wants sp+0x18, declare an extra `int pad` BEFORE scratch.
 - [`or v0, v1, zero` after jal = wrapper returning low word of callee's 64-bit return](#feedback-ido-long-long-v1-move) — In 1080 USO wrappers, the target `or v0, v1, zero` right before `jr ra` means the callee returns a `long long` and the wrapper returns only the low 32 bits.
+- [Consuming a 64-bit CALL return: extract hi/lo with a UNION, not `(int)(r>>32)`](#feedback-ido-consume-64bit-call-return-union) — _When a callee returns 64-bit (v0=hi,v1=lo) and you need both words, `(int)(r>>32)` emits a CALL to a shift helper (bloat; objdiff-None). A `union{long long ll; struct{int hi,lo;} w;}` stores v0:v1 and reads the words, matching the target's stack roundtrip. Do 64-bit arithmetic with manual int hi/lo (subu/sltu/subu). Verified gl_func_000743C4 → 55% 2026-05-28._
 - [IDO doesn't accept bare `__asm__("")` as a scheduling barrier](#feedback-ido-no-asm-barrier) — _The GCC trick of `__asm__("")` to force an instruction ordering barrier is NOT supported by IDO 7.1.
 - [`&BASE + 0xOFFSET` vs `extern SYM_AT_OFFSET` produces different .o byte patterns even when addresses are equal](#feedback-ido-offset-in-instruction-vs-reloc) — _When target asm has `lw $reg, 0xNNN($at)` (offset baked into the instruction), write `*(int*)((char*)&BASE + 0xNNN)` in C — this emits `lw $reg, 0xNNN(...)` matching the target.
 - [IDO can't fold `&SYM + 0xCONST + runtime` into 3-insn lui/addiu/addu — always factors constant onto runtime side (4 insns)](#feedback-ido-symbol-offset-runtime-cannot-fold) — Pure-address-computation analog of the load-offset-vs-reloc rule: IDO emits 4 insns (lui-D / addiu-CONST-on-runtime / addiu-D-lo / addu) where expected has 3 (lui-D-with-CONST / addiu-D-lo-with-CONST / addu). Workaround: per-offset extern + undefined_syms entry + INSN_PATCH for the linked-imm word.
@@ -5993,8 +5994,25 @@ If only v0 is set and v1 is left untouched (or v1 was set by a sibling load with
 
 **Related:**
 - `feedback_ido_double_return_uses_f0_f1_not_f2.md` — analogous gotcha for `double` return (uses $f1, not $f2)
+- [Consuming a 64-bit call return: extract hi/lo with a UNION, not `(int)(r>>32)`](#feedback-ido-consume-64bit-call-return-union) — the inverse direction (this entry packs a return; that one unpacks a callee's 64-bit result).
 
 ---
+
+<a id="feedback-ido-consume-64bit-call-return-union"></a>
+## Consuming a 64-bit (long long) CALL return: extract hi/lo with a UNION, not `(int)(r>>32)`
+
+_When a callee returns a 64-bit value (v0=hi, v1=lo on big-endian o32) and you need BOTH words, `int hi = (int)(r >> 32); int lo = (int)r;` makes IDO -O2 emit a CALL to a 64-bit-shift runtime helper for the `>>32` (huge bloat — one decode went to 0x214 vs a 0x100 target, and objdiff couldn't even score it). Use a UNION instead — it stores v0:v1 to the stack and reads the two words back, which is exactly what the target does (`sw v0,N(sp); sw v1,N+4(sp); lw ...`)._
+
+```c
+extern long long callee();   /* 64-bit-returning view of the (K&R) placeholder */
+typedef union { long long ll; struct { int hi; int lo; } w; } Pair64;
+Pair64 r;
+r.ll = callee(a, b, c, d);
+int hi = r.w.hi;   /* big-endian: high word at offset 0 */
+int lo = r.w.lo;
+```
+
+Then do all 64-bit ARITHMETIC with manual int hi/lo (`lo2 = lo - x; hi2 = hi - y - ((unsigned)lo < (unsigned)x);` → subu/sltu/subu), NOT long-long operators (those also emit MIPS3/helper sequences on -mips2). This is the consume-side complement to the produce-side `((s64)hi<<32)|(u32)lo` return idiom above (which has the same `__ll_lshift`-on-leaf caveat). Verified 2026-05-28 on gl_func_000743C4: union extraction + manual hi/lo subtract took the wrap from objdiff-None (shift-helper bloat) → 40% → 55%.
 
 ---
 
