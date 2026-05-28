@@ -142,6 +142,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [scripts/truncate-elf-text.py must shrink trailing symbols past sh_size, not just .text section size](#feedback-truncate-elf-text-must-shrink-symbols) — _When TRUNCATE_TEXT shrinks .text below where the last function symbol ends, objdiff rejects the .o with `Symbol data out of bounds: 0xN..0xM`.
 - [TRUNCATE_TEXT blocks C conversion of asm-padded functions in bootup_uso](#feedback-truncate-text-blocks-c-conversion) — _In 1080's bootup_uso.c (and its tail[1-4].c splits), converting an `INCLUDE_ASM` to C can fail with "`.text is already smaller (0xNNNN < 0xMMMM)`" when the original asm has trailing alignment nops that IDO doesn't…
 - [TRUNCATE_TEXT must run AFTER SUFFIX_BYTES in the Makefile build rule, not before](#feedback-truncate-text-must-run-after-suffix-bytes) — _TRUNCATE_TEXT errors with `.text is already smaller` if a function's C body emit is shorter than its INCLUDE_ASM bytes AND SUFFIX_BYTES is meant to restore the trailing bytes.
+- [Extracting a -O0 MIDDLE function: 3-way split + build-vs-build ELF-section oracle (benign downstream pad shift)](#feedback-o0-middle-function-split-and-build-vs-build-oracle) — _To land a single -O0-only function sitting mid-file in an -O2 unit, do a 3-way split (before / fn / after), preserve the after-wraps, TRUNCATE the middle to the fn size and the bottom to its last fn's content-end. The split shifts everything after by the dropped section-pad delta, but that's benign (no downstream .o edited; scoring is .o-level). Verify with build-vs-build `objcopy --only-section` byte-diff (cancels pre-existing ROM mismatch), not build-vs-baserom. Landed func_0000FBCC 2026-05-28._
 - [TRUNCATE_TEXT must match natural compiled size, not the clean ROM boundary — drift cuts real code](#feedback-truncate-text-preserve-drift) — _When splitting a .c file with TRUNCATE_TEXT, set the target to the natural compiled size (including asm-processor drift), not the expected clean boundary.
 - [undefined_syms_auto.txt is link-time ONLY — adding `sym = 0xADDR` does NOT change the pre-link .o `jal 0` placeholder bytes that objdiff compares](#feedback-undefined-syms-link-time-only-doesnt-fix-o-jal-bytes) — _For NM-wraps capped at ~92% by USO-internal `jal 0xADDR` placeholders (where target's `jal` encodes a specific intra-USO offset like 0x4DC), DO NOT try fixing it by adding the symbol to undefined_syms_auto.txt.
 - [objdiff reloc-awareness ≠ linker reloc resolution — never delete `func_X = 0xADDR;` from `undefined_syms_auto.txt` as "redundant" cleanup](#feedback-undefined-syms-still-needed-for-link-even-if-objdiff-reloc-aware) — _objdiff's reloc-aware scoring (treats `jal SYMBOL + R_MIPS_26 reloc` as equivalent to `jal pre-baked-addr-to-same-symbol`) lets you remove redundant INSN_PATCH-for-jal recipes. But the LINKER still needs the symbol resolved — `func_7C860 = 0x7C860;` in `undefined_syms_auto.txt` is the linker-side resolution, not a matching artifact. Removing it as "redundant" breaks the build with `undefined reference to func_7C860`. The two layers are independent: pre-link bytes (objdiff territory) vs link-time symbol resolution (ld territory)._
@@ -4682,6 +4683,31 @@ _When splitting a .c file with TRUNCATE_TEXT, set the target to the natural comp
 **Origin:** 2026-04-20, issue #2 (game_libs ucode split). Initial TRUNCATE_TEXT := 0xEBF8 cut the trailing `jr ra; nop` (8 bytes) of gl_func_0000EBC8. Fixed by bumping to 0xEC00.
 
 ---
+
+<a id="feedback-o0-middle-function-split-and-build-vs-build-oracle"></a>
+## Extracting a -O0 MIDDLE function: 3-way split + build-vs-build ELF-section oracle (benign downstream pad shift is unavoidable)
+
+_To land a single function that only matches at -O0 but sits in the MIDDLE of an -O2 multi-function file, you need a 3-way split (before / the-function / after), NOT a 2-way. The split inevitably shifts everything after by a few bytes (the last piece's section trailing-pad changes), but that's BENIGN — verify with a build-vs-build ELF-section byte-diff, not against baserom._
+
+**Recipe** (verified 2026-05-28 landing `func_0000FBCC` byte-exact out of `bootup_uso_tail1.c`, which held F81C·F954·F9E8·FAE8·**FBCC**·FC28·FD4C·FEA0·FEE8 as INCLUDE_ASM NM-wraps at -O2):
+1. `nm build/.../parent.c.o` to get each function's `.o`-relative offset. The split points are the target function's offset and its successor's offset.
+2. Three files: `parent.c` keeps `[first .. F)`; new `parent_o0_F.c` holds ONLY F (OPT_FLAGS := -O0); new `parent_bot.c` holds `[F+1 .. end)` with the INCLUDE_ASM wraps **preserved** (move the C bodies, don't bare them).
+3. TRUNCATE_TEXT for each = its `.o`-relative span. The middle file MUST end on its single function (so a +N-insn -O0 emit, e.g. a trailing nop, is clipped): `TRUNCATE := <target_size>`. The bottom file: `TRUNCATE := <last_fn_content_end>` (NOT the padded section size — see below).
+4. Linker (`tenshoe.ld`): insert the two new `.o(.text)` between parent and its old successor, in address order.
+5. `objdiff.json`: add a unit per new file (c_flags match the file's OPT_FLAGS — `-O0` for the middle, `-O2` for the bottom).
+6. Source files are auto-discovered (`C_FILES := $(shell find src/<seg> -name '*.c')`), so no source-list edit. `expected/` is git-tracked — surgically `cp build/src/.../{3 files}.c.o expected/src/.../` (default build = target bytes for INCLUDE_ASM wraps AND for the verified-matching middle fn), then `scripts/refresh-report.sh`.
+
+**The unavoidable downstream shift (why it's benign):** GAS packs functions at 4-byte boundaries but pads the `.text` SECTION to 16. The last function's trailing pad depends on its `.o`-relative alignment phase — which CHANGES when it moves to a new file (different preceding functions). So you cannot reproduce the parent's original section-trailing pad in the bottom file; `TRUNCATE` can only shrink, not grow. Truncating the bottom file to its last function's true content-end is correct (the function bytes are exact); everything after the parent's region then shifts by the dropped-pad delta (-0x10 in the FBCC case). This does NOT regress any match: you edited no downstream `.o`, and all per-function scoring (report.json / land-script byte_verify) is `.o`-level / position-independent. (1080's bootup_uso already had a pre-existing linked-layout mismatch here; the shift just changes it slightly, and no `.z64` byte-match is gated on it.)
+
+**The oracle — build-vs-build, NOT build-vs-baserom:** a correct migration leaves the linked region byte-IDENTICAL up to the moved function's end (the -O0 C compiles to the same bytes the INCLUDE_ASM provided). Snapshot the section before AND after, and require the pre-function..function-end window to be identical:
+```
+mips-linux-gnu-objcopy -O binary --only-section=.<seg> build/<rom>.elf /tmp/pre.bin   # before edits
+# ... do the split, rebuild ...
+mips-linux-gnu-objcopy -O binary --only-section=.<seg> build/<rom>.elf /tmp/post.bin  # after
+# assert pre[lo:hi] == post[lo:hi] for [first_kept_fn .. moved_region_end)
+# assert pre[F:F_end] == post[F:F_end]  ← this IS the match (C-emit == target asm)
+```
+Build-vs-build is essential: it cancels any pre-existing ROM/layout mismatch (which build-vs-baserom would flag as noise). Also confirm `nm build/<rom>.elf` shows the moved function + its neighbours still at their name-offsets. Verified 0 regressions in report.json. See also [[feedback-truncate-text-preserve-drift]] (single-file drift) and [[feedback-after-file-split-refresh-both-expected-paths]].
 
 ---
 
