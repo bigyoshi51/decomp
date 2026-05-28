@@ -35,6 +35,18 @@ Usage (from a 1080-agent-<letter> worktree, after building the NM objects):
 Prints the bucket histogram + the low-diff-count members of each bucket
 (those are the only plausible single-tick C-fix candidates; high-diff-count
 members are structural and need multi-tick work or are already capped).
+
+CAVEAT (raw-byte compare is RELOC-BLIND): this tool diffs unrelocated .o
+bytes, so every `jal`/`%hi`/`%lo` site with a reloc shows as a byte-diff
+(e.g. `jal 0`+R_MIPS_26 in ours vs a baked target word in expected/) even
+though the linker resolves them identically. A jal-heavy function can show
+dozens of "diffs" yet be ~98% per objdiff (reloc-aware) and 1 REAL insn from
+matching. So: the SIZE-MISMATCH detection (instruction COUNT) is reliable,
+but the per-instruction diff CLASS and count for a given function are NOT —
+always re-check a candidate with a mnemonic-level disasm (strip `<...>`
+annotations so jals symbolize to `jal 0` on both sides) or report.json
+before trusting the diff count. Verified 2026-05-28 on gl_func_0003F4F0
+(raw-byte said 41 diffs; real diff is 1 insn, `sw a1` unused-arg cap).
 """
 
 import argparse
