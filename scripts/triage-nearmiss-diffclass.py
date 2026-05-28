@@ -152,6 +152,13 @@ def main():
 
     buckets = Counter()
     members = defaultdict(list)
+    # Structural (size-mismatch) candidates are the genuinely C-fixable vein:
+    # built .text size != target. The CSE-bust sub-class (expected has an
+    # extra `lui ...,0x0` for a global load our C CSE-folds into a saved reg)
+    # is the reliably-fixable one — see gl_func_00039C8C (landed 2026-05-28 via
+    # extern char D_<fn>_<n>; =0x0 in undefined_syms_auto.txt as a distinct base).
+    cse_bust = []
+    structural = []
     for n in names:
         o, exp = find_pair(n)
         if not o:
@@ -161,6 +168,25 @@ def main():
         e = func_text(exp, n)
         if b is None or e is None:
             buckets["NOT-BUILT"] += 1
+            continue
+        if len(b) != len(e):
+            buckets["SIZE-MISMATCH(structural)"] += 1
+            structural.append((n, len(e) - len(b)))
+            # CSE-bust heuristic: expected has more `lui rX, 0x0` words than ours
+            elui = sum(
+                1
+                for i in range(0, len(e), 4)
+                if (struct.unpack(">I", e[i : i + 4])[0] >> 26) == 0x0F
+                and (struct.unpack(">I", e[i : i + 4])[0] & 0xFFFF) == 0
+            )
+            olui = sum(
+                1
+                for i in range(0, len(b), 4)
+                if (struct.unpack(">I", b[i : i + 4])[0] >> 26) == 0x0F
+                and (struct.unpack(">I", b[i : i + 4])[0] & 0xFFFF) == 0
+            )
+            if elui > olui:
+                cse_bust.append((n, len(e) - len(b)))
             continue
         diffs = []
         for i in range(0, min(len(b), len(e)), 4):
@@ -181,11 +207,26 @@ def main():
     )
     for k, v in buckets.most_common():
         print(f"  {k}: {v}")
-    print("\n# Low-diff-count members per bucket (plausible C-fix candidates):")
+    print("\n# Same-size diff buckets — low-diff members (mostly caps, inspect):")
     for c in ("MIXED", "REG-RENUMBER", "FP-OPERAND", "SP-LAYOUT"):
         ms = sorted(members.get(c, []), key=lambda x: x[1])[:10]
         if ms:
             print(f"  [{c}] " + ", ".join(f"{n}({d})" for n, d in ms))
+    if structural:
+        print("\n# SIZE-MISMATCH (structural, C-fixable vein). +N=missing N/4 insns:")
+        print(
+            "  "
+            + ", ".join(
+                f"{n}({d:+d})"
+                for n, d in sorted(structural, key=lambda x: abs(x[1]))[:20]
+            )
+        )
+    if cse_bust:
+        print(
+            "\n# *** CSE-BUST candidates (expected has extra `lui rX,0` — "
+            "MOST LIKELY FIXABLE, like gl_func_00039C8C): ***"
+        )
+        print("  " + ", ".join(f"{n}({d:+d})" for n, d in cse_bust))
 
 
 if __name__ == "__main__":
