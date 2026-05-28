@@ -210,6 +210,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Loop reloads ALL locals from sp every iteration = -O0 codegen signal](#feedback-ido-o0-loop-stack-reload-signal) — _When a function's loop body starts with `lw tA, X(sp); lw tB, Y(sp); lw tC, Z(sp)` for variables that have no `volatile` or address-taken reason, it's almost certainly -O0 compiled. -O2 keeps loop-carried values in registers (only ra + callee-saves spill). Detection signal: before writing C, check if the loop body's first 3 insns are `lw` from sp-relative offsets matching the function's own prologue spills — if yes, abandon -O2 attempts and either (a) file-split to per-function OPT_FLAGS=-O0, or (b) accept INCLUDE_ASM. Verified 2026-05-14 on gl_func_00071864 (16-bit byte-sum checksum, 23 insns): straightforward -O2 C body produced 5.4% match because target reloads p/accum/i from sp every iteration._
 - [-O0 variant of the int-reader accessor template — 19 insns / 0x4C bytes vs the standard -O2 template's 16 insns / 0x40 bytes](#feedback-o0-int-reader-template-variant) — _When scanning USO accessor templates, also check 0x4C-byte / 19-instruction variants — these are -O0 compiles of the SAME body.
 - [Stack-residency does NOT imply -O0 — `residency + FILLED delay slots` is an -O1 build with original register-pressure spill, NOT reproducible by the project cc](#feedback-ido-stack-residency-plus-filled-slots-is-o1-not-o0) — _Refines `#feedback-ido-o0-loop-stack-reload-signal`: loop-reloads-all-locals is necessary but NOT sufficient for -O0. -O0 ALSO leaves delay slots UNFILLED (b;nop / jr;nop). If the target reloads locals from sp every use AND has its delay slots FILLED (≈0-1 nops), it is NOT -O0 — it is an -O1 object whose original register pressure spilled those locals while the assembler still filled slots. The project cc can't emit that combo: -g1/-g2 force residency but leave slots unfilled; plain -O1/-O2 fill slots but register-allocate the locals away. Permuter can't help (can't add assembler-level slot filling); a `volatile` base adds a reload the target lacks. Genuine cap. Verified 2026-05-25 on gl_func_00070194/000718C0/0003D914 (previously mis-tagged "-O0 carve candidates")._
+- [-O0 stack-offset +8 shift between mine and target — declaration reorder + extra padding locals all grow the frame instead of shifting layout (gl_func_00008A40, 4-diff stays 4)](#feedback-ido-o0-local-offset-shift-not-c-reachable) — _When -O0 codegen produces a 4-diff residual where target's struct locals are at sp+8 higher offset than mine but frame size is identical: declaration reorder, type swaps (Tri3i → long long pad), or adding pad locals all GROW the frame (extra 8 diffs from prologue/epilogue) without shifting tmp/raw's offsets the desired +8. The -O0 allocator's bottom-padding-vs-top-padding choice between saved-regs and locals isn't driven by C-source structure. Verified 2026-05-27 on gl_func_00008A40 (4 stack-offset diffs at 0x24/0x38/0x3c/0x5c): swap raw↔tmp decl order, add 12-byte pad_low first, add long long pad_align first — all worsened to 8 diffs. Cap class: -O0 stack-layout non-determinism similar to register-rename cap. Don't grind -O0 4-diff stack-offset residuals; wrap NM with stack-layout-cap label._
 - [-O0 RETURN-VALUE functions get a DEAD second `b epilogue; nop` after the return's branch — our ido-static-recomp cc emits it, the original 1080 toolchain didn't; not C-fixable (TOOLCHAIN-BINARY GAP, blocks all -O0 return fns)](#feedback-ido-o0-return-value-dead-double-b) — _A frame-having -O0 function ending in `return X;` compiles to `lw v0,off(sp); b epi; nop; b epi; nop; <epilogue>` — TWO unconditional branches to the epilogue (the return's, then a dead/unreachable closing-brace one). The 1080 target has only ONE. Proven a toolchain-binary codegen gap, NOT a C-structure issue: the trivial `int f(int*a0){int x=a0[0];g();return x;}` reproduces the double-b. Full matrix (IDO 7.1 AND 5.3): -O0/-O0-g/g1/g2/g3 and -O1-g/-O1-g2 all give b=2 with full -O0 reloads; -O1-g3/-O2/-O2-g3 give b=0 (over-optimized, registers cached, breaks the -O0 reload structure). NO setting yields the target's "b=1 + full reloads". VOID -O0 functions are unaffected (no return → the single closing-brace b is LIVE and matches — that's why void -O0 fns DO land, e.g. gl_func_000093DC). Blocks ALL -O0 return-value fns project-wide (func_00011B5C, arcproc_uso_func_0000012C, gl_func_000092F4, etc.). Removing the dead b post-cc would be match-faking (BANNED). Only real fix = the exact original 1080 IDO cc binary that elides it (focused acquisition, not a tick). Verified 2026-05-25._
 
 ### indirect / function pointer
@@ -11323,3 +11324,34 @@ exact original 1080 IDO `cc` binary that elides the dead branch (our
 ido-static-recomp 5.3/7.1 do not). That's a focused toolchain-acquisition task,
 not a loop tick. Until then these are honest `INCLUDE_ASM`/NM caps. Verified
 2026-05-25 (full matrix + trivial-repro on `func_00011B5C`).
+
+<a name="feedback-ido-o0-local-offset-shift-not-c-reachable"></a>
+## -O0 stack-offset +8 shift between mine and target: not C-reachable via decl reorder or pad locals
+
+When an -O0 function residual is 4 stack-offset diffs where target's struct
+locals are at sp+8 higher than mine but the **frame size is identical**, the
+diffs are NOT shiftable from C source. The -O0 allocator's choice between
+"padding below locals" vs "padding above locals" (between saved-regs and the
+first local) is not driven by declaration order or type.
+
+**Verified 2026-05-27 on `gl_func_00008A40`** (3 `register Vec3*` locals +
+`Tri3i tmp` + `int pad_mid[2]` + `Tri3i raw` + `register float *src`, frame -0x58):
+
+- Target: `tmp` at sp+0x34, `raw` at sp+0x48 (12-byte pad BELOW tmp).
+- Mine (decl order tmp → pad_mid → raw): `tmp` at sp+0x2C, `raw` at sp+0x40
+  (12-byte pad ABOVE raw). 4 diffs at @0x24/0x38/0x3c/0x5c.
+- Swap raw and tmp decl order → still 4 diffs, just shifted differently.
+- Add `Tri3i pad_low` as first local → frame grows -0x58→-0x68, 8 diffs
+  (4 original + 4 from prologue/epilogue size).
+- Add `long long pad_align` as first local → same as above, frame grows.
+
+**Why no fix:** -O0 allocates locals in declaration order from a base offset,
+with the choice of base (sp+0x28 vs sp+0x34) coming from the allocator's
+internal selection, not visible to C. Any added local just grows the frame.
+
+**How to apply:** for -O0 functions with 4 stack-offset diffs and identical
+frame size to target, the structure is already correct — wrap NM at ~99.9 %
+with a "[-O0 stack-layout cap]" label and move on. Don't grind decl-order
+variants (already proven inert). This is the same cap class as register-rename
+diffs in -O2: structurally indistinguishable at the C level. Distinct from
+`feedback_ido_local_ordering.md` (which IS controllable for -O2 stack layout).
