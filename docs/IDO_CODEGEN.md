@@ -5554,9 +5554,11 @@ Verified on func_80001184 (kernel_000.c).
 ---
 
 <a id="feedback-ido-precall-arg-spill-unreachable"></a>
-## IDO pre-call outgoing-arg spills (`sw aN, N(sp)` before jal for args loaded from globals) are not C-reproducible for K&R callees
+## IDO pre-call outgoing-arg spills (`sw aN, N(sp)` before jal) — **SOLVED 2026-05-28: pass the pair as a struct by value** (this "cap" was WRONG)
 
-_Some IDO-compiled functions emit extra `sw $a1, 4(sp); sw $a2, 8(sp)` stores IMMEDIATELY before a jal, saving the OUTGOING arg values (just loaded from global memory) into the caller's arg-save slots. When the callee is K&R (`extern int f();`) and the outgoing args are `*(int*)&D_XXX` reads, no C variant tried reproduces these spills — leaves a ~2-insn gap capping match at ~75-80%._
+**DISPROVEN — see [`#feedback-ido-struct-by-value-homes-arg-pair`](#feedback-ido-struct-by-value-homes-arg-pair).** The `sw a1,4(sp); sw a2,8(sp)` outgoing home-stores are produced by passing the adjacent int pair AS A 2-INT STRUCT BY VALUE: `f(x, *(Pair2*)p, k)` (NOT `f(x, p[0], p[1], k)`). IDO places the struct in a1,a2 and homes them to sp+4/sp+8. Verified on game_uso_func_00011168 (61.2%→93.92%). The text below (claiming "no C variant reproduces these spills") is retained only for historical context — it was wrong because it never tried struct-by-value.
+
+_Some IDO-compiled functions emit extra `sw $a1, 4(sp); sw $a2, 8(sp)` stores IMMEDIATELY before a jal, saving the OUTGOING arg values (just loaded from global memory) into the caller's arg-save slots. When the callee is K&R (`extern int f();`) and the outgoing args are `*(int*)&D_XXX` reads, no C variant tried reproduces these spills — leaves a ~2-insn gap capping match at ~75-80%. [OBSOLETE — the missing variant was struct-by-value; see above.]_
 
 **Pattern (target):**
 ```
