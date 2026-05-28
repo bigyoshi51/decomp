@@ -212,8 +212,16 @@ def main():
                 if (struct.unpack(">I", b[i : i + 4])[0] >> 26) == 0x0F
                 and (struct.unpack(">I", b[i : i + 4])[0] & 0xFFFF) == 0
             )
-            if elui > olui and _has_nm_body(n):
-                cse_bust.append((n, len(e) - len(b)))
+            # A real CSE-bust makes us SHORTER than target by exactly the
+            # missing lui(+load) insns: positive small delta. Negative deltas
+            # (we're longer) and large deltas are sp-layout/structural — the
+            # incidental lui-0 count diff there is noise. Require +4..+16 and
+            # delta consistent with the extra luis (verified 2026-05-28:
+            # gl_func_0003F8E8 -4 / gl_func_00024C08 -12 were sp-layout false
+            # positives despite elui>olui).
+            delta = len(e) - len(b)
+            if elui > olui and 4 <= delta <= 16 and _has_nm_body(n):
+                cse_bust.append((n, delta))
             continue
         diffs = []
         for i in range(0, min(len(b), len(e)), 4):
