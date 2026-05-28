@@ -8906,6 +8906,32 @@ But it BACKFIRES on functions that reference `&D_00000000` at MANY sites sharing
 
 ---
 
+<a id="feedback-ido-fp-immediate-cse-not-bustable"></a>
+## FP-IMMEDIATE-constant CSE (e.g. 1.0f into two `$f` regs) is NOT bustable from C — distinct from symbol-address CSE
+
+The distinct-externs lever above works because a symbol ADDRESS is materialized via `lui`/`addiu` of a named symbol — give it two names, two materializations. An **immediate FP constant** (`1.0f` via `lui at,0x3f80; mtc1 at,$fN`) has NO symbol handle, so there's no way to make IDO emit two materializations from C.
+
+**Symptom** (`gl_func_0002DF98`, 2026-05-28, struct-init writing 1.0f to three fields 0x54/0x58/0x5C): target keeps 1.0f in TWO fp regs —
+```
+lui  at, 0x3f80
+mtc1 at, $f2        ; 1.0f copy A
+mtc1 at, $f4        ; 1.0f copy B  (extra insn)
+...
+swc1 $f2, 0x54(a0)
+swc1 $f2, 0x58(a0)
+swc1 $f4, 0x5C(a0)  ; third store uses the SECOND reg
+```
+IDO's natural emit CSE-folds the immediate into ONE reg and stores it to all three (1 insn shorter — `swc1 $f2, 0x5C(a0)`).
+
+**Why C can't reproduce it:**
+- `float last = 1.0f; ... store last` → IDO value-numbering proves `last == 1.0f literal`, merges them back to one reg (regression, no extra insn).
+- `volatile float last = 1.0f;` → forces a STACK roundtrip (`swc1 $f0,N(sp); lwc1 $f4,N(sp)`), not the target's `mtc1` immediate — wrong shape.
+- Loading from a distinct float extern → emits `lwc1 from memory`, not `mtc1` immediate.
+
+There is no C construct that makes IDO materialize the SAME immediate FP constant into two registers via two `mtc1`s. The target shape arises from original source where two distinct fp pseudos both happened to be 1.0f and stayed simultaneously live; value-numbering in our single-expression C always unifies them. **Treat 1-insn "+mtc1 duplicate-FP-constant" diffs as permanent NM caps — don't grind.**
+
+---
+
 <a id="feedback-ido-extern-vs-literal-pointer-encoding-cap"></a>
 ## `&extern_symbol` vs `(int*)0xNNNN` literal: lui+addiu vs lui+ori — SOLVED 2026-05-24 by `&D_00000000 + offset` (the body below is the obsolete "cap" analysis)
 
