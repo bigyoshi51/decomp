@@ -249,6 +249,7 @@ Zero register-renumber changes. The permuter's randomization space didn't includ
 **When to skip permuter on an NM wrap:**
 - Existing comment notes "register renumber" or "$s-reg swap" as the remaining diff
 - Existing comment notes "$a-class register pick" (e.g. target uses $a3, mine uses $a1) — 2026-04-21 update: these also don't crack. Ran permuter on `gl_func_0000D9B8` (base score 20, just 2 $a1/$a3 diff insns). Permuter ran 1000+ iterations, best stayed at 20. Even "close" scores (20 vs 1030) don't mean permuter can close them — reg-class picks are deterministic on IDO's side.
+- **$t-class renumber also resists in practice (2026-05-28).** Despite the "$t-class CAN sometimes crack" note above, a concrete test on `gl_func_0000C28C` (59-insn struct-copy + dispatch; 2-insn diff = `lw/sw $t8` mine vs `$t9` target on the `arg0[4]=arg1->a` store) ran ~230s across 8 threads (`--stop-on-zero -j 8`) and never beat **base score 50** — the shape-changing mutation it found (splitting the store into `new_var = arg1->a; arg0[4] = new_var;`) scored an identical 50. The "2 episodes" of $t-renumber cracks were record-append/pointer-arith shapes with a genuinely different ALLOCNO COUNT achievable from C; a plain mid-function $t8↔$t9 swap on an otherwise-fixed shape is NOT reachable. Triage adjacent-$t renumbers as caps unless the diff is in heavy pointer-arith where ref-count can be materially changed.
 - Prior passes already tried decl reordering + literal folding
 - The skill's band rubric "1000+ structural" applies
 
