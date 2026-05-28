@@ -41,6 +41,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import struct
 import subprocess
 
@@ -103,6 +104,32 @@ def find_pair(name):
                     if os.path.exists(exp):
                         return o, exp
     return None, None
+
+
+_SRC_CACHE = None
+
+
+def _has_nm_body(name):
+    """True if some src/*.c has a `#ifdef NON_MATCHING` block containing a
+    definition of `name(` — i.e. there's a real C body to apply the CSE-bust
+    lever to. Filters out bare-INCLUDE_ASM / structural-pass-comment-only
+    functions that the byte heuristic flags spuriously."""
+    global _SRC_CACHE
+    if _SRC_CACHE is None:
+        _SRC_CACHE = {}
+        for src in glob.glob("src/**/*.c", recursive=True):
+            try:
+                _SRC_CACHE[src] = open(src).read()
+            except OSError:
+                pass
+    pat = re.compile(rf"\b{re.escape(name)}\s*\(")
+    for txt in _SRC_CACHE.values():
+        for m in re.finditer(
+            r"#ifdef NON_MATCHING(.*?)#(?:else|endif)", txt, re.DOTALL
+        ):
+            if pat.search(m.group(1)):
+                return True
+    return False
 
 
 def classify(diffs):
@@ -185,7 +212,7 @@ def main():
                 if (struct.unpack(">I", b[i : i + 4])[0] >> 26) == 0x0F
                 and (struct.unpack(">I", b[i : i + 4])[0] & 0xFFFF) == 0
             )
-            if elui > olui:
+            if elui > olui and _has_nm_body(n):
                 cse_bust.append((n, len(e) - len(b)))
             continue
         diffs = []

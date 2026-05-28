@@ -8897,6 +8897,12 @@ Use `D_<funcaddr>_<purpose>` per existing 1080 convention (e.g., `D_44F4_iter0`,
 
 Only reach for the split when the target's asm clearly uses TWO separate scratch registers for what would be the same C-level address. If the target uses a single shared base (like IDO's natural CSE'd output), forcing a split via 2 externs would REGRESS the match.
 
+### Scope limit: ISOLATED loads only, NOT entangled multi-ref webs (2026-05-28)
+
+The lever works cleanly when the to-split load is relatively ISOLATED — `gl_func_00039C8C` (2026-05-28): a 102-insn fn that loads `&D_0+0x1A80` once for a bounds-arg while `&D_0` is otherwise a stable entry-`$s0` base; one distinct extern (`D_39C8C_max`) for just that load → 99.0%→100% (408B byte-exact), no collateral.
+
+But it BACKFIRES on functions that reference `&D_00000000` at MANY sites sharing one base. `timproc_uso_b5_func_000079A4` (2026-05-28): 3 `&D_0` refs (0x34 gate / 0x1D0 fade / 0xA4+slot array) all CSE'd onto one base. Splitting just the 0x1D0 fade load into a distinct extern shattered the shared-base CSE web and reshuffled the WHOLE allocation → 98.32%→75-diff regression (+2 insns). Rule of thumb: count the `&D_0` (or placeholder) reference sites first. 1-2 isolated sites → safe. 3+ sites sharing a base → the split cascades; leave it as the natural CSE cap.
+
 ---
 
 <a id="feedback-ido-extern-vs-literal-pointer-encoding-cap"></a>
