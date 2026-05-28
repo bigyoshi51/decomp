@@ -92,6 +92,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [**Remove an "obvious idiomatic local" and recompute inline** — IDO CSE's it AND schedules the spill into the jal delay slot at a HIGHER in-frame offset](#feedback-ido-remove-local-recompute-inline-for-jal-delay-spill) — _When a function spills a small computed value (`char *newA0 = a0 + 0xA0`) across a `jal`, the natural `T name = expr;` local makes IDO -O2 spill `name` to the LOWEST in-frame slot (sp+0x18 in a 0x20 frame), BEFORE the jal. Target has the spill in the jal's DELAY SLOT at sp+0x1C. **Lever: delete the local; recompute the expression inline at every use.** IDO CSE collapses the recompute back to one value AND schedules its spill into the delay slot at the higher slot (0x1C, not 0x18). 9-variant grind (alias, &a0-home, register, volatile, decl-order swap, int pad, static pad, K&R, etc.) all failed before this; removing the local was the simplest possible change. Verified byte-exact 2026-05-27 on `gl_func_0004E180` + `gl_func_0002FA90` (16 + 32 insns respectively). Generalizes for any near-miss whose ONLY residual is "in-frame spill at lower slot than target wants" — try the no-local lever before declaring an allocator cap. **FAILURE MODE (verified 2026-05-28 on func_00007C74 + game_uso_func_00000724): only works when the value has essentially ONE consuming use across the jal so CSE collapses the recompute to a single spill. When the local has MANY uses — e.g. a loop-condition read + after-loop reads, or 4 derefs bracketing a call — inlining makes IDO emit a fresh reload at each use site and REGRESSES (func_00007C74 6→19 diffs, game_uso_func_00000724 ~5→18 diffs). Check the local's use-count first; if it's used >1-2 times across calls, skip this lever.**_
 - [**Volatile-pad sandwich** to pin an &-taken local to a specific in-frame slot — declare volatile pads ABOVE and BELOW; NO `(void)pad;` cast](#feedback-ido-volatile-pad-sandwich-for-and-taken-local) — _When the residual is `&local` placed at slot X but target wants slot X±4, and the existing C uses `int local; volatile int pad[N];`, switch to a SANDWICH layout: `volatile int pad_upper; int local; volatile int pad_lo_a, pad_lo_b;` — IDO -O2's first-declared-highest stack placement puts pad_upper at the highest slot, then local one slot down (matching the target's slot), then the lower pads fill the remaining frame. **Critical: do NOT cast `(void)pad;`** — the cast emits extra `lw zero, N(sp)` discard reads at epilogue (one per pad). The volatile DECLARATION alone reserves the slot without emitting any read/write — it's a layout hint only. Don't use array-typed pads (`volatile int pad[3]`) either — IDO aligns arrays to 8 bytes which can over-pad and yield the wrong slot. Verified byte-exact 2026-05-27 on `gl_func_00041768` (25 insns, vtable dispatch + `int local; …; func(…, &local);`). Generalizes for any near-miss whose only residual is "in-frame slot off by 4 bytes from target AND local has `&local` somewhere"._
 - [**Pad-SPLIT (not pad-size) positions a MULTI-local block at fixed offsets while holding frame size; re-check "INSN_PATCH-only" cap notes — they can be false**](#feedback-ido-pad-split-multi-local-block) — _Extends the volatile-pad sandwich to TWO adjacent locals. When the target places a block of locals (e.g. `buf@sp+0x28` AND `sp_arg@sp+0x34`, sp_arg ABOVE buf) but your emit puts the whole block N bytes too high, the fix is to SPLIT the dead-space pad into top+bottom halves of the SAME total size — `volatile int pad_top[2]; int sp_arg; float buf[3]; volatile int pad_bot[2];` — NOT to grow/shrink a single pad. First-declared = highest offset, so pad_top occupies the top dead space (pushing the block down) and pad_bot fills the bottom, keeping total locals constant → frame size unchanged (-0x40) while the block lands at the target offsets. Adding pad without removing the equal amount elsewhere just GROWS the frame (8-diff regression). Array-typed volatile pads with `(void)pad;` cast are FINE here (the cast decays to a pointer discard, emits NO `lw` — unlike a scalar `volatile int pad`). Verified byte-exact 2026-05-28 on `gl_func_00039A9C` (28 insns) — whose prior comment claimed a "99.8% INSN_PATCH-only cap, pad-size tuning is a C-level dead-end". It was a FALSE dead-end: the author only tried pad SIZE, never the top/bottom SPLIT. **Lesson: a stale "INSN_PATCH-only" / "C-level dead-end" note is worth one re-test via declaration-order + pad-split before trusting it** — especially since INSN_PATCH is now banned, so those notes predate the requirement to find a real C form. Also: the function's two `jal` words were R_MIPS_26 relocs to absolute-defined symbols — objdiff is reloc-aware and already scored them matched; the raw-byte `jal 0` "diff" was never real._
+- [**`&local` forces a dead home-spill WITHOUT a reload; `volatile` forces the spill WITH a reload (1 insn longer)**](#feedback-ido-and-local-dead-spill-no-reload) — _When the target spills a computed value to a stack slot (`sw t6, X(sp)`) as a DEAD store but then uses the same register copy directly afterward (`addiu a1, t6, 0x30` — no reload from the slot), the C must produce the spill while keeping the register live. `volatile T t = expr;` emits the spill but ALSO re-reads it on next use (`lw a1, X(sp)`) → 1 insn too many. **Lever: `T t = expr; T *p = &t; … use t; (void)p;`** — taking the local's address forces IDO to home `t` to its stack slot (the dead spill) but it keeps the register copy live for subsequent uses (no reload, because nothing writes through `p`). This is the COMPUTED-LOCAL generalization of the `&param` crack at [used-arg-dead-home](#feedback-ido-used-arg-dead-home). Verified byte-exact 2026-05-28 on `gl_func_0003604C` (10 insns: `int t=a0[5]; int *p=&t; f(a0,t+0x30); (void)p;`), which cracked a documented "non-volatile dead spill" cap whose recorded variants (plain local / volatile / register+pad) had all missed the address-taken form._
 - [TU-CONTEXT-SENSITIVE scheduling: a standalone-byte-exact function can mis-schedule IN-TREE (reverse of the standalone-false-cap trap)](#feedback-ido-tu-context-sensitive-scheduling) — _Same C, same cc, same flags, but the full translation unit schedules a tiny leaf differently than the isolated standalone compile. `game_uso_func_0000C3E8` (`return *(int*)&D`): standalone -O2 = target byte-exact (dead a0 homed in jr-delay as a free filler); in the full game_uso.c TU the home/load swap (home before jr, load in delay). NOT lower-opt, NOT a C-form issue, NOT permuter-crackable — the TU perturbs the list scheduler's delay-slot pick. When standalone matches but in-tree doesn't, suspect this; it's a genuine cap (2026-05-24)._
 - [IDO `-g3` disables delay-slot filling while keeping -O2 optimization — unfilled-`sw; jr; nop` IS matchable](#feedback-ido-g3-disables-delay-slot-fill) — _Compiling with `-O2 -g3` produces unfilled-delay-slot epilogues (`sw; jr ra; nop` instead of `sw; jr ra; sw(delay)`).
 - [IDO -g does NOT suppress delay-slot fill (unlike KMC GCC -g2) — don't borrow the Glover technique](#feedback-ido-g-flag-does-not-suppress-delay-slot-fill) — _KMC GCC -g2 disables delay-slot reordering (per project_compiler_findings.md).
@@ -2120,6 +2121,39 @@ prologue's home stores, which anchors the sp-adjust FIRST and keeps the global
 load after it. Verified gl_func_00035188: 79.2% -> 98.4% (the lever fixed BOTH
 the missing a0-home AND the pre-sp global hoist in one shot; only a v0-vs-t6/t7
 register-renumber on the global remained, permuter 75->55 not 0).
+
+<a id="feedback-ido-and-local-dead-spill-no-reload"></a>
+## `&local` forces a dead home-spill WITHOUT a reload; `volatile` forces the spill WITH a reload (1 insn longer)
+
+_The COMPUTED-LOCAL generalization of the `&param` crack above. When the target
+spills a computed value to a stack slot as a DEAD store, then uses the same
+register copy directly afterward (no reload), the C must produce the spill while
+keeping the register live._
+
+Target shape (`gl_func_0003604C`, 10 insns):
+```
+lw   t6, 20(a0)      ; t6 = a0[5]
+sw   t6, 28(sp)      ; DEAD spill of t6 (slot never reloaded)
+jal  callee
+addiu a1, t6, 0x30   ; delay: uses t6 DIRECTLY (no reload)
+```
+
+- **`volatile int t = a0[5];`** emits the spill but ALSO re-reads it on the next
+  use (`lw a1, 28(sp)` then `addiu a1, a1, 0x30`) → **1 insn too many** (the
+  documented "non-volatile dead spill" cap noted this and stopped here).
+- **`int t = a0[5]; int *p = &t; … use t; (void)p;`** — taking the local's
+  address forces IDO to home `t` to its stack slot (the dead spill) **but it
+  keeps the register copy live** for subsequent uses (no reload, because nothing
+  writes through `p`). `(void)p;` reads only the pointer value (no deref → no
+  load). **Byte-exact.**
+
+This is the same `&X`-homes-without-reload mechanism as the `&param` lever; the
+distinction worth remembering is the contrast with `volatile`: **`volatile`
+gives spill+reload, `&local` gives spill+keep-register.** When a near-miss is
+exactly 1 insn LONGER than target because of a `lw` reload right after a dead
+`sw`, swap `volatile` → address-taken. Verified 2026-05-28. **Re-test any cap
+note that only lists `plain local / volatile / register+pad` variants — the
+address-taken form is the one they missed.**
 
 <a id="feedback-ido-empty-body-do-while-emits-branch-likely"></a>
 ## IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay
