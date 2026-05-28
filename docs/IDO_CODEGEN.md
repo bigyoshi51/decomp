@@ -7621,6 +7621,8 @@ void f(int *dst) {
 
 **How to apply:** When you see a NM wrap with comment "target uses pointer-indirect load" or you see the asm contain `addiu tA, sp, NN; lw tB, 0(tA)` for a stack-local buffer access, try `volatile T buf[N]`. Cheap to test, often unlocks a structural improvement.
 
+**Refinement (2026-05-28, game_uso_func_000044F4): this does NOT extend to keeping `&local` in a SAVED register ($s) across a loop.** The trick above forces a single materialize-then-load (`addiu tA,sp,off; lw tB,0(tA)`) into a TEMP. It does NOT make IDO hold the materialized address in an `$s` register across many iterations. If the target has `addiu s2,sp,0x2c` ONCE in the prologue-region then `sw/lw 0(s2)` reused across N loop iterations (register-indirect via a callee-saved base), a plain `char *s2 = &local;` with N uses will NOT reproduce it: IDO folds every `*s2` back to direct `sw/lw off(sp)` because the address is a known sp+const, and direct addressing is strictly cheaper (zero extra insns) than holding a base in `$s`. Marking the slot `volatile` forces the memory roundtrip but STILL uses direct sp-relative (no `$s` base). To get a held `$s2` register-indirect base, the source must give the slot an address IDO can't prove is sp+const (a pointer param threaded in, an aliased struct field, an opaque-returned pointer) — not reproducible from a bare `&stacklocal`. Net effect: chasing it with `&local` is a regression. See the `game_uso_func_000044F4` NM-wrap comment for the full measurement (70.04 vs 70.53 baseline).
+
 ---
 
 ---
