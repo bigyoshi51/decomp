@@ -6310,6 +6310,22 @@ stub to match — fix the boundary (or skip), don't write C for it.
 Verified 2026-05-25 on game_libs_func_0004DD0C (`void f(int a0){}` gave 8B; target
 was 16B `nop nop jr ra sw a0`; insn-diff false-positived, land script caught it).
 
+## Re-trim `char frame_pad[N]` knobs across multi-pass decodes — decoded body locals make a once-correct pad over-shoot the target frame
+
+When a big multi-run NM wrap uses a `char frame_pad[N];` knob to force IDO's frame
+to the target size (IDO -O2 keeps the stack space for an unused local), that `N` is
+only correct for the set of REAL locals present when it was tuned. Each later pass
+that decodes more of the body adds real stack locals — so the pad must be SHRUNK by
+the same amount or the frame over-shoots. Symptom: prologue insn 0 (`addiu sp,sp,-K`)
+diverges again with K too large, even though a prior commit claimed "frame byte-
+correct". Fix: binary-search the pad against the target `addiu sp` immediate (IDO
+rounds the frame up to 8B, so a small range of pad values all hit the same K — pick
+the largest that still matches). Verified 2026-05-28 on game_uso_func_00001DDC: as
+the branch_88 Vec3 locals (~76B) had been decoded, `frame_pad[168]` over-shot to
+0x1A8; trimming to `[128]` re-hit the target 0x180. (Note: re-hitting the frame is a
+correctness step but often fuzzy-neutral on its own — the rest of the prologue
+regalloc can still be interlocked with the undecoded body.)
+
 ## TICK-DOABLE boundary correction for too-big-tail near-misses (sanctioned, replaces banned SUFFIX_BYTES/PROLOGUE_STEALS)
 
 Many 90-99% "structural" near-misses are splat BOUNDARY artifacts, not codegen
