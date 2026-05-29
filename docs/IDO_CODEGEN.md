@@ -47,6 +47,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 final-add operand order in FPU reductions (`add.s fd, fs, ft`) follows source evaluation; can't easily flip without changing load order](#feedback-ido-fpu-reduction-operand-order) — _For dot products and chained FPU adds like `a[0]*b[0] + a[1]*b[1] + ... + a[n]*b[n]`, IDO emits the final reduction `add.s fd, fs, ft` with `fs` = running-sum register and `ft` = last-product register.
 - [IDO-unrolled loop residual trip-counter representation (count-groups vs count-elements) is NOT C-controllable](#feedback-ido-unroll-trip-counter-representation) — _When IDO auto-unrolls a simple `for(i=0;i<N;i++)` body by K, the body emits byte-identical but the residual pure trip-counter may count elements (`0,K,2K..<N`, `+K`) or groups (`0..N/K`, `+1`). If target chose the other representation it's a 2-insn cap (the bound + the increment immediates); element-loop, manual grouped-unroll `i<N/K`+ptr, and `i*K+k` indexing ALL emit IDO's same scaled counter. Verified-fail `game_libs_func_0005BDC0` (16-elem 1/x loop, 4x-unrolled)._
 - [Inline a cached load-deref local into the loop body to drop its stack slot and shrink the frame (sibling of inline-everything for GPR-renumber)](#feedback-ido-inline-cached-local-for-frame-shrink) — _When a near-miss has a too-large frame by an aligned slot's worth (+8 typical) AND a cached `T x = *load_chain(...)` local used only inside a single loop, inlining the load chain at each loop use removes the local's slot. Frame shrinks; spill offsets for OTHER live values align down to the target. Different from inline-everything (which targets GPR-renumber by forcing fresh-temp reloads); this one targets frame-size. Verified `titproc_uso_func_00000418` 6→2 diffs (frame 40→32, spill 28→24) by inlining `unsigned short mask = **(unsigned short**)(...)` from a local into the loop body's `if` condition._
+- [Block-scope a re-assigned cached local to drop its `$s` save and shrink the frame (sibling of inline-cached-local)](#feedback-ido-block-scope-cached-local-for-frame-shrink) — _A cached local re-assigned mid-function (e.g. `int *root = ...; ...; root = ...;` for the same expression between two segments) gets promoted to a callee-saved `$s` register because IDO sees one long-lived variable. The save+restore costs +8 frame bytes vs target. Wrap each segment in `{ int *root = ...; ... }` so each scope's `root` is a fresh local — IDO uses a temp ($3-class) instead of $s, the save/restore disappear, and the frame shrinks by 8. Verified `h2hproc_uso_func_00000E04` 38→37 diffs (frame -56 → -48 matching target; insn count fixed)._
 - [K&R-declared extern can't be called with float args under IDO (no way to get direct jal)](#feedback-ido-knr-float-call) — _In game_libs (1080), `gl_func_00000000` is declared as `extern int gl_func_00000000();` (K&R / no prototype).
 - [Target asm with `mfc1 $aN, $f12` (float-bits-to-int-reg) is hard to reproduce from IDO C](#feedback-ido-mfc1-from-c) — When the target has a single `mfc1 aN, $f12` instruction converting a float arg's bits to an int register for passing as arg, IDO's C compiler emits a stack round-trip (swc1 + lw) instead — at least 14 C variants tried…
 - [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — _In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum — shifts IDO's FPU register allocation and instruction order across the WHOLE…
@@ -11893,3 +11894,35 @@ Result: frame 40 → 32, spill 28 → 24, 4 of 6 diffs closed. Residual 2 = a sc
 
 **Related:**
 - [Inline a cached local-in-$v0 to force fresh-temp reload (GPR-renumber lever)](#feedback-ido-fp-commutative-operand-order-assignment-lever) — sibling lever for the register-cascade subclass.
+
+<a id="feedback-ido-block-scope-cached-local-for-frame-shrink"></a>
+## Block-scope a re-assigned cached local to drop its `$s` save and shrink the frame
+
+_Sibling lever to inline-cached-local-for-frame-shrink. That one targets a frame +8 from a local's stack-slot overhead; this one targets a frame +8 from a local's `$s`-save+restore overhead._
+
+The pattern: a function has a cached local like `int *root` re-assigned mid-function (the SAME expression on both sides — `root = *(int**)((char*)&D + 0x134);` at two points, between two segments of work). IDO sees one long-lived variable `root` with reads on both sides of intervening calls, so it promotes `root` to a callee-saved `$s` register (e.g. `$s0`). The cost: `sw $16, 24(sp)` + `lw $16, 24(sp)` at function boundaries → frame grows by 8 bytes versus a target that uses a temp register for each segment's `root` and reloads from memory between segments.
+
+**Fix:** wrap each segment in its own block, declare `root` fresh inside each:
+```c
+gl_func_00000000(a0, a1);
+{
+    int *root = *(int**)((char*)&D_00000000 + 0x134);
+    // segment 1's work using root
+}
+{
+    int *root = *(int**)((char*)&D_00000000 + 0x134);
+    // segment 2's work using root
+}
+```
+Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-class) inside each block, the cross-call save/restore disappears, and the frame shrinks by 8.
+
+**Verified 2026-05-29 on `h2hproc_uso_func_00000E04`** (slotC4+slotCC dual-channel processor, frame -56 → -48 matching target's -48, insn count 41 → 43 matching target's 43; 38 → 37 diffs).
+
+**How to apply:** if a frame is +8 too large AND the C body has a cached local re-assigned mid-function with the same expression on each side, block-scope the local per segment. Cheap and decisive when the pattern matches.
+
+**Limits:**
+- Only works when the segments DON'T need to share the cached value (i.e., target also reloads). If the target keeps the value in a saved register across both segments, block-scoping would diverge from target.
+- Doesn't fix the residual `&D_00000000`-in-`$s0` pattern: a target that ALSO caches the global base in a saved register requires keeping that base alive across calls. `char *D_base = (char*)&D_00000000;` hoist gets inline-folded; `register char *D_base` regresses the frame the other way. The base-in-$s0 residual is its own subclass.
+
+**Related:**
+- [Inline a cached load-deref local into the loop body](#feedback-ido-inline-cached-local-for-frame-shrink) — sibling lever for the stack-slot-overhead subclass.
