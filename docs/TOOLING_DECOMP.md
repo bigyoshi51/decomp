@@ -506,6 +506,8 @@ Without `--m2c` it prints the `.s`. Validated on `game_libs_func_00060F90`
 `.o` (it is, via INCLUDE_ASM). This unblocks medium-function decode grinds on every
 USO segment. (Manual round-trip below kept for reference.)
 
+**GOTCHA — m2c renders a reloc'd `&D_00000000`-pointer store as `= 0` (verified 2026-05-29, mgrproc_uso_func_00002940).** When the asm is `lui rX,0x0; addiu rX,rX,0; sw rX, OFF(base)` (i.e. store the *address* `&D_00000000` into a field), m2c shows it as `field = 0` because the relocation target resolves to 0x0 and m2c can't see the reloc. So a field m2c claims is zeroed may actually hold a POINTER. Tell them apart by the insn count: a real zero-store is one `sw zero, OFF` (1 insn); a `&D` store is `lui;addiu;sw` (3 insns, with R_MIPS_HI16/LO16 relocs). If your NM body is ~2 insns short per such field, change `*(int*)(p+OFF) = 0;` to `*(char**)(p+OFF) = (char*)&D_00000000;`. Recovered 8 insns / +6.5pp on mgrproc_uso_func_00002940. Same root cause as the `*(s32 *)0x68`-style m2c renderings (those are `&D_00000000 + 0x68`).
+
 **Symptom:** an asm file under `asm/nonmatchings/<uso>/<uso>/<func>.s` is all `.word 0x…` lines with no mnemonics. Running `uv run m2c --target mips-ido-c <file>.s` errors with:
 
 ```
