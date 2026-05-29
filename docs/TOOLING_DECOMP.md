@@ -536,6 +536,7 @@ mips-linux-gnu-objdump -d -M no-aliases /tmp/decode.o
 - `lui $at, 0` will look weird in objdump output (no symbol resolution) — you'll need to leave it as a literal `lui $at, 0` in the m2c input. m2c handles this fine; it just emits `*(T*)0` accesses, which you replace with `&D_00000000 + offset` in the C body.
 - Branch targets (`bne … 0x20 <_start+0x20>`) need to be rewritten as `.LXXXX` labels matching the original ROM offsets — m2c errors with "Cannot find branch target" if the labels don't exist. Add label lines (`.LXXXX:`) at the appropriate offsets in your temp .s.
 - If you forget a label, m2c's error names exactly which one, so iterate until it parses.
+- **If you SCRIPT the relabel step** (regex-rewrite branch targets to `.LXXXX`), only rewrite operands of actual branch ops (`b/beq/bne/beqz/bnez/bgez/...`). A naive `,(0x[0-9a-f]+)$` substitution also matches the immediate in `lui rX, 0x2`, corrupting it to `lui rX, .L2` → m2c aborts with `lui/lis argument must be a literal or %hi/@ha/@h macro`. Guard the rewrite on the mnemonic. (Hit 2026-05-29 auto-synthesizing the temp .s for gl_func_0003829C.)
 
 **When to use this:** any USO function whose .s is .word-only AND whose body is non-trivial (≥30 insns) — small functions you can decode by hand instruction-by-instruction faster than the round-trip. Used 2026-05-05 on `game_uso_func_00002744` (52 insns) — m2c produced a clean structural decode in one pass that would've taken 30+ minutes by hand.
 
