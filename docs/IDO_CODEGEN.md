@@ -46,6 +46,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Commutative FP op operand order (`mul.s`/`add.s` fs vs ft) IS flippable via an assignment-expression: `coord * (tmp = scale)` forces `scale` as fs](#feedback-ido-fp-commutative-operand-order-assignment-lever) — _For `A * B` IDO -O2 does NOT reliably emit source-left as fs; after a fresh coord load it uses coord-as-fs even for `scale * coord`. Force the scale as fs via `coord * (tmp = scale)` (assignment-expr pins it into a reg at the op); on a neg, `coord * (tmp = -x)` also lands the target's result reg. Cracked the documented `game_uso_func_00003FAC` "genuine cap" (99.245% → byte-exact, 5 diffs closed). Found via permuter `X*(var=Y)` mutation, then minimized. Supersedes the "final-add operand order can't flip" cap — try this before NM-wrapping any pure-operand-order FP near-miss; re-grind game_uso_func_000000A0. **2026-05-29: GENERALIZES to integer commutative ops (`or`/`and`/`xor`/`addu`)** — `value | (t = const)` forces the const as `rs` where source-swap and named-local both fail; cracked timproc_uso_b{3_00002700,1_000024F4} (8 `or` diffs each, CSE keeps the single lui)._
 - [IDO -O2 final-add operand order in FPU reductions (`add.s fd, fs, ft`) follows source evaluation; can't easily flip without changing load order](#feedback-ido-fpu-reduction-operand-order) — _For dot products and chained FPU adds like `a[0]*b[0] + a[1]*b[1] + ... + a[n]*b[n]`, IDO emits the final reduction `add.s fd, fs, ft` with `fs` = running-sum register and `ft` = last-product register.
 - [IDO-unrolled loop residual trip-counter representation (count-groups vs count-elements) is NOT C-controllable](#feedback-ido-unroll-trip-counter-representation) — _When IDO auto-unrolls a simple `for(i=0;i<N;i++)` body by K, the body emits byte-identical but the residual pure trip-counter may count elements (`0,K,2K..<N`, `+K`) or groups (`0..N/K`, `+1`). If target chose the other representation it's a 2-insn cap (the bound + the increment immediates); element-loop, manual grouped-unroll `i<N/K`+ptr, and `i*K+k` indexing ALL emit IDO's same scaled counter. Verified-fail `game_libs_func_0005BDC0` (16-elem 1/x loop, 4x-unrolled)._
+- [Inline a cached load-deref local into the loop body to drop its stack slot and shrink the frame (sibling of inline-everything for GPR-renumber)](#feedback-ido-inline-cached-local-for-frame-shrink) — _When a near-miss has a too-large frame by an aligned slot's worth (+8 typical) AND a cached `T x = *load_chain(...)` local used only inside a single loop, inlining the load chain at each loop use removes the local's slot. Frame shrinks; spill offsets for OTHER live values align down to the target. Different from inline-everything (which targets GPR-renumber by forcing fresh-temp reloads); this one targets frame-size. Verified `titproc_uso_func_00000418` 6→2 diffs (frame 40→32, spill 28→24) by inlining `unsigned short mask = **(unsigned short**)(...)` from a local into the loop body's `if` condition._
 - [K&R-declared extern can't be called with float args under IDO (no way to get direct jal)](#feedback-ido-knr-float-call) — _In game_libs (1080), `gl_func_00000000` is declared as `extern int gl_func_00000000();` (K&R / no prototype).
 - [Target asm with `mfc1 $aN, $f12` (float-bits-to-int-reg) is hard to reproduce from IDO C](#feedback-ido-mfc1-from-c) — When the target has a single `mfc1 aN, $f12` instruction converting a float arg's bits to an int register for passing as arg, IDO's C compiler emits a stack round-trip (swc1 + lw) instead — at least 14 C variants tried…
 - [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — _In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum — shifts IDO's FPU register allocation and instruction order across the WHOLE…
@@ -11864,3 +11865,31 @@ IDO normalizes all three to the same internal loop, then re-unrolls 4× with its
 
 **Related:**
 - [final-add operand order in FPU reductions](#feedback-ido-fpu-reduction-operand-order) — sibling "byte-identical body, one encoding choice differs" cap.
+
+<a id="feedback-ido-inline-cached-local-for-frame-shrink"></a>
+## Inline a cached load-deref local into the loop body to drop its stack slot and shrink the frame
+
+_Sibling lever to inline-everything (which targets GPR-renumber by forcing fresh-temp reloads at each use). This one targets FRAME-SIZE diffs: when a near-miss has a too-large frame by exactly an aligned slot's worth (+8 typical, since IDO usually rounds to 8) AND a cached `T x = *load_chain(...)` local that's used only inside a single loop, inlining the load chain at each loop use removes the local's stack slot. The frame shrinks; spill offsets for OTHER live values align down to the target's._
+
+**Verified 2026-05-29 on `titproc_uso_func_00000418`** (33-insn FP selector). Original C cached `unsigned short mask = **(unsigned short**)((char*)&D_00000000 + 0x154);` then used `mask & (1 << index)` inside the do-while loop. Diff signature: frame size 40 vs target 32, spill `selected` at sp+28 vs target sp+24, plus matching sw/lw at the corresponding offsets — **6 diffs total**, all on the SAME 8-byte-frame-overhead root.
+
+Fix: inline the two-level load into the loop body's condition:
+```c
+do {
+    if ((**(unsigned short**)((char*)&D_00000000 + 0x154) & (1 << index)) != 0) {
+        selected = index + 1;
+    }
+    index++;
+} while (index != 8);
+```
+Result: frame 40 → 32, spill 28 → 24, 4 of 6 diffs closed. Residual 2 = a scheduler-decision order swap on independent instructions (`lw $5,24(sp)` vs `or $2,$0,$0`), not C-controllable.
+
+**How to apply:** if a near-miss has a frame size that's exactly 8 bytes too large AND any cached load-deref-local-only-used-in-a-loop, inline it before touching anything else. Cheap, often-decisive. Doesn't fix GPR-renumber cascades (that's inline-everything's job).
+
+**Limits:**
+- Only works when the cached value is stable across loop iterations (no observable difference between caching and re-reading). If the underlying memory could change mid-loop, inlining IS semantically different — use a `volatile` re-read if you want both correctness and inlining.
+- Doesn't help if the local is shared between multiple call sites outside the loop (the savings are exactly one stack slot — inlining into N sites costs N loads; the slot-drop has to be the dominant signal).
+- Won't crack pure-scheduler residual diffs (final 2 diffs here are a register-init / stack-preload order swap independent of frame layout).
+
+**Related:**
+- [Inline a cached local-in-$v0 to force fresh-temp reload (GPR-renumber lever)](#feedback-ido-fp-commutative-operand-order-assignment-lever) — sibling lever for the register-cascade subclass.
