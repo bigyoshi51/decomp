@@ -59,7 +59,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### argument / save register
 
-- [Register-allocation-renumber caps: the matching toolkit (IDO color order, GVN/dedup, live-range split, permuter PERM_ passes, and the `-zdbug` dump — blocked by an `ecvt` stub)](#feedback-ido-regalloc-renumber-matching-techniques) — _When logic + instruction COUNT match but a value lands in the wrong register (cascading: const in `$a2` vs `$v1`, ptr in `$a3` vs `$t7`, FP `$f4` vs `$f18`). NOT operand-order. IDO colors in fixed order `$v0,$v1,$a0..$a3,$t0..` by first-USE/expression-list position + Chow–Hennessy priority. Levers: reorder first-use (not decls); duplicate/CSE-fold a subexpr to shift the cascade; split live ranges around calls (`a=b; a+=c`); drive permuter `perm_pad_var_decl`/`perm_refer_to_var`/`perm_duplicate_assignment` MANUALLY via PERM_ macros (random mode floors). SYSTEMATIC DIAGNOSTIC: `cc -Wo,-zdbug:5/6` dumps the regalloc trace — but it CRASHES our static-recomp (`wrapper_ecvt` is an `assert(0)` stub in tools/ido-static-recomp/libc_impl.c:1153); implementing ecvt (~20 lines) + rebuild unlocks it project-wide (codegen-safe). Researched from OoT/sm64/mm IDO guides + permuter, 2026-05-29._
+- [Register-allocation-renumber caps: the matching toolkit (IDO color order, GVN/dedup, live-range split, permuter PERM_ passes, and the `-zdbug` dump — blocked by an `ecvt` stub)](#feedback-ido-regalloc-renumber-matching-techniques) — _When logic + instruction COUNT match but a value lands in the wrong register (cascading: const in `$a2` vs `$v1`, ptr in `$a3` vs `$t7`, FP `$f4` vs `$f18`). NOT operand-order. IDO colors in fixed order `$v0,$v1,$a0..$a3,$t0..` by first-USE/expression-list position + Chow–Hennessy priority. Levers: reorder first-use (not decls); duplicate/CSE-fold a subexpr to shift the cascade; split live ranges around calls (`a=b; a+=c`); drive permuter `perm_pad_var_decl`/`perm_refer_to_var`/`perm_duplicate_assignment` MANUALLY via PERM_ macros (random mode floors). SYSTEMATIC DIAGNOSTIC: `cc -Wo,-zdbug:6` dumps IDO's UCODE expr-list + regalloc coloring to a file **`uoptlist`** in the CWD (NOT stdout) — **UNLOCKED 2026-05-29** by implementing `wrapper_ecvt`/`wrapper_fcvt` in tools/ido-static-recomp/libc_impl.c (was an `assert(0)` stub that crashed the dump; codegen-verified-safe). The `N: N assigned (unconstrained) R` lines show candidate→register order. Researched from OoT/sm64/mm IDO guides + permuter, 2026-05-29._
 - [**Pass an adjacent int pair AS A STRUCT BY VALUE to reproduce outgoing-arg home-stores (`sw a1,4(sp); sw a2,8(sp)`) — DISPROVES the "precall-arg-spill cap"**](#feedback-ido-struct-by-value-homes-arg-pair) — _When the target stores outgoing register args to their home slots right around a `jal` — `lw a1,0(p); sw a1,4(sp); lw a2,4(p); jal; sw a2,8(sp)` — and your C `f(x, p[0], p[1], k)` does NOT emit the `sw a1,4(sp)/sw a2,8(sp)` stores, the fix is to pass the adjacent pair as a 2-int STRUCT BY VALUE: `typedef struct {int a,b;} Pair2; f(x, *(Pair2*)p, k);`. IDO places the struct's two ints in a1,a2 AND homes them to the caller's outgoing-arg slots (sp+4, sp+8), exactly matching the target. Verified empirically: K&R/`(int,...)`/`(int,int,...)`/`(int,int,int,...)`/`(int,int,int,int)` prototypes and register/pointer/global-addr arg sources ALL fail to home the args; only struct-by-value does it. The old `feedback_ido_precall_arg_spill_unreachable` "cap" was WRONG. Verified 2026-05-28 on game_uso_func_00011168: 61.2% → 93.92% (instruction count 46→60 to match target; residual ~6% is an unrelated $v0/$v1 &D-base renumber). Recheck every NM wrap labeled "precall-arg-spill"/"vararg-spill cap" (game_uso_func_0000A374/0000FF48/0000FFB8/00010BAC/0000D5F8, etc.) — many pass adjacent int pairs and should now match or near-match._
 - [**Declare a byte arg as `unsigned char` to reproduce BOTH its `sw aN` home AND its `andi 0xFF` zero-extend — but the eager extension flips s-reg order vs a later int arg**](#feedback-ido-unsigned-char-param-homes-and-extends) — _When the target both homes an incoming int-register arg (`sw a2,64(sp)`) AND zero-extends it once before use (`andi sX,a2,0xff`, hoisted out of a loop), the arg is an `unsigned char` parameter. Declaring it `int` + masking `a2 & 0xFF` gets the andi but NO home (the home only appears with the char type). The `unsigned char` declaration produces the home + the eager prologue zero-extend together — the cleanest way to match a dead-arg-home that coexists with a byte mask. CAVEAT (verified 2026-05-29 gl_func_0000A7B4): the char extension is EAGER at the prologue, so the extended pseudos are born before a sibling `int` arg's loop-invariant copy and grab the LOWER $s-regs — leaving the int arg (e.g. a1) in a higher $s than the target wants. So char-arg homing and "int-arg-first allocno order" are mutually exclusive; a function needing both lands as a clean cyclic $s-reg renumber (size + control flow + homes all exact). NM-wrap that residual._
 - [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
@@ -11778,18 +11778,27 @@ our toolchain (fixable).** `cc ... -Wo,-zdbug:6` dumps the priority-based-colori
 trace; `-Wo,-zdbug:5` dumps live ranges + the regalloc bit-vectors. This tells
 you EXACTLY which candidate grabs the contested color first, so you target the
 fix instead of blind-permuting. **BUT** all `-zdbug` levels currently crash our
-static-recompiled IDO: `uopt: libc_impl.c:1154: wrapper_ecvt: Assertion '0'
-failed` — the dump formats floats via `ecvt(3)`, which is an unimplemented stub
-(`tools/ido-static-recomp/libc_impl.c:1153 wrapper_ecvt { assert(0); }`).
-**UNLOCK:** implement `wrapper_ecvt` (standard `char *ecvt(double, int ndigit,
-int *decpt, int *sign)` — ~20 lines via `snprintf("%.*e")` parsing, writing the
-digit string to a scratch emulated-mem buffer like `INTBUF_ADDR` and `*decpt`/
-`*sign` via the `MEM_*` macros, returning the buffer's emulated address; mirror
-`wrapper_strtok`'s mem conventions) and rebuild ido-static-recomp. This is
-codegen-SAFE (only the dump path calls ecvt — normal compiles are unaffected) and
-unlocks systematic regalloc debugging for the WHOLE project. **Do it as a
-deliberate focused task** (it rebuilds the shared `tools/ido-static-recomp` cc;
-coordinate so parallel agents' builds aren't disrupted mid-rebuild).
+static-recompiled IDO (it formatted floats via `ecvt(3)`, an `assert(0)` stub).
+**UNLOCKED 2026-05-29** — implemented `wrapper_ecvt`/`wrapper_fcvt` in
+`tools/ido-static-recomp/libc_impl.c` (via `snprintf("%.*e"/"%.*f")` parse →
+scratch `INTBUF_ADDR` slice → `MEM_S8`/`MEM_S32`; ~110 lines) and rebuilt
+(`cd tools/ido-static-recomp && make VERSION=7.1`). VERIFIED codegen-SAFE: ecvt
+is only on the dump path, and all spot-checked matches (00003890, 73C0, 00003FAC,
+F49C) still byte-match after the rebuild. **HOW TO USE THE DUMP:**
+- `cc ... -Wo,-zdbug:6 -o x.o x.c` writes the trace to a file named **`uoptlist`
+  in the CWD** (NOT stdout/stderr — that's why it looked empty). One function per
+  invocation; for a whole-file build, build the file with the flag and the
+  `uoptlist` contains every function's section (grep the function name).
+- Format: a UCODE expression-list table (`index|bit kind op l r`; `isvar P =`
+  param, `isop umpy/uadd/uilod/ustr =` ops) followed by `N: N assigned
+  (unconstrained) R` lines = candidate→register coloring, plus live-range stats
+  (`numlr`, `numlu`). The `assigned` lines tell you EXACTLY which candidate grabs
+  the contested register and in what order — so you target the first-use/dedup/
+  pad fix (techniques 1–3) instead of blind-permuting.
+- NOTE: `tools/` is gitignored (per-machine build), so this `libc_impl.c` patch is
+  LOCAL — re-apply + rebuild after a clean `tools/` checkout, or upstream it to
+  decompals/ido-static-recomp. The rebuild relinks the shared cc; coordinate with
+  parallel agents (codegen is identical, so only the brief relink window matters).
 
 **Honest limit:** the permuter README states there is no register-allocation-
 specific randomizer and it "finds changes that improve regalloc by accident." When
