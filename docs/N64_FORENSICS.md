@@ -35,6 +35,17 @@ _2026-05-23. After landing the clean small leaves, a size-sorted sweep of the re
 
 **Takeaway:** when source-3 (small-unstarted) rolls and the candidate is bare game_libs ≤0x40, classify it against these four shapes first. None are quick matches. The genuine remaining game_libs %-work is (a) a refine-splat pass on the 0x8-fragment gaps, (b) big-function first-pass wraps (`5721C` FPU, `578B4` 2423-insn), or (c) the permuter on the few structurally-exact reloc-free leaves (e.g. `27504`).
 
+## 1080 kernel segment is NON-USO (real addresses, m2c works) but cap-heavy — mine the real-logic functions only
+
+_2026-05-28. Unlike the raw-word USO segments, the kernel (`src/kernel/*.c`, `func_8000XXXX` at real RAM addrs) has PROPER mnemonic disasm — `m2c` produces clean C and libreultra reference applies. BUT a survey of its 67 bare `INCLUDE_ASM` functions shows it's cap-heavy:_
+
+- **CP0 / TLB runtime** (the majority of small ones): `mtc0`/`mfc0 $12` (Status), `mtc0 $5/$10` (TLB), `tlbwi` — MIPS3 kernel ops not emittable from C (`func_80002DB0`, `func_800062D0`, `func_800099F0`, `func_80002DE0`…). Permanent INCLUDE_ASM cap.
+- **Handwritten libultra** with non-C-reachable instructions: `func_80002CD0` = `_bzero` (uses `swl` for the unaligned head; the `.s` is even comment-tagged "Handwritten function - libultra _bzero"). Cap (cf. `reference_libreultra`).
+- **Splat fragments** (m2c "Cannot find branch target .L… / Read from unset register"): `func_800031D0/31E0`, `func_80003E54` (reads unset `$t9/$at`), `func_80003FF0/3E0C`. Need boundary fixes, not decode.
+- **Real-logic functions** (the only matchable vein): `func_800000B0` (bump allocator — register-renumber near-miss, partial-cracked to 15 diffs via the var-reuse lever), `func_80000D2C` (75-insn table-lookup + list-search, multi-tick), `func_80002250`/`func_80003C24` (~67 insns). These are near-misses (regalloc caps) or large multi-tick decodes.
+
+**Takeaway:** the kernel is readable (m2c) but NOT a quick-match vein — filter out CP0/TLB/handwritten/fragment first; only the real-logic functions are workable, and those are regalloc near-misses or multi-tick. Use `decomp-search` against libreultra for the os*/__os* ones (most are handwritten → stay INCLUDE_ASM).
+
 ## 1080 game.uso spine decode status (2026-05-28) — remaining work is multi-tick decode + caps, not tick-safe
 
 _The game.uso "spine" (top-10 biggest functions, per `project_1080_game_uso_map`) is where the call-graph-DFS priority points, but a byte-diff status sweep shows none are tick-safe quick wins — they are large multi-tick decodes whose 100% is regalloc/branch-likely-cap-blocked. Current fuzzy + the binding residual:_
