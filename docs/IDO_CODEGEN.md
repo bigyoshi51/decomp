@@ -11471,3 +11471,21 @@ with a "[-O0 stack-layout cap]" label and move on. Don't grind decl-order
 variants (already proven inert). This is the same cap class as register-rename
 diffs in -O2: structurally indistinguishable at the C level. Distinct from
 `feedback_ido_local_ordering.md` (which IS controllable for -O2 stack layout).
+
+## Size +1 near-miss with an early `sw $aN` the target lacks: the placeholder call should PASS that arg, not be argless
+
+A NM wrap one instruction too long (e.g. build 63 vs expected 62), where the
+*build* has an extra `sw $a0, N(sp)` (an incoming-arg home) near the top that the
+target does NOT have, often means a cross-USO placeholder call was written argless
+(`gl_func_00000000()`) when the original PASSES the incoming arg through
+(`gl_func_00000000(a0)`). When the arg is consumed by the call, IDO leaves it in
+`$a0` and emits the `jal` directly; when the call takes no args, IDO has nothing to
+do with the live incoming arg and homes it to the stack (the extra `sw`) — even if
+the C never references it again. Fix: pass the arg the asm's first `jal` actually
+uses (read the target — `$a0` at the first call site is usually the incoming arg
+unchanged). Verified 2026-05-28 on gl_func_0005E190: `reloc1()` -> `reloc1(a0)`
+dropped the spurious `sw a0` home, fixed the 63->62 size mismatch, and took it
+98.26% -> 99.87%. This is a recurring fix in the size-mismatch near-miss vein
+(K&R `gl_func_00000000()` placeholders make it easy to forget the passthrough arg);
+docs/MATCHING_WORKFLOW.md notes that vein is the C-fixable one (vs same-size
+allocator/operand caps).
