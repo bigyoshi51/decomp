@@ -194,6 +194,8 @@ _When a file-scope K&R prototype (`extern int gl_func_00000000();`) prevents a b
 
 **When NOT to use:** if you can change the file-scope decl to typed at top, do that instead — one prototype for the whole file is cleaner.
 
+**Generalizes beyond USO/K&R (2026-05-28):** the same alias trick works for (a) **fixed-address non-USO segments** — the alias value is the literal absolute address (e.g. `func_800005DC_d2c = 0x800005DC;` in the kernel), not `0x0`, and the `jal` still resolves byte-identically; and (b) a conflicting **4-arg DEFINITION** in a merged TU, not just a file-scope K&R prototype. Case: `func_80000D2C` (kernel_000.c) calls `func_800005DC` with 2 args (asm sets only a0,a1), but `func_800005DC` is *defined* 4-arg earlier in the same monolithic .c — so the only legal direct-call path is `extern s32 func_800005DC_d2c(void*,void*);` against the alias. This turned a forced fn-ptr cast (`lui+addiu+jalr`, +1 insn, whole-tail misalignment) back into a single `jal`, taking `func_80000D2C` from structurally-broken to size-exact 75/75 (~83%, residual = an 8-byte frame spill + bne-operand canonicalization). Lesson: a "merged-TU arg-count conflict forces a cast" is NOT a hard cap — alias it.
+
 **Precedent:** `gl_func_00000000_va` (game_uso) — first established `_va` alias for varargs K&R pattern, 2026-04-20.
 
 **Concrete example (2026-05-17):** `gl_func_00042338` promoted to byte-exact via `gl_func_00000000_42338(void*, float, ...)` alias. Combined with `PROLOGUE_STEALS=4` (separate post-cc recipe) for the stolen mtc1-zero prefix.
