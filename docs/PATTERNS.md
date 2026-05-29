@@ -196,7 +196,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [`volatile T saved_x = x;` for codegen-shaping must remain UNCONSUMED — using the local in a condition regresses](#feedback-volatile-for-codegen-shape-must-stay-unconsumed) — _When using `volatile` locals as a spill-shaping trick (per feedback_ido_volatile_unused_local_forces_local_slot_spill.md) to lift a wrap's match%, the volatile MUST be left dead (unused after assignment).
 - [The "all .word directives" skip rule applies to fresh decomp, NOT to episode logging — `.word`-only USO functions are still episode-eligible if byte-correct via INCLUDE_ASM](#feedback-word-only-skip-rule-doesnt-block-episode-logging) — _The /decompile skill's skip rule says to skip functions whose .s file is all `.word` directives ("data misidentified as code").
 - [An NM-wrap doc claiming "logic verified correct, IDO codegen cap" may actually be hiding a wrong-dereference bug](#feedback-wrap-doc-codegen-cap-may-mask-logic-bug) — _A wrap doc that names a specific IDO codegen pattern as the "cap" (e.g. "&D base-register form not C-flippable") and says "logic verified correct" can be wrong.
-- [Yay0-compressed USO file-split: SOLVED via binary-concat-before-compress (2026-05-28)](#feedback-yay0-uso-blocks-file-split-recipe) — _objcopy each sub-unit's truncated .text → cat in address order → 16-align → crunch64-compress. Unblocks per-file -O0/-g3 in Yay0 USOs. Ref impl: mgrproc_uso_o0_0.c.
+- [Yay0-compressed USO file-split: SOLVED via binary-concat-before-compress (2026-05-28)](#feedback-yay0-uso-blocks-file-split-recipe) — _objcopy each sub-unit's truncated .text → cat in address order → zero-pad to exact block size (NOT 16-align) → crunch64-compress. Unblocks per-file -O0/-g3 in Yay0 USOs. Ref impl: mgrproc_uso_o0_0.c + timproc_uso_b{1,3}_o0_0.c.
 
 
 ---
@@ -8373,18 +8373,19 @@ on offsets without checking base registers.
 <a id="feedback-yay0-uso-blocks-file-split-recipe"></a>
 ## Yay0-compressed USO file-split: SOLVED via binary-concat-before-compress (2026-05-28)
 
-> **SOLVED 2026-05-28.** The Yay0 file-split blocker is fixed. The Yay0 rule now objcopy's EACH sub-unit's truncated `.text` to a raw binary, concatenates them in address order (16-aligned), then crunch64-compresses. This is the analogue of the direct multi-`.o` link the non-Yay0 USOs use. Reference impl: `mgrproc_uso_o0_0.c` + the `mgrproc_uso_block1_yay0.bin` rule in 1080's Makefile (landed `mgrproc_uso_func_00000000` at `-O0`). Recipe below; the historical blocker write-up follows it.
+> **SOLVED 2026-05-28.** The Yay0 file-split blocker is fixed. The Yay0 rule now objcopy's EACH sub-unit's truncated `.text` to a raw binary, concatenates them in address order, zero-pads to the exact pre-split block size, then crunch64-compresses. This is the analogue of the direct multi-`.o` link the non-Yay0 USOs use. Reference impl: `mgrproc_uso_o0_0.c` + the `mgrproc_uso_block1_yay0.bin` rule in 1080's Makefile (landed `mgrproc_uso_func_00000000` at `-O0`). Recipe below; the historical blocker write-up follows it.
 
 **The implemented recipe (binary-concat, NOT `ld -r`):**
 
 ```makefile
 # region0 = -O0/-g3 sub-unit (carved funcs, TRUNCATE_TEXT to its size);
 # region1 = -O2 main object (the rest). Order = address order.
+build/assets/<uso>_blockN_yay0.bin: YAY0_TEXT_SIZE := 0x<exact pre-split block .text size>
 build/assets/<uso>_blockN_yay0.bin: build/src/<uso>/<uso>_o0_0.c.o build/src/<uso>/<uso>.c.o
 	$(OBJCOPY) -O binary --only-section=.text $(word 1,$^) $(@:.bin=.text0.bin)
 	$(OBJCOPY) -O binary --only-section=.text $(word 2,$^) $(@:.bin=.text1.bin)
 	cat $(@:.bin=.text0.bin) $(@:.bin=.text1.bin) > $(@:.bin=.text.bin)
-	python3 -c "import sys; f=sys.argv[1]; d=open(f,'rb').read(); open(f,'ab').write(b'\x00'*((-len(d))%16))" $(@:.bin=.text.bin)
+	python3 -c "import sys; f=sys.argv[1]; n=int(sys.argv[2],0); d=open(f,'rb').read(); assert len(d)<=n,(hex(len(d)),hex(n)); open(f,'ab').write(b'\x00'*(n-len(d)))" $(@:.bin=.text.bin) $(YAY0_TEXT_SIZE)
 	python3 -c "import sys, crunch64; open(sys.argv[2],'wb').write(crunch64.yay0.compress(open(sys.argv[1],'rb').read()))" $(@:.bin=.text.bin) $@
 ```
 Plus per-sub-unit `OPT_FLAGS := -O0` (or `-O2 -g3`) + `TRUNCATE_TEXT := <size>` (and `NON_MATCHING_TRUNCATE_TEXT` for the parallel tree), an objdiff.json unit for the sub-unit (copy an existing `_o0_*` unit, set `c_flags`), and a targeted `expected/` refresh (`cp build/src/<uso>/*.o expected/src/<uso>/`).
@@ -8392,7 +8393,7 @@ Plus per-sub-unit `OPT_FLAGS := -O0` (or `-O2 -g3`) + `TRUNCATE_TEXT := <size>` 
 **Why binary-concat, not `ld -r` (the originally-scoped idea):** `ld -r` does a partial link that rewrites in-place relocation addends when it merges local sections — it can perturb bytes that were already correct. Binary-concat never touches a byte: each region's `.text` is exactly what its own compile produced. It works because **every intra-USO `jal` is addend-0 reloc-carried** (`0c000000` + R_MIPS_26; verified on map4/mgrproc), so functions are position-independent across the split. (External-USO calls = addend 0 in ROM too; only some *intra*-USO calls are baked, e.g. `0c000331`, and those still match via objdiff reloc-awareness.)
 
 **Key facts that make this tractable:**
-- **`cat` then 16-align.** The original single `.o`'s `.text` size was 16-aligned; reproduce it by padding the concatenated `.text` up to a 16-byte multiple before compression (zeros = block padding, policy-allowed). Without the pad the block can be 4–12 bytes short → ROM layout shifts. Verify the compressed blob is **byte-identical to the pre-split baseline** (snapshot it first).
+- **`cat` then pad to the EXACT block size (NOT 16-align).** Zero-pad the concatenated `.text` up to the pre-split single-`.o` `.text` size (a fixed per-block constant — set it as a per-target `YAY0_TEXT_SIZE`). **Do not 16-align**: block sizes are not uniformly 16-aligned (e.g. `timproc_uso_b1` is only 4-aligned because its `REPLACE_FUNC_BODY` donor-splice changes the size), and 16-aligning over-padded it by 12 bytes → ROM layout shift. Snapshot the pre-split blob first and verify the new compressed blob is **byte-identical** (zeros past the last function are block padding, policy-allowed). The size is invariant: matching a function (INCLUDE_ASM→C) never changes its byte size.
 - **The match metric never touches the blob.** `make objects` → objdiff scores each `.c.o` per-function, so a candidate's match is provable *before* any Yay0-rule change. The concat infra is only needed to keep the full ROM build correct after the split.
 - **`-g3` vs `-O0` is just the `OPT_FLAGS` string** — identical split mechanism (bootup_uso has both).
 
