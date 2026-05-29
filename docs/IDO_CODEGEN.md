@@ -11507,3 +11507,37 @@ reg-assignment/frame-spill nuance). Companion to the size+1 argless-placeholder
 recipe — together they cover much of the game_libs size-mismatch near-miss vein
 (docs/MATCHING_WORKFLOW.md): +1 long = an arg needlessly homed (pass it); -1 short =
 a reload CSE'd away (volatile it).
+
+## Telling a FIXABLE size-mismatch near-miss from a CAP one (game_libs +/-1 vein triage)
+
+After landing 3 game_libs +/-1 size-mismatch fixes (gl_func_0005E190, 0005C6C4,
+0003FF44) and confirming ~8 others are caps (2026-05-28 sweep), the triage rule for
+the extra/missing `sw aN` / `lw` signature:
+
+FIXABLE (do the fix):
+- **Extra `sw aN` (mine +1 long) AND the target's first `jal` USES aN** (aN is the
+  incoming arg, unchanged, at the call site): the C wrote an argless placeholder
+  `gl_func_00000000()` — pass aN. The arg is consumed by the call, not homed.
+- **Missing `lw field` (mine -1 short) where `base->field = X` was just stored**:
+  IDO CSE'd the reload with X's register. Force it with a volatile read
+  `(int*)((volatile int*)base)[field/4]`.
+
+CAP (leave NM, don't grind):
+- **Extra/missing `sw aN` that is a DEAD spill filling a jal delay slot** — aN is
+  homed to its shadow (sp+frame+N) AND spilled again to a low local slot, but aN is
+  dead after the call (the code reloads OTHER args). IDO's delay-slot-filler chose
+  the dead spill; `volatile int *p=&aN` produces the wrong (addiu+lw) form or no-op.
+  (gl_func_0003EAE0, 0002DD58, 0003FA54.)
+- **Unused-arg-save**: target saves an incoming arg the function never reads;
+  asymmetric (saves a0 not a1, or vice versa). Not C-flippable. (0003F4F0, 0003F444.)
+- **Duplicate float-const load** (target `mtc1 at,$fX; mtc1 at,$fY` — same const in
+  two FP regs): IDO CSEs the const into one reg from C. (0002DF98.)
+- **$s / FP register renumber** (s1<->s2, f4<->f12 swapped throughout): allocno-order
+  artifact. (0002A55C, 0000D318.)
+- **Constant-fold** (`+0xFF000000 - 1` folds to `+0xFEFFFFFF` lui+ori): robust against
+  named/register/volatile locals. (0005AFD4.)
+- **Force-register-copy** (target `or aN,a0,zero` preserving a0): IDO won't emit the
+  copy from C, and GCC `register asm("$N")` is rejected by IDO cfe. (000671E4.)
+
+Quick test: decode the target's first call site — if the extra-homed arg is a live
+call argument there, it's the passthrough fix; if it's dead-after-call, it's a cap.
