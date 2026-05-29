@@ -43,6 +43,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Function reads $f0 at entry without setting it — caller-context "implicit zero" pattern](#feedback-ido-f0-implicit-zero-at-entry) — Some IDO -O2 functions store $f0 (float return reg, NOT a standard arg) to memory at the start of the body.
 - [IDO -O2 always folds `return 0.0f` paths through $f0 directly — `mtc1 $0, $f2; mov.s $f0, $f2` unreachable from C](#feedback-ido-f2-intermediate-unreproducible) — Target 4-insn leaves that return 0.0f via an intermediate ($fN != $f0) like `mtc1 $0,$f2; nop; jr $ra; mov.s $f0,$f2` cannot be reproduced from any tested IDO-O2 C body — literal, local var, volatile local (→stack…
 - [IDO's fabs idiom leaves an unreachable `mov.s` at the merge point — branch-likely artifact unmatchable from C](#feedback-ido-fabs-dead-mov) — _IDO emits fabs as `bc1fl fall_taken; mov.s fDst, fSrc (taken=positive); b merge; neg.s fDst, fSrc (delay-always=negative); mov.s fDst, fSrc (fallthrough, unreachable); merge:`.
+- [Commutative FP op operand order (`mul.s`/`add.s` fs vs ft) IS flippable via an assignment-expression: `coord * (tmp = scale)` forces `scale` as fs](#feedback-ido-fp-commutative-operand-order-assignment-lever) — _For `A * B` IDO -O2 does NOT reliably emit source-left as fs; after a fresh coord load it uses coord-as-fs even for `scale * coord`. Force the scale as fs via `coord * (tmp = scale)` (assignment-expr pins it into a reg at the op); on a neg, `coord * (tmp = -x)` also lands the target's result reg. Cracked the documented `game_uso_func_00003FAC` "genuine cap" (99.245% → byte-exact, 5 diffs closed). Found via permuter `X*(var=Y)` mutation, then minimized. Supersedes the "final-add operand order can't flip" cap — try this before NM-wrapping any pure-operand-order FP near-miss; re-grind game_uso_func_000000A0._
 - [IDO -O2 final-add operand order in FPU reductions (`add.s fd, fs, ft`) follows source evaluation; can't easily flip without changing load order](#feedback-ido-fpu-reduction-operand-order) — _For dot products and chained FPU adds like `a[0]*b[0] + a[1]*b[1] + ... + a[n]*b[n]`, IDO emits the final reduction `add.s fd, fs, ft` with `fs` = running-sum register and `ft` = last-product register.
 - [K&R-declared extern can't be called with float args under IDO (no way to get direct jal)](#feedback-ido-knr-float-call) — _In game_libs (1080), `gl_func_00000000` is declared as `extern int gl_func_00000000();` (K&R / no prototype).
 - [Target asm with `mfc1 $aN, $f12` (float-bits-to-int-reg) is hard to reproduce from IDO C](#feedback-ido-mfc1-from-c) — When the target has a single `mfc1 aN, $f12` instruction converting a float arg's bits to an int register for passing as arg, IDO's C compiler emits a stack round-trip (swc1 + lw) instead — at least 14 C variants tried…
@@ -2520,11 +2521,41 @@ Naive C `a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + b[3]*a[3]` produces 15/16 instructi
 
 **Why it's hard to flip:** the final reduction add's `fs`/`ft` register choice is downstream of IDO's expression-tree-walk. Target's source must have written `last + running` (last on left), which forces b[3] and a[3] to be loaded BEFORE the running sum is computed — but the loads visible in target's asm clearly match natural left-to-right evaluation of `a[0]..b[3]`. So target's source likely had something we can't reproduce in plain C: a custom intrinsic, an already-precomputed running sum from a prior function, or a different IDO version.
 
-**How to apply:** for FPU dot-product / vector-reduction leaves, expect a 1-instruction final-add operand-order cap if your output otherwise matches. Wrap NM at ~94 % and move on; don't grind variants — the load-order vs add-operand-order tradeoff is structural.
+**How to apply:** for FPU dot-product / vector-reduction leaves, expect a 1-instruction final-add operand-order cap if your output otherwise matches. **2026-05-29: this "structural cap" framing is partly SUPERSEDED — see [the assignment-expression operand-order lever below](#feedback-ido-fp-commutative-operand-order-assignment-lever), which DOES flip `mul.s` operand order (and likely `add.s`) by forcing one operand into a register at the op via `other * (tmp = wanted_fs)`.** Before wrapping a 1-insn FP-operand near-miss NM, try that lever (and/or the permuter). Re-grind `game_uso_func_000000A0` with `f10 + (tmp = running_sum)` form.
 
 **Related:**
+- [assignment-expression operand-order lever](#feedback-ido-fp-commutative-operand-order-assignment-lever) — the lever that flips this
 - `feedback_ido_v0_reuse_via_locals.md` — sibling case for integer register choice
 - `feedback_ido_arg_save_to_sreg_in_bne_delay.md` — IDO instruction-scheduler caps from C
+
+<a id="feedback-ido-fp-commutative-operand-order-assignment-lever"></a>
+## Commutative FP op operand order (`mul.s`/`add.s` fs vs ft) IS flippable via an assignment-expression: `coord * (tmp = scale)` forces `scale` as fs
+
+_For a commutative FP op `A * B` (or `A + B`), IDO -O2 does NOT reliably emit the source-left operand as `fs`. In scale×coordinate vector math, after a fresh `lwc1` of the coordinate, IDO emits `mul.s fd, coord, scale` (the freshly-loaded coord as `fs`) even when source is written `scale * coord`. To force the OTHER operand (`scale`) as `fs` — matching targets that keep a persistent multiplier in the low reg — wrap it in an assignment-expression at the multiply: `coord * (tmp = scale)`. The `tmp =` forces `scale` into a register right at the op, so IDO uses it as `fs`. The `tmp` var is write-only (a pure operand-ordering lever). The same form on a negation, `coord * (tmp = -orig_scale)`, additionally lands the target's specific result reg (e.g. `$f8` vs `$f10`) for the `neg.s`._
+
+**Verified 2026-05-29 on `game_uso_func_00003FAC`** (53-insn FPU 2D-rotation-like vector builder), which had been documented as a "genuine cap... not C-reachable" stuck at 99.245% (5 diffs: 3 commutative `mul.s` operand swaps + an `$f8`↔`$f10` `neg_scale`/coord allocation pair). All 5 closed:
+
+```c
+/* near-miss: each `scale * a2[k]` emits coord-as-fs (wrong) */
+a0[0] = orig_scale * a2[2] + new_scale * a2[0];
+a0[2] = new_scale * a2[2] + neg_scale * a2[0];
+a1[0] = new_scale * a2[0] - a2[2] * orig_scale;
+a1[2] = new_scale * a2[2] + orig_scale * a2[0];
+
+/* byte-exact: force the scale into a reg AT the multiply */
+a0[0] = (orig_scale * a2[2]) + (a2[0] * (ns  = new_scale));
+a0[2] = (new_scale  * a2[2]) + (a2[0] * (neg = -orig_scale));  /* also lands $f8 */
+a1[0] = (new_scale  * a2[0]) - (a2[2] * (os  = orig_scale));
+a1[2] = (new_scale  * a2[2]) + (a2[0] * (nsd = orig_scale));
+```
+
+**How it was found:** decomp-permuter's `X * (var = Y)` mutation (its assignment-into-temp randomization) hit it; then minimized by hand. The permuter floored at score 35–45 (didn't reach 0 in 280s) but its partial source revealed the lever, which manual application then completed.
+
+**How to apply:** any 1-to-few-insn FP near-miss whose diffs are pure commutative-operand-order (or a coupled small-reg allocation swap on a `neg.s`/load) — `objdump -M no-aliases` shows `mul.s fd, X, Y` vs `mul.s fd, Y, X`, same operands — is a candidate. Identify which operand the target wants as `fs`, then write `<other_operand> * (tmp = <wanted_fs>)`. Declare throwaway `float tmp;` levers (set-but-unused warnings are harmless). This generalizes the old "final-add operand order can't flip" cap above; try it before NM-wrapping. Counterpart to [`feedback-ido-fp-compound-assign-load-order`](#feedback-ido-fp-compound-assign-load-order) (which fixes load order via `*=`); this fixes op-operand order via the assignment-expression.
+
+**Related:**
+- [final-add operand order in FPU reductions](#feedback-ido-fpu-reduction-operand-order) — the cap this supersedes
+- [FP read-modify-write compound `*=`](#feedback-ido-fp-compound-assign-load-order) — sibling load-order lever
 
 **Single-call mul.s variant (verified 2026-05-06 on `gl_func_00052104`):** for `result = jal_returns_float() * fresh_loaded_float`, IDO assigns the FRESHLY-LOADED operand to `fs` and the call-return ($f0) to `ft` regardless of C operand order. Tried 3 variants — operand swap (`x*y` vs `y*x`), inlining the call into the multiplication, and decl-first ordering — all hit the same fs=fresh / ft=$f0 emit. If target has fs=$f0 / ft=fresh (call return on the LEFT in mul.s), no C-source variant flips it. Clean promotion: INSN_PATCH at the mul.s offset with the byte-swapped operands (e.g. `0x46003202` → `0x46060202` flips fs/ft from `$f6,$f0` to `$f0,$f6`). Promoted gl_func_00052104 from 99.38 % → byte-correct via `gl_func_00052104=0x2C:0x46060202` in the per-`.o` INSN_PATCH list.
 
