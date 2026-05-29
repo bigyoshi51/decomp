@@ -11581,3 +11581,22 @@ CAP (leave NM, don't grind):
 
 Quick test: decode the target's first call site — if the extra-homed arg is a live
 call argument there, it's the passthrough fix; if it's dead-after-call, it's a cap.
+
+## Float passed into a callee's INT-register arg slot = raw-bits reinterpret (`*(int*)&f`), NOT a conversion
+
+When a function forwards a float value into an argument position that the callee
+takes as an INT register (a2/a3/stack, i.e. arg index >= the float that landed in
+f12/f14), the asm loads it with a plain `lw` (raw 32-bit copy) — NOT `trunc.w.s` +
+`mfc1`. That's a reinterpret of the float's bits, not a float->int conversion. In C,
+pass `*(int*)&f` (or a union), declaring the callee param `int`. Passing the `float`
+directly to an `int` param makes IDO emit the conversion (`trunc.w.s; mfc1`) — wrong
+bytes + wrong size. Tell which from the target asm: `lw aN,off(sp)` feeding the call
+= reinterpret; `lwc1 + trunc.w.s + mfc1` = genuine conversion.
+Verified 2026-05-29 matching gl_func_0005C43C (9-arg float fn): `r2 = cb(a1, a2,
+*(int*)&a4, *(int*)&a5)` — a4/a5 are floats (used as float in another call) but
+forwarded as raw int-reg bits here. Companion facts for such multi-float-arg fns:
+(1) the callee needs a float-typed alias (undefined_syms `gl_func_00000000_<suffix>
+= 0x0` + `extern float alias(float,float,int,int)`) so f12/f14 stay single-precision
+rather than K&R double-promoting (see #feedback-alias-extern-via-undefined-syms in
+MATCHING_WORKFLOW); (2) a stray `int _pad;` may be needed to reserve the exact frame
+slot (IDO's frame came out 8 bytes short without it).
