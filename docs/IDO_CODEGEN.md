@@ -50,6 +50,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — _In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum — shifts IDO's FPU register allocation and instruction order across the WHOLE…
 - [IDO -O2 needs named float locals to load-batch all loads before stores; inlined float derefs interleave load/store](#feedback-ido-named-float-locals-enable-load-batching) — When asm shows `lwc1 f14; lwc1 f12; lwc1 f2; lwc1 f0; swc1 f14; swc1 f12; swc1 f2; swc1 f0` (4 loads then 4 stores), the C source MUST have 4 named float locals.
 - [Inline a re-used base expression (don't name it) to force a fresh reload per access; a named local CSEs to one load](#feedback-ido-inline-base-forces-reload-per-access) — _When the target reloads the same base each time it's used inside a loop (e.g. two `lw base,0(a0)` per iteration before two different accesses through it), do NOT cache it in a named local — IDO will CSE that to a single load (N insns short). Write the base expression inline at each use site: `*(T*)((char*)a0[0] + off)` repeated, not `b = (char*)a0[0]; ... b+off ... b+off+4`. The inline form reloads the base for each access, matching. (Inverse of the named-float-locals load-batching rule.) Verified 2026-05-23 game_libs_func_00060CB8 (per-entry array reset: named base → 18/20, inline a0[0] twice → 20/20 byte-exact)._
+- [Force a SECOND zero FP reg (defeat the 0.0f CSE): store INT `0` through a `float*` variable](#feedback-ido-int-zero-through-float-ptr-forces-second-zero-reg) — _When the target materializes two zero FP regs (e.g. `mtc1 zero,$f0` for most float stores + `mtc1 zero,$f4` for one hoisted into a `jr` delay slot), plain `0.0f` everywhere CSEs to ONE reg (1 insn short), and `float z=0.0f` CSEs too. For the store needing the distinct reg, assign through a `float*` variable and store INT `0` (not `0.0f`): `float *p = ...; *p = 0;` — the int-0→float conversion doesn't CSE with the `0.0f` constant, forcing the 2nd `mtc1`. Cracked timproc_uso_b5_func_00003890 (7/8 → byte-exact, permuter-found). Disproved its "0.0f CSE not C-controllable" cap._
 - [Float-const register choice ($f0 vs $f2) follows C SOURCE order of the constants' first use, not asm store order — reorder to flip](#feedback-ido-float-const-reg-by-source-order) — _A multi-const float-init (e.g. identity matrix: 1.0f on the diagonal, 0.0f elsewhere) where the target puts one constant in $f0 and the other in $f2. IDO assigns $f0 to whichever constant's stores appear FIRST in C source, then reorders the actual stores during scheduling. So if the target has 1.0f in $f0 but stores 0.0f first in asm, write the 1.0f stores first in C — IDO still emits the 0.0f stores first but keeps 1.0f in $f0. Flips the "float-register-swap (f0 vs f2)" cap. Verified 2026-05-23 game_libs_func_0005E83C (3x4 identity init, 14/16 → byte-exact)._
 - [Float→narrow-int store: cast through `(int)` for `trunc.w.s`, NEVER directly to `(char)`/`(short)` (which pulls the soft-float-to-int range-check helper)](#feedback-ido-float-to-int-cast-via-int-not-char) — _For `byte = (T)(f * k)` where T is char/short, `(char)(float)` or `(short)(float)` emits a giant inlined float→int conversion routine (range checks + helper, ~100 insns). The target is just `mul.s; trunc.w.s; mfc1; sb`. Write `(int)(f*k)` and assign to the narrow lvalue — the (int) maps directly to `trunc.w.s`, the store narrows. Verified 2026-05-23 game_libs_func_00047AD8 (Vec3→3 bytes ×127.0f): (char) cast → 111 insns, (int) cast → 20-insn byte-exact._
 - [O32 passes floats in $aN when preceded by a non-float arg — use `mtc1 aN, fM` reconstruction](#feedback-ido-o32-float-in-int-reg) — _When a function signature is `(int_like, float, ...)`, MIPS O32 passes the float in $a1 (the int register), not $f14. **TRAP (verified 2026-05-27 gl_func_0005E664)**: do NOT write the body with `int a1_bits` arg + `float scale = *(float*)&a1_bits;` — taking address of an int arg forces a stack home spill + `lwc1` reload per iteration, regressing 45-insn target to 62 insns. The correct form is `void f(T *p, float scale, ...)` — IDO emits the natural `mtc1 a1, $f12` at entry, $f12 persists across the body. Sig-type-fix lever = byte-exact match on this family._
@@ -2375,6 +2376,35 @@ IDO still emits the 0.0f stores before the 1.0f stores in the final asm, but
 allocation. This **flips the "float-register-swap (f0 vs f2)" cap** — it's a
 C-source reorder, not a permanent cap. Verified 2026-05-23 on
 `game_libs_func_0005E83C` (3x4 affine identity init, 14/16 → byte-exact).
+
+<a id="feedback-ido-int-zero-through-float-ptr-forces-second-zero-reg"></a>
+### Force a SECOND zero FP reg (defeat the 0.0f CSE): store INT `0` through a `float*` variable
+
+When the target materializes TWO zero FP regs for a multi-float-zeroing function
+(e.g. `mtc1 zero,$f0` for most stores + `mtc1 zero,$f4` for one store that the
+scheduler hoists into a `jr` delay slot), plain `*(float*)p = 0.0f` everywhere
+won't reproduce it: IDO CSEs the `0.0f` constant to a SINGLE reg, leaving you 1
+insn short. `float z = 0.0f` also CSEs (same value). **Lever:** for the store
+that needs the distinct reg, assign through a `float*` *variable* and store the
+INT literal `0` (not `0.0f`):
+
+```c
+void f(int *a0) {
+    float *p;
+    *(int *)((char *)a0 + 0x2B4) = 0;
+    *(float *)((char *)a0 + 0x164) = 0.0f;   /* these CSE to $f0 */
+    *(float *)((char *)a0 + 0x168) = 0.0f;
+    *(float *)((char *)a0 + 0x16C) = 0.0f;
+    p = (float *)((char *)a0 + 0x2A0);
+    *p = 0;                                  /* int 0 via float* var -> fresh $f4 */
+}
+```
+
+The int-`0`-stored-to-`float` (implicit conversion) through a separate pointer
+variable doesn't CSE with the `0.0f` constant, so IDO emits a second `mtc1
+zero,$fN`. Verified 2026-05-29 on `timproc_uso_b5_func_00003890` (7/8 → byte-exact;
+permuter-found, then minimized — disproved its "0.0f CSE not C-controllable" cap
+comment). Companion to [float-const reg by source order](#feedback-ido-float-const-reg-by-source-order).
 
 **Pattern:** function body is 4 words, returning zero via a non-$f0 intermediate register:
 ```
