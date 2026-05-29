@@ -11489,3 +11489,21 @@ dropped the spurious `sw a0` home, fixed the 63->62 size mismatch, and took it
 (K&R `gl_func_00000000()` placeholders make it easy to forget the passthrough arg);
 docs/MATCHING_WORKFLOW.md notes that vein is the C-fixable one (vs same-size
 allocator/operand caps).
+
+## Size -1 near-miss (mine too SHORT) with a store-then-read of the same field: IDO CSE'd the reload — force it with a volatile read
+
+The mirror of the size+1 / argless-placeholder recipe above. When a NM wrap is one
+instruction too SHORT and the target has a `lw node, N(base)` reload that mine
+lacks, look for a `base->N = X; ... node = base->N;` pattern in the C: IDO proves
+`base->N == X` (the value just stored) and reuses X's register instead of reloading
+from memory, dropping the `lw`. The target's original compile reloaded. Force the
+reload by reading through a volatile-qualified pointer so IDO can't fold it:
+`node = (int*)((volatile int*)base)[N/4];`. This is faithful (volatile read = a real
+`lw`, the exact instruction the target emits) and not match-faking — the bytes come
+from a genuine compile. Verified 2026-05-28 on gl_func_0003FF44: `self[0x10/4] =
+handle; ... node = self[0x10/4];` CSE'd node==handle (-1 insn, 95.68%); the volatile
+read restored the reload and the 38-insn size -> 98.18% (residual was then a pure
+reg-assignment/frame-spill nuance). Companion to the size+1 argless-placeholder
+recipe — together they cover much of the game_libs size-mismatch near-miss vein
+(docs/MATCHING_WORKFLOW.md): +1 long = an arg needlessly homed (pass it); -1 short =
+a reload CSE'd away (volatile it).
