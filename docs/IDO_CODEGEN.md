@@ -11096,6 +11096,8 @@ byte-exact at 0x18). Generalizes directly to `gl_func_00066514`
 (same shape with the working pseudo in `$a2`; 3-param form spills
 at `0x20`, 1-param `a0`-reuse should spill at `0x18`).
 
+**Corollary — transcribe m2c's `||`/`&&` short-circuit + sentinel comparison VERBATIM; don't "clean it up" (verified 2026-05-29, gl_func_000628EC / gl_func_000519A4).** When m2c renders a nested alloc-bail as a comma/short-circuit monster like `if ((s != (void*)-0x110) || (a1 = s+0x110, v1 = alloc(4,a1), v1 != 0)) && ((a0 = v1, v1 != 0) || (a0 = alloc(4,a1), a0 != 0))) *a0 = 0;`, write it as-is. The `s != (void*)-0x110` is m2c's view of a null-check on `&s->field_110` (the address `s + 0x110`), and IDO genuinely emits the dead alloc(4) blocks because it can't fold `base+const != 0`. Rewriting it to the "obvious" `p = (int*)(s+0x110); if (p != 0) *p = 0;` lets IDO PROVE `p != 0` and deletes both dead blocks → frame shrinks, instruction count drops (~10 insns short), and the whole tail mis-aligns. On gl_func_000628EC the verbatim form jumped the match 26%→52% and restored the exact 80-insn count. So for the nested-alloc-with-dead-blocks family: faithful comma-operator transcription beats clean nested-`if` whenever the target keeps the unreachable alloc legs.
+
 ## Append+overflow: hold `n = count+1` in a named temp; don't reload the just-stored counter for the bound test
 <a name="feedback-ido-append-overflow-count-temp"></a>
 
