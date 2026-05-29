@@ -213,6 +213,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O0 gives target-prefix bytes for unfilled-delay-slot leaves, but adds dead trailing jr-nop — not trimmable from C](#feedback-ido-o0-prefix-match-dead-epilogue) — _For 3-insn leaf setters (`sw X, off(a0); jr ra; nop`) that IDO -O2 compacts into 2 insns (`jr ra; sw X, off(a0)`) — the classic `feedback_ido_unfilled_store_return.md` cap — -O0 DOES emit the 3 target insns as a…
 - [IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C](#feedback-ido-o2-tiny-wrapper-unflippable) — _Simple `void f(void) { func(&SYM); }` wrappers at IDO -O2 always emit `addiu sp; sw ra; lui a0; jal; addiu a0(delay)`.
 - [Value-returning -O0 functions emit an extra return-branch this toolchain can't fold — likely a systematic cap](#feedback-ido-o0-value-return-extra-branch) — _A value-returning -O0 function ends with TWO branches (return's `b epilogue` + the body's `b +1` marker); many 1080 targets have only one. Void -O0 funcs match fine; value-returning ones are +1 insn. Suspected IDO patch-level divergence._
+- [Float function-return used in an expression is preserved in callee-saved $f20 — target uses $f0 directly (toolchain cap)](#feedback-ido-float-call-result-preserved-in-f20) — _This IDO build moves a float call-return to callee-saved $f20 (+save/restore) before the next FP operand; targets keep it in $f0. Not C-fixable. Caps float-returning-call expressions (mgrproc_uso_func_000005D0)._
 - [-O0: a dead reassignment of a `register` var reproduces a stray `lui sN; addiu sN` symbol-materialize](#feedback-ido-o0-dead-reassign-forces-s-reg-materialize) — _Reproduce a target's dead `&D` address-materialize into a callee-saved reg via `register int v; ...; v = (int)&D;` (no DCE at -O0). Reuse the same register var to keep it in s0. Took mgrproc_uso_func_00000504 byte-exact._
 - [IDO -O3 produces byte-identical output to -O2 for single-file compiles — file-split with OPT_FLAGS=-O3 only adds value for inter-module (IPO) builds, which the per-.c.o pipeline doesn't use](#feedback-ido-o3-equals-o2-for-single-file-compile) — _When a function is stuck at -O2 codegen and you're considering file-split-with-OPT_FLAGS to try -O3, don't bother — IDO's -O3 differs from -O2 only in inter-module optimization (requires `cc -O3 -j ...`).
 - [-O0-cluster split mid-file requires a paired -O2 layout shim, not just the -O0 file](#feedback-o0-cluster-split-with-layout-shim) — _When a -O0 cluster sits MID-file (not at start or end), splitting it out needs THREE files: predecessor (truncated), the -O0 cluster file, AND a successor "layout shim" (-O2 INCLUDE_ASMs only) holding everything…
@@ -8334,6 +8335,20 @@ mine:    lw v0, 0x28(sp);  b ep;  nop;  b +1;  nop;  <ep>   # 2 branches (extra 
 **Verified** the extra branch is independent of: combined-vs-separate local init, comma-expression `return (store, val)`, a union/scalar alias for the returned element, and `-g`/`-g1`/`-g2`/`-g3` (all `-O0` variants emit 2; `-O1` emits 0). Minimal repro: `int f(int*a,int n){int s=0,i; for(i=0;i<n;i++) s|=g(a[i]); return s;}` builds 2 branches; the analogous original target has 1. The **void** `-O0` functions match fine (no `lw v0` → just the single end-marker) — which is why every landed `-O0` match (accessors, `mgrproc_uso_func_000009A8`, `_00000504`) is void.
 
 **How to apply:** if an `-O0` Yay0-USO target is **value-returning** and your build is exactly 1 insn long with an extra `b; nop` before the epilogue, it's this cap — leave it `INCLUDE_ASM`. Confirmed on `mgrproc_uso_func_00000A14` (got to 50 vs 48 insns via the union-alias trick for `buf[0]` direct-load, but the value-return branch is the irreducible residual). Suspected IDO patch-level codegen divergence vs the game's compiler; no C construct found to fold it. (If a value-returning `-O0` function is ever matched, revisit this.)
+
+---
+
+<a id="feedback-ido-float-call-result-preserved-in-f20"></a>
+## Float function-return used in an expression is preserved in callee-saved $f20 — target uses $f0 directly (toolchain cap)
+
+**Observed 2026-05-29.** When a function returning `float` is called and its result is used in a following FP expression, this toolchain (decompals `ido-static-recomp` 7.1) emits `mov.s $f20, $f0` (+ `sdc1/ldc1 $f20` save/restore) to preserve the return in a **callee-saved** FP register before the next operand, even when the next operand is just a load that can't clobber `$f0`. Many `1080` targets keep the value in `$f0` and use it directly:
+
+```
+target:  jal rng; lui at; lwc1 f4,0xN(at);  mul.s f6,f0,f4;  trunc.w.s; mfc1   # f0 direct, no f20
+mine:    jal rng; mov.s f20,f0; lui; lwc1 f4; mul.s f6,f4,f20; trunc.w.s; mfc1  # f0->f20 (+ save/restore)
+```
+
+Minimal repro: `int mf(void){ return (int)(g() * *(float*)&D); }` (g returns float) emits the `mov.s $f20,$f0` + `sdc1/ldc1 $f20`. No statement-splitting, operand-order, or local-vs-call ordering avoids it. Suspected IDO patch-level FP-temp-allocation divergence vs the game's compiler. **Treat float-returning-call expressions as a likely cap** when the target has no `$f20` save and uses `$f0` directly. Confirmed blocking on `mgrproc_uso_func_000005D0` (random-ID float-RNG loop; also value-returning calls feed the `mul.s`). Companion to [value-returning -O0 extra-branch](#feedback-ido-o0-value-return-extra-branch) — both are systematic toolchain codegen divergences, not C-fixable.
 
 ---
 
