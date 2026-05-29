@@ -1930,6 +1930,19 @@ Confirmed: in-loop decl → `lui 0x3A80; mul.s`; same decl hoisted → `lui 0x44
 div.s` byte-exact. Two functions in the float-format-log family (0005B764 matched,
 0005B848 matched this way); look for more 0005B* siblings with the same /1024.0f.
 
+**BOTH-LITERAL → FULL POOL-FOLD variant (2026-05-29, gl_func_0000D7B8):** when
+BOTH numerator and divisor are literals (e.g. `250.0f / 255.0f`, a color ratio),
+IDO doesn't even emit mul.s — it fully constant-folds the quotient at compile time
+and emits a precomputed `lwc1 fN, lo(at)` from the literal pool (one load per
+ratio). The SAME named-local-divisor fix applies and is even more impactful here:
+`float denom = 255.0f; v->a = 250.0f/denom; v->b = 235.0f/denom; ...` makes IDO
+materialize denom once (lui 0x437F; mtc1 → $f0) and emit a runtime `div.s` per
+ratio reusing that divisor — exactly the target's shape. Verified on gl_func_0000D7B8
+(four x/255 ratios): literal form pool-loaded all four (63% reg-blind); hoisted
+`float denom` restored the 4 `div.s` and the shared f0 divisor → 88%. So: a shared
+literal divisor across several ratio stores is a strong signal to hoist it into one
+named `float` — both to flip the opcode AND to get the single-materialize+reuse.
+
 **EXACT-RECIPROCAL EXCEPTION (2026-05-27, func_000102A4):** the named-local lever
 FAILS for divisors whose reciprocal is an EXACT power-of-2 float (2.0f→0.5f,
 4.0f→0.25f, 8.0f→0.125f, etc.). IDO's optimizer recognizes the exact-reciprocal
