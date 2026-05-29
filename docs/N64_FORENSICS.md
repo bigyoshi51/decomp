@@ -35,6 +35,19 @@ _2026-05-23. After landing the clean small leaves, a size-sorted sweep of the re
 
 **Takeaway:** when source-3 (small-unstarted) rolls and the candidate is bare game_libs ≤0x40, classify it against these four shapes first. None are quick matches. The genuine remaining game_libs %-work is (a) a refine-splat pass on the 0x8-fragment gaps, (b) big-function first-pass wraps (`5721C` FPU, `578B4` 2423-insn), or (c) the permuter on the few structurally-exact reloc-free leaves (e.g. `27504`).
 
+## 1080 game.uso spine decode status (2026-05-28) — remaining work is multi-tick decode + caps, not tick-safe
+
+_The game.uso "spine" (top-10 biggest functions, per `project_1080_game_uso_map`) is where the call-graph-DFS priority points, but a byte-diff status sweep shows none are tick-safe quick wins — they are large multi-tick decodes whose 100% is regalloc/branch-likely-cap-blocked. Current fuzzy + the binding residual:_
+
+- `game_uso_func_00007424` (1.7KB) — **DONE** (100%, plain C; was the "mostly self-contained algorithm").
+- `game_uso_func_000044F4` (4.6KB, entry) — **70.5%**. Frame fixed (0xE8); residual is the missing-`$s2` / args-homed-to-caller-slots / per-iter `s2`-marshalling — whole-function allocno divergence (see `IDO_CODEGEN#feedback-ido-game-uso-entity-ptr-a2-cap`). Cap.
+- `game_uso_func_00009B88` (1.4KB) — **55%**. First divergence is a documented branch-likely cap: target emits `addiu v1,sp,0x190; bnezl v1,+6` with the body's a2-reload in the delay-LIKELY slot; the `out=&local; if(out){...}` C produces plain `beqz` (IDO knows &local is non-null). Reorg-pass-driven, not C-reachable; cascades. Plus ~75 insns of further 3D-geometry not yet decoded.
+- `game_uso_func_00001DDC` (1.5KB) — **39%**, 122 insns short, divergent from insn 0 (frame 424 vs 384). Substantially-incomplete decode (big rewrite needed).
+- `game_uso_func_0000C48C` 8%, `_00008CD8` 3.5%, `_00000B3C` 3.4%, `_00007C1C` 1.5%, `_0000D9CC` 0.27% — **stub wraps** (essentially undecoded; each a 2.8–4.3KB first-pass-decode project).
+- `0x5924` in the map is **not a real symbol** (no `.o`/`.s` entry — stale map row).
+
+**Takeaway:** when source-5 (spine) rolls, expect a multi-tick decode, not a 60s match. The count-moving exact matches in this segment are the per-function `-O0`/Yay0 file-splits (REPLACE_FUNC_BODY donor splice, `MATCHING_WORKFLOW#feedback-replace-func-body-o0-donor`) and sustained spine RE — both focused-session work. Tick-safe game_uso matches (trapped promotions, decl-order/dead-spill cracks) were drained by 2026-05-28.
+
 <a id="feedback-1080-rsp-ucode-not-f3dex2"></a>
 ## 1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches
 
