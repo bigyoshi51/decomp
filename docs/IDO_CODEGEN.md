@@ -11796,9 +11796,23 @@ F49C) still byte-match after the rebuild. **HOW TO USE THE DUMP:**
   the contested register and in what order — so you target the first-use/dedup/
   pad fix (techniques 1–3) instead of blind-permuting.
 - NOTE: `tools/` is gitignored (per-machine build), so this `libc_impl.c` patch is
-  LOCAL — re-apply + rebuild after a clean `tools/` checkout, or upstream it to
-  decompals/ido-static-recomp. The rebuild relinks the shared cc; coordinate with
-  parallel agents (codegen is identical, so only the brief relink window matters).
+  LOCAL — re-apply via `scripts/patch-ido-ecvt-dump.py <libc_impl.c>` + rebuild
+  (`make VERSION=7.1`) after a clean `tools/` checkout, or upstream it to
+  decompals/ido-static-recomp. The rebuild relinks the shared cc; codegen is
+  identical (ecvt is dump-path-only) so only the brief relink window matters.
+- **SCOPE LIMIT (verified 2026-05-29, levels 1–99):** the `uopt -zdbug` dump shows
+  the HIGH-LEVEL UCODE candidate coloring (`isvar`/`isop` list + `N: N assigned R`
+  + live-range stats), but does NOT expose the FINAL hardware-register / spill-
+  reload-temp assignment — that is chosen in the later **`ugen`** phase, which
+  `uopt -zdbug` never prints. So the dump helps for true variable-coloring caps
+  (a named live-range landing in a different reg, decided in uopt) but is NOT
+  sufficient for the two caps probed: `timproc_uso_b1_func_00000DEC` (spilled ptr
+  reloaded into `$a3` vs target `$t7`/`$t9` — a spill-reload-temp choice) and
+  `mgrproc_uso_func_00001594` (literal `40` in `$a2` vs `$v1` — a constant is not
+  a live-range candidate at all). For those, the contested register is picked
+  downstream of the dump → fall back to the C-level levers (first-use reorder,
+  CSE/dedup-shift, live-range split, pad-var) + permuter. Open follow-up: does
+  `ugen` have its own debug dump exposing the final reg map? (not yet checked.)
 
 **Honest limit:** the permuter README states there is no register-allocation-
 specific randomizer and it "finds changes that improve regalloc by accident." When
