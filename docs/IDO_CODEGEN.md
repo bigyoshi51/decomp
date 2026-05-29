@@ -9053,6 +9053,8 @@ Built emits `bnez at, skip; nop; li a1, N; .skip: jal` directly — same shape a
 
 _When a function accesses `D_00000000` (or any cross-USO placeholder) at multiple sites and the target asm uses TWO separate `lui` instructions (one per access) instead of CSE-folding both into a shared base register, declare each access via a distinct C extern name. Add aliases for both to `undefined_syms_auto.txt` mapping to the same `0x00000000`. Runtime relocation collapses them back to the same address; compile-time CSE sees them as distinct symbols and emits separate `lui`s._
 
+**Generalizes to N sites + frees a callee-saved reg (verified 2026-05-29, gl_func_00054A14):** when the SAME constant address is passed as an arg to N successive calls and the target re-materializes `lui;addiu` for EACH call (no CSE), a single `&D_00000000` makes IDO CSE it into a callee-saved reg held across all the calls — which ALSO steals an `$s` reg, so the function's real arg gets bumped to a second `$s` (extra save + bigger frame, wrong allocation). Declaring N DISTINCT externs (`D_x_o0..o(N-1) = 0x0`), one per call site, defeats the CSE → IDO re-materializes `lui;addiu` per call AND no longer needs a callee-saved reg for the address, freeing `$s0` for the genuine arg and matching the target's single-`$s` allocation. Took gl_func_00054A14 (7-call settings binder) 66% → 97.78% (combined with a float-typed call alias for the single-precision stack args). The byte result is honest: each distinct extern resolves to `0x0`, so each emits the exact `lui 0; addiu 0` the target has.
+
 ### Symptom
 
 Two-extern target asm:
