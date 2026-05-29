@@ -6359,3 +6359,20 @@ so fine for normal builds; permanence needs the boundary source updated.
 **Still focused-session:** the stolen-prologue subclass (leading orphan belonging
 to the PREDECESSOR, e.g. gl_func_00027548) needs predecessor-side edits.
 Full recipe: `memory/project_1080_boundary_correction_tick_recipe.md`.
+
+## Before decoding an asm region as "label X's body", verify what actually branches to X (map inbound control flow first)
+
+A mid-function label (a `goto`/convergence target, `late_label`-style) does NOT
+necessarily own the asm that physically follows it, and a nearby unattributed asm
+region is NOT necessarily that label's body. Burned two commits (2026-05-29,
+game_uso_func_00001DDC) decoding an "~80-insn late_label convergence" (Vec3 scale +
+ctx-subtract) from a nearby asm region — then a 5-minute control-flow check showed
+the label was reached by a path that `b`'d straight to the epilogue (the key==3 arm:
+copy, then `b <epilogue>` directly), so the label was correctly EMPTY and the decoded
+region actually belonged to the OTHER arm's tail (already in the C). Rule: before
+attributing any asm to a label, decode the entry/dispatch branches and trace which
+`b`/`beq*`/`bne*` targets land on that label's address — `objdump`-disassemble the
+raw words, divide addr by 4 for the insn index, and follow every branch whose target
+is >~20 insns away. Cheap (one disasm pass) and prevents phantom-block decodes that
+mislead future passes. Especially important for relocatable-USO raw-word `.s` where
+splat emits no labels and the only structure is the branch arithmetic.
