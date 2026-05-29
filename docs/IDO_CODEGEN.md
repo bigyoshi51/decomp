@@ -58,6 +58,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 ### argument / save register
 
 - [**Pass an adjacent int pair AS A STRUCT BY VALUE to reproduce outgoing-arg home-stores (`sw a1,4(sp); sw a2,8(sp)`) — DISPROVES the "precall-arg-spill cap"**](#feedback-ido-struct-by-value-homes-arg-pair) — _When the target stores outgoing register args to their home slots right around a `jal` — `lw a1,0(p); sw a1,4(sp); lw a2,4(p); jal; sw a2,8(sp)` — and your C `f(x, p[0], p[1], k)` does NOT emit the `sw a1,4(sp)/sw a2,8(sp)` stores, the fix is to pass the adjacent pair as a 2-int STRUCT BY VALUE: `typedef struct {int a,b;} Pair2; f(x, *(Pair2*)p, k);`. IDO places the struct's two ints in a1,a2 AND homes them to the caller's outgoing-arg slots (sp+4, sp+8), exactly matching the target. Verified empirically: K&R/`(int,...)`/`(int,int,...)`/`(int,int,int,...)`/`(int,int,int,int)` prototypes and register/pointer/global-addr arg sources ALL fail to home the args; only struct-by-value does it. The old `feedback_ido_precall_arg_spill_unreachable` "cap" was WRONG. Verified 2026-05-28 on game_uso_func_00011168: 61.2% → 93.92% (instruction count 46→60 to match target; residual ~6% is an unrelated $v0/$v1 &D-base renumber). Recheck every NM wrap labeled "precall-arg-spill"/"vararg-spill cap" (game_uso_func_0000A374/0000FF48/0000FFB8/00010BAC/0000D5F8, etc.) — many pass adjacent int pairs and should now match or near-match._
+- [**Declare a byte arg as `unsigned char` to reproduce BOTH its `sw aN` home AND its `andi 0xFF` zero-extend — but the eager extension flips s-reg order vs a later int arg**](#feedback-ido-unsigned-char-param-homes-and-extends) — _When the target both homes an incoming int-register arg (`sw a2,64(sp)`) AND zero-extends it once before use (`andi sX,a2,0xff`, hoisted out of a loop), the arg is an `unsigned char` parameter. Declaring it `int` + masking `a2 & 0xFF` gets the andi but NO home (the home only appears with the char type). The `unsigned char` declaration produces the home + the eager prologue zero-extend together — the cleanest way to match a dead-arg-home that coexists with a byte mask. CAVEAT (verified 2026-05-29 gl_func_0000A7B4): the char extension is EAGER at the prologue, so the extended pseudos are born before a sibling `int` arg's loop-invariant copy and grab the LOWER $s-regs — leaving the int arg (e.g. a1) in a higher $s than the target wants. So char-arg homing and "int-arg-first allocno order" are mutually exclusive; a function needing both lands as a clean cyclic $s-reg renumber (size + control flow + homes all exact). NM-wrap that residual._
 - [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
@@ -5592,6 +5593,29 @@ is sometimes the more direct way to preserve the target back-edge shape.
 Verified on func_80001184 (kernel_000.c).
 
 ---
+
+---
+
+<a id="feedback-ido-unsigned-char-param-homes-and-extends"></a>
+## Declare a byte arg as `unsigned char` to reproduce its `sw aN` home + `andi 0xFF` zero-extend (and the s-reg-order caveat that follows)
+
+When a target both **homes** an incoming int-register arg to its shadow slot AND **zero-extends** it to a byte before use:
+
+```
+move    s3,a1
+andi    s4,a2,0xff      # zero-extend a2 -> s4, hoisted before the loop
+andi    s5,a3,0xff      # zero-extend a3 -> s5
+sw      ra,52(sp)
+sw      a2,64(sp)       # dead home of full a2
+sw      a3,68(sp)       # dead home of full a3
+```
+
+…the args (a2, a3) are **`unsigned char` parameters**. Two competing C shapes:
+
+- `int a2` + `cb(p, a1, a2 & 0xFF, ...)` → produces the `andi` mask but **NO home** (`sw a2,64`). Comes out 2 insns short.
+- `unsigned char c2` → produces the home **and** the hoisted `andi` zero-extend together. This is the cleanest way to match a dead-arg-home that coexists with a byte mask (the home appears *only* with the char type; `&a2`-address-taking would also home it but adds a reload).
+
+**CAVEAT — eager extension flips $s-reg order (verified 2026-05-29, gl_func_0000A7B4).** The char zero-extends are emitted EAGERLY at the prologue, so the extended pseudos (c2, c3) are *born before* a sibling plain-`int` arg's loop-invariant copy (e.g. `move sX,a1`, hoisted out of the loop after the prologue). Born-earlier-but-shorter-range char pseudos grab the LOWER $s-regs (s3, s4); the int arg lands one $s higher (s5) than the target wants (target: a1/c2/c3 → s3/s4/s5; IDO emits c2/c3/a1 → s3/s4/s5). **Char-arg homing and "int-arg-first allocno order" are therefore mutually exclusive** — no C shape gives both. A function needing both lands as a clean cyclic $s-reg renumber with everything else (size, control flow, homes, hoisted masks) byte-exact. NM-wrap that residual; it's the documented reg-renumber cap, not a logic miss.
 
 ---
 
