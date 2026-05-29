@@ -212,6 +212,8 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O0 `lui tA; lw tA, %lo(D)(tA)` reuse is the default; forcing fresh-temp `lw tB` is unreliable](#feedback-ido-o0-lui-lw-reuse) — _When the target asm reads a D_* global at -O0 with `lui tA; lw tB, %lo(D)(tA)` (fresh register for dest), plain `if (D == C)` produces the reuse form `lw tA, %lo(D)(tA)`.
 - [IDO -O0 gives target-prefix bytes for unfilled-delay-slot leaves, but adds dead trailing jr-nop — not trimmable from C](#feedback-ido-o0-prefix-match-dead-epilogue) — _For 3-insn leaf setters (`sw X, off(a0); jr ra; nop`) that IDO -O2 compacts into 2 insns (`jr ra; sw X, off(a0)`) — the classic `feedback_ido_unfilled_store_return.md` cap — -O0 DOES emit the 3 target insns as a…
 - [IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C](#feedback-ido-o2-tiny-wrapper-unflippable) — _Simple `void f(void) { func(&SYM); }` wrappers at IDO -O2 always emit `addiu sp; sw ra; lui a0; jal; addiu a0(delay)`.
+- [Value-returning -O0 functions emit an extra return-branch this toolchain can't fold — likely a systematic cap](#feedback-ido-o0-value-return-extra-branch) — _A value-returning -O0 function ends with TWO branches (return's `b epilogue` + the body's `b +1` marker); many 1080 targets have only one. Void -O0 funcs match fine; value-returning ones are +1 insn. Suspected IDO patch-level divergence._
+- [-O0: a dead reassignment of a `register` var reproduces a stray `lui sN; addiu sN` symbol-materialize](#feedback-ido-o0-dead-reassign-forces-s-reg-materialize) — _Reproduce a target's dead `&D` address-materialize into a callee-saved reg via `register int v; ...; v = (int)&D;` (no DCE at -O0). Reuse the same register var to keep it in s0. Took mgrproc_uso_func_00000504 byte-exact._
 - [IDO -O3 produces byte-identical output to -O2 for single-file compiles — file-split with OPT_FLAGS=-O3 only adds value for inter-module (IPO) builds, which the per-.c.o pipeline doesn't use](#feedback-ido-o3-equals-o2-for-single-file-compile) — _When a function is stuck at -O2 codegen and you're considering file-split-with-OPT_FLAGS to try -O3, don't bother — IDO's -O3 differs from -O2 only in inter-module optimization (requires `cc -O3 -j ...`).
 - [-O0-cluster split mid-file requires a paired -O2 layout shim, not just the -O0 file](#feedback-o0-cluster-split-with-layout-shim) — _When a -O0 cluster sits MID-file (not at start or end), splitting it out needs THREE files: predecessor (truncated), the -O0 cluster file, AND a successor "layout shim" (-O2 INCLUDE_ASMs only) holding everything…
 - [New -O0 .c file split needs FOUR config touches; objdiff.json is the easy-to-miss one](#feedback-o0-file-split-objdiff-json-step) — _When carving an -O0 function out of its parent .c into a dedicated `<seg>_o0_<offset>.c` file, you need (1) Makefile per-file `OPT_FLAGS := -O0` and `TRUNCATE_TEXT`, (2) tenshoe.ld entry, (3) source split itself, AND…
@@ -8316,6 +8318,29 @@ _When the target has `float buf` at sp+0xK and built emits it at sp+0xK-8 (or sp
 **Compare to:** `feedback-ido-file-context-affects-frame-size` (when the buf-offset gap isn't C-controllable AT ALL — different .c file context produces the gap). The low_pad recipe works on 39A9C because the frame-shape gap IS reachable from C; the file-context cap is for cases where it isn't.
 
 ---
+
+---
+
+<a id="feedback-ido-o0-value-return-extra-branch"></a>
+## Value-returning -O0 functions emit an extra return-branch this toolchain can't fold — likely a systematic cap
+
+**Observed 2026-05-29.** A value-returning function compiled at `-O0` with this toolchain (decompals `ido-static-recomp` 7.1) ends with TWO branches to the epilogue: the `return`'s explicit `b epilogue` PLUS the function-body's `b +1` end-of-block marker. Many original `1080` `-O0` targets have only ONE (`lw v0, <slot>; b +1; nop; epilogue` — the return value loaded, then a single dead `b +1`, falling through to the epilogue). So for value-returning `-O0` functions the build is reliably **+1 insn (an extra `b; nop`)** vs the target.
+
+```
+target:  lw v0, 0x28(sp);  b +1;  nop;  <epilogue>          # 1 branch
+mine:    lw v0, 0x28(sp);  b ep;  nop;  b +1;  nop;  <ep>   # 2 branches (extra b;nop)
+```
+
+**Verified** the extra branch is independent of: combined-vs-separate local init, comma-expression `return (store, val)`, a union/scalar alias for the returned element, and `-g`/`-g1`/`-g2`/`-g3` (all `-O0` variants emit 2; `-O1` emits 0). Minimal repro: `int f(int*a,int n){int s=0,i; for(i=0;i<n;i++) s|=g(a[i]); return s;}` builds 2 branches; the analogous original target has 1. The **void** `-O0` functions match fine (no `lw v0` → just the single end-marker) — which is why every landed `-O0` match (accessors, `mgrproc_uso_func_000009A8`, `_00000504`) is void.
+
+**How to apply:** if an `-O0` Yay0-USO target is **value-returning** and your build is exactly 1 insn long with an extra `b; nop` before the epilogue, it's this cap — leave it `INCLUDE_ASM`. Confirmed on `mgrproc_uso_func_00000A14` (got to 50 vs 48 insns via the union-alias trick for `buf[0]` direct-load, but the value-return branch is the irreducible residual). Suspected IDO patch-level codegen divergence vs the game's compiler; no C construct found to fold it. (If a value-returning `-O0` function is ever matched, revisit this.)
+
+---
+
+<a id="feedback-ido-o0-dead-reassign-forces-s-reg-materialize"></a>
+## -O0: a dead reassignment of a `register` var reproduces a stray `lui sN; addiu sN` symbol-materialize
+
+**From `mgrproc_uso_func_00000504` (2026-05-29).** Some `-O0` targets contain a stray full address-materialize of a data symbol (`lui sN, %hi(D); addiu sN, %lo(D)`) into a callee-saved register whose result is never read — a "dead" address computation (e.g. left over from source that took `&D` but the later use re-materializes it). Because `-O0` does no dead-code elimination, you reproduce it by **reassigning an existing `register` variable to that address as a dead statement**: `register int v3; ... /* real uses of v3 */; v3 = (int)&D_00000000;` emits `lui s0; addiu s0, %lo` even though `v3` is dead afterward. Reusing the SAME `register` var (rather than a second one) keeps it in `s0` (a second `register` var would take `s1`). Pair with a direct int-symbol read (`extern int D; if (D == K)`) for the `$at`-fused `lui; lw %lo` sentinel load (vs `*(int*)&D` which materializes), and let `bake-data-relocs.py` bake the `%lo` into the Yay0 blob. Took `func_00000504` to byte-exact.
 
 ---
 
