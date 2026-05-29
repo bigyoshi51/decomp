@@ -4140,6 +4140,17 @@ different fs/ft ordering than target across multiple instructions
 (not just one), check whether you have a named float local that
 should be inlined.
 
+**FRAME-SIZE variant (verified 2026-05-29, gl_func_0000E84C):** a named float
+local can reserve a DEAD stack home slot that bloats the frame, even when the
+value otherwise lives entirely in an FP reg. There, two `float f38, f3C;` locals
+(each read from a struct field, passed to a callback) added a dead 8-byte stack
+slot → frame `-56` vs target `-48`, the ONLY residual at 99.84%. INLINING the
+field reads at the call site (`f(p, *(float*)&s->a, *(float*)&s->b, *(float*)&s->a, *(float*)&s->b)`)
+dropped the dead slot AND IDO still CSE'd the repeated reads into single f0/f2
+loads → frame `-48`, byte-exact. So when a near-miss bottoms out on a small
+frame-size delta and the function names float temps, try inlining them — the
+CSE keeps the loads minimal while shedding the dead home slot.
+
 **Related**:
 - `feedback_ido_fpu_reduction_operand_order.md` — the underlying
   1-insn cap on FPU reductions.
