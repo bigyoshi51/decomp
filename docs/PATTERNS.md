@@ -8968,3 +8968,12 @@ Permuter-class for full byte-match. NM wrap at 97-98% is the achievable bound.
 **Found this session 2026-05-27**:
 - `gl_func_0005D4F8` (4-comp normalize): NM 97.22%
 - `gl_func_0005C9BC` (3-comp normalize w/ eps fallback): NM 98.40%
+
+## Alloc-cascade constructors: failure arms CONVERGE into the init tail, they don't `goto end`
+
+In the common "alloc-or-passthrough" constructor cascade — `p=a0; if(!p){p=alloc(A);if(!p)return;} q=p; if(!q){q=alloc(B);...} r=q; if(!r){r=alloc(C);...}` then init — the intuitive C sends every alloc failure to a single early-return (`goto end`). That is usually WRONG and shows up as a SIZE MISMATCH (built > target) with the failure branches all pointing at the epilogue. The target instead **converges each failure into the init sequence** at the point where that level's sub-object pointer field is stored:
+- the innermost alloc (`r`/C) failure jumps to the `q->field = ...` write,
+- the middle alloc (`q`/B) failure jumps to the `p->field = ...` write,
+- only the OUTERMOST alloc (`p`/A) failure early-returns.
+
+Those `*sub->0x28 = &D` stores are SHARED TAILS reached by both the success path (fall-through after the `gl_func(r,...)` setup call) and the matching failure path. The fix: split the single block of `0x28`/field writes into per-level labeled tails (`Lq28:`, `Lp28:`) and retarget the dead-arm failure `goto`s at those labels instead of `end`. Took n64proc_uso_func_00000100 from 88.04% → 95.01% (every branch target then matched; residual was a pure regalloc/frame cap). LESSON: a near-miss previously written off as a "regalloc cap" can hide an unfixed STRUCTURAL control-flow bug — whenever built insn-count > target, the diff is structural (fixable), not allocation; check the branch targets and frame size before declaring a regalloc cap. The sibling n64proc constructors (00000014, 00000268) likely have the same convergence structure. Confirmed 2026-05-30.
