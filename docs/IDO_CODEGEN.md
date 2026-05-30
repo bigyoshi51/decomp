@@ -6581,6 +6581,10 @@ jr    ra
 - Hand-written asm or compiler-pragma-controlled output.
 - Different IDO version with different DCE aggressiveness.
 
+**UPDATE 2026-05-30 — flag matrix + alloca now tested (still no clean trigger):**
+- **Full opt/debug matrix {-O0,-O1,-O2} × {plain,-g,-g2,-g3} = all frameless-leaf.** The "different DCE aggressiveness" and debug-frame hypotheses are FALSE for our static-recompiled IDO 7.1: no `-g` level emits a leaf frame. `-g`/`-g2`/`-g3` only toggle trailing alignment nops and an extra `jr ra`; never an `addiu sp`. So a per-file `-g3` (or any std flag) does NOT crack this — don't bother splitting the file for it.
+- **`alloca(8)` (extern decl) WAS tested: it forces the frame AND flips the `andi` dest to `$t7` — the target's exact register** — but it also emits `jal alloca` + frame `-24` + `sw ra/a0` + a0-reload-from-stack. Structurally wrong (target has no call, no reload, frame `-8`). Useful signal though: it confirms the target frame is *real allocation* (not pad), and that the frame is what shifts the andi from `$t6` (frameless) to `$t7` (framed). So any successful trigger must (a) allocate a real ≥1-byte frame, (b) emit zero sw/lw, (c) keep `a0` used directly. No standard-C construct satisfies all three — `volatile` violates (b), unused locals violate (a) via DCE, `alloca` violates (c). Confirmed genuine cap; INCLUDE_ASM build emits correct bytes.
+
 **Rule for next time:** if the target has a plain `addiu sp,-N` / `addiu sp,+N` pair with NO intervening sw/lw and the function body is simple compute/branch logic, don't waste a full /decompile tick grinding — wrap NM with the best `volatile int x =` form and move on. Record the match % in the comment; permuter-eligible.
 
 **Origin:** 2026-04-20, gl_func_0006F3BC. Capped at ~45 % after 30+ variants.
