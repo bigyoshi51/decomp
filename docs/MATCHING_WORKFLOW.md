@@ -6299,6 +6299,25 @@ wrong tool — use a CONTIGUOUS-region file split (`OPT_FLAGS := -O2 -g3` +
 precedent), which requires the target functions to be contiguous in `.text`
 (scattered stubs need splat re-extraction first). Focused-session, not a tick.
 
+**REFINED 2026-05-30 — the "size change breaks the file" rule applies to
+DIRECT-`jal` files, NOT to relocatable USOs.** The 60-function game_libs_post
+break happened because those functions call each other via *intra-`.text`
+`jal <fixed-target>`* — shifting one function moves every later function's body,
+so all the fixed `jal` targets (and the objdiff per-function offset baseline)
+break. But **relocatable USO segments (VRAM=0: arcproc/timproc/mgrproc/eddproc/
+h2hproc/n64proc/titproc/boarder*/gui/game_uso) emit every cross-function call as
+`jal 0` + an `R_MIPS_26` reloc, and intra-function branches are PC-relative** —
+so a function's bytes are entirely link-offset-independent. A size-changing
+donor splice in a packed relocatable-USO `.o` therefore does NOT break downstream
+functions. Verified landing `arcproc_uso_func_00000748` (non-Yay0 USO) via a
+donor splice that grew it 0x48→0x6C (18→27 insns) inside `arcproc_uso_tail1.c.o`:
+arcproc held 33→34 matched, zero downstream regressions. **Consequence: the
+`-O0`/`-g3` donor splice is viable for ANY relocatable USO (Yay0 or not),
+including mid-file functions — you do NOT need a contiguous-region file split or
+same-size constraint there.** Reserve the file-split for non-relocatable, direct-
+`jal` segments (kernel, the absolute-addressed game code). Pair with the
+`realign_sections()` fix (same date) so objdiff accepts the grown object.
+
 **`replace-function-body.py` does NOT re-align post-`.text` sections after a
 non-16-multiple `.text` growth → objdiff `report generate` can choke ("Invalid
 ELF section header offset/size/alignment").** Diagnosed 2026-05-30 attempting to
