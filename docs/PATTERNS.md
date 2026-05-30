@@ -2073,6 +2073,8 @@ Confirmed in:
 <a id="feedback-game-uso-precall-spill-family"></a>
 ## game_uso has a 6+ function precall-arg-spill cluster — recognize and don't grind
 
+> **CRACKED 2026-05-30 — the "cap" is FALSE when the spilled args are an adjacent `&D` pair (the common case here).** Pass the pair as a `*(Pair2*)` (where `typedef struct { int a, b; } Pair2;`) **BY VALUE** instead of two separate int args: `gl_func_00000000(a0, *(Pair2*)((char*)&D_00000000 + OFF))` (extra fixed args after the pair are fine: `..., *(Pair2*)(&D+OFF), 1)`). The by-value struct copy makes IDO BOTH cluster the base (`lui; addiu base,OFF; lw 0(base); lw 4(base)`) AND emit the `sw a1,4(sp); sw a2,8(sp)` caller-slot homes — exactly the "defensive spills" this note called unreproducible. **LANDED byte-exact 2026-05-30: `game_uso_func_00010408` (82.3→100, + an inline-single-use-deref to fix a $v0/$t reg), `game_uso_func_0000D7F4` (86.2→100); `game_uso_func_0000FC34` 82.5→96.6 (two pair calls; residual is a separate field-fold + FP-sched).** Same idiom as the long-known `game_uso_func_00010648` Pair2 match. **Before declaring any precall-spill function capped, check if the spilled args are `*(D+OFF), *(D+OFF+4)` — if so, Pair2-by-value cracks it.** The note below is retained for the residual cases where the spilled args are NOT an adjacent pair.
+
 _At least 6 functions in game_uso share an identical structural cap: 28-insn 0x70 dispatchers (sometimes 26 with extra leading call) where target emits `sw a1,4(sp); sw a2,8(sp)` defensive spills around a jal that IDO -O2 with K&R extern won't reproduce. ALL hit 89.18% NM and stop. Recognize the byte signature and don't waste a /decompile run trying to grind one._
 
 **Confirmed instances (2026-05-04)**:
