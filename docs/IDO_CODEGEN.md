@@ -8808,6 +8808,21 @@ AF0F0000 sw t7,0(t8)             # *dst = buf[0]
 **Related**:
 - `feedback_uso_accessor_template_reuse.md` — original 4 -O2 templates
 - `feedback_uso_byte_identical_clones_beyond_accessors.md` — byte-clones beyond simple accessors
+
+**CAVEAT — the dead `b +1` BB-marker is matchable in straight-line bodies but NOT
+when a `return 0` path precedes it (CAP).** In the accessor templates above the
+marker is the function's only end-branch, so it matches. But in an -O0 function
+that ends `... return 1; <fallthrough> stmt; return 0;`, IDO emits the return-0's
+OWN `b epilogue` AND a separate dead `b +1` marker (2 branches), where the target
+MERGED them into a single `move v0,zero; b+1; nop; epilogue` (the return-0 branch
+IS the marker). Verified non-C-reachable 2026-05-30 on `arcproc_uso_func_000000B4`
+(8 variants: register-ptr / direct / p-for-all / inverted-if / goto-exit /
+else-block / single-return). Every form that uses `s0` for the pointer (which the
+target needs — `register int *p=a0`) is 32 insns WITH the dead BB; every 30-insn
+form drops the `s0` save (wrong regs). The `s0`+merged-marker combo is an IDO -O0
+BBL-emission artifact, likely original-IDO-version-specific — leave NM. (The
+removed INSN_PATCH used to fake this; banned 2026-05-23.) Same class:
+`arcproc_uso_func_0000012C`, and the USO entry-0 trampoline 95% caps.
 - `feedback_o0_cluster_split_with_layout_shim.md` — how to do the file split
 
 ---
