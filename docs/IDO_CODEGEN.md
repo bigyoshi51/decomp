@@ -292,6 +292,10 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 ---
 
 <a id="feedback-ido-split-shift-temp-renumber"></a>
+## Index-form `buf[i]` vs pointer-form `*p++` changes saved-reg pressure for a loop over a stack array
+
+_When iterating a stack-local array inside a loop, the C access form decides whether IDO burns a saved register on the array base. Pointer-form (`p = arr; ... *p; p++;` reset each outer iteration) makes IDO hoist the array base address into a **saved register** (computed once, `move` to the working ptr each reset) — a whole extra `$s` reg. Index-form (`arr[i]; i++;`) lets IDO recompute the base cheaply each outer iteration via `addiu sN, sp, OFF` (the array is at a fixed sp offset), using ONE FEWER saved reg. If a near-miss has exactly one extra saved reg (target uses s0-s7, build uses s0-s8) and the function loops over a stack buffer, switch pointer-form → index-form. Verified 2026-05-29 on arcproc_uso_func_00002884 (9→8 saved regs, 62-diff → 9-diff). Caveat: this only changes the base-holding; an explicit `char *base = &D+0xN` loop-invariant pointer is still correctly hoisted to its own `$s` reg (that's wanted) — see the loop-invariant-CSE note. The remaining diffs after the fix are usually allocno-order register swaps between the surviving loop-invariants._
+
 ## Split a `<<16` into `(x<<15)<<1` to renumber the temps IDO allocates for a multi-field word-pack
 
 Symptom: a function that packs several bit-fields into a 32-bit word (GBI-style
