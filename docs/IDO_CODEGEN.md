@@ -11865,6 +11865,19 @@ F49C) still byte-match after the rebuild. **HOW TO USE THE DUMP:**
   downstream of the dump → fall back to the C-level levers (first-use reorder,
   CSE/dedup-shift, live-range split, pad-var) + permuter. Open follow-up: does
   `ugen` have its own debug dump exposing the final reg map? (not yet checked.)
+  - **Third example (2026-05-30, `func_00007C74` bootup_uso) — spill-SLOT
+    coalescing is also `ugen`-side, not in the dump.** This cap is the
+    reuse-vs-abandon of a *dead* spill slot (mine reuses a0's freed `sp+0x18`
+    for `link`; target abandons `0x18` and gives `link` a fresh `sp+0x20`,
+    frame 0x20 vs 0x28). The dump DID surface the structure that drives it — 3
+    spilled live ranges as `-ve save` candidates 23/24/25 in reg-alloc-prep,
+    param a0 (cand 12) "split out 26", and the summary `rlods=3 rstrs=3
+    numcalls=3` — but, exactly per the scope limit, it prints NO stack offset
+    per candidate, so it can't tell you whether a freed slot gets coalesced.
+    Net: the dump is a good *confirmation* tool for spill caps (it proves the
+    spill count and which values spill, ruling out "missing pad" theories) but
+    NOT a *crack* tool — the slot-packing decision is downstream. Dump-confirmed
+    intractable; left NM.
 
 **Honest limit:** the permuter README states there is no register-allocation-
 specific randomizer and it "finds changes that improve regalloc by accident." When
