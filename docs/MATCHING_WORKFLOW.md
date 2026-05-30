@@ -1398,6 +1398,16 @@ redundant extern — the file-top declaration is in scope for the whole TU.
 
 <a id="feedback-file-split-needs-paired-expected-o-refresh"></a>
 <a id="feedback-layout-orphan-candidate-discover-yields-has-source-but-decoding-is-dead-storage"></a>
+## size-sort surfaces tiny return-const leaves with UNFILLED delay slots — look trivially matchable but regress at -O2; skip fast
+
+_The smallest-N candidates from `discover --sort-by size` are often 3–4-word return-constant leaves. Some MATCH trivially (`return N` → `jr ra; li v0,N`, filled delay slot, 2 words); others are the SAME apparent shape but with an **unfilled** delay slot in the target and DON'T match at -O2. They're indistinguishable by size/name — only the `.s` word layout tells them apart, so a size-sort tick will keep re-surfacing the unfilled ones as false candidates._
+
+**Tell — read the `.s` words before un-wrapping:**
+- **Filled (matches):** value-insn IS the jr-ra delay slot. `int`: `03E00008 (jr ra) / 2402000N (li v0,N)` = 2 words. `return N` matches at -O2.
+- **Unfilled (cap):** value-insn precedes jr-ra, delay slot is `nop`. `int`: `00001025 (move v0,zero) / 03E00008 (jr ra) / 00000000 (nop)` = 3 words (e.g. `timproc_uso_b5_func_000087E8`). `float`: `mtc1 zero,f2 / nop / jr ra / mov.s f0,f2` (f2-intermediate + nop = -O0 no-coalesce, e.g. `game_uso_func_00007ABC`). **No -O2 C form reproduces these** — IDO's reorg fills the jr-ra delay slot at -O2, so plain `return 0`/`return 0.0f` always yields the 2-word filled form.
+
+**Why you can't just split the file:** these unfilled leaves are usually interspersed among filled-delay siblings that DO match at -O2 (87D8/87E0 right next to 87E8). A per-file -O0/-g3 override to un-fill 87E8 would break the adjacent filled siblings. They need a per-FUNCTION split (Yay0-style binary-concat, see PATTERNS.md) — heavy for a 3-word leaf. Keep them `#ifdef NON_MATCHING` and move on; don't re-roll the size-sort onto them each tick. Verified 2026-05-29.
+
 ## Layout-orphan candidate: discover yields a "[has source]" function whose VRAM lies past its parent .c.o's TRUNCATE_TEXT cap AND no sibling .c file declares it — the INCLUDE_ASM is dead, decoded C body in the parent .c is also dead
 
 _When a file-split (e.g. `game_libs.c` → `game_libs_post.c` migration) is partial, some INCLUDE_ASM declarations get stranded: they're still in the parent .c but past the parent's `TRUNCATE_TEXT` cap, AND haven't been re-declared in the successor .c. The function's bytes don't appear in any .o file but the discover tool still reports it as "[has source]" because the .s file exists — leading to wasted decode work._
