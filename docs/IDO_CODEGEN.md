@@ -12076,3 +12076,35 @@ When a USO function reads `$f4` (or any non-`$f12` float reg) via `swc1 $f4, OFF
 The fix is an orphan-prologue MERGE (see also [project_1080_orphan_fn_prologue_vein]): combine the stub's `.s` + the body's `.s` into one symbol (the stub's name/address, size = sum), remove the body's separate symbol, and write the merged C with the constant inline (`*(float*)((char*)a0+OFF) = 1.0f;`). IDO re-hoists the `lui;mtc1` above the prologue and the bytes match both pieces. **Pre-check before merging:** `cc -c` the merged C standalone and `objdump` it — confirm the hoisted const-load reproduces the orphan's exact words — and grep that nothing else calls the body symbol you're about to delete.
 
 Companion idiom that co-occurs here: a call whose args home to `sw a1,4(sp); sw a2,8(sp)` (the outgoing-arg home slots, storing the same values passed in registers) is a **struct passed BY VALUE**, not three scalar args. `gl_func(a0, *(Pair2*)((char*)&D+off))` (where `Pair2 = {int,int}`) emits the load-both-words + home-both pattern; the named base `&D+off` also keeps the `addiu base; lw 0(base); lw 4(base)` split instead of folding the offset into the loads. Took `game_uso_func_00010648` byte-exact (19 insns) — a function the prior pass had documented as a permanent "intra-USO float-in-$f4 callee cap." Verified 2026-05-30.
+
+## Two -O0 structure levers for multi-gate functions: struct-copy table init + `goto shared_label` (not `return`) for gate exits
+
+<a name="ido-o0-structcopy-and-goto-gates"></a>
+
+When matching an -O0 function that (a) copies a small fixed-size table to a stack local and (b) has a cascade of guard checks each exiting early, two C-shape levers move it sharply closer (func_000122C4: 34% -> 69% in one pass):
+
+**1. Fixed-size table init = a STRUCT copy, not per-element assignment.** The target materializes `&dst` and `&src` ONCE and copies with shared bases:
+```
+addiu $14, $sp, 0x24      # &tbl, once
+lui/addiu $15 = &SRC      # &src, once
+lw/sw 0($15)->0($14); lw/sw 4(..); lw/sw 8(..)
+```
+`tbl[0]=SRC[0]; tbl[1]=SRC[1]; tbl[2]=SRC[2];` at -O0 RE-materializes `&tbl` and `&SRC` for every element (3x the address setup). Use a struct copy instead:
+```c
+typedef struct { int a, b, c; } Tbl3;   /* size = the table's byte length */
+extern Tbl3 SRC;
+Tbl3 tbl;
+tbl = SRC;                               /* one &tbl + one &SRC, then word copies */
+```
+Index the struct-as-array afterward with `*(int*)((char*)&tbl + i*4 - OFF)`.
+
+**2. Gate exits: `goto ret;` to a shared end label, NOT `return;`.** In a function with several `if (cond) <bail>;` guards, the target compiles each as a *single* direct conditional branch to the shared epilogue (`bne a1,2,EPI` / `bnez` / `beqz`). Writing `if (cond) return;` at -O0 instead emits a two-branch split per gate — `beq a1,2,skip; b EPI; skip:` — inflating the function by ~2 insns *per gate*. Route every early exit through one label:
+```c
+if (a1 != 2) goto ret;
+if (foo < 4) goto ret;
+if (foo >= 5) goto ret;
+... ;
+ret: ;
+}
+```
+Pairs with the inline-fresh rule: at -O0 don't cache pointer/counter locals — re-deref (`*(char**)(a0+off)`, `st->field`) at every use, matching the target's per-use stack reloads. Remaining residual after these levers is usually the -O0 chained-branch epilogue (nested-block exits emit `b L1; ...; L1: b L2; L2:`) plus temp renumbering. Verified 2026-05-30 on func_000122C4.
