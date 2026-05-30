@@ -6299,6 +6299,26 @@ wrong tool — use a CONTIGUOUS-region file split (`OPT_FLAGS := -O2 -g3` +
 precedent), which requires the target functions to be contiguous in `.text`
 (scattered stubs need splat re-extraction first). Focused-session, not a tick.
 
+**`replace-function-body.py` does NOT re-align post-`.text` sections after a
+non-16-multiple `.text` growth → objdiff `report generate` can choke ("Invalid
+ELF section header offset/size/alignment").** Diagnosed 2026-05-30 attempting to
+mirror the working b1 0x65C donor onto its byte-identical sibling
+`timproc_uso_b3_func_0000065C`: the splice grows `.text` 0x38→0x54 (+0x1C) and
+`_grow_section` bumps every later section's `sh_offset` by +0x1C *without*
+padding, so sections with `sh_addralign` 16 land at non-16-aligned offsets.
+`objdump -h` tolerates this; objdiff's stricter `object`-crate parser rejects it,
+and a single bad object aborts the WHOLE `report generate` (the b3 object had 7
+misaligned sections; the bytes themselves were byte-PERFECT vs target). The b1
+splice has the identical +0x1C growth but happens to leave only 1 misaligned
+section, which objdiff tolerates — so b1 lands and b3 doesn't, purely by section-
+layout luck. FIX: `replace-function-body.py` must insert file padding so each
+post-`.text` section's new `sh_offset` stays a multiple of its `sh_addralign`
+(round the per-section shift up to alignment, not a flat +delta). Shared script,
+~30 existing splices depend on it — test all before landing. Until fixed, a
+grow-`.text` donor splice is only landable if it luckily leaves ≤1 (objdiff-
+tolerable) misaligned section. Verify with a strict ELF section-header check
+before assuming a byte-correct splice will land.
+
 **Re-confirmed 2026-05-27 on `mgrproc_uso_func_0000015C`:** unaware of the
 2026-05-24 finding above, ran the same recipe — `-O2 -g3` donor for the
 3-insn `return 0` stub (0x8 at -O2 → 0xC at -g3). The `replace-function-body.py`
