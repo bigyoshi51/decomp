@@ -6311,13 +6311,23 @@ and a single bad object aborts the WHOLE `report generate` (the b3 object had 7
 misaligned sections; the bytes themselves were byte-PERFECT vs target). The b1
 splice has the identical +0x1C growth but happens to leave only 1 misaligned
 section, which objdiff tolerates — so b1 lands and b3 doesn't, purely by section-
-layout luck. FIX: `replace-function-body.py` must insert file padding so each
-post-`.text` section's new `sh_offset` stays a multiple of its `sh_addralign`
-(round the per-section shift up to alignment, not a flat +delta). Shared script,
-~30 existing splices depend on it — test all before landing. Until fixed, a
-grow-`.text` donor splice is only landable if it luckily leaves ≤1 (objdiff-
-tolerable) misaligned section. Verify with a strict ELF section-header check
-before assuming a byte-correct splice will land.
+layout luck. **FIXED 2026-05-30:** added `Elf.realign_sections()` to
+`replace-function-body.py` — a final pass (after the splice + reloc import,
+before write-out) that walks sections in file-offset order and inserts zero
+padding before any whose `sh_offset` isn't a multiple of `sh_addralign`,
+shifting that section + all later ones + `e_shoff`. Idempotent (no-op on
+already-aligned objects), invisible to the linker (inter-section gaps are
+ignored), never touches section *content* (.text bytes unchanged → matched-ness
+preserved). Verified no regression: clean rebuild held 1714/3590 before the new
+match. This UNBLOCKS the grow-`.text` `-O0` donor-splice vein generally. First
+beneficiary: `timproc_uso_b3_func_0000065C` landed 100% (1714→1715), the
+byte-identical sibling of the already-landed b1 0x65C. Remaining same-class
+candidate: `arcproc_uso_func_00000748` (byte-identical to the matched
+`mgrproc_uso_func_000009A8`) — but arcproc is non-Yay0, so it may take a
+contiguous-region file split instead. To find more: a name-independent
+`.s`-instruction-word signature scan across all segments surfaces byte-identical
+sibling pairs where one is 100% and the other isn't (regenerate report.json
+first — the git-tracked one lags HEAD).
 
 **Re-confirmed 2026-05-27 on `mgrproc_uso_func_0000015C`:** unaware of the
 2026-05-24 finding above, ran the same recipe — `-O2 -g3` donor for the
