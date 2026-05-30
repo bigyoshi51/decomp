@@ -12024,3 +12024,25 @@ The clean body is byte-exact at -O0 (47/47 words). The recorded table had simply
 **Rule:** when the asm shows -O0 fingerprints (fresh `addiu rN,zero,imm` per constant, stack-stored loop counter `sw/lw N(sp)` per iteration, unfilled `b/jr` delay slots), the *first* thing to do is derive the most LITERAL C possible (direct `*(T*)(p+off)=const;` stores, plain `for`, no `volatile`, no temp vars) and compile it at -O0 — even if a comment says "-O0 (35%)". The old number is about the old C.
 
 **Landing mechanism:** func_00012188 sat at the head of `bootup_uso_tail3b_top.c` (-O2 -g3), immediately after the existing `-O0` run-8 file `bootup_uso_o0_120A8.c` in linker order. Matched by *moving* it into that adjacent -O0 file and shifting `TRUNCATE_TEXT` between the two (`o0_120A8` 0xE0→0x19C, `tail3b_top` 0x268→0x1AC = +0xBC / −0xBC). Linker order and every later function's offset stay identical. The trailing 8-byte-align nop (0xBC→0xC0) is dropped by the TRUNCATE. This "append to the adjacent -O0 file" trick avoids the heavier 3-file layout-shim of [#feedback-o0-cluster-split-with-layout-shim](#feedback-o0-cluster-split-with-layout-shim) whenever the -O0 target abuts an existing -O0 file boundary.
+
+## BRANCH-INTO-ADJACENT-RETURN-LEAF-CAP
+
+<a name="branch-into-adjacent-return-leaf-cap"></a>
+
+**A tiny guard function whose conditional branch offset points PAST its own end, into the next function, is a genuine cap — but NOT for the reason "the offset is linker-set."** In raw-`.word` USO code the branch offset is baked into the instruction word and is SELF-RELATIVE (PC-relative, link-independent). So `15CF0004` (`bne $14,$15,+4`) is a fixed +4 that lands 4 instructions past the branch — past the guard's own `jr ra` and into the adjacent function.
+
+**Case: mgrproc_uso_func_00000140 / _00000170.** Each is a 0x1c/0x18 guard:
+```
+lw $14, 4($4); lw $15, 8($4); bne $14,$15, +4; nop; li $2,1; jr ra; nop
+```
+The `bne +4` lands at the START of the NEXT symbol — `func_0000015C`, a standalone `move v0,0; jr ra; nop` return-0 leaf (no jal/data xref anywhere). So the guard's `!= ` path has NO local return-0; it branches into the separate adjacent return-0 function. The target's distinctive shape — a *regular* `bne` (not branch-likely), a NOP-filled delay slot, and TWO separate `jr ra` blocks — exists precisely *because* the return-0 is a separate function: the cross-function branch is opaque to the optimizer, so it can't fold the two return paths.
+
+**Why C can't reproduce it (verified 2026-05-30, multiple variants):**
+- Merge into one function `if (eq) return 1; return 0;` → IDO optimizes to a **preset-default**: `move v0,0; bne; li v0,1` (9 insns, one `jr ra`). The separate return-0 block is gone.
+- `if (ne) goto ret0; return 1; ret0: return 0;` → IDO emits a **branch-LIKELY**: `bnel ...; <ret0's move v0,0 in the delay slot>` (9 insns). Again collapses the two blocks.
+- Keeping them as two C functions → the guard's missing-`else`-path branches to its OWN epilogue (offset +2), never into the neighbor, because the compiler always gives each function its own epilogue and can't emit a branch from function A into function B's body.
+
+The 10-insn target form (regular bne + nop delay + two jr-ra blocks) is reachable ONLY when the return-0 genuinely lives in a separate adjacent symbol — which standard C function definitions cannot express. **Leave the guard `#ifdef NON_MATCHING` / `INCLUDE_ASM`; the adjacent return-0 leaf matches on its own** (`int f(void){return 0;}` at -O2 -g3 gives the unfilled `move v0,0; jr ra; nop`). Do NOT attempt the in-tree merge — it changes codegen and cannot match. Distinguish this from the genuinely-mergeable shared-tail vein (`project_1080_shared_tail_dispatch_merge_vein`): that one merges when the tail is reached by a branch the optimizer keeps; this one can't because matching *requires* the cross-function opacity.
+
+**Related un-fixable small-diff caps confirmed same session (all `samesize`, 2-insn):**
+- **2-insn scheduling swap** (mgrproc_uso_func_000011A4): `lui $at,0x20` (const hi) and `addiu $a1,$a1,-1` (`a1-1`) feeding an `or` are scheduled lui-first in target, addiu-first in build. Neither commutative-`|` operand flip (`0x200000 | (a1-1)`) nor precompute (`int t=a1-1; t|0x200000`) reorders them — IDO's scheduler tie-break isn't C-driven here. Same shape in titproc_uso_func_000015F4 (addiu↔lw), gui_uso_func_00001794 (ori↔ori), gui_uso_func_00003B14 (or↔or), gl_func_0000871C (mtc1↔lwc1). 2-insn scheduling swaps of independent ops are a standing cap class — don't grind them.
