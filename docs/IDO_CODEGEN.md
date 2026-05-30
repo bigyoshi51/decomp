@@ -333,6 +333,26 @@ expression, try splitting the shift before reaching for the permuter. Verified
 ---
 
 <a id="feedback-ido-3save-vs-2save-arg-preserve"></a>
+## A caller-saved value spilled-and-reloaded AROUND a jal is often a genuine ARG to that call — pass it (don't grind reg-alloc)
+
+_Before treating a "post-jal reload goes to the wrong register ($t7 vs $a1)" near-miss as a reg-alloc cap, check whether the spilled/reloaded value is actually an **argument** to the call. If the asm holds a value in $aN through the call (spills it in the jal delay slot, reloads it after) and that value was the incoming param, the call almost certainly TAKES it as an arg — and the prior C just under-counted the call's arguments. Passing it as the genuine arg makes IDO keep it live in $aN across the call, so the reload lands in $aN (matching) with zero spill-shaping tricks._
+
+**Symptom (2026-05-29, `h2hproc_uso_func_000008EC` + sibling `00000944`, capped 89.5–94% for weeks):**
+```
+move  a2,a0            ; save orig a0
+sw    a1,0x6B8(a0)
+lw    a0,0x6A8(a0)     ; a0 = first call arg
+sw    a2,0x18(sp)      ; spill orig-a0
+jal   <call1>
+sw    a1,0x1c(sp)      ; DELAY: spill a1 (still the incoming param!)
+lw    a1,0x1c(sp)      ; reload a1  <-- target reloads to $a1
+lw    a2,0x18(sp)
+bnez  a1, ...          ; a1 used after the call
+```
+The reload to `$a1` (not `$t7`) is the tell: `a1` is live across the call because it's `call1`'s **2nd argument**. Prior C wrote `call1(*(a0+0x6A8))` (1 arg) → `a1` wasn't an arg → IDO reloaded the still-live param into `$t7`. Fix: `call1(*(a0+0x6A8), a1)`. Result: 89.5% → **100% byte-exact**, no `volatile`/dead-spill shaping (the long history of volatile-spill grinding in the file's comment was chasing the wrong cause).
+
+**General rule:** a documented "reg-alloc reload cap" with a spill/reload bracketing a single call deserves an argument-count recheck first. The arg count is recoverable from the asm: any caller-saved reg ($a0–$a3) that holds a value AT the jal (set up before it, not clobbered) is being passed as that positional arg, even if a later decoder dropped it. Contrast with [[#ido-targets-3-save-reg-pattern-copy-to-free-reg--stack-spill--stack-reload-for-arg-preservation-isnt-reachable-from-natural-c]] (336) and the `$a1`-not-`$a3` save-pick entry (913): those are genuine caps where the saved value is NOT an arg; this lever applies only when it IS.
+
 ## IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C
 
 _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2 won't generate that from natural C. IDO picks the simpler 2-save (spill $a0 directly + reload). The "extra save into a free arg-reg" gives target a different reg layout for downstream code (e.g. index goes to $v1 instead of $v0) that 2-save can't reach. Skip these or NM-wrap._
