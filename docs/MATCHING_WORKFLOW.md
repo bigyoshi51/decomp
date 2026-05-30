@@ -6318,6 +6318,20 @@ same-size constraint there.** Reserve the file-split for non-relocatable, direct
 `jal` segments (kernel, the absolute-addressed game code). Pair with the
 `realign_sections()` fix (same date) so objdiff accepts the grown object.
 
+**BOUNDARY — donor-splice does NOT fix trivial `return N` unfilled-jr-delay
+stubs.** Our IDO -O0 compiles `int f(){return 0;}` to **0x1c** (`move v0,zero; jr
+ra; nop` + two redundant `jr ra; nop` epilogue pairs), not the target's clean
+**0xC**. So the -O0 donor body is the wrong size AND, since a file-split -O0
+build emits the same 0x1c, these stubs are NOT -O0-matchable at all — our
+toolchain's -O0 return-stub codegen diverges from the original's. Verified
+2026-05-30 on `timproc_uso_b5_func_000087E8`/`_00008940` (donor splice regressed
+the unit, reverted). The donor splice only helps the **multi-insn -O0
+cleanup-wrapper family** (e.g. `arcproc_uso_func_00000748` /
+`mgrproc_uso_func_000009A8`: `register int z; gl_func(a0[N]); a0[N]=0; …;
+D_0000014C=z;`), whose -O0 body size matches the target. Before wiring a donor,
+compile the body at -O0 standalone and check its symbol size == the target `.s`
+size.
+
 **`replace-function-body.py` does NOT re-align post-`.text` sections after a
 non-16-multiple `.text` growth → objdiff `report generate` can choke ("Invalid
 ELF section header offset/size/alignment").** Diagnosed 2026-05-30 attempting to
