@@ -6175,11 +6175,17 @@ The `(unsigned int)` cast on `ret_lo` is **required** — without it, signed `in
 
 **Caveat for TRUE LEAF functions (no jal anywhere in the asm):** the `((s64)hi << 32) | (u32)lo` pattern emits `jal __ll_lshift` (libgcc helper for 64-bit shifts) on IDO -O2. Tested 2026-05-05 with `(s64)x<<32`, `(u64)x<<32`, and `s64 r=x; r=r*0x100000000LL` — all produce the helper call. The call forces a stack frame (`addiu sp,-32` + `sw ra,20(sp)`), which makes the function NOT match a leaf-shaped expected/.o.
 
-If `grep -E "0x0C[0-9A-F]{6}" <asm>.s` shows the original is a TRUE leaf (no jal opcodes), the recommended s64-pack idiom isn't usable. Diagnostic: `grep "jal" <built.o-disasm>` shows `R_MIPS_26 __ll_lshift`. Options:
+If `grep -E "0x0C[0-9A-F]{6}" <asm>.s` shows the original is a TRUE leaf (no jal opcodes), the `<<32` s64-pack idiom isn't usable. Diagnostic: `grep "jal" <built.o-disasm>` shows `R_MIPS_26 __ll_lshift`. Options:
 
+0. **BEST FIX — build the s64 return via a hi:lo UNION, no shift** (verified 2026-05-30 on `game_uso_func_00007538`, **58.69%->63.27%**, `__ll_lshift` jal eliminated, function became leaf-shaped):
+   ```c
+   union { long long ll; struct { int hi; int lo; } w; } _r;  /* big-endian o32: hi=v0, lo=v1 */
+   _r.w.hi = ret_hi;  _r.w.lo = ret_lo;  return _r.ll;
+   ```
+   Places ret_hi/ret_lo directly into the v0:v1 return words with NO 64-bit shift → no helper call. Removing the call ALSO removes the frame, the ra-save, AND any `$a0->$s0` callee-saved promotion that existed only because a0 had to survive the `__ll_lshift` call — the function collapses to the target's frameless-leaf prelude. **If a near-miss s64 leaf is "stuck saving $s0 / has a spurious frame", check the return for a `<<32` FIRST** — the `$s0` promotion is often a symptom of the `__ll_lshift` call, not an independent regalloc cap (this misled ~5 prior 7538 experiments chasing a pointer-CSE `$s0` theory).
 1. **Re-examine whether the function actually returns s64.** Sometimes a function's asm sets v1 internally as a control flag (e.g., `addiu v1,zero,1` inside a branch arm, then later `beq v1,zero,...`) but v1 gets overwritten before the final `jr` (e.g., `lw v1, OFF(rX)` for delay-slot-store addressing). In that case the function returns INT (just v0); the apparent v1-as-return is mis-analysis. Look for `lw v1, ...` near the epilogue — if v1 is reloaded right before jr, it's not a return.
 2. **Restructure the C to compute v0 only**, drop ret_hi tracking entirely.
-3. **Last resort: post-cc patch.** INSN_PATCH the `__ll_lshift` jal + frame insns out via Makefile recipe (see `docs/POST_CC_RECIPES.md`). High-risk because the helper's input/output regs need manual unwinding.
+3. ~~post-cc patch the `__ll_lshift` jal out~~ — BANNED 2026-05-23 (match-faking, INSN_PATCH removed). Use option 0.
 
 **Detection signal:**
 
