@@ -10915,6 +10915,8 @@ order — it picks the target's. Transient subexpressions get the
 caller-save `$t` temps IDO uses for scratch; a named local enters the
 priority allocator and grabs `$v0`.
 
+**RMW-update corollary (verified 2026-05-30, `titproc_uso_func_000016B8`, 95.7%->byte-exact).** Same `$v0/$v1`-vs-`$t` trap for a field-counter update. A two-arm field oscillator (`if (flag==0) { cur=a0[0x2C]; nv=cur+6; a0[0x2C]=nv; if (nv>=250) ... } else { ...-6...<65... }`) put every `cur`/`nv` named temp into `$v0/$v1` and CSE'd the field read; the target uses `$t2/$t7/$t8/$t3` with the field re-read fresh in each branch (and in the branch-likely delay slot). **Fix: in-place RMW — `a0[0x2C/4] += 6;` then test `a0[0x2C/4] >= 250` — no named `cur`/`nv` at all.** Reading the field fresh per access (one for the `+=`, one for the bound test) makes IDO emit two independent `lw $tN,0x2C(a0)` into transient `$t` regs exactly like the target, instead of caching into `$v0/$v1`. General rule for any near-miss whose only residual is "my loads land in `$v0/$v1`, target uses `$t`": delete the named temps and read/update the memory in place — the priority allocator only reaches for `$v0/$v1` when a *named* SSA value forces it.
+
 **Generalizes:** any small leaf where the target double-loads `aN[k]`
 into distinct `$t` regs around stores to a *different* aliasing-class
 base — express both reads as bare derefs in the order that puts the
