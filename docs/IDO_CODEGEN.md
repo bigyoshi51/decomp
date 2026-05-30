@@ -12112,3 +12112,18 @@ ret: ;
 }
 ```
 Pairs with the inline-fresh rule: at -O0 don't cache pointer/counter locals — re-deref (`*(char**)(a0+off)`, `st->field`) at every use, matching the target's per-use stack reloads. Remaining residual after these levers is usually the -O0 chained-branch epilogue (nested-block exits emit `b L1; ...; L1: b L2; L2:`) plus temp renumbering. Verified 2026-05-30 on func_000122C4.
+
+## -O0 multi-gate functions: NESTED POSITIVE conditions give direct `bne`/`bnez`/`beqz` to a shared exit; flat `if(!cond) return/goto` inverts to `beq;b`
+
+<a name="ido-o0-nested-positive-gates"></a>
+
+A function with a cascade of guard checks that all bail to a common exit has two C shapes at -O0, and only one matches the typical target:
+
+- **Flat negative + early exit** — `if (a1 != 2) return; if (c < 4) return; if (c >= 5) return; <body>` — IDO -O0 compiles each gate as an INVERTED pair: `beq a1,2,skip; b EXIT; skip:` ... i.e. two branches per gate (~2 extra insns each). This holds whether the exit is `return` OR `goto shared_label`.
+- **Nested positive** — `if (a1 == 2) { if (c >= 4) { if (c < 5) { <body> } } }` — IDO emits ONE direct conditional branch per gate straight to the shared fall-out point: `bne a1,2,EXIT`, `slti c,4; bnez EXIT`, `slti c,5; beqz EXIT`. This is the shape most -O0 targets have.
+
+So when the target's gate region is a run of single `bne/bnez/beqz` to the same address, write the gates as nested positive `if`s, NOT flat `if(!cond) bail`. Map each comparison by its emit: `if (x == K)` -> `bne x,K,EXIT`; `if (x >= K)` -> `slti x,K; bnez EXIT`; `if (x < K)` -> `slti x,K; beqz EXIT`.
+
+**Range check reads its value ONCE via `register`.** A two-sided range `if (c >= 4) { if (c < 5) {` where `c` is `*(u16*)(p)` inline re-reads the dereference for each side (+3 insns at -O0). The target reads it once (`lhu` then two `slti` on the same reg). Cache it with `register int c = *(u16*)(p);` (a plain `int c` spills to stack and reloads; only `register` keeps it live across the gate branch). Note this consumes `$s0`, so it competes with any RMW pointer the target also wants in `$s0` (see below).
+
+**Residual cap.** When the target ALSO holds a read-modify-write pointer in `$s0` (e.g. `register char *st` for `st->field += 1`), you cannot get BOTH the range `c` in a caller-temp AND the RMW `st` in `$s0` from C at -O0: `register` forces `$s0` (only one such slot is saved), and dropping it makes `c` re-read. Pick whichever the target weights — usually the structure is then byte-exact except that one register cascade. Combined with [#ido-o0-structcopy-and-goto-gates](#ido-o0-structcopy-and-goto-gates) this took bootup_uso func_000122C4 from 34% to a structurally-exact 88.7% (75/75 insns); the last ~11% is the `$s0` contention. Verified 2026-05-30.
