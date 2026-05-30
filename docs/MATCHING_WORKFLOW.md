@@ -786,6 +786,14 @@ bytes."
 - `scripts/land-successful-decomp.sh` — the script (post-fix)
 
 <a id="feedback-byte-compare-blind-to-reloc-target"></a>
+## Stale placeholder symbols (gl_ref_NNNN / gui_ref_NNNN / D_NNNNNNNN = 0x0) emitting `0(reg)` should be `&D_00000000 + 0xNNN` — a BROAD landable vein
+
+_A recurring near-miss class: a function references a named placeholder symbol (`gl_ref_00000138`, `gui_ref_00000150`, `D_00000138`, …) that is declared `extern` and set to `0x0` in `undefined_syms_auto.txt`. Used as a load base or call arg, it emits `lui rX,0; lw/sw rY,0(rX)` (offset 0) where the target has `lw/sw rY,0xNNN(rX)` — the data lives at the USO/segment D-base + 0xNNN, and the placeholder's `0x0` collapses the offset to 0. The matched SIBLINGS of these functions almost always already use the correct form `*(T*)((char*)&D_00000000 + 0xNNN)` — D_00000000 is the segment-base label, so `%lo(0xNNN)` bakes into the load/store immediate (a R_MIPS_LO16 reloc rides on top, but the **raw immediate bytes match expected**, so the land's `objcopy`-raw `byte_verify` passes)._
+
+**Detection (the 1-diff near-miss finder):** build all `.o`, diff each function's `.text` words (symbol-table addr+size) build-vs-expected, keep functions with exactly 1–2 diffs, then **filter to non-`jal` diffs** (jal diffs are the separate intra-USO-call reloc cap below). The tell is `build[lw/sw rX, 0(rY)]` vs `exp[lw/sw rX, N(rY)]` (same base reg, offset 0 vs N). The offset N usually equals the number in the placeholder's name (`gl_ref_00000138` → N=0x138).
+
+**Fix:** replace the placeholder identifier with `*(T*)((char*)&D_00000000 + 0xNNN)` (or `(char*)&D_00000000 + 0xNNN` for a base). Convert its `extern` decl to a harmless `extern char D_00000000;`. ONE symbol fix can land several callers at once (e.g. `gui_ref_00000150` → 3 gui functions). Verified 2026-05-29: landed `gl_func_00006DC8`/`00006F60`, `game_uso_func_0000EE30`, `gui_func_0000267C`/`000026D8`/`0000271C` (6 functions) this way. **Do NOT confuse with** the `addiu rX,rX,0` → `addiu rX,rX,N` variant where expected has NO reloc and the value is a RETURN/pure-address (e.g. `game_libs_func_000666FC` — that's the genuine literal-baked cap, see IDO_CODEGEN; the distinguisher is whether expected/.o itself carries the matching reloc — `objdump -dr expected/...o`).
+
 ## Raw-word byte-compare is BLIND to reloc targets — a pure symbol-reference leaf byte-matches regardless of which symbol
 
 The per-tick recognizer compares built `.text` words against the `.s` raw
