@@ -6482,3 +6482,21 @@ raw words, divide addr by 4 for the insn index, and follow every branch whose ta
 is >~20 insns away. Cheap (one disasm pass) and prevents phantom-block decodes that
 mislead future passes. Especially important for relocatable-USO raw-word `.s` where
 splat emits no labels and the only structure is the branch arithmetic.
+
+## Moving a function to a different .c file changes its objdiff UNIT — refresh BOTH units' expected/.o or the land byte_verify fails with "null fuzzy_match_percent"
+
+When you match a function by **relocating it to another source file** (e.g. moving an -O0 target into the adjacent `<seg>_o0_<offset>.c` file and shifting `TRUNCATE_TEXT` between the two — see `docs/IDO_CODEGEN.md#ido-o0-stale-nm-percent-table-reflects-c-shape`), the function's objdiff *unit* changes. objdiff pairs base↔target **per unit**: `expected/<unit>.c.o` (target) vs `build/non_matching/<unit>.c.o` (your build). The committed `expected/` baseline still has the function's TARGET bytes under its OLD unit, while your build now emits it under the NEW unit. Result:
+
+- `objdiff-cli report generate` shows the function under the OLD unit with **no `fuzzy_match_percent`** (a target-only symbol with no base pairing — NOT a match, despite looking like the "complete = field omitted" case).
+- `land-successful-decomp.sh` fails: `null fuzzy_match_percent and byte-verify failed` (byte_verify reads the symbol from `build/<old-unit>.c.o`, where it no longer exists).
+
+**Fix:** refresh the `expected/.o` for BOTH affected units so the target bytes follow the move. Surgical (avoids the non-deterministic `make expected` churn across all -g3 units):
+
+```bash
+make objects                                          # ensure build/src is current
+cp build/src/<seg>/<new-unit>.c.o expected/<seg>/<new-unit>.c.o   # gains the function (target bytes)
+cp build/src/<seg>/<old-unit>.c.o expected/<seg>/<old-unit>.c.o   # loses the function
+objdiff-cli report generate > report.json             # now shows fuzzy 100.0 under the new unit
+```
+
+This is honest because `build/src/` is the matching (INCLUDE_ASM-derived) build: for an INCLUDE_ASM function the .o holds real ROM bytes, and for a verified-byte-exact real-C function the .o holds identical bytes. Confirm the new-unit `.o` is byte-exact vs the `.s` words BEFORE copying (a wrong move would otherwise bake your wrong bytes into the baseline). Commit both refreshed `expected/.o` with the match. Verified 2026-05-30 landing func_00012188 (moved bootup_uso_tail3b_top.c → bootup_uso_o0_120A8.c).
