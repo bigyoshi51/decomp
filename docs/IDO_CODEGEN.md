@@ -12046,3 +12046,25 @@ The 10-insn target form (regular bne + nop delay + two jr-ra blocks) is reachabl
 
 **Related un-fixable small-diff caps confirmed same session (all `samesize`, 2-insn):**
 - **2-insn scheduling swap** (mgrproc_uso_func_000011A4): `lui $at,0x20` (const hi) and `addiu $a1,$a1,-1` (`a1-1`) feeding an `or` are scheduled lui-first in target, addiu-first in build. Neither commutative-`|` operand flip (`0x200000 | (a1-1)`) nor precompute (`int t=a1-1; t|0x200000`) reorders them — IDO's scheduler tie-break isn't C-driven here. Same shape in titproc_uso_func_000015F4 (addiu↔lw), gui_uso_func_00001794 (ori↔ori), gui_uso_func_00003B14 (or↔or), gl_func_0000871C (mtc1↔lwc1). 2-insn scheduling swaps of independent ops are a standing cap class — don't grind them.
+
+## A `register`-qualified RMW pointer forces the lvalue base into $s0 at -O0 (frame +8); the condition's separate deref stays an inline fresh temp
+
+<a name="ido-o0-register-rmw-pointer-forces-s0"></a>
+
+At -O0, when a target reads a global/struct pointer in a guard condition AND re-derives the same pointer in the taken block for a read-modify-write, the two derivations land in DIFFERENT register classes:
+- the **condition's** deref → a caller-save temp (`$t`/`$v`), re-derived fresh;
+- the **body's** RMW base → a **saved register `$s0`** (with the corresponding `sw $s0` save / `lw $s0` restore and a +8 frame bump).
+
+This is NOT reproduced by a single shared pointer local (that stack-stores `p` once and reloads it — frame stays small, no `$s0`), nor by a plain inline `|=` in the body (the base lands in a `$t` temp). The lever that puts the body's base in `$s0` is declaring it **`register`**:
+
+```c
+void f(int *a0, int a1) {
+    if ((**(unsigned short**)((char*)a0 + 0x154) & (1 << a1)) == 0) {  /* cond: inline fresh temp */
+        register unsigned short *q = *(unsigned short**)((char*)a0 + 0x154);  /* body base -> $s0 */
+        *q = *q | (1 << a1);
+        func_00000000(a0);
+    }
+}
+```
+
+`register` is honored at -O0 (no allocation pass to discard it) — same mechanism as `register int v` in [#feedback-ido-o0-dead-reassign-forces-s-reg-materialize](#feedback-ido-o0-dead-reassign-forces-s-reg-materialize). The key is asymmetry: keep the CONDITION's deref inline (so it re-derives into a temp and is NOT stack-stored), and make ONLY the BODY's pointer `register`. A shared/stack `p` used in both places collapses to the small-frame, no-`$s0` form. Took bootup_uso func_00012244 byte-exact (32/32 insns, frame 0x28) — a function previously documented as a multi-tick "-O0-cluster split" that actually matched via the adjacent-`-O0`-file append + the `register`-`$s0` lever. Verified 2026-05-30.
