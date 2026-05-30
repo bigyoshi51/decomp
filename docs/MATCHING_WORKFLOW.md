@@ -5809,6 +5809,40 @@ uninitialized (base-reg load AND any FPU/`&D` const setup) — don't stop
 at the first `lw`. game_uso variant, no external refs → clean
 forward-merge (verified verbatim build.o==.s, the USO method).
 
+**`&D`-base global-load donor + intra-segment-jal wrinkle (2026-05-30,
+`game_libs_func_0002353C`→`gl_func_00023548`):** the donor was a 3-insn
+`lui v0,0; addiu v0,0; lw t6,0x215C(v0)` (materialize `&D_00000000` AND read
+`D[0x215C]`); the body reuses `$v0`(=&D) as its store base (`addu t8,v0,t7`),
+so `&D` is CSE-shared across the entry global-read and the body store — write
+both as `(char*)&D_00000000 + ...` (one pseudo) so IDO keeps `$v0` shared.
+Two non-obvious keys beyond the standard forward-merge:
+- **The merged BODY called an intra-segment function via a non-zero-addend jal**
+  (`.word 0x0C00DF14` = `jal 0x37C50`, NOT the `0x0C000000`/`gl_func_00000000`
+  placeholder). Compiling the C then link-errors `undefined reference to
+  gl_func_00037C50` because 0x37C50 is mid-blob (splat bundled it inside
+  `gl_func_00037BEC`, no own symbol). **Fix: add `gl_func_00037C50 = 0x00037C50;`
+  to `undefined_syms_auto.txt`** (same mechanism as `gl_func_000365AC` for the
+  already-landed `gl_func_00021E08`). objdiff is reloc-aware: build/.o keeps the
+  `jal 0`+R_MIPS_26 reloc while expected/.o has the baked `0x0C00DF14`, and the
+  fuzzy score resolves them to the same target → 100 (land via `fuzzy==100`, not
+  raw byte_verify which would diff on the unbaked word). This applies to ANY
+  compiled-C decomp calling an intra-segment mid-blob function, not just merges.
+- **Branch polarity needs an int-return shape.** Target was `beq t6,zero,<work>`
+  with the early-exit inline (`b <exit>; move v0,zero`); plain
+  `void f(){ if (D[x]!=0) return; <work>; }` emits the opposite `bne t6,zero,
+  <exit>` (work inline). The fix is to make it int-returning with two distinct
+  return values: `int f(){ if (D[x]!=0) return 0; <work>; return callee(a0); }` —
+  the explicit `return 0` early vs `return callee()` in the work path reproduces
+  the `move v0,zero` early-exit and the `beq`-to-work layout. (Generic if/else
+  arm-swap symptom; the distinct return values are what pin it.)
+
+After ANY such merge, regenerate the baseline with
+`scripts/refresh-expected-baseline.py` (keep ONLY the changed seg's
+`expected/*.c.o`, `git checkout --` the cross-segment churn) before the report
+shows 100 — `expected/.o` is stale until then and reads `fuzzy=0/None`. The
+land script reruns refresh-expected-baseline itself but checks the report
+BEFORE that, so the refreshed `expected/<seg>.c.o` must already be committed.
+
 **EXCLUSION — do NOT forward-merge when the successor is clone-canonical
 or otherwise externally referenced.** `00001C74` is the canonical decode
 for a byte-identical-clone family (timproc_uso_b1/b3 stubs reference the
