@@ -12077,6 +12077,8 @@ The fix is an orphan-prologue MERGE (see also [project_1080_orphan_fn_prologue_v
 
 Companion idiom that co-occurs here: a call whose args home to `sw a1,4(sp); sw a2,8(sp)` (the outgoing-arg home slots, storing the same values passed in registers) is a **struct passed BY VALUE**, not three scalar args. `gl_func(a0, *(Pair2*)((char*)&D+off))` (where `Pair2 = {int,int}`) emits the load-both-words + home-both pattern; the named base `&D+off` also keeps the `addiu base; lw 0(base); lw 4(base)` split instead of folding the offset into the loads. Took `game_uso_func_00010648` byte-exact (19 insns) — a function the prior pass had documented as a permanent "intra-USO float-in-$f4 callee cap." Verified 2026-05-30.
 
+**Discriminator — merge-match vs DUAL-ENTRY.** If the merged single-entry C lands byte-exact, the two `.s` were genuinely one split function (merge it). If it comes out exactly ONE instruction short — almost always the body's own dead `sw aN, home(sp)` incoming-arg home — that is the signal the body is a SEPARATE entry point sharing a tail, NOT a split: a single function entered at the orphan has different arg dataflow and cannot reproduce the body's standalone-prologue home. Do NOT merge those (it would delete the body's direct-entry symbol). Example: `gl_func_0002DDF4` (game_libs) has the same 1.0f orphan (`game_libs_func_0002DDEC`) prefix as `00010648`, but its merge is 13 vs 14 insns (missing `sw a0,0x18(sp)`) — confirmed dual-entry, left INCLUDE_ASM (2026-05-30).
+
 ## Two -O0 structure levers for multi-gate functions: struct-copy table init + `goto shared_label` (not `return`) for gate exits
 
 <a name="ido-o0-structcopy-and-goto-gates"></a>
