@@ -2981,6 +2981,13 @@ Generalization: "same-type aliases" rule above only applies WITHIN a single call
 
 **Caveat — does NOT help cluster-load patterns** (verified 2026-05-06 on `game_uso_func_0001001C`, regressed 84.05% → 81.26%): when target uses ONE base reg + multiple offsets (`p = &D + 0xDD0; arg1 = p[0]; arg2 = p[1]` emitting `lui+addiu p; lw 0(p); lw 4(p)`), declaring two unique externs at the offset addresses (e.g., `D_arg1 = 0xDD0; D_arg2 = 0xDD4`) FORCES two separate `lui+addiu` pairs, breaking the cluster. The unique-extern technique only helps when target ALREADY emits two separate base loads — never when target uses cluster-load. Also doesn't help precall-arg-spill caps (`sw a1, 4(sp)` in jal delay slot is structural, not symbol-CSE).
 
+**Inverse case — to SHARE one address register across a store + call-arg, use a single `&alias`, NOT `&base + bigoffset`** (verified 2026-05-30 on `gl_func_000671E4`, 67.7% → 92.7%). When the target materializes a data address ONCE (single `lui aN` / `lui+addiu`) and reuses that register for BOTH a store (`sw t6, 0(aN)`) and a call argument, write the address as one clean address-of a distinct extern aliased to that exact link-addr (`extern int gl_ref_NNN; gl_ref_NNN = 0xADDR;`), used in both statements:
+```c
+*(int*)&gl_ref_000416E0 = 1;                       /* sw t6, 0(a1) */
+gl_func_00000000(a0 + 0x11B0, &gl_ref_000416E0, 1); /* a1 reused */
+```
+The clean `&symbol` is CSE'd to one full-address register (store becomes `sw 0(reg)`). The `&D_00000000 + 0x416E0` form does NOT share: IDO folds the offset into the store (`lui at; sw 0x16E0(at)`) but materializes a separate full address for the arg (`lui a1; addiu`), emitting TWO luis and regressing the function. So: distinct-alias = CSE-bust (two luis) is the rule for the cluster/two-use cases above, but for the store+arg-SHARE case the single `&alias` is what produces the one shared register — the determinant is `&symbol` (one address pseudo, shared) vs `&base+offset` (offset folds into the store, splitting it from the arg). **Workflow note:** the regression came from commit `cc6464c3` rewriting the alias to `&D+offset` while claiming a +% gain — the claim was never verified because `report.json` was not refreshed (it is land-script-managed and goes stale during NM-only loops). Always `objdiff-cli report generate` before trusting a near-miss %-improvement claim.
+
 ---
 
 <a id="feedback-ido-cse-bust-via-near-symbol-pointer-arith"></a>
