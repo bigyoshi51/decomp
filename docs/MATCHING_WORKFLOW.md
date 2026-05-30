@@ -6332,6 +6332,23 @@ D_0000014C=z;`), whose -O0 body size matches the target. Before wiring a donor,
 compile the body at -O0 standalone and check its symbol size == the target `.s`
 size.
 
+**Prefer EXTENDING a contiguous -O0 region over a donor splice when the target
+sits immediately adjacent to one.** If the -O0 function is right after an
+existing -O0 sub-unit (e.g. `mgrproc_uso_func_000000F8` at 0xF8, directly after
+the `o0_0` run `[0x0,0xF8)`), just append it to that `.c` and bump the region's
+`TRUNCATE_TEXT` (0xF8→0x140) + shrink the next region's (`head` 0xA4→0x5C). This
+is cleaner than a donor splice (no `replace-function-body.py`, no size-change
+section churn) and gives a real in-file -O0 compile. Verified 2026-05-30:
+`mgrproc_uso_func_000000F8` (`register int *p=a0; p[0]--; gl_func(a0)`, exact
+sibling of the matched `_000000B0`) landed this way, 1717→1718. GOTCHA: moving a
+function between objects requires `make expected` to refresh the baseline — but
+`make expected` rebuilds and re-snapshots EVERY segment's `expected/*.o`
+non-deterministically (touched 68 tracked files here). Before committing,
+`git checkout HEAD -- ` the expected objects of every segment EXCEPT the one you
+changed; commit only the changed segment's `expected/*.o`. objdiff compares
+`.text`/relocs (not the churned metadata), so restoring the others doesn't
+regress the report.
+
 **`replace-function-body.py` does NOT re-align post-`.text` sections after a
 non-16-multiple `.text` growth → objdiff `report generate` can choke ("Invalid
 ELF section header offset/size/alignment").** Diagnosed 2026-05-30 attempting to
