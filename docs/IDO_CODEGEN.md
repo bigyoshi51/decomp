@@ -12399,3 +12399,19 @@ When a near-miss's only diffs are a zero integer argument emitted as `move aN,ze
 ## -O2 branch-likely (`bnezl`/`beql`/`bnel`) emission is a genuine cap — NO IDO flag disables it
 
 Some targets are -O2-COMPACT but use REGULAR `bnez`/`beqz` where IDO -O2 emits the branch-LIKELY form (`bnezl`+filled-delay). Confirm it's not an opt-level issue first: -O1/-O0 give regular branches but BLOATED (+8-10 insns of spills), so they don't match either — the target is -O2-size WITHOUT branch-likely. **There is NO branch-likely-disable command-line flag in IDO 7.1 cc** (verified 2026-05-31: the `bnezl` emission is internal to ugen's `f_emit_branch_rrll`, not exposed via any `-Wo`/`-W` option — checked the cc binary). The only theoretical fixes are (a) a C shape that makes the branch-target's FIRST instruction non-delay-slot-fillable so ugen falls back to `bnez`+`nop` (not found despite do-while/call-in-body tries on the 1080 kernel func_80004808..49B8 tail), or (b) a ugen patch (out of scope). Treat a "-O2-size + regular-branch vs our -O2 + branch-likely" residual as a genuine NM cap; don't grind opt-levels or hunt for a flag. Affects kernel func_8000487C-family, gl_func_0006AF0C, and other 2-4 diff `bnel`/`bnezl` near-misses.
+
+## o32 float-arg position: `lwc1 $f12` for a float arg means the float is the FIRST C arg
+
+When the target loads a function's float argument into `$f12`/`$f14` (`lwc1 $f12, OFF(...)`
+before a `jal`), the C function must declare that float as the **first** parameter (or
+first two for `$f12`+`$f14`). The o32 ABI only routes FP args through `$f12`/`$f14` when
+they are the leading args with **no integer parameter before them** — an `int` first
+parameter forces every following float into a GP register (`a1`/`a2`, via `lw`/`mtc1`).
+
+Decode symptom: a stub written as `func(int a0, float f, ...)` emits `lw a1, OFF(a0)`
+(float-as-int in `a1`) where the target has `lwc1 $f12, OFF(a0)`. Fix: drop the leading
+int — the function is `func(float f, void *p1, ...)`. The `a0` you thought was arg-1 is
+often just a value the caller *saves across the call* (homed to the stack, reloaded
+after), NOT passed. Verified 2026-05-31 on game_uso_func_0000B424 (86%→96% by removing a
+spurious `a0` first arg so the field-loaded float went to `$f12`). Always prototype the
+callee with the real `float` types so IDO doesn't promote/misroute the arg.
