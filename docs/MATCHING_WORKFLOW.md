@@ -6568,3 +6568,29 @@ Why some USO calls DO resolve to 100%: when the jal target is a real function *i
 The five USO entry-0 functions `{boarder5,arcproc,eddproc,n64proc,h2hproc}_uso_func_00000000` open with a relocated unconditional branch (`beq zero,zero,<reloc>` = `b <far>`, e.g. boarder5 `0x1000736F`, the others `0x10006F00`) before the real body. That leading word is a legitimate **USO-header word** injected via `PREFIX_BYTES` (Makefile, applied by `scripts/inject-prefix-bytes.py`) — it survived the 2026-05-23 instruction-forcing purge precisely because it's a loader/header mechanism, not a faked instruction match. The body C below it is byte-exact.
 
 BUT `PREFIX_BYTES` is applied **only in the `build/src` (matching) rule, NOT in `build/non_matching`** — by design, the non_matching rule deliberately skips all instruction-bearing fixups so objdiff shows honest C-only output. objdiff/report.json compares `build/non_matching` (no prefix) vs `expected` (has prefix), so these functions read 66–94% (off by exactly the one prefix word) even though the real ROM is correct. This is NOT a decomp gap — the body matches and the trampoline isn't C-producible. Don't chase the "missing" leading branch, and don't add `NON_MATCHING_PREFIX_BYTES` to inflate the metric (the project intentionally credits only the C-producible bytes here). Recognize the `b <reloc>` + `addiu sp` opening at a USO offset-0 symbol and move on. (Same recognition cue as the pure `b;jr;nop` proc-USO trampolines.) Confirmed 2026-05-30.
+
+## Before declaring a near-miss a "regalloc/reorder cap" — try the higher-level C construct
+
+A recurring failure mode in this project's documented "caps": a near-miss (95–99%) gets
+attributed to register allocation or basic-block reordering, with a list of failed
+*hand-rolled* levers (manual shift chains, if/goto dispatch, decl-order shuffles,
+permuter runs). In several cases the real fix was to stop hand-rolling and let IDO lower
+a **higher-level C construct** — IDO's own lowering frequently matches the target better
+than a manual equivalent:
+
+- **Constant multiply / strength-reduced index** → write `x * N`, not a hand-expanded
+  `t<<=2; t-=x; t<<=3; ...` chain. The combined multiply reuses one register
+  (single-`$t7` chain); the manual form spreads to fresh pseudos. (game_libs_func_000315BC,
+  documented "hoist-breaks-reuse cap" → exact. See IDO_CODEGEN.md#strength-reduce-multiply-vs-hand-expanded-chain.)
+- **Small-key dispatch** → write `switch (key) {...}`, not `if(key==0)goto; if(key==1)goto;`.
+  The if/goto chain inverts the branch polarity (`bne key,K,end` fall-through) and reorders
+  the case blocks; the switch emits the target's `beq key,K,caseK` + case order.
+  (n64proc_uso_func_0000035C, documented "block-reorder + arm-polarity cap" → exact. See
+  IDO_CODEGEN.md#switch-vs-if-goto-dispatch-polarity.)
+
+**Heuristic:** when a near-miss's diff is "right mnemonics, wrong registers/branch senses"
+AND the prior analysis only tried hand-rolled variants of one construct, try expressing
+the same logic with the *natural higher-level construct* (multiply, switch, array index,
+struct assignment) before concluding it's a post-RTL cap. IDO 7.1's optimizer is tuned for
+idiomatic C; the idiom is often closer to the target than the clever hand-rolled form.
+Both examples above were multi-week documented caps cracked in one tick this way (2026-05-31).
