@@ -87,6 +87,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Fix IDO unused-a0 spill by passing a0 through to the jal callee](#feedback-ido-unused-arg-fix-pass-to-callee) — When a function has signature `void f(int a0, int *a1)` where a0 appears unused in the body but is a real (required) parameter to preserve a1's register assignment, IDO spills a0 to the caller's arg-save slot (extra `sw…
 - [IDO -O2 won't put `addiu aN, aN, K` into a jal-delay slot when a store via the SAME base precedes the call](#feedback-ido-no-addiu-into-jal-delay-when-store-via-base-precedes) — _For `*a0_offset_K = v; func(&a0[L], ...)`, IDO emits the `addiu a0,a0,L*4` as a standalone insn before the jal — it can't sink into the delay slot because the preceding store-via-a0 is a true dependency on the original $a0. Creates a fixed +1-insn delta vs targets that DO have the addiu in the delay slot. No clean C lever; structural cap. Verified 2026-05-16 on gl_func_0003E904 (built 26 vs target 25)._
 - [Inline `aN[OFFSET]` at each use to force IDO to emit the same `lw` twice — matches target's redundant-reload shape](#feedback-ido-inline-arg-deref-defeats-cse-emit-multiple-lw) — _When built is N insns short and the missing insns are duplicate `lw aN, K(aN)` for the same struct field, refactor the C to inline the deref at each use instead of caching into a local. IDO's CSE doesn't fold separate-statement field-deref loads. Verified 2026-05-16 on gl_func_00046B64: caching `int *p = a0[0x240/4]` produced 23 insns (target 24); inlining `(int*)a0[0x240/4]` at all 3 use sites gave 24 insns matching target's count._
+- [A 2-reg renumber where the target uses a HIGH temp ($t8/$t9): that value is a THROWAWAY — inline its deref, don't name it](#feedback-ido-high-temp-means-inline-deref-throwaway) — _When a near-miss is a pure register renumber and the target holds a value in `$t8`/`$t9` while you hold it in `$v0`/`$v1`/low-temp, that value was an inlined-deref consumed once — inline it (`if (*(u8*)(o+0x21)==2)`), don't name it. A value the target keeps in a mid temp ($t6/$t7) for a store wants its OWN named local (`nf = f & ~0x20; *p = nf;`), separate from the source var (mutating `f &= ~0x20` in place reuses the source reg instead). Naming vs inlining picks the register pool. Cracked gl_func_0002E24C (game_libs, documented 2-reg-renumber cap → byte-exact, 2026-05-30); fuzzy % climbs one reg at a time. Also reconcile call arity first — that fn's call was mis-decoded `(0x3D)`→`(o, 0x3D)`._
 - [`float four = 4.0f;` named local pins the FP constant to one $fN across multiple uses](#feedback-ido-named-float-const-pins-fp-reg-across-body) — _For FP literals used 2+ times in a function body, declare `float NAME = LITERAL;` as a named local — IDO -O2 pins one $f-reg and reuses, vs re-materializing `lui at, IMM; mtc1 at, $fN` per use. Different from the `register int N = 1;` constant-fold trap because FP literals need lui+mtc1 setup. Verified 2026-05-16 on game_libs_func_000086A0 (parallel) and gl_func_0000871C (this tick) — both 4.0f-pinning under `float four = 4.0f;`._
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
@@ -10666,6 +10667,34 @@ vtable = (int*)((int*)a0[0x240/4])[0x28/4];
 **When NOT to apply (verified 2026-05-16 on `timproc_uso_b1_func_00001908`):** built is N insns short BUT the missing insns are STRUCTURAL register-shuffles around a cached pointer (target keeps `self` in `$a3` from one spill-reload, my emit reloads per-use into `$a0`). Inlining the deref REGRESSED by losing 1 more insn (86.60% → 85.96%, 172B/43 → 168B/42). Diagnostic: look at the missing insns in the diff — if they're `lw self,sp+0xN; lw sub,K(self)` PAIRS, this recipe applies; if they're `lw sub,K(self)` only (self already cached in an unchanged reg), inlining doesn't help and may hurt by collapsing the cached form.
 
 **Complementary recipe:** `feedback-unique-extern-neutral-when-clobber-forces-reload` (PATTERNS.md) covers the &D-extern case where unique-externs force separate reloads. This entry covers arg-pointer field-deref CSE-defeat via inline.
+
+---
+
+<a id="feedback-ido-high-temp-means-inline-deref-throwaway"></a>
+## A 2-reg renumber where the target uses a HIGH temp ($t8/$t9): that value is a THROWAWAY — inline its deref, don't name it as a local
+
+_When a near-miss is a pure register renumber and the target holds one of the values in a **high temp** (`$t8`=24, `$t9`=25) while your build holds it in a low caller-saved reg (`$v0`/`$v1`/`$t0`), that's IDO telling you the value was an **inlined deref consumed once**, not a named local. Inline it. Conversely, a value the target keeps in a **mid temp** (`$t6`/`$t7`) across one or two uses wants a **separate named local**. Naming vs inlining picks which pool (low/named vs high/throwaway) IDO draws from._
+
+**Symptom:** built is ~98–99% — same opcodes, same structure — but 2 (or 3) registers are swapped/renumbered vs target, and at least one target reg is `$t8`/`$t9`.
+
+**Diagnosis by register:** in IDO -O2 leaf/near-leaf code, a value that is **read once and immediately consumed** (e.g. fed straight into a compare-and-branch) tends to land in a HIGH temp ($t8/$t9). A value that is a **named local living across a couple of statements** lands in $v0/$v1 or a mid temp. So map each target reg back to a C shape:
+- target value in `$t8`/`$t9` → **inline the deref at the use site** (`if (*(u8*)(o+0x21) == 2)`), do NOT give it a name.
+- target value in `$t6`/`$t7` used for a store → give it its **own named local** (`nf = f & ~0x20; *p = nf;`), separate from the source var — naming it keeps it out of the source var's reg (mutating the source in place, `f &= ~0x20`, instead REUSES the source reg for the result).
+- target value in `$v0` that lives across the body (multiple refs) → a plain **named local** read once at the top.
+
+**Worked example — `gl_func_0002E24C` (game_libs, 2026-05-30, documented "2-reg renumber cap" → byte-exact):** target = `f`→`$v0`, masked-store-value→`$t7`, `k`→`$t8`. The matching C:
+```c
+unsigned char f = *(unsigned char *)(o + 0x16);  // named local, lives across → $v0
+unsigned char nf;
+if (!(f & 0x20)) return;
+nf = f & ~0x20;                                  // SEPARATE named local → $t7 (not reusing f's reg)
+*(unsigned char *)(o + 0x16) = nf;
+if (*(unsigned char *)(o + 0x21) == 2) return;   // INLINED deref → throwaway $t8
+gl_func_00000000(o, 0x3D);
+```
+Versions that FAILED: naming `k` as a local put it in `$v0`/`$v1` (98.5%); mutating `f &= ~0x20` in place got `f`→`$v0` right but reused `$v0` for the store instead of a fresh `$t7` (98.8%). Only inline-`k` + separate-`nf` hits all three regs at once (100%). The fuzzy % climbs one register at a time as you get each shape right — treat each +0.3% as confirmation that lever fixed one reg, then attack the next.
+
+**Note:** this also fixed a real decode bug first — the call was mis-read as `gl_func_00000000(0x3D)` (1 arg → `li a0,61`); target passes the object: `gl_func_00000000(o, 0x3D)` (`li a1,61`). Always reconcile call arity before blaming the renumber.
 
 ---
 
