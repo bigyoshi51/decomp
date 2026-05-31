@@ -12359,3 +12359,16 @@ A recurring cap class: "find-or-create" cascades — `p = a0; if(!p){p=alloc(N);
 - `n64proc_uso_func_00000100` (3-stage 0x88/0x50/0x2C cascade, 95.0%, frame 0x30 vs 0x28)
 
 Levers verified NOT to crack it (2026-05-31): ternary `p = a0 ? a0 : alloc(N)` form (RTL-normalized, zero change); **reusing the `a0` param for the 3rd stage value** (helped collapse eddproc 025C's frame by dropping a local, but on `00000100` the frame stays 0x30 — the extra slots come from the cascade's spill arrangement, not the named local, so the lever does NOT transfer); decl-order; (void)&arg. This is IDO's RTL FP/GPR allocator coloring on the caller-saved spill schedule — the per-function-RE cap class (cf. project_1080_cap_analysis). Next tools: permuter, or the regalloc dump (`-Wo,-zdbug:6` → uoptlist). Don't re-grind the C-textual variants above; they're exhausted on both functions.
+
+<a id="rmw-pointer-advance-for-store"></a>
+## Field RMW that materializes the store pointer (`addiu base,base,K; sw 0(base)`) — write as load-via-offset + pointer-advance + store-via-0
+
+When a `p->field_K &= ~m` (or any RMW at a large offset) shows the target ADVANCING the base for the store — `lw t,K(base); addiu base,base,K; and t2,t,imm; sw t2,0(base)` (4 insns) — but your natural `*(int*)((char*)p + K) = *(int*)((char*)p + K) & ~m;` emits a direct `sw t,K(base)` (3 insns, 1 short), rewrite it to advance the pointer in place between the load and the store:
+
+```c
+int v = *(int*)((char*)p + K);     /* lw  K(base)         — load via offset  */
+p = (int*)((char*)p + K);          /* addiu base,base,K   — advance in place  */
+*p = v & ~m;                       /* and; sw 0(base)     — store via 0(base) */
+```
+
+This recovers the missing `addiu` and the `0(base)` store form (size-exact). Used on game_uso_func_00011024 / 000110A4 (1-insn-short → size-exact, 2026-05-31). **Order matters:** load-via-offset must come BEFORE the advance (advancing first then `*p = *p & ~m` gives `lw 0(p)` not `lw K(base)`, and puts the `addiu` before the load). **Residual caveat:** the loaded value `v` must be a named local here (it's live across the advance), so IDO births it in `$v1`; if the target uses a high temp (`$t9`) for it, that's a leftover register renumber the C form can't reach (named-local→$v vs throwaway→$t) — permuter/allocno territory, not a structure problem.
