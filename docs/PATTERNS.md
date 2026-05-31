@@ -3043,6 +3043,8 @@ volatile T x; x = compute(); use(x);           /* same as above */
 can't keep array elements in registers because address-taken-implicitly.
 Single-element arrays are just a thin wrapper that forces this.
 
+**Multi-element variant — jump-table case-result spill (2026-05-31, game_uso_func_0000ECEC 64.6%->87.0%):** the same lever applies when a jump-table `switch` assigns two (or more) accumulator locals per case and the target spills those case-results to ADJACENT stack slots rather than keeping them in registers. Declaring the accumulators as one array `int ab[2]` forces both into a contiguous frame block; pick the index→offset mapping to match the target's slots (here `a=ab[1]` at `sp+4`, `b=ab[0]` at `sp+0` — the array's element 0 is the LOWER address, so a higher-offset target slot is the higher index). Plain `int a, b;` keeps them register-resident and the per-case `sw` disappears. Recognition: each `case` block in the target does `lw $tN, OFF(obj); sw $tN, k(sp)` (load-then-spill) for the case value, and the post-switch merge reads them back via `lw ... k(sp)`. Also note: when the cases ALWAYS assign every accumulator for valid idx (and idx==0 / out-of-range is handled separately), do NOT zero-init the array at the top — the target relies on the cases and emits no `sw zero, k(sp)` prologue clears (dropping the init was the final +0.5pp on ECEC).
+
 **Use when**:
 
 1. Target has `sw $rA, OFF($sp); ...; lw $rB, 0($tM)` where `tM = sp + OFF`
