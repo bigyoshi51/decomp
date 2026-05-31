@@ -12331,3 +12331,11 @@ both the branch sense AND the block-emit order at once. Verified 2026-05-31 on
 Reach for `switch` before declaring a key-dispatch branch polarity a post-RTL reorg.c cap.
 Complements the strength-reduce-multiply lever: both are cases where the higher-level C
 construct matches IDO's own lowering better than a hand-rolled equivalent.
+
+## Find-or-create allocator-cascade regalloc/frame cap (cross-function, multi-tick RE)
+
+A recurring cap class: "find-or-create" cascades — `p = a0; if(!p){p=alloc(N); if(!p)return;} q=p; if(!q){...} ...` with convergent `Lq28/Lp28` shared-tail stores. The LOGIC and control-flow structure match the target exactly, but the residual is **register allocation + frame size**: the target keeps the stage pointers in caller-saved regs (`$a3`/`$a0`-reused, spilling to low slots within a smaller frame) while IDO routes ours through `$v1` + extra stack slots (larger frame). Confirmed instances:
+- `eddproc_uso_func_0000025C` (the 3-stage 0x54/0x50/0x2C cascade)
+- `n64proc_uso_func_00000100` (3-stage 0x88/0x50/0x2C cascade, 95.0%, frame 0x30 vs 0x28)
+
+Levers verified NOT to crack it (2026-05-31): ternary `p = a0 ? a0 : alloc(N)` form (RTL-normalized, zero change); **reusing the `a0` param for the 3rd stage value** (helped collapse eddproc 025C's frame by dropping a local, but on `00000100` the frame stays 0x30 — the extra slots come from the cascade's spill arrangement, not the named local, so the lever does NOT transfer); decl-order; (void)&arg. This is IDO's RTL FP/GPR allocator coloring on the caller-saved spill schedule — the per-function-RE cap class (cf. project_1080_cap_analysis). Next tools: permuter, or the regalloc dump (`-Wo,-zdbug:6` → uoptlist). Don't re-grind the C-textual variants above; they're exhausted on both functions.
