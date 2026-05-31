@@ -615,4 +615,4 @@ When the permuter reaches **score 0**, the matching C is in
 `nonmatchings/<func>/output-0-*/source.c`. Put that C into the function's
 `#ifdef NON_MATCHING` block in src, rebuild, verify byte-exact against the `.s`
 (`raw-diff=0`), and it's a **real match** — no patch, episode-worthy. `nonmatchings/`
-is gitignored. Score bands still apply (≥1000 ≈ structural, stop and fix the C).
+is gitignored. Score bands still apply (≥1000 ≈ structural, stop and fix the C).- (5) **frame-SIZE differences** (not just spill-slot swaps) — when the target frame is e.g. 0x90 but your C emits 0x98 (an extra 8-byte spill/temp slot), the permuter is USELESS: its scorer normalizes ALL sp-relative offsets, so it neither sees the size diff nor the cascade of shifted sp-offsets it causes, and it will happily report a *lower* score for a variant that actually GREW the frame (verified `func_80000D2C` 2026-05-31: 28k iters, "score 15" while frame grew 0x98→0xA0, 18 raw diffs vs base 13). Frame-size caps need MANUAL spill-elimination (reduce live-range pressure), not the permuter. 
