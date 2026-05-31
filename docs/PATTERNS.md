@@ -2243,6 +2243,8 @@ The `;` after `end:` is required because a label needs a statement.
 
 **Pad sizing:** if target has frame size 0x48 and mine is 0x38, try `char pad[16]`. `char pad[12]` often rounds up to 16 (alignment). `int pad` is only +8. Place `pad` AFTER the functional locals — IDO first-declared-highest-offset per `feedback_ido_local_ordering.md`.
 
+**Oversized-array variant — phantom slots BELOW a used array (game_uso_func_0000B424, 2026-05-31):** when the missing frame bytes sit at LOWER offsets than a used local array (target has the live array high in the frame with unused slots beneath it), grow the array itself rather than adding a separate `pad`. Declare `float buf[5]` but use only the top indices `[2..4]` — GCC can't partially-elide a single array, so the unused `[0],[1]` reserve the low slots, the used elements land at the target's exact offsets (0x24/0x28/0x2C), and the frame grows by the right amount. A plain `float buf[3]` gave frame -40 and shifted every stack offset by 8; `float buf[5]` (use 2..4) gave the exact -48 layout. Use this when a trailing `char pad[N]` would land at the WRONG (high) offset — the oversized array reserves space contiguously beneath the used region instead.
+
 **What this combo does NOT fix:**
 - Branch polarity on the second dispatch (target `beq tag1` vs mine `bne end`) — this is IDO's choice for chained if-goto. May need `switch` or explicit else-if.
 - Exact local positions (4-byte offsets) inside the frame.
