@@ -12389,3 +12389,8 @@ if (n > 0) {
 ```
 
 Scoping `key` inside the `if` makes IDO emit its load after the `blez`, freeing the `i = 0` (move v0,zero) to fill the branch's delay slot — matching. Byte-exact game_libs_func_00025A80 (2-diff scheduler swap → 0, 2026-05-31). Applies specifically to the loop-guard-delay-slot swap; does NOT generalize to unrelated pre-prologue swaps (uninitialized-local preload, `sw ra`/arg-setup ordering) which are genuinely scheduler-fixed.
+
+<a id="prototyped-fp-call-zero-arg-move-vs-li"></a>
+## A prototyped call carrying a `float` arg materializes a zero INT arg as `move aN,zero` (not `li aN,0`)
+
+When a near-miss's only diffs are a zero integer argument emitted as `move aN,zero` (`or aN,zero,zero`, 0x00003825) where the target has `li aN,0` (`addiu aN,zero,0`, 0x24070000), check whether that call is **prototyped with a `float` parameter**. IDO emits the `move` form for the zero int arg specifically on prototyped FP-bearing calls; the same zero on a K&R `gl_func_00000000(...)` call (no prototype) emits the matching `li`. This is a coupling between the prototype (needed so the float arg goes via `swc1` as a 4-byte float rather than K&R's `sdc1` double) and the int-zero encoding — not separately controllable. Verified resistant on gl_func_00054A14 (2 diffs, both prototyped-`_54a` calls; passing the float's int bits via K&R to drop the prototype regressed 38 diffs — the target genuinely uses `swc1`). Treat as a genuine 2-diff cap when both the float-arg `swc1` and the `li`-zero are required simultaneously.
