@@ -12453,3 +12453,16 @@ Verified 2026-05-31 on `gui_func_00000D04` (gui_uso): two `1024` stack args on t
 **Symptom:** the build is N instructions short at the top of the function; the missing block is a constant materialization + a run of stores to consecutive stack slots that are NEVER read again (e.g. `lui at,0x3f80; mtc1 at,$f0; swc1 $f0,A(sp); swc1 $f0,B(sp); ...`). The target initializes some stack locals (commonly to `1.0f`) and then never uses them — a dead store the original source wrote but the *target's* build kept, while IDO -O2 in our build eliminates them as dead.
 
 **Fix:** declare those locals `volatile` — `volatile float sp48, sp4C, sp50, sp54;` then `sp48 = 1.0f; ...`. Volatile stores are never dead-code-eliminated, so IDO emits the `swc1`s (plus the shared `lui/mtc1` constant load). Verified 2026-05-31 arcproc_uso_func_000014C8: four dead `1.0f` locals → `volatile` lifted 80.6→85.58% (closed the 6-insn prologue gap). Distinct from [[#feedback-ido-volatile-pp-forces-n-fold-pointer-reload]] (that forces N *reloads* of a pointer; this forces *dead writes* to persist). Caveat: it does NOT control the *slot* the floats land in — if the target also has them at specific high offsets (frame-size mismatch), that residual is ordinary -O frame layout, not fixable via volatile. Only reach for this when the missing insns are provably dead stores (no later read, no address taken — grep the asm for any load/`addiu rX,sp,OFF` of those slots first).
+
+## Loop-buffer pointers spilled to the stack (not saved regs)? `char *volatile` forces it — but read each ONCE into a non-volatile temp or it over-spills
+<a name="feedback-ido-volatile-loop-buffer-spill"></a>
+
+**Symptom:** a list-traversal / double-buffer loop where the target keeps its working pointers (e.g. `cur`/`next`) in **stack slots** (`sw t,24(sp)` ... `lw t,24(sp)` each iteration, NO callee-save register used, small frame) but natural C promotes them to `$s0/$s1` (callee-saves, +8/frame, spill cascade). The cross-call liveness makes IDO prefer a saved register; the target instead spills/reloads.
+
+**Fix:** declare the loop pointers `char *volatile cur, *volatile next;`. Volatile forces every access through memory → the `sw`/`lw` stack form, no saved reg. **Gotcha:** *full* volatile reloads on EVERY read, which over-spills (e.g. 52 insns vs the target's 43 — each `cur`/`next` use re-reads). The target reads each buffer **once per iteration** into a temp and reuses it. So read the volatile into a plain (non-volatile) local `t` once, then do all the work through `t`:
+```c
+t = next;              /* one volatile read */
+v0 = 0;
+if (t != 0) { cur = t; next = *(char**)(t + 4); v0 = *(int*)t; }  /* reuse t */
+```
+Verified 2026-05-31 gl_func_0003D48C: plain locals (saved-reg form) 49%, full-volatile (over-spill) 61.9%, volatile+read-once-into-temp **75.8%**. Residual after that is the loop-condition var taking a saved reg vs the target's temp — an ordinary allocno cap. Companion to [[#feedback-ido-volatile-keeps-dead-init-stores]] and [[#feedback-ido-volatile-pp-forces-n-fold-pointer-reload]] (same `volatile` family, different goal: this forces the *pointer itself* to live in a stack slot).
