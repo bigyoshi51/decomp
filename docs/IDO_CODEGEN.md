@@ -9555,6 +9555,8 @@ _When the target asm has `lui aN, HI; addiu aN, aN, LO` materializing a magic 32
 
 Both compute the same final address, but the BYTE PATTERN differs (`0x34a5...` ori vs `0x24a5...` addiu).
 
+**Generalizes to `&D+offset` data-section CONSTANTS, not just call args (2026-05-31, gl_func_000519A4 86.2→97.88%, +9.6pp from this alone).** A constructor/driver often stashes several data-section references as plain hex literals — format-string addresses passed to a sprintf cb, a vtable pointer `*obj = 0x20740`, stored handler addresses `field = 0x20D88`, even pointer-deref'd handler reads `*(int*)0x20630`. Every one of these is an ADDRESS and should be written `(T)((char*)&D_00000000 + 0xN)` (or a distinct `&gl_ref_0xN`/`&D_000XXXXX` symbol). The literal form emits `lui rN,HI; ori rN,rN,LO` for EACH; the address form emits `lui rN,HI; addiu rN,rN,LO`. **Detector:** scan a near-miss for `ori rN,rN,0xNNN` in the build aligned to `addiu rN,rN,NNN` in the target (same register, LO==0xNNN) — that's a literal-that-should-be-an-address. Fix every site at once; they often share the `lui HI` so the win compounds. (Distinct from the &D-CSE distinct-extern lever, which fixes a SHARED base being reused vs re-materialized; this fixes the ori-vs-addiu LOW-half encoding of each individual reference.)
+
 **Recipe:**
 
 ```c
