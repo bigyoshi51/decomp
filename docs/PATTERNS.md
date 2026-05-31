@@ -28,6 +28,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 - [When matching IDO output, where you load `arg0->fieldN` (early vs late) determines frame-spill shape — early load → $s spill, late load → caller-slot reload](#feedback-arg-load-early-vs-late-swaps-frame-shape) — _For a function that reads `arg0->fieldN` AFTER one or more cross-USO calls, the C-source position of that read controls IDO's frame layout.
 - [`li aN; move aM, zero` BEFORE a conditional may be args for a JAL AFTER the conditional — don't read it as conditional setup](#feedback-args-loaded-before-conditional-feed-jal-after) — _When target asm has `li a1, K; move a2, zero` (or similar arg-prep) immediately before a `beqzl`/`bnel`-with-store sequence, those args are NOT for the conditional path — they're hoisted by IDO's scheduler from the JAL…
+- [A delay-slot load before `beq zero,zero` makes a ROTATED single loop look NESTED — account for the delay slot before declaring nesting](#feedback-delay-slot-load-rotated-loop-not-nested) — _IDO rotated do-while: prefetch `next=cursor->4` before body, `obj=cursor->0` in the unconditional branch's DELAY SLOT (so it runs), loop test `bne obj,zero`. One loop, not two. Cracked gl_func_00038728 41->64%._
 - [game_uso has a 6+ function precall-arg-spill cluster — recognize and don't grind](#feedback-game-uso-precall-spill-family) — _At least 6 functions in game_uso share an identical structural cap: 28-insn 0x70 dispatchers (sometimes 26 with extra leading call) where target emits `sw a1,4(sp); sw a2,8(sp)` defensive spills around a jal that IDO…
 - [K&R-style function definition lets a NM wrap coexist with same-TU callers passing extra/fewer args](#feedback-knr-def-for-inconsistent-arg-callers) — _When NM-wrapping a function whose existing INCLUDE_ASM siblings are called with varying arg counts in the same .c file, an ANSI prototype `int f(int c)` breaks the -DNON_MATCHING build with cfe "number of arguments…
 - [`lw $aN, OFFSET($sp)` with NO preceding sw to same slot — diagnose before grinding](#feedback-lw-arg-from-stack-no-preceding-sw) — When the asm has an early `lw $a1, 0x18($sp)` (or similar) right after prologue with NO preceding sw to that slot in the same function, it's not a normal C source pattern.
@@ -9011,3 +9012,35 @@ int *self = arg0;            // promotes to s0, no spill
 **Why it also fixes regalloc:** because `self` is just the param, IDO can move it into a saved register (`or s0,a0`) in the call's delay slot — it's available pre-call. A call *return* (v0) isn't available until after the call, so IDO keeps it in v0 and stack-spills it across subsequent calls. The param-as-self form is both structurally correct AND promotes to sN.
 
 Cracked `gl_func_00061E9C` 70.3%→100% (2026-05-31), stacked with two finishers: the assert-callback constant `0x22040` is address-style (`(char*)&D_00000000 + 0x22040` → `lui+addiu`, not literal `lui+ori`), and inlining a single-use `related` temp colored it `t8` (high) instead of `t1`. Recognition trigger: first-call delay slot is `or sN,a0,zero` and the body reads `sN`, never `v0`.
+
+## A delay-slot load before `beq zero,zero` (unconditional) makes a ROTATED single loop look like a NESTED loop — account for the delay slot before declaring nesting {#feedback-delay-slot-load-rotated-loop-not-nested}
+
+**Trigger:** decoding a list/tree-walk and the structure looks like two nested loops because some `v0 = X->0` (or `obj = cursor->0`) loads appear to be "skipped" by `beq zero,zero,LABEL` unconditional jumps that branch right over them, while the loop-test (`beq v0,zero` / `bne v0,zero`) reads a register that was set to 0 at function entry. Reading it naively, the body looks unreachable and you reach for a nested/list-of-lists interpretation.
+
+**What's actually happening:** the skipped load sits in the **delay slot** of the unconditional branch, so it EXECUTES before the branch takes effect. IDO uses this to implement a rotated do-while: the cursor-advance (`next = cursor->4`) is a prefetch *before* the body, and `obj = cursor->0` is read in the branch's delay slot, then the loop test runs. It's ONE loop, not two.
+
+```
+L_setup: ... ; v0 = 0 ; mask = lui ...
+  beq cursor,zero, L_TEST     ; if list empty, skip to test (v0 still 0 -> exit)
+  40(sp) = cursor             ; (delay) save cursor
+  next = cursor->4            ; prefetch
+  44(sp) = next
+  beq zero,zero, L_TEST       ; UNCONDITIONAL ->
+  v0 = cursor->0              ; (DELAY SLOT — RUNS) obj = *cursor
+L_BODY:  ... process obj ...  ; reached via L_TEST: bne v0,zero, L_BODY
+L_advance: cursor = 44(sp) ; v0 = 0 ; beq cursor,zero,end ; ... ; v0 = cursor->0(delay)
+L_TEST: bne v0,zero, L_BODY  ; loop while obj != 0
+```
+
+The clean C is a single rotated loop:
+```c
+for (cursor = head; cursor != 0; cursor = next) {
+    next = *(void**)(cursor + 0x4);   /* prefetch BEFORE body */
+    obj  = *(void**)cursor;
+    if (obj == 0) break;              /* the "v0==0 -> exit" test */
+    ... body uses obj ...
+}
+final_cb();
+```
+
+Cracked `gl_func_00038728` 41.2%→64.4% (2026-05-31) after first mis-reading it as a nested list-of-lists. **Rule:** when a `v0 = mem` load looks dead because an unconditional `beq zero,zero` jumps over it, check whether it's the branch's delay slot — if so it runs, and you're looking at a rotated single loop with delay-slot loads, not nesting. (Residual after the logic fix is usually regalloc: the target spills the cursor/next chain to stack slots while IDO keeps them in saved regs — a permuter target, not a logic gap.)
