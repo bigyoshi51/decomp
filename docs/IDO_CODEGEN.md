@@ -1882,6 +1882,8 @@ b3 = (char*)*base_pp;  *(int*)(self + 0x34) = *(int*)(b3 + 0x8C);
 
 _When the target asm is a chain of sequential `li at, K; beq a1, at, body_K` (compares grouped at top, case bodies after), straight `if-else-if` produces 49 % match (interleaves bodies) and `switch` produces 69 % (jumptable + .rodata that won't link). The matching form is a hand-laid `if (a1 == N) goto cN;` chain followed by `cN: body; goto end;` labels. This puts compares-first / bodies-after, matching IDO's emit for the chained-beq pattern._
 
+> **CAVEAT — this is the LARGE/sparse case (many cases → switch jumptables).** For SMALL key dispatches (2–3 contiguous cases, e.g. `key==0`/`key==1`), the OPPOSITE holds: `switch` wins and the `if (k==N) goto cN;` chain LOSES, because IDO inverts the chain's last test to `bne k,N,end` (case as fall-through) where the target wants `beq k,N,caseN` — and with few cases `switch` emits that beq dispatch directly (no jumptable). Verified 2026-05-31: `switch` cracked `n64proc_uso_func_0000035C` (95.5→100 %) and improved `n64proc_uso_func_00000268` (93.57→97.30 %, BEATING the goto-chain the old note called "strictly better"). **Decide by case count: many sparse cases → goto-chain; few cases → `switch`.** See [#switch-vs-if-goto-dispatch-polarity](#switch-vs-if-goto-dispatch-polarity).
+
 **Pattern (verified 2026-05-02 on game_uso_func_0000174C, 16-case dispatch):**
 
 Asm shape (target):
