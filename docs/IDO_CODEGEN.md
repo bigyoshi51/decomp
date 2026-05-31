@@ -12341,6 +12341,14 @@ IDO lays the arms out in case order with the target's `beq key,K,caseK` polarity
 both the branch sense AND the block-emit order at once. Verified 2026-05-31 on
 `n64proc_uso_func_0000035C` (documented block-reorder + arm-polarity cap, 95.5% to 100%).
 Reach for `switch` before declaring a key-dispatch branch polarity a post-RTL reorg.c cap.
+
+> **WHEN switch REGRESSES (verified 2026-05-31 on mgrproc_uso_func_000014F4):** the win
+> requires DISTINCT per-case bodies. If two keys share a body (`case 1: case 3:` → same
+> code) OR the cases are contiguous enough that IDO builds a jumptable, `switch` can
+> REGRESS hard (mgrproc 14F4: cases 1/2/3 with 1&3 sharing → 88.5% goto-chain dropped to
+> 79.3% switch). Rule of thumb: distinct-body sparse small dispatch → `switch`; shared-body
+> or dense-contiguous → keep the goto-chain (its only residual is then the last-test
+> bnel-annul, a separate reorg cap). Always re-measure after switching; don't assume.
 Complements the strength-reduce-multiply lever: both are cases where the higher-level C
 construct matches IDO's own lowering better than a hand-rolled equivalent.
 
