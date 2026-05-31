@@ -136,6 +136,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### constant fold / immediate / CSE
 
+- [A constant metric (e.g. `1024`) is sometimes a REDUNDANT DIVISION `(x<<N)/x` in the target — model the div, not the constant](#feedback-ido-redundant-div-trap-as-constant) — _When target asm has `sll rT, rX, 0xN; div zero, rT, rX; mflo rR` (+ the `bne rX,zero;break 0x7` div-by-0 and `bne rX,-1 / bne rT,0x8000…;break 0x6` overflow traps) and the divisor rX equals the dividend's base, the value rR is just `2^N` — but IDO can't fold a runtime `(x<<N)/x` to a constant, so it emits the whole div+trap sequence. If your C passed that arg as the literal `2^N` (e.g. `1024`), the entire div block goes missing. Fix: write `(x * (1<<N)) / x` (or `(x<<N)/x`) where `x` is the live var the asm divides by. Verified 2026-05-31 gui_func_00000D04: two such `1024` packet metrics were `(scale<<10)/scale` and `(glyph[2]<<10)/glyph[2]`; modeling both (a contiguous ~12-insn block each) lifted 45.3→71%. Recognition cue: a `break 0x7`/`break 0x6` pair near a `mflo` whose result feeds a call arg that "should" be a round power-of-two constant._
 - [IDO -O2 constant-folds the load-address even when the base is a register-declared local](#feedback-ido-constant-address-load-fold-inevitable) — _For `arg = *(int*)((char*)base + N)` where base = `&D_constant`, IDO emits a fresh `lui+lw` rather than `lw arg, N($base_reg)` even with `register` keyword.
 - [Force shared base register across multiple loads from `&D + N` via deferred assign + named locals](#feedback-ido-shared-base-via-deferred-assign-and-named-locals) — _Counter to the above for TWO+ loads consumed by a single call: `register T *t; ... t = &D + N; v1 = t[0]; v2 = t[1]; f(..., v1, v2, ...)` produces shared-base form (lui+addiu once, 2 lw with offset), vs the natural `f(..., t[0], t[1], ...)` which inlines 2 separate luis._
 - [Force N-fold reload of `*(SYM+N)` via `volatile T **` + N intermediate locals (no CSE)](#feedback-ido-volatile-pp-forces-n-fold-pointer-reload) — _When target asm has `lui v1; addiu v1, 0; lw t?, OFF(v1)` repeated N times — i.e., the symbol address materialized once and N separate lw reloads from the same offset — natural C `base = *(...)` collapses to one load via IDO CSE. Use `volatile char **base_pp = ...; b1 = *base_pp; ... b2 = *base_pp; ...` with N separate intermediate locals to force N volatile reads._
@@ -12417,3 +12418,31 @@ often just a value the caller *saves across the call* (homed to the stack, reloa
 after), NOT passed. Verified 2026-05-31 on game_uso_func_0000B424 (86%→96% by removing a
 spurious `a0` first arg so the field-loaded float went to `$f12`). Always prototype the
 callee with the real `float` types so IDO doesn't promote/misroute the arg.
+
+## A round-number constant arg may be a redundant `(x<<N)/x` division in the target — model the div, not the constant
+<a name="feedback-ido-redundant-div-trap-as-constant"></a>
+
+**Symptom:** a near-miss is missing one or more contiguous ~12-insn blocks, each shaped:
+```
+sll  rT, rX, 0xN        # rT = rX << N  (x * 2^N)
+div  zero, rT, rX       # rT / rX
+bne  rX, zero, .ok1     # div-by-0 guard
+nop
+break 0x7
+.ok1:
+addiu at, zero, -1
+bne  rX, at, .ok2       # signed-overflow guard (divisor == -1 ...)
+lui  at, 0x8000
+bne  rT, at, .ok2       # ... and dividend == INT_MIN
+nop
+break 0x6
+.ok2:
+... mflo rR             # rR = (rX<<N)/rX  == 2^N, but computed at runtime
+```
+The `mflo` result `rR` mathematically equals `2^N` (the `<<N` then `/x` cancel), so it looks like a plain constant (`1024` for N=10, `256` for N=8, etc.). **IDO will NOT constant-fold a runtime `(x<<N)/x`** — it emits the full divide + the two MIPS `break` trap-guards. If your C passed that argument as the literal `2^N`, the whole block is absent and the function caps well below match.
+
+**Fix:** find the live variable `x` the asm divides by (the `div`'s 2nd source `rX`, also the `sll` source) and write the arg as `(x * (1 << N)) / x` (equivalently `(x << N) / x`). Example: a packet metric written `1024` was really `(scale << 10) / scale`. There can be more than one in a function with different divisors.
+
+**Recognition cue:** a `break 0x7` (div-by-zero) and `break 0x6` (overflow) pair sitting just above an `mflo` whose result feeds a call argument that "should" be a round power-of-two. Don't dismiss it as a constant — it's a deliberate (often defensive / metric-normalizing) redundant division in the original source.
+
+Verified 2026-05-31 on `gui_func_00000D04` (gui_uso): two `1024` stack args on the 2nd glyph-render call were `(scale<<10)/scale` and `(glyph[2]<<10)/glyph[2]`; modeling both (plus an unrelated `a0[4]`→byte-4 field fix and a re-deref'd `cmd_list[0]`) lifted the NM body 45.34→71.01%. Residual is then ordinary 9-saved-reg allocation + frame/scheduling.
