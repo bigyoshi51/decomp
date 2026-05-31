@@ -176,6 +176,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO -O2 strength-reduces `array[idx]` in nested inner loops into cached-pointer-post-increment — not flippable from standard C](#feedback-ido-o2-loop-array-strength-reduction) — When the inner loop reads `array[idx]` and increments idx every iter, IDO -O2 caches `s_reg = array + idx` and post-increments it. If target has the NON-strength-reduced form (per-iter `addu base, idx`), no C variant defeats it. Verified 2026-05-06 on gl_func_00055B44.
 - [When the TARGET has two IVs (counter + strength-reduced pointer), write ONE counter IV and index the array — don't declare an explicit pointer](#feedback-ido-want-two-iv-use-single-counter-index) — Productive inverse of the above: index `(char*)src + i` so `i` is the sole source IV (test + address) → wins `$s0`, and GCC manufactures the data pointer into `$s1`. Fixes both the `$s0↔$s1` swap AND the residual preheader schedule diff in one move. Verified 2026-05-24 on gl_func_0005C784 (98.8%→exact).
 - [**When the target has a trip counter + a SEPARATE advancing pointer (both real $s-regs), write TWO explicit IVs and init the COUNTER first; comma-`for` cracks the prologue schedule**](#feedback-ido-two-explicit-ivs-counter-first) — _The complement of the single-counter-index recipe above. When the target loop genuinely keeps BOTH a trip counter AND a separate advancing pointer in distinct $s-regs — outer `addiu cnt,1; bne cnt,LIMIT` + `addiu ptr,STRIDE` in the delay slot (the pointer is NOT re-derived from the counter each iteration) — DON'T index (`a1[row*4+col]`) and don't compute `p = a1 + row*4` (IDO strength-reduces both to a single by-stride counter). Write two explicit IVs: `counter` (trip) and `ptr` (advancing). Two levers make it byte-exact: (1) **init the counter before the pointer** (`for (i=0, q=base; ...)`, not `q=base; for(i=0;...)`) so the counter's pseudo is born first and wins the LOWER $s-reg — the documented "p+=4 only swaps roles" failure was caused by initing the pointer first; (2) use the **comma-init `for` form** `for (i=0, q=base; i!=N; i++, q++)` — this reorders the prologue so the loop-invariant address `addiu`s schedule before the var-init moves, cracking the last scheduler-tie diffs. Nests cleanly (inner: byte counter `col 0..16,+4` + `p++`; outer: `row 0..4,+1` + `rowp += 4floats`). Verified 2026-05-29 on gl_func_0005C6C4 (4x4 matrix printer): a documented induction-var cap, 99.96% → 100%. NOTE: distinct from the auto-unroll by-N-vs-by-1 cap ([feedback-ido-unroll-element-vs-trip-counter](#feedback-ido-unroll-element-vs-trip-counter), e.g. 0005BDC0) — that's a SINGLE fully-unrolled loop where the counter IS strength-reduced; this recipe is for NON-unrolled loops whose target already has two separate IV regs. Try this before NM-wrapping any "induction-var cap" whose target shows counter+separate-pointer (NOT an unrolled body)._
+- [Small-integer key dispatch: use a `switch`, not an if/goto chain — the if-chain inverts the branch polarity (`bne key,1,end` fall-through) where the target wants `beq key,1,case`](#switch-vs-if-goto-dispatch-polarity) — _When the target dispatches on a small enum/key with `beq key,K,caseK` (branching TO the case body, case kept as a separate block) and your `if (key==K) goto L;` chain instead emits `bne key,K,end` (case body as fall-through), rewrite as `switch (key) { case 0:...; case 1:...; }`. IDO lays the switch arms out in case order with the target's beq-to-case polarity, fixing both the branch sense and the k0/k1 block-emit order at once. Verified 2026-05-31 on n64proc_uso_func_0000035C: a documented block-reorder + arm-polarity cap (95.5%; if/goto + k1-first-reorder + else-if all regressed) to 100% via switch. Try switch BEFORE declaring a key-dispatch branch-polarity a reorg.c cap._
 - [GCC 2.7.2 evaluates binary-operator operands RIGHT-to-LEFT — swap commutative operands to control which pointer IV wins the lower temp register](#feedback-ido-rtl-operand-eval-pointer-reg) — In `dst[i] = a[i] + b[i]`, GCC evaluates `b[i]` first, so b's strength-reduced pointer IV is created first and gets the lower temp ($v1), a gets $a3. If the target has a→$v1/b→$a3, swap to `b[i] + a[i]` (commutative: same value, same `add.s` bytes) to flip it. Verified 2026-05-24 on gl_func_0005E030 (register swap fixed). NOT applicable to non-commutative ops (sub/div) where operand order is semantically fixed.
 - [Write a constant multiply as `x * N` and let IDO strength-reduce it — hand-expanded shift/subu chains break the single-register reuse (cracks "hoist-breaks-reuse")](#strength-reduce-multiply-vs-hand-expanded-chain) — _When the target computes a constant-stride index (`x*100` = `sll;subu;sll;addu;sll` ALL reusing one `$t7`, often with the first step hoisted above the prologue), write the index literally as `x * 100` — IDO's strength reduction emits the whole chain on a single mutated register. Hand-expanding it (`t=x<<2; t-=x; t<<=3; t+=x; t<<=2`) creates a fresh pseudo per step → the allocator spreads them to `$t8/$t9/$t0/$t1` (96.8%, looks like a regalloc cap but isn't). Verified 2026-05-31 on game_libs_func_000315BC: documented "hoist-breaks-reuse cap" → 100% by replacing the manual chain with `a0 * 100`. Try the plain multiply BEFORE declaring any strength-reduction-chain a regalloc cap._
 - [For args-preserved-as-locals byte-copy loops, decrement the ARG directly (`count--`) — not the local copy (`cp--`)](#feedback-ido-decrement-arg-not-local-for-counter-loop) — When target preserves an arg as the loop counter (one move at entry, then `addiu argReg,argReg,-1` per iter) AND a local mirror, write the loop with `count--` (decrement the arg-named param) and use the local only as the loop-bound capture (`rem = count`). `cp--; rem = cp` regresses 22→29 diff lines on the same function; `count--; rem = count` tightens to 10 diff lines. Verified 2026-05-06 on func_80000598.
@@ -12262,3 +12263,38 @@ BEFORE hand-expanding or declaring a strength-reduction chain a register cap.** 
 the same class as the timproc_uso_b3 mul/shift family; cracked to byte-exact). This is
 the inverse of the usual "split expressions to control regalloc" advice — for a multiply
 that IDO can strength-reduce, the *combined* expression is what reuses the register.
+
+## Switch-vs-if-goto dispatch polarity
+
+**Symptom:** target dispatches on a small key with the case body as a *separate block*
+reached by an equality branch (`beq key,K,caseK` to the case, default falls through to
+the epilogue). An `if`/`goto` chain —
+
+```c
+if (key == 0) goto k0;
+if (key == 1) goto k1;     /* WRONG: IDO emits `bne key,1,end`, k1 as fall-through */
+goto end;
+k0: ...; goto end;
+k1: ...;
+end: ;
+```
+
+— makes IDO invert the second test to `bne key,1,end` (k1 becomes the fall-through) and
+emit the k1 block before k0. Reordering source blocks (k1 first), `else if`, and pad-size
+tweaks all regress.
+
+**Fix:** write a `switch`:
+
+```c
+switch (key) {
+case 0: ...; break;
+case 1: ...; break;
+}
+```
+
+IDO lays the arms out in case order with the target's `beq key,K,caseK` polarity, fixing
+both the branch sense AND the block-emit order at once. Verified 2026-05-31 on
+`n64proc_uso_func_0000035C` (documented block-reorder + arm-polarity cap, 95.5% to 100%).
+Reach for `switch` before declaring a key-dispatch branch polarity a post-RTL reorg.c cap.
+Complements the strength-reduce-multiply lever: both are cases where the higher-level C
+construct matches IDO's own lowering better than a hand-rolled equivalent.
