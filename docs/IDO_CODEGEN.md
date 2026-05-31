@@ -52,6 +52,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Target asm with `mfc1 $aN, $f12` (float-bits-to-int-reg) is hard to reproduce from IDO C](#feedback-ido-mfc1-from-c) — When the target has a single `mfc1 aN, $f12` instruction converting a float arg's bits to an int register for passing as arg, IDO's C compiler emits a stack round-trip (swc1 + lw) instead — at least 14 C variants tried…
 - [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — _In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum — shifts IDO's FPU register allocation and instruction order across the WHOLE…
 - [IDO -O2 needs named float locals to load-batch all loads before stores; inlined float derefs interleave load/store](#feedback-ido-named-float-locals-enable-load-batching) — When asm shows `lwc1 f14; lwc1 f12; lwc1 f2; lwc1 f0; swc1 f14; swc1 f12; swc1 f2; swc1 f0` (4 loads then 4 stores), the C source MUST have 4 named float locals.
+- [A target base-register-adjust (`v1 += 0x2C`, then small-offset loads) IS C-reachable by MUTATING the pointer (`p += N`), NOT `q = p + N` (which folds back to full offsets)](#feedback-ido-pointer-mutate-forces-base-register-adjust) — _When target does `addiu base,base,N` then loads at small offsets where you emit full offsets, mutate the pointer in place: `p += N;`. `q = p + N;` folds the constant back to the original base. Cracked game_libs_func_0005FE14's "base-adjust not C-reachable" note → 26/26 opcodes exact (also fixed bnel→bne). Re-check any such note._
 - [Inline a re-used base expression (don't name it) to force a fresh reload per access; a named local CSEs to one load](#feedback-ido-inline-base-forces-reload-per-access) — _When the target reloads the same base each time it's used inside a loop (e.g. two `lw base,0(a0)` per iteration before two different accesses through it), do NOT cache it in a named local — IDO will CSE that to a single load (N insns short). Write the base expression inline at each use site: `*(T*)((char*)a0[0] + off)` repeated, not `b = (char*)a0[0]; ... b+off ... b+off+4`. The inline form reloads the base for each access, matching. (Inverse of the named-float-locals load-batching rule.) Verified 2026-05-23 game_libs_func_00060CB8 (per-entry array reset: named base → 18/20, inline a0[0] twice → 20/20 byte-exact)._
 - [Force a SECOND zero FP reg (defeat the 0.0f CSE): store INT `0` through a `float*` variable](#feedback-ido-int-zero-through-float-ptr-forces-second-zero-reg) — _When the target materializes two zero FP regs (e.g. `mtc1 zero,$f0` for most float stores + `mtc1 zero,$f4` for one hoisted into a `jr` delay slot), plain `0.0f` everywhere CSEs to ONE reg (1 insn short), and `float z=0.0f` CSEs too. For the store needing the distinct reg, assign through a `float*` variable and store INT `0` (not `0.0f`): `float *p = ...; *p = 0;` — the int-0→float conversion doesn't CSE with the `0.0f` constant, forcing the 2nd `mtc1`. Cracked timproc_uso_b5_func_00003890 (7/8 → byte-exact, permuter-found). Disproved its "0.0f CSE not C-controllable" cap._
 - [Float-const register choice ($f0 vs $f2) follows C SOURCE order of the constants' first use, not asm store order — reorder to flip](#feedback-ido-float-const-reg-by-source-order) — _A multi-const float-init (e.g. identity matrix: 1.0f on the diagonal, 0.0f elsewhere) where the target puts one constant in $f0 and the other in $f2. IDO assigns $f0 to whichever constant's stores appear FIRST in C source, then reorders the actual stores during scheduling. So if the target has 1.0f in $f0 but stores 0.0f first in asm, write the 1.0f stores first in C — IDO still emits the 0.0f stores first but keeps 1.0f in $f0. Flips the "float-register-swap (f0 vs f2)" cap. Verified 2026-05-23 game_libs_func_0005E83C (3x4 identity init, 14/16 → byte-exact)._
@@ -4370,6 +4371,27 @@ declaration-order to f0/f2/f12/f14 and it's not C-controllable.
 - `feedback_ido_inline_deref_v0.md` — opposite direction for int derefs
 - `feedback_ido_no_gcc_register_asm.md` — `register T x asm("$fN")` rejected
 - `feedback_function_trailing_nop_padding.md` — pad-sidecar for trailing nops
+
+---
+
+<a id="feedback-ido-pointer-mutate-forces-base-register-adjust"></a>
+## A target that adjusts a base register mid-function (`v1 += 0x2C`, then loads at small offsets) is C-reachable by MUTATING the pointer — `p += N`, NOT `q = p + N`
+
+_When the target computes a base, then does `addiu base, base, N` (UNCONDITIONALLY, often in a branch delay slot), then uses `base` with SMALL offsets (`lw x, 0xC(base)`, `lw y, 0(base)`) where without the adjust the offsets would be large (`0x38`, `0x2C`) — that base-register-adjust IS reproducible from C. The trick: **MUTATE the pointer in place** (`p += N;`), which forces IDO to keep `p` in one register and rebase all subsequent accesses to small offsets. Do NOT write `q = p + N;` — the compiler folds the constant offset back, accessing through the ORIGINAL base with FULL offsets (`p+N+0xC` → `p+0x38`), so the adjust never appears._
+
+**Symptom:** target has `addiu rX, rX, N` you can't reproduce; your loads use `0x38(base)` where target uses `0xC(adjusted_base)` (= same address, N less). An old note may claim "IDO doesn't generate this base-adjust from natural C."
+
+**Recipe:**
+```c
+char *p = ...;
+a = *(int*)(p + 0x34);   // pre-adjust reads use the original base + full offset
+b = *(int*)(p + 0x38);
+p += 0x2C;               // MUTATE — emits `addiu p, p, 0x2C`, often into a delay slot
+... *(int*)(p + 0xC) ... // post-adjust reads use small offsets off the mutated p
+... *(char**)(p + 0) ...
+```
+
+**Verified 2026-05-30** `game_libs_func_0005FE14` (append-and-return-slot): the documented "$v1 += 0x2C base-adjust not C-reachable, reg-rename grind" cap was wrong. `q = p + 0x2C` gave 5/26 (folded to full offsets + bnel); `p += 0x2C` gave 26/26 opcodes/order exact (bne, the adjust in the bne delay slot) — only a residual caller-saved-temp regalloc renumber remained (86.1% → 97.69%). Mutation also fixed the bnel→bne (the conditional reload through the mutated base schedules differently). Treat any "base-adjust not C-reachable" note as a RE-CHECK: try pointer mutation before declaring it a cap.
 
 ---
 
