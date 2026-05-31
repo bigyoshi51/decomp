@@ -277,6 +277,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — _When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce this from C.
 - [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — _When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; or v1, ret_hi, zero; jr ra`), the function signature is `long long`/s64 (o32…
 - [IDO -O2 leaf with `addiu sp,-8` but no stack use is unreachable from standard C](#feedback-ido-sp-frame-without-stack-use) — When target has a leaf function with stack frame adjust (`addiu sp, sp, -8` / `addiu sp, sp, +8`) but NO sw/lw using the frame, no standard C idiom produces this at IDO -O2.
+- [64-bit-add helper: `long long` PARAM matches the add carry-chain but can regress the whole function via call-convention reshaping](#feedback-ido-64bit-add-param-vs-manual) — _A target whose body shows `lo=glob+a1; t8=0; hi=carry+t8+a0` (literal-0 hi word + `or` copy before the add) is a 64-bit add where one operand arrives as a `long long` param in a0:a1 (hi:lo). Switching the C signature to `unsigned long long X` and writing `(u64)glob + X` reproduces the add EXACTLY (no shift helper — the value is already register-split). BUT if the function then passes only the low word to a downstream call and spills the dead hi word, the long-long form reshapes the call convention + global-store ordering and nets LOWER than a manual `lo=glob+a1; hi=(lo<a1)+a0` form (gl_func_0006FDE8: 63% long-long vs 74% manual). Use long-long only when the 64-bit value flows straight through; keep the manual pair when the callee takes split 32-bit args. NEVER construct the operand via `((u64)a0<<32)|a1` — the `<<32` emits a 64-bit shift helper (regressed 6FDE8 to 43%)._
 - [kernel/func_80008030 (SP_STATUS & 3 check) not reproducible from C at -O1 or -O2](#feedback-ido-sp-status-check-unreachable) — _Simple `if ((SP_STATUS & 3) == 0) ret |= 1;` function (0x24 = 9 insns, no stack frame, ret in $v0 with `or v0,zero,zero` + `ori v0,v0,1`) is not reachable from IDO C. -O1 spills ret to stack (adds 4 insns); -O2 routes…
 - [IDO -O2 picks the lowest-available spill slot when the frame has unused space; can't force a higher slot without bloating the frame](#feedback-ido-spill-slot-picks-low-offset) — When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWEST available slot above the ra-save (e.g. if ra=sp+0x14, it picks sp+0x18).
 - [Split `char pad[N]` into pad-before-buf + pad-after-locals to fine-tune array offset within a fixed frame size](#feedback-ido-split-pad-for-buf-offset) — When you need a buf at a specific stack offset (e.g., target wants `swc1 $f0, 0x34(sp)` with frame 0x48 but your single `pad[N]` only puts buf at 0x28 or 0x38), split the pad into TWO declarations bracketing your…
@@ -12465,4 +12466,27 @@ t = next;              /* one volatile read */
 v0 = 0;
 if (t != 0) { cur = t; next = *(char**)(t + 4); v0 = *(int*)t; }  /* reuse t */
 ```
+
+## 64-bit-add helper: `long long` PARAM matches the add but can regress the whole function {#feedback-ido-64bit-add-param-vs-manual}
+
+_A target whose body shows a 64-bit add where the high word uses a **literal-0 intermediate** (`addiu t8,zero,0; addu hi,carry,t8; addu hi,hi,a0`) plus an `or` copy of the loaded operand before the add (`or t9,glob,zero; addu lo,t9,a1`) is adding a 32-bit global (zero-extended, hi=0) to a 64-bit value that **arrives as a `long long` param** in a0:a1 (O32: a0=hi, a1=lo)._
+
+```
+# target — gl_func_0006FDE8, the add region
+lw   t6,0(t6)        # t6 = D_X_low (32-bit global)
+or   t9,t6,zero      # copy before add (64-bit-op marker)
+addu t3,t9,t1        # lo = D_X_low + a1   (t1 = a1 = X_lo)
+addiu t8,zero,0      # literal-0 = global's HI word
+sltu at,t3,t1        # carry
+addu t2,at,t8        # hi = carry + 0
+addu t2,t2,t0        # hi = carry + 0 + a0  (t0 = a0 = X_hi)
+```
+
+The signature is `gl_func(unsigned long long X)` and the add is just `sum = (unsigned long long)D_X_low + X;` — IDO emits the exact carry-chain with **no shift helper**, because X already occupies a0:a1.
+
+**The trap — measure the whole function, not just the add.** The clean `long long` form reproduces the add but **reshapes everything around it** when the value doesn't flow straight through:
+- If a downstream call takes only the **low** word (`gl_func(sum_lo)`) with the hi word spilled-but-dead, the long-long form passes/spills the full 64-bit value and reorders the global-store → **net LOWER** (gl_func_0006FDE8: 63% long-long vs 74% with the manual pair `lo = glob + a1; hi = (lo < a1) + a0`, `gl_func(lo, hi)`).
+- So: use the `long long` param **only when the 64-bit value flows straight through** (passed whole, returned whole). When the callee takes **split 32-bit args**, keep the manual int-pair add even though it lacks the literal-0 `+0` (the call convention dominates the metric).
+
+**Never** construct the 64-bit operand with `((unsigned long long)a0 << 32) | a1` — the `<<32` emits a call to a 64-bit shift helper (`gl_func_...`/`__ll_lshift`), bloating the function (regressed 6FDE8 to 43%). The split must come from the param ABI, not a shift.
 Verified 2026-05-31 gl_func_0003D48C: plain locals (saved-reg form) 49%, full-volatile (over-spill) 61.9%, volatile+read-once-into-temp **75.8%**. Residual after that is the loop-condition var taking a saved reg vs the target's temp — an ordinary allocno cap. Companion to [[#feedback-ido-volatile-keeps-dead-init-stores]] and [[#feedback-ido-volatile-pp-forces-n-fold-pointer-reload]] (same `volatile` family, different goal: this forces the *pointer itself* to live in a stack slot).
