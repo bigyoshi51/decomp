@@ -18,6 +18,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 - [Isolated-compile vs full-TU IDO -O2 codegen can DIVERGE for the same function — verify decodes against the full `make` build, never an isolated cc](#feedback-isolated-vs-full-tu-o2-divergence) — _A function body can compile to the exact target shape (12 insns, plain beq/bne, nop delays) when cc'd IN ISOLATION with the exact project flags, yet the full-TU `make` build of the same source (asm-processor phase-1 output verified identical) produces a different, worse shape (17 insns, beql/bnel, loop rotation) at the SAME -O2. IDO's optimizer is TU-context-dependent. Implication: a "proven-correct in isolation" decode can still be sub-80 in the real build — that's NOT a logic error, don't re-derive; it's permuter / TU-robust-form territory. Always measure against the build .o. Verified 2026-05-16 game_libs_func_0003D9E4._
 - [Same-base multi-deref: intervening `jal` forces natural reload (exact-able) vs no-call → IDO CSEs base (reload-CSE cap)](#feedback-intervening-call-forces-reload-vs-cse-cap) — _Triage which small fresh/split funcs to push to byte-exact: a `jal` between two same-base derefs forces the reload that matches the target (verified timproc_uso_b3_func_00001184 byte-exact land); no call → IDO CSEs, N-short reload-CSE cap (120C/11D4/EE84/DDC0 family), no C form defeats it. Exact-able case must be unconditional C, not #else INCLUDE_ASM (tautology)._
+- [Reuse the PARAM var to hold a chained-call result — extending its live range across the calls promotes it to a saved register (s0), fixing the whole register cascade](#feedback-reuse-param-for-chained-call-promotes-saved-reg) — _Logic-correct structural sketch caps ~70% because target keeps the first arg/chained value in s0 across jals while your build stack-spills it. Reuse the param (x = func(2,x)) so one pseudo spans all calls -> s0. Inverse of the spill levers. Cracked gl_func_00023760 72->91%._
 - [Branch-likely opcode cheat sheet — decode raw `.word` correctly before drafting C control flow](#feedback-mips-branch-likely-opcode-cheatsheet) — Top 6 bits of the instruction (`(word >> 26) & 0x3F`): `0x14` = `beql`, `0x15` = `bnel`, `0x16` = `blezl`, `0x17` = `bgtzl`. In the high byte, that's `0x50–0x53` = `beql` (rs varies the low 2 bits), `0x54–0x57` = `bnel`, `0x58–0x5B` = `blezl`, `0x5C–0x5F` = `bgtzl`. So `5320000B` IS `beql $t9, $zero, +0xB` — branch on EQUAL, not `bnezl`. Misreading silently inverts the C if-condition direction; the body compiles fine but byte-matches drop dramatically.
 - [IDO emits the if-body's first store TWICE around a beql — once in delay slot (annulled on taken) + once at fall-through](#feedback-ido-beql-speculative-store-double-emit) — _For `if (cond) { dst = val; ... }` IDO -O2 emits `beql cond_reg, $0, end; sw val, dst_off(dst_reg)` in the delay slot AND ALSO `sw val, dst_off(dst_reg)` at the fall-through.
 - [Asm `blez/blezl` vs `bne/beql` distinguishes `> 0` (signed) from `!= 0` (eq) source](#feedback-ido-blez-vs-bne-signed-compare) — When target asm uses `blez $rs, X` or `blezl $rs, X` for a conditional, the C source MUST be `if (val > 0)` (signed comparison), NOT `if (val != 0)`.
@@ -12491,3 +12492,25 @@ The signature is `gl_func(unsigned long long X)` and the add is just `sum = (uns
 
 **Never** construct the 64-bit operand with `((unsigned long long)a0 << 32) | a1` — the `<<32` emits a call to a 64-bit shift helper (`gl_func_...`/`__ll_lshift`), bloating the function (regressed 6FDE8 to 43%). The split must come from the param ABI, not a shift.
 Verified 2026-05-31 gl_func_0003D48C: plain locals (saved-reg form) 49%, full-volatile (over-spill) 61.9%, volatile+read-once-into-temp **75.8%**. Residual after that is the loop-condition var taking a saved reg vs the target's temp — an ordinary allocno cap. Companion to [[#feedback-ido-volatile-keeps-dead-init-stores]] and [[#feedback-ido-volatile-pp-forces-n-fold-pointer-reload]] (same `volatile` family, different goal: this forces the *pointer itself* to live in a stack slot).
+
+## Reuse the PARAM variable to hold a chained-call result — extending its live range across the calls promotes it to a saved register (s0), fixing the whole register cascade {#feedback-reuse-param-for-chained-call-promotes-saved-reg}
+
+**Symptom:** a structural NM-wrap body is logically correct (same ops as target) but caps ~70% because the target keeps the first argument / a chained value in a **saved register** (`or s0,a0,zero` then reuses `s0`) across several `jal`s, while your build spills it to a stack slot and uses scratch temps — shifting the frame and every subsequent register, so objdiff penalizes the whole tail.
+
+**Cause:** in your C the value has a SHORT live range (e.g. param `x` is used once, to compute `j`), so IDO doesn't bother promoting it to a callee-saved register — it stack-spills it, and the chained result `j` becomes a separate pseudo in a scratch/stack slot. The target's source instead threads ONE long-lived variable through the whole call chain, so it must survive the calls → IDO gives it `s0` (first saved-reg, by first-encounter order).
+
+**Lever:** reuse the parameter variable itself to hold the chained result, so a single pseudo spans all the calls:
+
+```c
+/* BEFORE — x used once, j separate; both stack/scratch; frame grows, 72% */
+int j  = func_b(2, x);
+int ok = func_c(2, j);
+... uses j ...
+
+/* AFTER — reuse the param; one long-lived pseudo across all calls -> s0, 91% */
+x = func_b(2, x);          /* x now holds j */
+int ok = func_c(2, x);
+... uses x ...
+```
+
+Cracked `gl_func_00023760` 72.5%→91.2% (2026-05-31) — the last non-USO-reloc residual. This is the **inverse** of the spill levers ([[#feedback-ido-volatile-pp-forces-n-fold-pointer-reload]], `feedback_remove_local_recompute_inline_lever`): there you *shorten* a live range to force a stack slot; here you *lengthen* one (by reusing a variable across the calls) to force a saved register. Reach for it whenever a completed structural sketch caps in the 65–80% band and the diff is dominated by a one-register `s0`-vs-stack shift on the first arg / a value threaded through a call chain. (Won't get past the baked-`jal` USO-reloc cap if the function is raw-word USO — that's a separate ~7%/call ceiling.)
