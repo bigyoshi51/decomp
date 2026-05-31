@@ -12374,3 +12374,18 @@ p = (int*)((char*)p + K);          /* addiu base,base,K   — advance in place  
 ```
 
 This recovers the missing `addiu` and the `0(base)` store form (size-exact). Used on game_uso_func_00011024 / 000110A4 (1-insn-short → size-exact, 2026-05-31). **Order matters:** load-via-offset must come BEFORE the advance (advancing first then `*p = *p & ~m` gives `lw 0(p)` not `lw K(base)`, and puts the `addiu` before the load). **Residual caveat:** the loaded value `v` must be a named local here (it's live across the advance), so IDO births it in `$v1`; if the target uses a high temp (`$t9`) for it, that's a leftover register renumber the C form can't reach (named-local→$v vs throwaway→$t) — permuter/allocno territory, not a structure problem.
+
+<a id="scope-loop-invariant-in-guard-for-delay-slot"></a>
+## Scope a loop-invariant load INSIDE the loop-guard `if` so the counter-init fills the guard's branch delay slot
+
+When a counted loop is guarded by `if (n > 0) { ... while (i != n); }` and the target schedules the guard branch FIRST with the counter-init in its delay slot (`blez n, end; move v0,zero` [delay]), loading the loop-invariant only AFTER the branch — but your C emits `move v0,zero` BEFORE the `blez` because a `T inv = ...;` load sits between the counter decl and the guard — move the invariant's declaration INSIDE the guarded block:
+
+```c
+int i = 0;
+if (n > 0) {
+    int key = a0[1];          /* was before the if -> load now lands AFTER blez */
+    do { if (key == ...) break; i++; } while (i != n);
+}
+```
+
+Scoping `key` inside the `if` makes IDO emit its load after the `blez`, freeing the `i = 0` (move v0,zero) to fill the branch's delay slot — matching. Byte-exact game_libs_func_00025A80 (2-diff scheduler swap → 0, 2026-05-31). Applies specifically to the loop-guard-delay-slot swap; does NOT generalize to unrelated pre-prologue swaps (uninitialized-local preload, `sw ra`/arg-setup ordering) which are genuinely scheduler-fixed.
