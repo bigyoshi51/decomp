@@ -117,6 +117,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C](#feedback-ido-target-larger-preemptive-set-nop-delay) — _Diagnostic for the inverse-of-bloat cap: when built `.o` is SHORTER than target by exactly 1 insn (a preemptive `or v0, v1, 0` BEFORE a sltu/bnez that the natural emit folds INTO the branch's delay slot), suspect this scheduling cap. IDO never picks the longer "preemptive + nop" form. Tested early-exit, goto-out, and early-set-clear variants all produce the same shorter natural emit. NM-wrap. Verified 2026-05-08 on kernel/func_800000B0 (91.15% fuzzy)._
 - [Leaf load-hoist-above-aliasing-store: don't cache the first deref in a named local](#feedback-ido-leaf-load-hoist-no-named-temp) — _When a no-frame leaf's target hoists `lw t6, off(aN)` ABOVE a preceding `sw aM, 0(a0)` (aliasing store) AND uses transient `$t6/$t7` for two un-CSE'd derefs of the same `aN[k]`, write the load-bearing statement FIRST in source with NO named temp. A named `int t = aN[k];` both mis-allocates the value ($v0 instead of $t6) and CSEs the second deref to one load. Verified byte-exact 2026-05-18 on `game_libs_func_000664D4` (7-insn doubly-linked-list splice)._
 - [A no-dependency constant store (`field = 0`) gets hoisted into an earlier load-delay gap — write it LAST in source order to pin it at the end](#feedback-ido-zero-store-write-last-to-prevent-hoist) — _When a function copies several loaded fields into the object AND also writes a constant (e.g. `obj->K = 0`), IDO's scheduler hoists the zero-store (no value dependency) up to fill a load-delay gap, landing it earlier than the target. Writing the constant store as the LAST statement keeps it after the dependent loads, matching the target's late placement (typically just before the jr-delay store). Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (3 global-table field copies + one `a0->0x3C=0`): zero-store written 3rd → emitted at pos 8 (hoisted); written last → pos 11 (matches)._
+- [Split a local's declaration from its initializer to hoist intervening stores together (`int n; ...; store; store; n=0;`)](#feedback-ido-split-decl-init-hoists-stores) — _When the target emits two (or more) prologue byte/word stores back-to-back at the top but your `int n=0; char *d=a0; char *s=a3;` + `a0[0]=a1; a0[1]=a2;` form interleaves the second store among the setup moves, split the decls from their inits: declare `int n; char *d; char *s;` first, then the stores `a0[0]=a1; a0[1]=a2;`, then `n=0; d=a0; s=a3;`. IDO then schedules both stores adjacently at the top (the inits become later moves with no reason to slot between the stores). Verified game_libs_func_000099DC 80%→90% (2026-05-31). Residual there was an orthogonal const-scheduling tie._
 - [jr-epilogue double-store: delay-pick + emit-order + temp-reg# all couple to source order, so some target combos are unreachable (cap)](#feedback-ido-jr-epilogue-double-store-coupling-cap) — _A 5-insn `compute;compute;sw;jr;sw` leaf with two independent stores of differently-computed values: the delay-slot store (always the FIRST source store), the emit order, and the temp-reg numbering (first-computed value → lower temp) are all locked to source order. If the target's delay store uses the second-computed value while the first-computed value lands in the lower temp, no source order produces both — NM-wrap/defer. jr analogue of the jal swap-stores recipe, but the jr case couples reg# too so the swap that fixes the delay store breaks the reg. Verified 2026-05-23 game_libs_func_000478D8._
 - [Commutative compare (beq/bne) operand order: don't cast the parameter — casting flips which operand becomes rs](#feedback-ido-beq-operand-order-param-cast) — _`while(p!=a0)`/`if(p!=a0)` against a param: no cast → loaded value p ($v0) is rs (`beq $v0,$a0`); casting the param (`p!=(int*)a0`, or `int**a0`+cast) makes the param rs (`beq $a0,$v0`) — reversed bytes. Source operand order (a0!=p vs p!=a0) does NOT change it; only the cast does. Declare the param at the type that avoids the cast to match a target whose freshly-loaded value is rs. Verified byte-exact 2026-05-23 game_libs_func_0005B73C._
 - [getc-style post-increment: deref `**a0` (not a named pointer local) keeps the pointer in $a1 and forces lbu-before-addiu](#feedback-ido-getc-deref-form-keeps-a1) — _For `c = *(*pp)++` (read byte, post-increment caller's pointer), write `unsigned char v = **a0; *a0 = *a0 + 1; return v;`. The double-deref keeps the loaded pointer in $a1 and emits `lbu` before the `addiu`/`sw`-in-delay. A named `p = *a0; v = *p; *a0 = p+1;` mis-allocates to $v1 and reorders to increment-first/lbu-in-delay. Verified byte-exact 2026-05-23 game_libs_func_0002A9A4._
@@ -10971,6 +10972,45 @@ only `break 7` appears because the divisor equals the shifted dividend
 
 Verified 2026-05-17 on `func_800044CC` (1080 kernel, libultra
 PI-event callback with an inlined `osSendMesg` ring-index `%`).
+
+## Split a local's declaration from its initializer to hoist intervening stores together
+<a name="feedback-ido-split-decl-init-hoists-stores"></a>
+
+**Symptom.** The target emits two (or more) prologue stores back-to-back at
+the very top, but your build interleaves the second store among the
+register-setup moves:
+
+```
+# target                      # build (80%)
+sb a1,0(a0)                    sb a1,0(a0)
+sb a2,1(a0)    <- adjacent     or v0,zero,zero   ; n=0
+addiu a1,zero,3                or v1,a0,zero     ; d=a0
+or v0,zero,zero                or t0,a3,zero     ; s=a3
+or v1,a0,zero                  sb a2,1(a0)       <- deferred
+or t0,a3,zero                  addiu a1,zero,3
+```
+
+**Cause.** When locals are declared-with-initializer (`int n=0; char *d=a0;
+char *s=a3;`) *before* the stores in source, IDO interleaves the init moves
+with the stores. The first store's value (a param) frees its register early,
+but the second store gets scheduled after the moves.
+
+**Fix.** Split the declarations from the initializers — declare the locals
+uninitialized, do the stores, THEN assign the locals:
+
+```c
+int n; char *d; char *s;
+a0[0] = a1;          /* both stores emit adjacently at the top */
+a0[1] = a2;
+n = 0; d = a0; s = a3;   /* moves now follow, with no reason to interpose */
+```
+
+Verified game_libs_func_000099DC 80%→90% (2026-05-31). Keep the init order
+matching the target's move order (here n,d,s → v0,v1,t0); permuting it
+reshuffles the regalloc and regresses. The residual single diff there (the
+loop-bound const `addiu a1,zero,3` landing after the moves vs before) is an
+orthogonal scheduling tie — the const reuses the dead param reg a1 and has
+no data dep on the moves, so its slot among them is a priority tie.
 
 ## Leaf load-hoist above an aliasing store — don't cache the first deref in a named local
 <a name="feedback-ido-leaf-load-hoist-no-named-temp"></a>
