@@ -10,7 +10,7 @@
 > shape matches, the function stays NON_MATCHING. See
 > `memory/feedback_no_instruction_forcing_matches_policy.md`.
 
-_145 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_146 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Quick reference by sub-topic
 
@@ -177,6 +177,7 @@ _145 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Upstream segment-wide revert-to-INCLUDE_ASM can be intentional — respect it](#feedback-upstream-segment-revert-intentional) — _If a rebase pulls in a commit that reverts a whole segment's C bodies back to INCLUDE_ASM, and a system-reminder marks the change intentional, DON'T re-decompile the reverted functions.
 - [Recipe for promoting a USO accessor template NM-wrap to 100% via per-file -O0 split (applies to any USO, not just bootup_uso)](#feedback-uso-accessor-o0-file-split-recipe) — _The standard USO accessor templates (int/float/Vec3/Quad4 reader) often compile at -O0 in the ROM (see feedback_uso_accessor_o0_variant.md for the three signals).
 - [USO accessor template has -O0 variant (19 insns) alongside -O2 (15 insns) — three-signal fingerprint](#feedback-uso-accessor-o0-variant) — _The int-reader accessor (gl_func_00000000(&D_00000000, buf, 4); *dst = buf[0];) has both -O2 (15 insns, 0x3C) and -O0 (19 insns, 0x4C) variants.
+- [USO accessor-template source=4 scan can be dry; classify tiny leftovers before grinding](#feedback-uso-accessor-source4-dry-scan) — _When a source=4 roll asks for small unstarted USO accessor templates, do not assume every tiny no-fuzzy function is a reader.
 - [USO accessor templates can be called with a discardable scratch arg to advance the underlying loader stream](#feedback-uso-accessor-skip-via-scratch) — _1080's per-USO accessor templates (int reader, float reader, Vec3 reader, Quad4 reader) call `gl_func_00000000(&D_00000000, buf, N)` and write `*dst = buf[0]`.
 - [USOs reuse identical accessor-function templates — match one, match many](#feedback-uso-accessor-template-reuse) — _1080's game.uso, bootup_uso, gui_uso (and likely the proc-USOs) ship the SAME small accessor functions (`int reader`, `float reader`, `Vec3 reader`, `struct copy`) at different offsets in each USO.
 - [USO assert/panic call signature — `jal 0` + `addiu $a2, $zero, 0xNNN` line number](#feedback-uso-assert-panic-signature) — _When decoding an unknown USO function, a `jal 0` (cross-USO placeholder for gl_func_00000000) preceded by `lui+addiu` setups for $a0/$a1 pointing at string symbols and followed by `addiu $a2, $zero, 0xNNN` (NNN =…
@@ -6994,6 +6995,24 @@ void func(int *dst) {
 **Related:** `feedback_uso_accessor_template_reuse.md` (the 4 standard -O2 templates), `project_1080_bootup_uso_o0_runs.md` (scattered -O0 detection), `project_o1o2_split.md` (per-file Makefile override recipe).
 
 **Origin:** 2026-04-20, agent-a, timproc_uso_b1/func_00000000. Sibling func_0000083C at -O2 matches cleanly; func_00000000 has the three -O0 signals and can't match in the same file.
+
+---
+
+<a id="feedback-uso-accessor-source4-dry-scan"></a>
+## USO accessor-template source=4 scan can be dry; classify tiny leftovers before grinding
+
+_When a source=4 roll asks for small unstarted USO accessor templates, do not assume every tiny no-fuzzy function is a reader. In late-stage 1080, the obvious int/float/Vec3/Quad4 accessors may already be matched or NM-wrapped, leaving mostly fragments and documented caps._
+
+**Current 1080 source=4 scan result (2026-06-01):** after sorting small unmatched USO functions, the first rows are not fresh accessor templates:
+- `gui_uso` 0x0..0x148 char-mapper fragments: over-split early-return chain, needs a deliberate cluster merge.
+- `gui_uso_func_000008C0`: no `jr ra`, display-list builder head that falls into `gui_func_00000918`; merge only after export-table proof.
+- `game_uso_func_0000C3E8`: 4-insn global reader capped by IDO dead-arg-home delay-slot scheduling.
+- `arcproc_uso_func_00000F48`, `h2hproc_uso_func_0000049C`, `mgrproc_uso_func_0000119C`, `timproc_uso_b1/b3_func_000010D4/00001088`: 2-insn preload or alternate-entry fragments that seed a successor register.
+- `timproc_uso_b5` 0x87xx/0x88xx tiny leaves: shared-tail / branch-into-`jr` ladder fragments, not standalone readers.
+
+**Workflow:** still scan for the standard signatures (`gl_func_00000000(&D_00000000, buf, N)` and the -O0 0x4C/0x64/0xA4 variants), but once the size-sort head is made of the classes above, record the specific cap in source and move to a different vein. A source=4 tick should not re-grind known fragments as if they were missed accessor bodies.
+
+**Origin:** 2026-06-01 source=4 re-audit on 1080 `agent-s`; first missing inline note was the b3 mirror preload `timproc_uso_b3_func_00001088`.
 
 ---
 
