@@ -6658,3 +6658,21 @@ After landing the func_00000620 missing-block completion (57.5→74%), a sweep o
 - **func_00001360 (80%)** — the difflib "missing block" is a scheduling artifact (the conditional `(t7[0]==1)?0:115` IS in the C, emitted in different registers/frame-offsets). Frame/scheduling cap.
 
 **Lesson:** a difflib `delete` block only signals a *completable* gap when the build genuinely lacks that structure; when the C already has it (just scheduled differently), it's a regalloc/scheduling cap — read the current C before assuming a gap. The prime remaining h2hproc/game_libs code-% target is the deferred class: **gl_func_00024378** (1.5KB / 372-insn subsystem initializer at 2.87%) — a budgeted multi-tick full decode (the unrolled byte-conversion loop is one simple `for` IDO unrolls 4×; the clears/switch/jal-seq are symbolization-heavy).
+
+### Per-function match % — use `objdiff-cli diff`, not `report generate` (2026-06-01)
+
+`objdiff-cli report generate -o r.json` now populates **only unit-level** `measures.fuzzy_match_percent` (per-.o file); the per-function `functions[].measures` come back empty (`None`). To read ONE function's % (the daily need when iterating a single NM wrap), use the diff subcommand and parse `match_percent`:
+
+```bash
+objdiff-cli diff -o /tmp/d.json --format json -u <unit-path> <symbol>
+# unit-path is the report's unit name, e.g. src/arcproc_uso/arcproc_uso_tail1 (NOT the bare segment)
+python3 -c "import json; d=json.load(open('/tmp/d.json'))
+def w(o):
+ if isinstance(o,dict):
+  if o.get('name')=='<symbol>' and 'match_percent' in o: print(round(o['match_percent'],2))
+  [w(v) for v in o.values()]
+ elif isinstance(o,list): [w(x) for x in o]
+w(d)"
+```
+
+Gotchas: the unit arg must be the full tracked unit path (`src/<seg>/<file>`), not the bare segment name (bare name → `Unit not found`, but a stale `/tmp/d.json` from a prior run may still be parsed → wrong number; always check the INFO "Writing to" line printed). The symbol's `match_percent` appears twice in the tree (section + symbol scope) — same value. This is the reliable single-function measure for whole-body-decode ticks.
