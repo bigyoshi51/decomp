@@ -379,6 +379,16 @@ _For "if(a0==0) a0=alloc(); init_with_a0; return a0" constructor pattern, the na
 
 **Pattern recognition:** asm shape is `bne a0,zero,+N; sw ra(delay); jal alloc; addiu a0,zero,SIZE(delay); beq v0,zero,+epi; or a0,v0,zero(delay); [init using a0]; lw ra; addiu sp; or v0,a0,zero; jr ra`.
 
+## Varargs constructor reuses the caller SHADOW-arg region as an aligned scratch buffer (`or aN,sp; addiu K; and ~3` passed to a call)
+
+A constructor that homes `a1,a2,a3` to their caller shadow slots (`sw a1,framesize+4(sp); sw a2,+8; sw a3,+0xc` — i.e. just ABOVE the frame top) and then materializes a stack pointer with **`or aN,sp,zero; addiu aN,aN,K; and aN,at(~3)`** which it passes to a call is NOT using a declared local buffer — it is reusing the shadow-arg region as an aligned scratch buffer. The `and ~3`/`& ~7` is an alignment-up; the `K` lands the pointer inside the shadow slots (e.g. `(sp+0x33)&~3 = sp+0x30 = &a2_shadow`).
+
+**Recognition:** 3 consecutive `sw aN` to offsets ≥ framesize (shadow slots, not in-frame), one arg saved to a `$s` reg instead (`or s0,a0,zero`), and an `or aN,sp; addiu; and` pointer fed to a `jal`. It's a varargs function.
+
+**C form:** force the shadow homes by taking `&a2` (the first vararg slot) — `aligned = ((int)&a2 + 3) & ~3;` — plus `(void)a3;`, and do NOT declare a `char buf[]` local (that bloats the frame and bases the scratch in-frame instead of at the shadow region). This reproduces the `or aN,sp; addiu; and` form + the 3 shadow `sw` in shape (gl_func_0004C190, 2026-05-31).
+
+**RESIDUAL CAP:** the target frequently bases the scratch at **sp+0** (`or aN,sp` = offset-0, the scratch overlapping the outgoing-arg area) inside a frame 8 bytes larger than the no-local C produces. No C `buf[]` size lands a local at sp+0 with the right frame (buf[8]→+0x10, no-buf→−8); the sp+0 overlapping-scratch placement is an IDO allocator artifact. Reshape gets the structure (≈91%) but the last frame-size + sp+0 base needs an alloca/union or a donor splice.
+
 The KEY signature: `beq v0, zero, +epi` IMMEDIATELY after the alloc jal returns, with `or a0, v0, zero` in its delay slot. The init code then uses `a0` (not `v0`) as the base register.
 
 **The C variants and their match%:**
