@@ -387,7 +387,7 @@ A constructor that homes `a1,a2,a3` to their caller shadow slots (`sw a1,framesi
 
 **C form:** force the shadow homes by taking `&a2` (the first vararg slot) — `aligned = ((int)&a2 + 3) & ~3;` — plus `(void)a3;`, and do NOT declare a `char buf[]` local (that bloats the frame and bases the scratch in-frame instead of at the shadow region). This reproduces the `or aN,sp; addiu; and` form + the 3 shadow `sw` in shape (gl_func_0004C190, 2026-05-31).
 
-**RESIDUAL CAP:** the target frequently bases the scratch at **sp+0** (`or aN,sp` = offset-0, the scratch overlapping the outgoing-arg area) inside a frame 8 bytes larger than the no-local C produces. No C `buf[]` size lands a local at sp+0 with the right frame (buf[8]→+0x10, no-buf→−8); the sp+0 overlapping-scratch placement is an IDO allocator artifact. Reshape gets the structure (≈91%) but the last frame-size + sp+0 base needs an alloca/union or a donor splice.
+**RESIDUAL CAP:** the target frequently bases the scratch at **sp+0** (`or aN,sp` = offset-0, the scratch overlapping the outgoing-arg area) inside a frame 8 bytes larger than the no-local C produces. No C `buf[]` size lands a local at sp+0 with the right frame (buf[8]→+0x10, no-buf→−8); the sp+0 overlapping-scratch placement is an IDO allocator artifact. Reshape gets the structure (≈91%) but the last frame-size + sp+0 base needs a donor splice. (`__builtin_alloca` does NOT work — IDO emits a frame-pointer/dynamic-stack prologue, not the target's static `addiu sp,-N` + `or aN,sp` static-local-at-sp0 form. 2026-05-31.)
 
 The KEY signature: `beq v0, zero, +epi` IMMEDIATELY after the alloc jal returns, with `or a0, v0, zero` in its delay slot. The init code then uses `a0` (not `v0`) as the base register.
 
