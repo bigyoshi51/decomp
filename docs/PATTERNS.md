@@ -7008,6 +7008,7 @@ _When a source=4 roll asks for small unstarted USO accessor templates, do not as
 - `gui_uso_func_000008C0`: no `jr ra`, display-list builder head that falls into `gui_func_00000918`; merge only after export-table proof.
 - `game_uso_func_0000C3E8`: 4-insn global reader capped by IDO dead-arg-home delay-slot scheduling.
 - `arcproc_uso_func_00000F48`, `h2hproc_uso_func_0000049C`, `mgrproc_uso_func_0000119C`, `timproc_uso_b1/b3_func_000010D4/00001088`: 2-insn preload or alternate-entry fragments that seed a successor register.
+- `timproc_uso_b1_func_000011D0`, `timproc_uso_b3_func_00001920`: 2-insn float-constant preloads (`lui at,0x3F80; mtc1 at,$f0`) that seed successor `$f0 = 1.0f`.
 - `timproc_uso_b5` 0x87xx/0x88xx tiny leaves: shared-tail / branch-into-`jr` ladder fragments, not standalone readers.
 
 **Workflow:** still scan for the standard signatures (`gl_func_00000000(&D_00000000, buf, N)` and the -O0 0x4C/0x64/0xA4 variants), but once the size-sort head is made of the classes above, record the specific cap in source and move to a different vein. A source=4 tick should not re-grind known fragments as if they were missed accessor bodies.
