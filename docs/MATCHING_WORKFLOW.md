@@ -6714,3 +6714,21 @@ When a build is N instructions shorter/longer than the target (lendiff != 0), ev
 ### split-fragments.py DROPS the symbolic `lui %hi` line at a split-off boundary — corrupts the .s (2026-06-01)
 
 When the instruction at a split boundary is a symbolic `lui $rX, %hi(SYM)` line (raw-USO `.s` renders `lui`+reloc as a symbolic mnemonic line, not a `.word`), split-fragments.py drops it: the split-off piece's size header says N words but the file contains only N-1, and the piece starts with the orphaned `addiu $rX, $rX, %lo(...)` whose base register is never loaded. Detection: after a split, `head -1 <piece>.s` size vs `grep -c '0x' <piece>.s` word/line count — a mismatch (header claims one more word than present) means a dropped reloc line; also any piece that starts with `addiu`/`lw`/`lwc1` on a register with no preceding `lui` is corrupt. Verified on game_uso_func_0000D458's D5BC→D5DC boundary (D5DC begins `lui t6,%hi(D+0xDC8)`): the auto-split made D5BC 0x24/9-words-header but 8 `.word`s, and the next piece began with the orphaned `addiu t6,t6,0xDC8`. Fix: `git checkout -- <bundle>.s` + `rm` the untracked split-offs, then split MANUALLY (truncate the parent .s at the jr-ra+delay, keep the symbolic lui line with the successor). This is the concrete mechanism behind the general "USO split is risky" warning — it only bites when a sub-function boundary lands on a %hi/%lo-relocated load.
+
+## Batch-find typed-float-proto candidates by scanning NM objects for the double-promote signature (2026-06-02)
+
+The single-float-arg double-promote bug (K&R extern → `cvt.d.s`+`sdc1` doubleword stores where the target wants single `swc1`; fix = typed-float-proto alias-extern, see the alias-extern entries above) is a recurring CROSS-USO vein, not a one-off. Find all candidates in one sweep:
+
+```bash
+# from the project dir, after `make non_matching_objects`:
+for o in build/non_matching/src/*/*.c.o; do
+  mips-linux-gnu-objdump -d --no-show-raw-insn "$o" 2>/dev/null | awk -v O="$o" '
+    /<.*>:/{fn=$0; gsub(/[<>:]/,"",fn); sub(/^[0-9a-f]+ /,"",fn)}
+    /cvt\.d\.s/{seen[fn]=1}
+    /sdc1.*,(16|20|24|28)\(sp\)/{ if(seen[fn]) print O, fn }'
+done | sort -u
+```
+
+The `sdc1 ...,N(sp)` offset filter must target the **outgoing-arg area** (sp+0x10/0x14/0x18 = decimal 16/20/24, sometimes 28) — NOT the high offsets (0x28-0x40) where IDO saves callee-saved FP regs `$f20-$f26` via sdc1 at the prologue (those are noise, present in every FP function). Then per hit, **confirm it's the bug** by checking the target `.s` uses single `swc1` at those slots (`grep -E 'swc1.*0x1[0-8]' asm/.../FN.s`); if the target genuinely uses `sdc1` there, the arg really is a double — skip.
+
+Fix per confirmed hit: declare `extern void FN_alias(void*, float, float, ...);` (one `float` per single-float arg), add `FN_alias = 0x00000000;` to `undefined_syms_auto.txt` (0x0-alias of the K&R `func_00000000`/`gl_func_00000000` so the reloc target is unchanged), and call the alias. Verified +3.6pp on bootup_uso func_00001A44 (7 float args), and the same recipe cracked h2hproc 15F0/17A0 single-float 5th args. Caveat (per the alias-extern net-fuzzy note above): rerun the report — the proto can shift surrounding regalloc; keep only if net-positive.
