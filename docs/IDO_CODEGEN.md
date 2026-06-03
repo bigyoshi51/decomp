@@ -259,6 +259,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ### indirect / function pointer
 
+- [Convert an in-file callee's DEFINITION to K&R old-style to keep a direct `jal` when calling it with extra (int-only) args](#feedback-ido-knr-def-unblocks-direct-jal-varying-arity) — _When the target has `jal helper` but your build emits indirect `jalr t9` because an in-file ANSI prototype/def for the helper has a fixed arity that blocks your bare call (forcing the `((int(*)())fn)(...)` cast → jalr): rewrite the callee's DEFINITION K&R-style (`(a0) int a0;`). K&R defs don't establish a prototype, so mismatched-arity calls type-check AND keep the direct jal; callee bytes identical (gate it). INT ARGS ONLY — K&R promotes float→double. 2026-06-03 gl_func_000675A4 85.88→88.23%._
 - [Inline function-pointer call → IDO uses `jalr $t9`; naming as local → `$a1` or other](#feedback-ido-indirect-call-t9) — _For indirect calls via a struct member (`(*struct->callback)(args)`), keep the function-pointer EXPRESSION inline inside the call.
 - [`volatile T buf[N]` forces IDO to emit `addiu tA, sp, off; lw tB, 0(tA)` (pointer-indirect load) instead of `lw tB, off(sp)` (direct sp-relative)](#feedback-ido-volatile-buf-pointer-indirect) — When the target asm uses `addiu tA, sp, off; lw tB, 0(tA)` (materialize stack address into a temp register, then load via the temp) instead of the standard direct `lw tB, off(sp)`, declaring the local buffer as…
 
@@ -3458,6 +3459,26 @@ Emits `lw $t9, 0xC($v1); lh $t6, 8($v1); jalr $t9; addu $a0, $t6, $v0` — ✓ c
 **Caveat:** this only fixes the `$t9` allocation. The v0/v1 assignment for the surrounding pointer chain (p1 in $v0 vs $v1, etc.) is separately determined by IDO's SSA renumbering and is often NOT controllable from C without decomp-permuter.
 
 **Origin:** 2026-04-19 game_libs gl_func_0004E150. With named `int (*func)() = ...`: 95.8 %. With fully inline call: 97.5 % (only v0/v1 swap remained). NON_MATCHING wrapped at 97.5 %.
+
+---
+
+<a id="feedback-ido-knr-def-unblocks-direct-jal-varying-arity"></a>
+## Convert an in-file callee's DEFINITION to K&R old-style to keep a direct `jal` when calling it with extra (int-only) args
+
+**Symptom:** the target calls a helper with a *direct* `jal helper` but your build emits the *indirect* `lui/addiu/jalr t9` sequence. This happens when the callee already has an **ANSI prototype or definition in the same file** with a *fixed* arity (e.g. `void gl_func_00062F64(int a0) { ... }`, often an m2c stub) but the real function is called with a *different* number of args at this site. Calling the bare name `gl_func_00062F64(0, idx, val, self)` then fails IDO cfe with "The number of arguments doesn't agree with the number in the declaration", so the reflexive workaround is the fn-ptr cast `((int(*)())gl_func_00062F64)(...)` — which compiles but produces the **indirect `jalr t9`** (wrong; target wants direct `jal`).
+
+**Fix:** rewrite the callee's in-file *definition* to **K&R old-style** so it no longer creates an arg-count-checking prototype:
+```c
+/* before (ANSI: blocks any other arity) */
+void gl_func_00062F64(int a0) { gl_func_00000000(a0); gl_func_00000000(a0); }
+/* after (K&R: calls with ANY count type-check, direct jal preserved) */
+void gl_func_00062F64(a0) int a0; { gl_func_00000000(a0); gl_func_00000000(a0); }
+```
+K&R definitions do **not** establish a prototype, so subsequent calls with mismatched arity compile *and* keep the direct `jal`. The callee's own emitted bytes are **identical** (ANSI vs K&R for a plain `int` param produce the same code) — verify with a gate (the callee here stayed 100 %).
+
+**Hard constraint — int args ONLY.** K&R (no prototype) default-promotes `float`→`double` at the call, so a float arg will mismatch (`cvt.d.s` + double-ABI). If the varying-arity call passes any float, this lever can't help — see `feedback-ido-knr-float-call`. (Distinct from `feedback-ido-typed-cast-of-kr-extern-regresses`, which is about *adding* a cast to a K&R extern; this is about *removing* a fixed prototype from a def.)
+
+**Origin:** 2026-06-03 game_libs gl_func_000675A4. Two int-only calls to gl_func_00062F64 (4-arg and 2-arg) were emitting `jalr t9` via the fn-ptr cast (~4 extra insns each); K&R-izing the callee def gave direct `jal` and bumped 85.88 % → 88.23 % (callee gl_func_00062F64 stayed 100 %). Combined with EXPECTED-.o offset retype, the function reached 91.97 %.
 
 ---
 
