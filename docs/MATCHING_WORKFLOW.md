@@ -1821,6 +1821,17 @@ _A `switch`/`if-else`-dispatch function (e.g. `if (mode==1){...} else {...}`) wh
 
 **Payoff once whole:** these low-% (10-25%) medium game_uso functions are *undecoded stubs, not caps* — a full multi-path decode lands +20 to +35pp in one tick (A0E8 21.7→45.6, 2CC8 13.8→48.6, 28C0 0→31.5, all 2026-06-03). The residual after a full decode is the usual RA/spill/frame-packing materialization cap.
 
+**m2c DOES work for game_uso *control-flow* functions (not just game_libs).** `decomp-uso-cf.py` lifted game_uso_func_0000D458 (an init/dispatch: setup call, field writes, a mode==3 branch, a magic-number gate) from 0→**51.2%** in one tick (2026-06-03). So the split is by SHAPE not module: control-flow (calls + branches + field writes) → m2c lift; FP-builder (Vec3 math + materialization) → family-template hand-decode. The m2c residual is the unresolved globals (m2c emits `*(s32*)0x34` / `FW(0xDB0,..)` for what are really `import_800200CC` / `game_uso_D_807FF3A0..` symbols) + the gl placeholder calls — resolve those to push past ~50%.
+
+**HAZARD — `decomp-uso-cf.py` writes SHARED `/tmp/cf_body.c`; a parallel agent's run will clobber it mid-edit.** Burned 2026-06-03: between reading `/tmp/cf_body.c` and splicing it, a sister agent ran the script on `gl_func_00027804` — I wrapped THEIR body into MY game_uso.c (wrong function, didn't build the target symbol, fuzzy=None). The script's `/tmp/cf*.{s,c}` files are a shared reservoir across all worktrees (same `/tmp`). FIX: capture atomically and verify before use:
+```
+python3 scripts/decomp-uso-cf.py <FUNC> >/dev/null 2>&1
+cp /tmp/cf_body.c /tmp/mine_$$.c          # private copy, $$ = pid
+grep -c '<FUNC>(' /tmp/mine_$$.c          # MUST be 1 — else a sister clobbered it; re-run
+# splice from /tmp/mine_$$.c, not /tmp/cf_body.c
+```
+Same root cause as the shared-stash and `git diff --check` gotchas (TOOLING_GIT.md): /tmp and `.git` are shared across worktrees; never trust a shared scratch file across a tool call when sisters are active.
+
 **Tooling boundary — do NOT m2c game_uso FP-builders; hand-decode with the family template.** The sister-agent m2c campaign (`scripts/decomp-uso-cf.py`) is great for game_libs *control-flow* functions (40-67%) but produces structurally-divergent C for game_uso FP-builders: on game_uso_func_000028C0 m2c gave **3.68%** (285 vs 250 insns, −400 vs −232 frame — m2c's RA/struct-layout doesn't align with IDO's builder emit), whereas a hand-decode reusing the **2CC8 / A0E8 / A604 family template** (mode=a0->0x40 dispatch → staged Vec3s → 23D4/normalize-070238/transform-071028/072EE8 shared tail → mirror out->0x60.. into out->0xA0..) gave **31.5%** in the same tick. Recognize a builder by: `out=a0->0x14; s=(a0->0x3C)->0x38; mode=a0->0x40; if(mode==0)return; if(mode==1){...}else{matrix×{0,0,±1000}}`. Reuse the nearest already-decoded sibling's body verbatim and adjust offsets — don't re-derive from m2c.
 
 ---
