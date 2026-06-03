@@ -9133,3 +9133,13 @@ Surveyed the medium game_uso NM wraps (30-92%) for structural (non-RA) gains aft
 ### Universal game_uso near-miss blocker: IDO inlines pointer-locals; target materializes base+offset (2026-06-02)
 
 Confirmed across the medium game_uso NM wraps (0000F948, 0000E1FC, 0000F060, 0000FD04, 00007ACC, 0000ECEC, 0000A3C4): the recurring residual is POINTER MATERIALIZATION. Target asm computes a base pointer once (`addiu v0,v0,968` / `addiu v1,v0,1856`) and then uses small offsets (`swc1 ...,0/4/8(v0)`, `lwc1 16(v1)`); IDO compiling the natural C inlines those as big direct offsets (`swc1 ...,968(v0)`, `lwc1 1872(v0)`) — every such insn then mismatches on the offset/operand. C pointer-locals (`T *p = base+0x968; p[0]=...`) get re-folded back to big offsets despite multiple uses; volatile forces materialization but adds stack spills that regress (per the FD04 attempts). This stacks with FP-op scheduling differences and temp-register renumbers. Net: these near-misses are NOT C-forceable to 100% — permuter-class or permanent NM. The ONE clean structural win was 6FA8 (its gap was an un-decoded RETURN mechanism, not materialization). Don't re-grind the materialization functions per-function; the remaining game_uso gains are large fresh decodes of the complex dead-alloc/stack-buffer builder family (A7F8, A3C4, 8CD8), which are multi-tick.
+
+### Reproducible: the dead-alloc/stack-buffer Vec3 idiom (builder family) (2026-06-02)
+
+The game_uso "builder" functions (A7F8, A3C4, 8CD8, ...) materialize small vectors into stack buffers via a DEAD alloc: target asm shows `addiu vN,sp,OFF; addiu a0,12; bne vN,zero,skip; jal <alloc>(=game_uso_func_055750); skip: swc1 x,0(vN); swc1 z,8(vN); swc1 y(=0),4(vN)`. The alloc is never taken at runtime (vN=&stackbuf != 0) but IDO still emits the branch+jal. This IS reproducible from C — previously thought too hard:
+```
+Vec3 buf; Vec3 *p = &buf;
+if (p == 0) p = (Vec3 *)func_00000000(12);   // dead alloc, emits bne/jal
+p->x = ...; p->z = ...; p->y = 0.0f;          // fill order x, z, y (offsets 0,8,4)
+```
+Each such block adds ~10 matching insns. On A3C4 (3 blocks) this was 54.2→58.6%. Caveats: the gain is capped by the same pointer-materialization/RA residual (the buffer sp-offsets and temp regs still diverge), so it's a partial-% lever not a path to 100%; and don't try to "fix" the slot-lookup call args while you're at it — A3C4's func_00000000(*ent,0,ref) args matched better than the seemingly-correct A374(obj,*ent,ref) (regressed, reverted). Use this to push builder-family stubs (8CD8 @3.5%, A7F8 @12.9%) up incrementally.
