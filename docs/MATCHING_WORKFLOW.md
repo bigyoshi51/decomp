@@ -1805,6 +1805,8 @@ _A `(int)float` / `(char)(int)float` cast emits two completely different instruc
 
 **General rule:** when a no-call FP function is stuck at low % and the only diff class is `trunc.w.s` (built) vs `cfc1/cvt.w.s/ctc1` (target) — or vice-versa — it's a `-mipsN` MIPSISET mismatch, not a C bug. Check `grep MIPSISET Makefile` for the file's flag and whether a per-file override is needed. Do NOT grind C variants; the cast can't be coerced across the flag boundary.
 
+**BREADTH + carve requirement (confirmed 2026-06-03):** this is a BROAD class, not 3 functions — gl_func_00020A28 (and many other game_libs low-% stubs with float→screen-space projection) carry the same cfc1/ctc1 idiom. Tested whole-file `-mips1` on game_libs_post0b: the 3 converters improved 6.0→11.6% (idiom now emits; residual is the scale/structure decode) BUT **207 of 433 matched functions REGRESSED** — the rest of post0b is genuinely `-mips2` (mips1 changes branch-likely/other codegen). So a whole-file flag flip is WRONG; the fix is a **dedicated `-mips1` TU**: carve all the cfc1-converter functions out of post0b/post into one new `.c` with `MIPSISET := -mips1`, place the pieces in tenshoe.ld (multi-piece TRUNCATE_TEXT carve — they're non-contiguous, so several splits like the 4-way post.c split). This is a focused multi-tick infrastructure project (collect-all-converters + per-lane scale decode), not a single /loop tick. Until then these stay low-% NM (the C is correct; only the TU's flag is wrong). Identify members: `objdump -d` the expected `.o` and grep for `cfc1`/`ctc1`.
+
 ---
 
 ## Multi-PATH functions: decode ALL branches in one pass, or objdiff REGRESSES vs the stub
