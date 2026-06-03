@@ -9118,3 +9118,14 @@ Refinement of the switch-dispatch-reproduces entry above: the `switch` form wins
 ### Big-swing recognizer: a `void` decode with `(void)result` often actually RETURNS it (stack-resident → v0) (2026-06-02)
 
 When a partial game_uso/game_libs NM decode computes a value into a local and then drops it with `(void)result;` (function typed `void`), check the expected asm's EXIT paths: if every `jr ra` is preceded by `lw v0, OFF(sp)` and the value is `sw`-stored to that same `OFF(sp)` slot at each branch (e.g. `sw zero,188(sp)` init, `sw t4,188(sp)`/`sw t5,188(sp)` per arm, `lw v0,188(sp)` before return), the function RETURNS the value — it's just stack-resident because it's live across calls. Re-type the function `int` and `return result;`. This restored the entire return mechanism on game_uso_func_00006FA8 (53%→69.7%, +16.7pp) — a large chunk of "missing insns" that read as RA-divergence but were really the un-decoded return. Cheap, high-yield; always verify the constant/ternary direction against the c.lt.s/bc1f arms while you're there (6FA8's was inverted).
+
+### game_uso structural near-miss survey (2026-06-02)
+
+Surveyed the medium game_uso NM wraps (30-92%) for structural (non-RA) gains after the carve vein closed. Result: the return-recognizer win was largely a one-off — game_uso_func_00006FA8 (53→69.7%). The rest are MULTI-ISSUE caps, not clean single-fix:
+- 6A30: `result` is the ARG to the final call (lw a1,180(sp) in the jal delay), not a return; 88-insn gap (large orchestrator, multiple missing branches).
+- 0000ECEC: switch jump-table addressing differs (expected `lw,528(at)` from D_0+0x210 table vs build's offset) + RA + pointer materialization.
+- 00007ACC: frame -56 vs -40, pervasive RA + pointer materialization.
+- 0000FD04: documented pointer-materialization + precall-arg-spill cap (heavily attempted, volatile/named-pair all regress).
+- 0000EAF4: already `int`/returns; residual is RA.
+- Return-recognizer scan candidates that AREN'T clean: 000097EC (bare INCLUDE_ASM, decode in comments only), 00008CD8 (709-insn 3.5% stub — fresh multi-tick decode), 000074D8/0000751C (v0 is a working base pointer, not a return).
+6FA8's own residual is the struct-copy-chain/frame cap (expected keeps more redundant Vec3 stack copies; forcing them regresses per the FD04 note). Net: the cheap game_uso structural wins are now worked out too; remaining gains need per-function multi-issue RE or large fresh decodes (8CD8, etc.).
