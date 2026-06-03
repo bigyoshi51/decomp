@@ -1793,6 +1793,20 @@ _When progressively decoding a 1+ KB spine function across multiple /loop /decom
 
 ---
 
+## Multi-PATH functions: decode ALL branches in one pass, or objdiff REGRESSES vs the stub
+
+_A `switch`/`if-else`-dispatch function (e.g. `if (mode==1){...} else {...}`) where each arm fills the same output fields must have **every arm decoded together**. A partial decode of just one arm scores LOWER than the original stub, because (a) the unwritten arm's ~100 insns are all "missing", and (b) the smaller body needs a smaller stack frame, so EVERY sp-relative offset in the decoded arm misaligns against the target's full-size frame._
+
+**Symptom:** you carefully decode one branch correctly, build, and the fuzzy% goes DOWN (e.g. game_uso_func_00002CC8 2026-06-03: 13.8% stub → 10.6% with mode==1-only decoded → 48.6% with BOTH mode==1 and mode>=2 decoded). The mode==1 arm was logically correct, but alone it produced a −184 frame where the target is −216, so all the staged/divv/copy stack slots were off.
+
+**Rule:** before committing a low-% medium-function decode, check the asm for a top-level dispatch (`beql v0,zero`/`bnel v0,at` early-outs, a `switch`, or `if(mode==N)` chains). If there are N arms each writing outputs, budget to decode all N in the same tick. Don't commit a single-arm partial — revert to the stub instead (it at least doesn't regress), or finish the other arms first. The frame size only matches the target once the whole body is present.
+
+**Doesn't apply when** the arms are an early-`return` guard (no shared frame growth) or genuinely independent functions mis-bundled by splat (that's a fragment-split, not a decode). It applies specifically to one function with multiple output-producing branches sharing a frame.
+
+**Payoff once whole:** these low-% (10-25%) medium game_uso functions are *undecoded stubs, not caps* — a full multi-path decode lands +20 to +35pp in one tick (A0E8 21.7→45.6, 2CC8 13.8→48.6, both 2026-06-03). The residual after a full decode is the usual RA/spill/frame-packing materialization cap.
+
+---
+
 ---
 
 <a id="feedback-make-expected-contamination"></a>
