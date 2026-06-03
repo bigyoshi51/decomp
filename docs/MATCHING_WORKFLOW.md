@@ -798,6 +798,8 @@ _A recurring near-miss class: a function references a named placeholder symbol (
 
 **Fix:** replace the placeholder identifier with `*(T*)((char*)&D_00000000 + 0xNNN)` (or `(char*)&D_00000000 + 0xNNN` for a base). Convert its `extern` decl to a harmless `extern char D_00000000;`. ONE symbol fix can land several callers at once (e.g. `gui_ref_00000150` → 3 gui functions). Verified 2026-05-29: landed `gl_func_00006DC8`/`00006F60`, `game_uso_func_0000EE30`, `gui_func_0000267C`/`000026D8`/`0000271C`, `timproc_uso_b1_func_00001100`, `timproc_uso_b3_func_000010B4` (8 functions) this way.
 
+**INTRA-USO jal placeholder → resolve from the .s comment (correctness + episode, NOT %). (2026-06-02)** A function body calling the generic `game_uso_func_00000000(args)` (or `gl_func_00000000(...)`) where the target is an INTRA-segment jal: objdiff is name-blind on the relocatable jal (`.text` is `0C000000` regardless of which symbol the R_MIPS_26 reloc names), so the function scores **100% and may already be landed as plain C — but with a WRONG reloc** (placeholder = jal to 0x0 at USO-link) and a **non-byte/reloc-correct episode**. The caller's `.s` carries the resolved target in the disasm comment: `jal game_uso_func_000024BC /* 00272C 0C000000 -> game_uso_func_000024BC */`. Replace the placeholder call with that real symbol (cast args to its real prototype), rebuild (stays 100%), and re-log the episode. Verified `game_uso_func_00002714`→`_000024BC` and twin `game_uso_func_00002FC8`→`_00002CC8` 2026-06-02. **AUDIT VEIN (narrower than it looks):** `game_uso.c` has ~45 `game_uso_func_00000000(` sites, but only resolve the ones whose `.s -> ` target EXISTS as an intra-USO `.s` symbol (`ls asm/.../game_uso/<target>.s`). Most targets are HIGH addresses (`game_uso_func_04A2D8`, `_04DA24`, `_055904` …) that are NOT local function symbols — cross-USO calls / data thunks the `.s` comment names but that have no in-segment def, so there's nothing to point the C at (need cross-segment symbol resolution / the USO-reloc migration). Filter: 1 placeholder call + 1 distinct `-> ` target + `os.path.exists(target.s)`. Only ~2 game_uso sites qualified (the 2714/2FC8 field-0x40-guard twins). Does not move decomp.dev % (already 100% via name-blindness) but fixes link-correctness + the FALSE episode.
+
 **WHY the addend form and NOT just `gl_ref_NNNN = 0xNNN` in undefined_syms:** a placeholder symbol whose VALUE is set to its offset (`gl_ref_00000040 = 0x40` in `undefined_syms_auto.txt`) resolves only at LINK — the compiled `.o` still carries `lw/sw rX, 0(at)` (immediate 0 + R_MIPS_LO16 reloc), so the link is correct but the land's `objcopy`-raw `.o` `byte_verify` (and report.json's objdiff) STILL see a mismatch and the function never counts. Putting `0xNNN` as a C-level ADDEND (`&D_00000000 + 0xNNN`) makes the assembler bake `%lo(0xNNN)` into the instruction immediate at compile time (the reloc to D_00000000 rides on top), so the raw `.o` bytes match expected. So functions "known matched" via symbol-value placeholders are often actually *uncounted* — re-express them with the addend to land them. **DETECTION (2026-05-31, game_uso_func_0000D7F4): the C-level variant `extern int D_00000E90; ... &D_00000E90` (a separate named extern referenced directly, NOT `&D_00000000 + 0xE90`) emits the same HI16+LO16 pair → addiu imm=0 → 1-diff residual. These hide in PLAIN (un-wrapped) bodies — no `#ifdef NON_MATCHING` to grep — so the build silently links a WRONG instruction into the ROM, and they surface only via the ALL-functions byte-diff sweep (build/non_matching/*.o vs expected/*.o for every FUNC symbol, not just NM wraps). Especially common as leftovers where a banned INSN_PATCH that previously faked the byte was removed. Fix = the addend form; cross-check a byte-exact sibling in the same file (D8A8 uses `&D_00000000 + 0xE70`).** **CRITICAL SCOPE LIMIT (2026-05-31, full cross-segment sweep): the addend form only bakes the offset when it lands in an ADDIU — i.e. base-materialization + small-offset deref (struct-by-value `*(Pair2*)(&D+0xNNN)`, ≥2 adjacent fields). For a SCALAR load/store (`*(int*)(&D+0xNNN) = x`) the offset lives in the load/store `%lo` field, which is ALWAYS reloc-filled to 0 — no IDO-emittable C bakes it (`&D+0xNNN` regresses to 3 insns at -O0 / CSE-shares the base when &D is used >1×). That is the RELOC-BLIND CAP: expected/.o is post-link (relocs applied then stripped) so the field is literal, but our .o carries the reloc. It is NOT a per-fn C fix — the real fix is the spimdisasm USO-reloc migration (expected/ becomes reloc-aware). D7F4 landed ONLY because 0xE90 sat in an addiu, not a %lo. ALSO: sweep `build/src/*.o` (the MATCHING build, with REPLACE_FUNC_BODY donor splices applied) vs `expected/`, NOT `build/non_matching/*.o` — the latter OVER-REPORTS (skips the donor/recipe step), so its "1-diffs" include already-handled functions. The genuine-unmatched ≤2-diff non-game_uso set in the matching build is ~150 functions, ALL reloc-blind/hardcoded-jal caps — do not re-grind them for C fixes; they need the USO-reloc migration.**
 
 **WHERE THE ADDEND FORM WORKS vs FAILS (2026-05-29 trio + eddproc triage):** it works when the `0xNNN` folds into a SINGLE load/store immediate (`lw/sw rX, %lo(D+0xNNN)(base)`) — that's the common case (6DC8, 43F1C: `(*(int**)((char*)&D_00000000+0x254))[..]`). It FAILS in two shapes, which stay tooling-blocked (expected baked the address with NO reloc; re-check `objdump -dr`):
@@ -5731,6 +5733,8 @@ hoisted FP/address constant (stolen prologue). Check whether the following
 function uses that `$fN`/reg un-initialized; if so, move it forward and
 re-address the symbol, don't SUFFIX it onto the predecessor.
 
+**Corollary — a "NON-O32 float-in-$f6/$f8 callee cap" is often a MIS-SPLIT, not a real ABI cap.** When a USO function appears to *receive* floats in non-standard FP regs (`$f6/$f8/$f10`, not the `$f12/$f14` ABI regs) and gets filed as an un-matchable "float-in-$fN callee" cap (per the old `feedback_uso_float_in_f4_callee` class), CHECK TWO THINGS before believing it: (1) does it have **zero `jal` callers** (reached only by fall-through)? and (2) is there a **tiny preceding fragment** (8–12 words, no `jr ra`, no `addiu sp` prologue) that loads `a0` fields and computes exactly those `$fN` values? If both, it's ONE function that splat split because IDO hoisted the entry's FP arg-loads **above** the `addiu sp` prologue (so the prologue lands ~8 insns in, at the split point). The floats are computed from `a0`, NOT caller-passed — the function is an ordinary field-reading FP transform and is matchable once the entry+continuation boundary is merged. Verified 2026-06-02: `1080/timproc_uso_b5_func_000038B0`(entry, called from `5FC0`) + `_000038D0`(cont, 0 callers) is one 47-insn function long mis-filed as a float-in-$fN cap; sibling pair `0000396C`+`0000398C-F1` same. Retract the cap, merge the boundary (USO-asm regen), then decode normally.
+
 <a id="feedback-tiny-fragment-stolen-leading-insn-merge-forward"></a>
 ## A standalone tiny (0x4–0x8) symbol can be the STOLEN LEADING insn of the successor — merge FORWARD when the predecessor is complete
 
@@ -5752,6 +5756,28 @@ function body in the NEXT symbol reading a register that the orphan set._
    `addiu sp,sp,-N; ...; sw t6, 4(sp)` with no prior `t6` set). That proves
    the orphan insn is the successor's true entry.
 
+**SINGLE-entry (mergeable) vs DUAL-entry (cap) — the decisive test (2026-06-02).**
+Many FP-const / value-setup entry-fragments are NOT mergeable: they are an
+ALTERNATE entry that supplies a DEFAULT, while the body is also directly callable
+with those regs as real args. Before merging, classify:
+- **MERGEABLE (single-entry):** the successor has NO callers AND the entry-frag's
+  setup is NON-DEGENERATE / arg-derived — e.g. `mtc1 a2,$f14` (an arg bit-cast)
+  or it materialises a divisor the body genuinely needs. Entering only via the
+  frag makes the body sensible. Verified mergeable: timproc 038B0/038D0,
+  396C/398C; mgrproc 2EF0/2F10; game_libs 68004/68048, 0005DB00/0005DB0C.
+- **CAP (dual-entry / alternate-default-entry):** the frag sets a value to a
+  CONSTANT (e.g. `mtc1 zero,$f0` = 0.0f) that makes the body DEGENERATE if baked
+  (a compare against a fixed 0), OR the body is documented as taking those regs
+  as caller-args, OR the body emits a DEAD arg-home only meaningful for a direct
+  entry (the 2DDEC tell). Then the frag is a "default-value" alternate entry and
+  merging would drop the direct entry. Verified caps: game_libs F48 (alt-entry),
+  2DDEC (dual-entry, dead-a0-home proof), 0000CD74→CD80 (`mtc1 zero,$f0` default +
+  cross-USO-callable body, f0 is the variable operand). **Cross-USO caveat:** if
+  NEITHER the frag NOR the body has an in-segment caller (both reloc'd-jal/export
+  reachable), you cannot confirm single-entry from the segment alone — if the
+  body's "inherited" regs read as plausible caller-args, treat as a cap, don't
+  merge.
+
 **Fix (forward merge):**
 - Prepend the orphan's `.word` line(s) to the successor's `.s`, keeping the
   original address comments.
@@ -5769,6 +5795,31 @@ function body in the NEXT symbol reading a register that the orphan set._
   (`/* E22624 0003D54C ... */` → baserom @ 0xE22624) and compare the merged
   build `.o` `.text` slice to that. Raw `.word` re-assembles to itself, so a
   correctly-constructed merge is byte-exact by construction.
+- **Cleaner alternative — regenerate expected/ to measure with objdiff
+  (2026-06-02).** Instead of the manual baserom slice, run
+  `scripts/refresh-expected-baseline.py` after the `.s` edits: it rebuilds
+  `expected/*.o` from a pure-INCLUDE_ASM baseline reflecting the NEW boundaries,
+  so `objdiff-cli report generate` then measures the merged functions correctly
+  (the predecessor's residual % becomes real, e.g. 81→86.25% once the stolen
+  word leaves its range). Three gotchas: (1) it churns ~10 UNRELATED
+  `expected/*.o` via asm-processor nondeterminism — `git checkout HEAD --` every
+  churned `.o` except the segment you actually touched, then commit only that
+  one. (2) The newly-created `gl_func_*.s` may match a `.gitignore` rule even
+  though the 2000+ sibling `.s` are tracked — `git add -f` it (git then records
+  a clean rename from the old symbol). (3) `refresh` leaves `build/non_matching`
+  stale; `touch src/<seg>/<file>.c && make non_matching_objects` before the
+  objdiff report or the predecessor still measures at its pre-merge size.
+- **CRITICAL git gotcha — `asm/nonmatchings` is `.gitignore`d (2026-06-02).** The
+  2000+ existing `.s` are grandfathered-tracked, but `git add -A <path>` AND
+  plain `git add <path>` SILENTLY SKIP any `.s` under it (modified OR new) — no
+  error, exit 0. This bit a real merge: f7d19b65 committed the 68044 rename +
+  regenerated `expected/` but DROPPED the predecessor's `68004.s` shrink, so main
+  had `68004.s`@0x44 AND `68044.s` prepending the same word = a 4-byte overlap
+  that breaks a fresh-checkout build (local builds passed because the
+  uncommitted-but-on-disk `.s` was correct). ALWAYS `git add -f` EVERY `.s` you
+  edit in a merge, then `git status --short` and eyeball that each shows
+  `M`/`D`/`R` staged BEFORE committing. A merge that commits the `expected/.o`
+  but not the `.s` is silently broken on main.
   - **USO caveat (2026-05-17, timproc_uso_b3):** the baserom-offset check
     only works when the `.s` addr comment's FIRST column is a real baserom
     file offset (game_libs: `/* E22624 0003D54C ... */` — distinct 6-hex
@@ -6732,3 +6783,9 @@ done | sort -u
 The `sdc1 ...,N(sp)` offset filter must target the **outgoing-arg area** (sp+0x10/0x14/0x18 = decimal 16/20/24, sometimes 28) — NOT the high offsets (0x28-0x40) where IDO saves callee-saved FP regs `$f20-$f26` via sdc1 at the prologue (those are noise, present in every FP function). Then per hit, **confirm it's the bug** by checking the target `.s` uses single `swc1` at those slots (`grep -E 'swc1.*0x1[0-8]' asm/.../FN.s`); if the target genuinely uses `sdc1` there, the arg really is a double — skip. **Caveat — raw-`.word` `.s` files (game_libs, most USO segments) can't be grep-verified** (no decoded mnemonics): the `swc1`/`sdc1` confirmation must DECODE the words around the call (single `swc1`=0xE4xxxxxx, double `sdc1`=0xF4xxxxxx) — or just try the proto and keep only if net-positive. Confirmed false positives 2026-06-02: gl_func_00041148 (96%) / gl_func_00054C6C — the scan flagged them but decoding the raw words showed a GENUINE double (`cvt.d.s`+`sdc1` in the target too), and small-frame functions also false-trigger on the `$f20-$f26` FP-reg-save `sdc1` at sp+0x18/0x1C. The scan is reliable only for segments with decoded `.s` (e.g. bootup_uso — 1A44/3638/3734 all landed cleanly there). **And on game_libs the typed-float proto can NET-REGRESS even when the swc1 is genuine** (decoded from raw words, confirmed single): gl_func_00033338 went 74.2%->32.3% applying a correct arg-5 `float` proto, and reverted clean. The likely cause is a codegen cascade — for a float LITERAL arg (e.g. 180.0f) the single-precision proto reorders the rodata float-pool load + the surrounding &D reloc materializations, shifting far more than the one swc1 it fixes. Net: only pursue typed-float on decoded-`.s` segments (bootup_uso-style) with COMPUTED float args; on game_libs raw-word leaves with float LITERALS, gate hard and expect regressions.
 
 Fix per confirmed hit: declare `extern void FN_alias(void*, float, float, ...);` (one `float` per single-float arg), add `FN_alias = 0x00000000;` to `undefined_syms_auto.txt` (0x0-alias of the K&R `func_00000000`/`gl_func_00000000` so the reloc target is unchanged), and call the alias. Verified +3.6pp on bootup_uso func_00001A44 (7 float args), and the same recipe cracked h2hproc 15F0/17A0 single-float 5th args. **The vein can LAND outright matches, not just bump NM%.** When the float double-promote is the SOLE divergence, the typed-float proto takes the function to fuzzy=100 — then promote it (drop the `#ifdef NON_MATCHING`/`#else INCLUDE_ASM` wrapper so the C body is the build path), `log-exact-episode`, and land. Proof: bootup_uso func_0000477C 53.6%->100% landed 2026-06-02 (3 reg-config calls, each with 2 single-float args). So on a scan hit, always check the post-fix fuzzy for an outright 100% before assuming it's only a partial NM gain. Caveat (per the alias-extern net-fuzzy note above): rerun the report — the proto can shift surrounding regalloc; keep only if net-positive.
+
+### After merging a loop-tail fragment, re-verify NO out-of-range branches remain — multi-tail loops need multiple merges (2026-06-02)
+
+A single over-split loop can have MORE than one loop-bottom tail fragment, each a separate splat symbol with a backward branch into the parent body. Merging just the first tail can leave the parent with a still-out-of-range FORWARD branch that lands inside the SECOND tail. The build stays clean and byte-exact (the merged .s is raw `.word` data; an out-of-range branch just assembles to wherever), so a passing build does NOT confirm the boundary is complete.
+
+After every loop-tail merge, decode the merged function and check that every forward branch target `< size` and every backward target `>= 0` (i.e. inside `[0, size)`). If a forward target exceeds the new size, the next symbol is another tail of the same function — merge it too and re-check. Example: timproc_uso_b5_func_00008988 (an array-scan loop) needed TWO merges — 89DC (→0x94) then 8A1C (→0xB0); after the 89DC-only merge, 89DC's `blez` still targeted 0x50-relative (0xA4 absolute, inside 8A1C). The function only became boundary-complete once 8A1C was absorbed and it ended exactly at the next fresh function (0x8A38). Quick check script: decode words, for each `beq/bne/blez/bgtz/bltz/bgez/bc1*` insn whose objdump target is positive (not `0xffff…` backward), assert `target < n_words*4`.
