@@ -1819,7 +1819,9 @@ _A `switch`/`if-else`-dispatch function (e.g. `if (mode==1){...} else {...}`) wh
 
 **Doesn't apply when** the arms are an early-`return` guard (no shared frame growth) or genuinely independent functions mis-bundled by splat (that's a fragment-split, not a decode). It applies specifically to one function with multiple output-producing branches sharing a frame.
 
-**Payoff once whole:** these low-% (10-25%) medium game_uso functions are *undecoded stubs, not caps* — a full multi-path decode lands +20 to +35pp in one tick (A0E8 21.7→45.6, 2CC8 13.8→48.6, both 2026-06-03). The residual after a full decode is the usual RA/spill/frame-packing materialization cap.
+**Payoff once whole:** these low-% (10-25%) medium game_uso functions are *undecoded stubs, not caps* — a full multi-path decode lands +20 to +35pp in one tick (A0E8 21.7→45.6, 2CC8 13.8→48.6, 28C0 0→31.5, all 2026-06-03). The residual after a full decode is the usual RA/spill/frame-packing materialization cap.
+
+**Tooling boundary — do NOT m2c game_uso FP-builders; hand-decode with the family template.** The sister-agent m2c campaign (`scripts/decomp-uso-cf.py`) is great for game_libs *control-flow* functions (40-67%) but produces structurally-divergent C for game_uso FP-builders: on game_uso_func_000028C0 m2c gave **3.68%** (285 vs 250 insns, −400 vs −232 frame — m2c's RA/struct-layout doesn't align with IDO's builder emit), whereas a hand-decode reusing the **2CC8 / A0E8 / A604 family template** (mode=a0->0x40 dispatch → staged Vec3s → 23D4/normalize-070238/transform-071028/072EE8 shared tail → mirror out->0x60.. into out->0xA0..) gave **31.5%** in the same tick. Recognize a builder by: `out=a0->0x14; s=(a0->0x3C)->0x38; mode=a0->0x40; if(mode==0)return; if(mode==1){...}else{matrix×{0,0,±1000}}`. Reuse the nearest already-decoded sibling's body verbatim and adjust offsets — don't re-derive from m2c.
 
 ---
 
