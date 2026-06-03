@@ -451,6 +451,28 @@ changes.
 - `feedback_sister_agent_orphan_commits_resurface_as_unstarted.md` — sister-agent
   orphan commit detection.
 
+---
+
+## The per-tick `stash; rebase; stash pop` flow can COMMIT conflict markers — guard with `git diff --check`
+
+**Burned 2026-06-03 (agent-q): pushed conflict markers to `main`.** The common per-tick landing flow is:
+```
+git stash; git rebase origin/main; git stash pop
+git add <file>; git commit -m ...; git push origin HEAD:main
+```
+If a sister agent landed a change to the SAME file on `origin/main` between your last pull and this tick, the `git stash pop` produces a **merge conflict** (markers written into the working tree). The pop prints "CONFLICT" and keeps the stash — but the script keeps going: the unconditional `git add <file>; git commit` then **stages and commits the file WITH `<<<<<<< ======= >>>>>>>` markers**, and `git push` ships broken code to main. (Real case: I was hand-decoding gl_func_0001F3C8 while a sister agent's m2c campaign had already landed a 56% decode of the same function — pop conflicted, markers committed + pushed.)
+
+**Guard rule — after ANY `git stash pop` / rebase / merge, before `git add`:**
+```
+git diff --check        # exits non-zero + lists any conflict markers
+grep -rl '^<<<<<<<\|^>>>>>>>' <files>   # belt-and-suspenders
+```
+If either fires, RESOLVE first (see below), do NOT blind-`git add`. Better: make the commit step conditional — `git diff --check && git add ... && git commit ...`.
+
+**Resolving a stash-pop conflict when a sister already did the work better:** inspect both sides (`<<<<<<< Updated upstream` = the rebased origin/main version; `>>>>>>> Stashed changes` = your WIP). If theirs is higher-% / more complete (often true for the m2c-campaign decodes), keep the upstream side and DROP yours: strip the markers keeping only the upstream block, `git diff <origin-commit> -- <file>` should then be empty, build-verify, commit the resolution, push, `git stash drop`. Your redundant work is discarded — that's correct, not a loss.
+
+**Avoidance:** a sister agent is running a systematic m2c control-flow decode campaign on game_libs non-jumptable functions (`scripts/decomp-uso-cf.py` / `scripts/lift-uso-controlflow.py`; look for `// gl_func_XXXX — FULL m2c DECODE (NN% NM ...)` headers). To avoid collisions + redundant work, do NOT hand-decode game_libs gl_func_* low-% stubs — they're being swept automatically. Steer to other segments.
+
 **Failure mode I caught (2026-05-05):**
 After a revert (no real changes to stash), I ran `git stash` which was a no-op.
 Then later `git stash pop` would have applied agent-d's WIP. Caught by reading
