@@ -1793,6 +1793,20 @@ _When progressively decoding a 1+ KB spine function across multiple /loop /decom
 
 ---
 
+## game_libs float→int converters need a per-file `-mips1` MIPSISET split (cfc1/ctc1 saturation vs trunc.w.s)
+
+_A `(int)float` / `(char)(int)float` cast emits two completely different instruction sequences depending on the IDO `-mipsN` flag, and several game_libs functions were compiled with a DIFFERENT flag than the project default — so their NM stubs are stuck at ~6% no matter how correct the C is._
+
+**Symptom:** a pure float→int converter (e.g. `*(char*)a0 = (char)(int)*(float*)a1;` over a Vec3, no calls) sits at ~6% fuzzy. The built `.o` emits **`trunc.w.s; mfc1`** (2 insns/lane), but the target emits the **`cfc1/ctc1/cvt.w.s` + `andi 0x78` (invalid-op cause) + `0x4F000000` (2^31) bias-retry** software-saturation sequence (~15 insns/lane). Confirmed gl_func_000470FC / 000473AC / 00047B40 (three identical 664B/6.0% siblings, "saturating float-to-int converter over a Vec3 triple"), 2026-06-03.
+
+**Root cause:** the converter's TU was compiled `-mips1` (R3000, no `trunc.w.s` → IDO inlines the cfc1/ctc1 software round-to-zero-with-overflow-check). The project default is `MIPSISET := -mips2 -32` (Makefile line ~24), which has `trunc.w.s`. Verified directly: `tools/ido-static-recomp/build/7.1/out/cc -O2 -G0 -mips1` on `(int)x` → `cfc1/ctc1/cvt.w.s/...`; the same at `-mips2` → `trunc.w.s`. (mips2 AND mips3 both give trunc.w.s; only `-mips1` gives the saturation helper.)
+
+**Fix (infrastructure, not a C change):** split these converters into their own `.c` and add a per-file `MIPSISET := -mips1` override, exactly like the existing `kernel_056.c.o: MIPSISET := -mips3` line (Makefile ~198). Then also decode the per-lane **scale** (`(int)(x * scale)`; target does `mul.s f8,f2,f16` where the scale is loaded from a global at `t6+344`) — the conversion idiom is necessary but the byte-match also needs the scale + 3-lane structure. The sibling triplet shares one body, so one split + decode lands all three.
+
+**General rule:** when a no-call FP function is stuck at low % and the only diff class is `trunc.w.s` (built) vs `cfc1/cvt.w.s/ctc1` (target) — or vice-versa — it's a `-mipsN` MIPSISET mismatch, not a C bug. Check `grep MIPSISET Makefile` for the file's flag and whether a per-file override is needed. Do NOT grind C variants; the cast can't be coerced across the flag boundary.
+
+---
+
 ## Multi-PATH functions: decode ALL branches in one pass, or objdiff REGRESSES vs the stub
 
 _A `switch`/`if-else`-dispatch function (e.g. `if (mode==1){...} else {...}`) where each arm fills the same output fields must have **every arm decoded together**. A partial decode of just one arm scores LOWER than the original stub, because (a) the unwritten arm's ~100 insns are all "missing", and (b) the smaller body needs a smaller stack frame, so EVERY sp-relative offset in the decoded arm misaligns against the target's full-size frame._
