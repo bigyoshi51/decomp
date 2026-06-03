@@ -6834,3 +6834,11 @@ After the emulator path extracts a compressed-module jumptable (see `feedback_us
 5. Guard the macro/typedef with `#ifndef FW` so a second wrapped function in the same file doesn't hit a macro-redefinition error (IDO treats whitespace-different `#define` bodies as conflicting).
 
 Index: large m2c jumptable lift; quad scratch struct; ?32 decl removal; nested ->unk balanced scanner; IDO void* arithmetic error; FP4 cast; FW macro guard.
+
+### Two more wrinkles for compressed-USO jumptable lifts (func_00005FC0, 2026-06-03)
+
+6. **`disasm-func.py` mangles FP branch-likely.** `bc1fl`/`bc1tl` (coprocessor branch-likely, no register operands) come out as `bc1fl.L6150` with NO space before the target label, so m2c reports `unknown instruction: bc1fl.l6150` and emits an `M2C_ERROR`. Fix the disasm before m2c: `sed -E 's/(bc1[ft]l?)\.L/\1 .L/'`.
+7. **m2c `(bitwise T)` reinterpret casts are illegal in IDO cfe.** m2c emits `(bitwise f32)<ptr>` / `(bitwise char *)<float>` for bit-reinterprets. Stripping the keyword leaves `(f32)<pointer>` / `(char*)<float>` which IDO rejects (`Cast a pointer into a non-integral type` / `Cast a non-integral type into a pointer`). For an NM body, route through int: `(f32) ((FP4)fn)(...)` → `(f32) (int) ((FP4)fn)(...)`, and `(char *) (<float-expr>)` → `(char *) (int) (<float-expr>)`. Value-truncates rather than bit-reinterprets, but compiles (NM, not byte-matched).
+8. **Function-pointer member calls.** m2c `p->unkBC(args)` becomes `FW(p,0xBC)(args)` after arrow→FW, i.e. calling an int → `Non-function name referenced in function call`. Wrap: `((FP4)FW(p,0xBC))(args)` (balanced-paren scanner, same as the arrow conversion). WATCH the regex escaping — `r"FW\\("` in a heredoc'd raw string is a literal backslash, not `\(`; use a manual char-scanner instead.
+
+Result of the full vein: five timproc_uso_b5 jumptable whales (func_00008FC8/00004118/0000DF14/0000D884/00005FC0) decoded 0→~34% and 3-18%→33-47% off ONE emulator RDRAM snapshot. The remaining jr-reg candidates in the segment are 11-15-word fragments (not real switches).
