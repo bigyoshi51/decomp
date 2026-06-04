@@ -12130,6 +12130,22 @@ F49C) still byte-match after the rebuild. **HOW TO USE THE DUMP:**
   in the CWD** (NOT stdout/stderr — that's why it looked empty). One function per
   invocation; for a whole-file build, build the file with the flag and the
   `uoptlist` contains every function's section (grep the function name).
+- **IN-TREE INVOCATION (verified 2026-06-04): the build's `asm_processor.py`
+  wrapper REJECTS `-Wo,...` ("unrecognized arguments"), and a `make ... OPT_FLAGS=`
+  override doesn't reach `cc` through it.** So don't try to inject the flag via the
+  Makefile. Instead run `cc` DIRECTLY on the already-asm-processor-preprocessed
+  file (`make` the normal `.o` first so `build/non_matching/src/<seg>/<file>.c`
+  exists), with the MINIMAL flag set — extra flags like `-non_shared -Xcpluscomm`
+  SUPPRESS the dump (verified: produces the `.o` but no `uoptlist`):
+  `tools/ido-static-recomp/build/7.1/out/cc -c -Wo,-zdbug:6 -O2 -G0 -mips2 -I include -I src -DNON_MATCHING -o /tmp/x.o build/non_matching/src/kernel/kernel_000.c`
+  → `uoptlist` in CWD. (Remember to `rm uoptlist` after — it's a worktree artifact.)
+  Reading it: the `N: N assigned (constrained) R` lines map candidate→reg, `R`
+  14..21 = `$s0..$s7`; lower candidate number = earlier-created = wins the lower
+  saved reg (see line-328 note). CAVEAT (func_80002250 2026-06-04): a
+  param-vs-loop-counter `$s0`/`$a3` contest where the counter is the lower
+  candidate is NOT flippable by decl-order / count-cache / `register` alias — the
+  param's saved-reg candidate is created after the loop-carried counter's
+  regardless, so the dump diagnoses but doesn't always yield a C lever.
 - Format: a UCODE expression-list table (`index|bit kind op l r`; `isvar P =`
   param, `isop umpy/uadd/uilod/ustr =` ops) followed by `N: N assigned
   (unconstrained) R` lines = candidate→register coloring, plus live-range stats
