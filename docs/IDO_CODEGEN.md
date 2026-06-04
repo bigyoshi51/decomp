@@ -12291,6 +12291,11 @@ p += 4;
 ```
 flipped the `$v0`/`$v1` allocation → byte-exact, all 4 siblings with the identical lever. **Found via decomp-permuter** (base 35 → 0; the permuter's `if (1)` wrap is one of its mutations) — minimize by hand afterward. These were variously mislabeled "register-renumber cap" and "branch-likely-delay-slot-preload not reachable from std do-while C"; both wrong. **Try this on any caller-save register-PLACEMENT swap before NM-wrapping**, and apply across the whole template family once one cracks. (Distinct from the assignment-expression operand lever `coord*(t=scale)` which pins OPERAND order; this pins register ALLOCATION via a BB boundary. Distinct from block-scoping a cached local, below, which drops a `$s` save.)
 
+<a id="feedback-ido-force-sltu-via-u32-cast-on-comparison"></a>
+## Force `sltu` (unsigned compare) where the target uses it — cast the compared operands to `(u32)`
+
+A near-miss whose only diffs are `slt`↔`sltu` (or `slti`↔`sltiu`) at the SAME operands is a comparison-SIGNEDNESS mismatch, trivially C-fixable. m2c emits a SIGNED comparison (`slt`) for `for (i = 0; i < self->0x44; i++)` (both `int`), but the target compiled it UNSIGNED (`sltu`) — e.g. because the bound field is `u32` / the index is unsigned in the original. Fix: cast the comparison to unsigned — `(u32)i < *(u32*)((char*)self + 0x44)` (cast BOTH sides, or read the bound through a `u32*`). Inverse (mine `sltu`, target `slt`) → make them signed. Verified 2026-06-04 gl_func_00052AE8: two loop bounds, 78.3→81.7% (+3.4pp). **Scanner:** per size-matched near-miss, `zip(mine, target)` and flag positions where `mine.split()[1:]==target.split()[1:]` and `{mine[0],target[0]}` is `{slt,sltu}` or `{slti,sltiu}`. Cheap, low-risk, byte-exact on the touched `slt`. Distinct from the FF/field-width type veins (this is signedness of a COMPARE, not a load width) — but the same flavor of "m2c picked the wrong int signedness" bug, and they often co-occur in the same struct-walking functions.
+
 <a id="feedback-ido-inline-m2c-redundant-temp-copies-drops-saved-regs"></a>
 ## Inline m2c's redundant `temp_tN = sp_var` copies — they get promoted to EXTRA saved registers
 
