@@ -12274,6 +12274,23 @@ Result: frame 40 → 32, spill 28 → 24, 4 of 6 diffs closed. Residual 2 = a sc
 **Related:**
 - [Inline a cached local-in-$v0 to force fresh-temp reload (GPR-renumber lever)](#feedback-ido-fp-commutative-operand-order-assignment-lever) — sibling lever for the register-cascade subclass.
 
+<a id="feedback-ido-if1-block-boundary-flips-caller-save-alloc"></a>
+## `if (1) { ... }` around an inner block flips caller-save (`$v0`/`$v1`) register allocation — the cheap basic-block-boundary lever
+
+When a loop/region near-misses on a pure `$v0`↔`$v1` (or other caller-save) register-PLACEMENT swap — same opcodes, same logic, only WHICH caller-save reg holds each value differs — wrapping the inner sub-block in `if (1) { ... }` adds a basic-block boundary that re-runs IDO's local register allocation over that block, often flipping the assignment to the target's. It's legitimate (real C that compiles to the target bytes; the `if (1)` is a no-op control-flow that IDO keeps as a BB split, not match-faking).
+
+**Verified 2026-06-04, timproc_uso_b5 template family A97C/A9EC/D06C/D0DC** (4 functions): a per-element fn-table dispatch loop `do { v1 = *(int**)(p+OFF); v0 = *(int**)((char*)v1+0x28); (*(fn**)(v0+OFF2))(*(short*)(v0+OFF3) + (int)v1); i++; p += 4; } while (...)` stuck at ~98.8% because the cursor-read landed in `$v0` where the target used `$v1`. Wrapping the middle three statements:
+```c
+v1 = *(int**)(p + 0x40);
+if (1) {
+    v0 = *(int**)((char*)v1 + 0x28);
+    (*(int(**)())((char*)v0 + 0x4C))(*(short*)((char*)v0 + 0x48) + (int)v1);
+    i++;
+}
+p += 4;
+```
+flipped the `$v0`/`$v1` allocation → byte-exact, all 4 siblings with the identical lever. **Found via decomp-permuter** (base 35 → 0; the permuter's `if (1)` wrap is one of its mutations) — minimize by hand afterward. These were variously mislabeled "register-renumber cap" and "branch-likely-delay-slot-preload not reachable from std do-while C"; both wrong. **Try this on any caller-save register-PLACEMENT swap before NM-wrapping**, and apply across the whole template family once one cracks. (Distinct from the assignment-expression operand lever `coord*(t=scale)` which pins OPERAND order; this pins register ALLOCATION via a BB boundary. Distinct from block-scoping a cached local, below, which drops a `$s` save.)
+
 <a id="feedback-ido-block-scope-cached-local-for-frame-shrink"></a>
 ## Block-scope a re-assigned cached local to drop its `$s` save and shrink the frame
 
