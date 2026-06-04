@@ -7068,3 +7068,17 @@ Re-ran the inverted fp filter (count COP1 word-encodings `0x11<<26` + `0xC4/0xE4
 - **caller-set-float** (`gl_func_0005D760` fp95, a quaternion→3×4 matrix build): `BLOCKED:M2C_ERROR` with `$f2`/`$f4` read unset at entry (caller passes the quaternion in FP regs) + a float const in `$at`. Permanent cap class (cf. `feedback_caller_set_int_reg_cap_1080_game_libs` extended to float).
 
 So as of 2026-06-04 the single-tick auto-wrap vein is fully spent across BOTH game_libs (this cohort) AND non-game_libs (the bare non-game_libs ≥0x40 set is now only cross-fn-branch tail-merge caps — `timproc_uso_b5_func_00001D1C/1D60/1EB8/B850/C044` all `bnez`/`beq`-past-end into the successor symbol — boundary-broken m2c-forward-branch fails, the reroll-None `func_000077D0` glyph blitter [re-confirmed None this roll], and unmeasurable gui_uso/game_uso). Remaining %-movement is genuinely multi-tick: (a) template the 34458 family, (b) regalloc-dump-driven RE on the 88–99.95% near-misses (`-Wo,-zdbug:6`→uoptlist), (c) splat boundary fixes to un-break the cross-fn-branch leaves.
+
+## Systematic-vein exhaustion state (2026-06-04, end of a long auto-sweep session)
+
+A session of systematic-lever sweeps mined ~30+ functions across these veins, ALL now exhausted of clean candidates (re-scans return empty or false-positives — don't re-run them expecting fresh wins):
+- **cast-drop family** (K&R-callee direct-jal, result-cast, undefined_syms alias, K&R-ify-definition) — the biggest mover; fully swept across game_libs/proc-USOs/bootup_uso/game_uso.
+- **permuter re-audit of mislabeled caps** — cracked the small-leaf scheduling/regalloc ones (00060F90, timproc_uso_b5 A97C/A9EC/D06C/D0DC via the `if(1){}` BB-boundary lever); remaining caps carry evidenced iteration counts (trust those).
+- **cvt.d.s typed-float-alias** (K&R float-arg double-promote) — swept; remaining flags are genuine doubles or float-LITERAL-arg rodata-cascade regressors.
+- **FF float-field typing** (`*(f32*)` for fields read via the int `FW` macro) — swept; remaining cvt.s.w are GENUINE int→float (mtc1 of a computed value), not field reads — verified false-positives (game_uso BB8C/F360, gl_func_00062F8C/00002840, bootup func_0000B520).
+- **field-width typing** (`lh`/`lhu`/`lb`/`lbu`/`sh`/`sb` for narrow fields) — swept same-offset; remaining flags are STRUCT-LAYOUT shifts (offset 0x20→0x22) = decode errors, not width.
+- **unsigned-comparison** (`(u32)` cast for `slt`→`sltu`) — swept clean immediate-compares; remaining are regalloc-entangled (regress).
+- **m2c-redundant-temp-copy inline** (drop `temp_tN = sp_var` to free saved regs) — a COIN-FLIP (00060F90/478FC/697C4/432BC/47F9C landed; 40974/40E90 regressed); the clean-pattern candidates are done.
+- **absent veins** (scanned, zero hits): shift-signedness `sra↔srl`, mul/div-signedness `mult↔multu`/`div↔divu`, constant-materialization `ori↔addiu`, force-branch-likely `beqz→beqzl`.
+
+**What remains is genuinely multi-tick per-function RE**, not sweeps: regalloc-divergence grinding (permuter / `-Wo,-zdbug:6` uoptlist on the 88-99.9% near-misses), struct-layout decode fixes (the offset-shifted field-width functions), splat boundary fixes for cross-fn-branch leaves, operand-swap caps (permuter-floor, e.g. dot-product `add.s`), and writing missing structure in the large low-% functions (game_libs_post0b/post/bootup_uso). The cheap systematic %-movement is spent; pick a specific large function and RE it.
