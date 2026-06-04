@@ -3491,6 +3491,13 @@ When an `int`-returning call's result is consumed as a float across a *later* ca
 
 ---
 
+<a id="feedback-ido-reroll-m2c-loop-to-let-ido-unroll"></a>
+## m2c's already-unrolled copy/transform loops get DOUBLE-unrolled by IDO -O2 (built ≫ expected, fuzzy=None) — REROLL them to one element per iteration and let IDO do the unrolling
+
+When the target is an IDO `-O2` build of a tight copy/transform loop, IDO has **already unrolled the source loop** (typically by 4 — strides of `0x10`/`0x20`/`0x28`, four `lw`/`sw` or `swc1` per iteration). m2c faithfully reproduces that *unrolled* shape in its C output (a `do { ...4 copies...; i += 4; } while (i != N);`). But when you compile that already-unrolled C at `-O2`, **IDO unrolls it AGAIN**, so the built function is far larger than expected (e.g. func_0000A540 memmove 161 vs 76; func_000077D0 tilemap copy 197 vs 158; game_libs_func_0005FC64 38 vs 24) and objdiff reports `fuzzy=None` (size mismatch). **Fix: REROLL m2c's body to ONE element per iteration** — `do { *out++ = *in++; i++; } while (i != N);` — and let IDO's own unroller produce the target's by-4 shape. Works for contiguous copies AND strided gathers (the 4 reads at `0x0/0xA/0x14/0x1E` of a `0x28` record reroll to `*(u16*)(rec + j*0xA)` with `rec += 0x28` outside the `j` loop). Recognize the trap by: m2c shows `do{}while` with `i += 4` and ≥4 near-identical memory ops, AND your build's instruction count is ~1.3–2× the expected. (Counterpart to the *other* unroll problem where the target stays rolled — `feedback`-noted on 0005FC64 — but the mechanism here is the inverse: the target IS unrolled, m2c over-represents it, IDO compounds it.) Caveat: watch for variable-reuse in m2c's unrolled body (e.g. the source pointer doubling as a control-object arg) — untangle those into separate locals before rerolling.
+
+---
+
 <a id="feedback-ido-init-narrow-local-to-avoid-shared-exit-spill"></a>
 ## A local read on only ONE path but used at a shared exit gets stack-spilled (esp. `unsigned short` → `sh`/`lhu` round-trip + a whole frame); declare it `int x = 0` to keep it register-resident
 
