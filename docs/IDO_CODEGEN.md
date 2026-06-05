@@ -12291,6 +12291,15 @@ p += 4;
 ```
 flipped the `$v0`/`$v1` allocation → byte-exact, all 4 siblings with the identical lever. **Found via decomp-permuter** (base 35 → 0; the permuter's `if (1)` wrap is one of its mutations) — minimize by hand afterward. These were variously mislabeled "register-renumber cap" and "branch-likely-delay-slot-preload not reachable from std do-while C"; both wrong. **Try this on any caller-save register-PLACEMENT swap before NM-wrapping**, and apply across the whole template family once one cracks. (Distinct from the assignment-expression operand lever `coord*(t=scale)` which pins OPERAND order; this pins register ALLOCATION via a BB boundary. Distinct from block-scoping a cached local, below, which drops a `$s` save.)
 
+**Variant — an EMPTY `if (1) {}` placed right AFTER a call, in a non-loop function (verified 2026-06-04, mgrproc_uso_func_00001324, 99.63→100%):** a lazy-init guard `import_000B72F4(...); v = *(int*)(arg0+0x4F8); if (v==0)...` near-missed on a single diff — IDO put the `arg0+0x4F8` state load in `$v1` where the target used `$v0`. The fix was an empty block, not a wrapper:
+```c
+import_000B72F4(*(int*)(arg0 + 0x6AC), 0, 1);
+if (1) {}            /* BB boundary: preserves the call's dead $v0 return,
+                        forcing the next load into $v0 to match target */
+v = *(int*)(arg0 + 0x4F8);
+```
+The boundary between the call and the next statement is what re-colors the load; the call's return value (dead in C) stays parked in `$v0`, and the subsequent load is forced off `$v0`→ matching the target's `$v0` placement for the state local. So the lever works as a bare statement separator, not only as a block wrapper, and applies to plain straight-line functions — not just loop/template families. This was the exact "C-level v0 allocation lever" a prior agent's NM-cap note had been waiting for. **When a single-diff near-miss is a `$v0`/`$v1` swap on the first read after a call, try an empty `if (1) {}` immediately after that call.**
+
 <a id="feedback-ido-force-sltu-via-u32-cast-on-comparison"></a>
 ## Force `sltu` (unsigned compare) where the target uses it — cast the compared operands to `(u32)`
 
