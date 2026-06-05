@@ -12300,6 +12300,8 @@ v = *(int*)(arg0 + 0x4F8);
 ```
 The boundary between the call and the next statement is what re-colors the load; the call's return value (dead in C) stays parked in `$v0`, and the subsequent load is forced off `$v0`→ matching the target's `$v0` placement for the state local. So the lever works as a bare statement separator, not only as a block wrapper, and applies to plain straight-line functions — not just loop/template families. This was the exact "C-level v0 allocation lever" a prior agent's NM-cap note had been waiting for. **When a single-diff near-miss is a `$v0`/`$v1` swap on the first read after a call, try an empty `if (1) {}` immediately after that call.**
 
+**Scope caveat (verified 2026-06-04, negative): the lever is a NO-OP when the target statements are ALREADY in their own basic block** — e.g. inside an existing `if`/loop body, or after an existing branch. The lever's whole mechanism is *introducing* a BB boundary the scheduler/allocator otherwise wouldn't place; if a branch already supplies that boundary, `if (1) {}` adds nothing and the codegen is byte-identical. (Tried on kernel `func_80008030`'s `if ((SP_STATUS & 3) == 0) { if(1){} v |= 1; }` — identical to without it, because the `if` already split the BB. The residual `$v1`/`$t6` register-pick + `0|1`→`li` const-fold there is a real -O2 cap, permuter-only.) Reach for it only at straight-line / fall-through boundaries that have no existing branch.
+
 <a id="feedback-ido-force-sltu-via-u32-cast-on-comparison"></a>
 ## Force `sltu` (unsigned compare) where the target uses it — cast the compared operands to `(u32)`
 
