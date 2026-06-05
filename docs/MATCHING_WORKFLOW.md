@@ -3641,6 +3641,8 @@ In functions that chain error-checking calls (`ret = thing(); if (ret) return re
 
 **The BB-scramble caveat (nested-loop *reconstructions* regress to None) does NOT apply to this fill.** Filling empty error-returns in an *existing* m2c body only adds `return X;` statements inside already-present `if` blocks — it does NOT reorder basic blocks the way a from-scratch nested-loop reconstruction does. So nested do-while loops are NOT a reason to skip an empty-error-block candidate: gl_func_00072230 has two nested do-while loops and still recovered `None → 42.6%`. Apply the fill to any fuzzy=None written body with empty error-checks regardless of loop nesting; gate-and-revert as usual but expect it to align.
 
+**Also check for a DROPPED FINAL fall-through return.** m2c sometimes ends the function with no `return` statement at all (the body falls off the closing `}`), losing the tail return. Read the asm epilogue: `lw $v0, 0xNN($sp)` just before `jr $ra` means the function returns whatever local lives at `0xNN` — add that `return <var>;` at the end. gl_func_00072E3C 2026-06-05: filled one compound error-check (`return sp18;`) AND added the missing final `return sp24;` (epilogue `lw $v0,0x24($sp)`), `None → 23.1%`. (This one had heavier goto/loop scramble so the recovered % is lower than the ~35-46% siblings — removing the no-op gotos there nudged it only +0.5pp.)
+
 ---
 
 <a id="feedback-fake-extern-nm-body-unmeasured"></a>
