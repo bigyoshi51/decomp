@@ -291,6 +291,18 @@ If literal lui/addiu byte values differ, the C source has a wrong constant offse
 
 ---
 
+## objdiff fuzzy can read MUCH higher than a positional byte-diff on dispatch-shifted reconstructions — trust fuzzy (the metric), but know it credits sequence alignment not byte-exactness
+
+_objdiff's `fuzzy_match_percent` is a reloc-aware **sequence** alignment (Levenshtein-style over the instruction stream), so a single insertion/deletion early in a function does NOT cascade into a low score the way a naive positional `tgt[i] vs built[i]` compare does. On reloc-blind computed-jump-table / dispatch reconstructions this gap is large and EXPECTED: when the jr-table dispatch or a cb chain differs in length, every later instruction shifts by a few words, so a positional diff reports ~25-30% while objdiff fuzzy (which re-aligns) reports ~85%+._
+
+**Verified 2026-06-05 (`gl_func_00031334`, double computed-jump-table state machine):** reconstructing the correct head + both switch dispatches + the `0x83010000`-bank arm bodies took objdiff fuzzy from 20% → **87.5%**, while a positional `.word`-vs-objdump compare of the same `.o` read only 28% (delta −7 insns, 82 "aligned" diffs). The 28% is the artifact; **87.5% is the real number** — decomp.dev reads the objdiff report's `fuzzy_match_percent` directly, so that is what counts toward the tracked %.
+
+**Two practical consequences:**
+- Don't panic when a from-scratch reconstruction's positional diff looks terrible — regenerate the objdiff report and read `fuzzy_match_percent` before judging. The positional script is only trustworthy when built and target are the **same length AND same dispatch shape** (e.g. straight-line leaves, already-90%+ wraps).
+- Conversely, a high objdiff fuzzy on a *guessed* jr-table reconstruction reflects sequence alignment, NOT byte-exactness — the function is correctly NON_MATCHING (reloc-blind jr-table + jal-0 cbs can't be promoted) even at 87% fuzzy. Use the positional/byte diff (not fuzzy) when you actually need to know byte-closeness for a promote/episode decision.
+
+---
+
 <a id="feedback-data-ref-addend-idiom-vs-separate-extern"></a>
 ## USO data reference: `&D_00000000 + 0xNNNN` vs a separate `gl_ref_0000NNNN` extern — objdiff scores them THE SAME (reloc-aware); choose by LINK-ability, not score
 
