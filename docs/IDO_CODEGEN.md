@@ -1391,6 +1391,8 @@ IDO emits: `lw t7, 0x24(t6); blezl t7, +3` (branch-on-LE-zero-likely). Matches t
 
 _When the target asm has `bnel $a, $b, .exit; or v0, zero, zero` (branch-likely with "set 0" in delay-likely) and the other path sets v0=1 via `b + addiu v0, zero, 1`, write the C with the `==` case inside the `if`, not the `!=` case. The natural "bnel = branch-not-equal" mapping produces `beql` instead._
 
+**VALUE-SELECT corollary (verified 2026-06-05, h2hproc_uso_func_00001360, +6.95pp).** A select written as `x = DEFAULT; if (cond) x = OTHER;` does NOT emit a branch-likely — IDO emits `li x,DEFAULT; beqz cond,skip; ...; <conditional store>`. When the target shows the ternary `bnel cond,zero,merge / <store DEFAULT in delay-likely> / b merge / <store OTHER>` form, rewrite the select as a real C ternary `x = (cond) ? A : B`. Then the ARM ORDER controls bnel-vs-beql polarity exactly like the rule above: to match `bnel cond,zero` (branch-taken when `cond != 0`), put the `cond == 0` test first — `x = (cond == 0) ? OTHER : DEFAULT` gave `bnel`, whereas `(cond != 0) ? DEFAULT : OTHER` gave `beql`. Two such gate-selects on 00001360 went 79.98→86.93% fuzzy (opcode diffs 40→26) once converted to ternaries with the right arm order. So: any `default-then-conditional-override` select whose target uses a branch-likely is a ternary-rewrite candidate; A/B the arm order for polarity.
+
 **Rule:** Target pattern:
 ```
 bnel $v0, $t6, .exit
