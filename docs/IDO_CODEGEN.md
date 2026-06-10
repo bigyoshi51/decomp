@@ -13620,3 +13620,16 @@ block, then verify the SECTION is byte-identical, not just the fn;
 class (build .o has relocs, expected .o had baked literals) -- refresh
 the unit's expected/ baseline (justified by the post-ld section gate,
 which is strictly stronger) and re-land.
+
+## FCSR rounding-dance fingerprint: cfc1/ctc1 + cvt.w.s != plain (s32) cast (1304C)
+
+When target asm converts float->int via the FCSR dance (cfc1 save,
+ctc1 set-rounding-mode, cvt.w.s, mfc1, ctc1 restore) it is NOT a plain
+C `(s32)f` cast -- IDO -mips2 emits trunc.w.s for that. An m2c graft
+of such code emits library-call jals instead (the cast got softened).
+The construct producing the inline dance is unidentified (candidates:
+specific float-to-int idioms under different rounding semantics,
+roundf-style +0.5 forms, or -mips1-era patterns); finding it unlocks
+the conversion sites in FP-heavy fns (3 sites in bootup 1304C alone).
+Recognition: cfc1/ctc1 pairs around cvt.w.s = flag the site, don't
+assume cast.
