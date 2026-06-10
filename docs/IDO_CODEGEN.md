@@ -13472,3 +13472,14 @@ follows first pseudo). In multi-arm shapes where each arm re-derives
 the same chain after DIFFERENT preceding calls, inlining is neutral --
 the v0-reuse-after-void-call coloring dominates per-arm. Those pairs
 are uoptlist class.
+
+## `andi tN; jr ra; move v0,tN` tail = not C-reachable standalone (73310, VI-reader family)
+
+A masked-read leaf ending `andi t7,v0,1; jr ra; move v0,t7` (the AND
+landing in a TEMP with the copy filling the delay) cannot be produced
+from standalone C: direct expressions and -g3 emit `andi v0,v0,1`
+(copy-propagated, nop delay); named/volatile locals grow frames
+(6 shapes x O1/O2/g/g3 swept at 73310). The pair implies the AND's
+consumer in the ORIGINAL context was not the return -- another
+interior-entry/context fingerprint, same family as the 69F54 VI
+reader. Skip the shape sweep when you see this tail.
