@@ -12998,3 +12998,15 @@ declaring `q` first (target map q=s0, p1=s1, p2=s2, src=s3). The leftover
 "locals block sits N bytes low / hole between saves and locals" residual
 is the gl_func_00008A40 frame-packing cap family (bottom pads allocate in
 the hole but regrow the frame).
+
+### -Olimit fallback is PER-FUNCTION within a translation unit (pfschecker.c evidence, 2026-06-09)
+
+1080's pfschecker.c compiled as one TU yet its functions landed in DIFFERENT
+pipeline modes: osPfsChecker (433 insns, flat control flow) got full 5.3 -O1
+optimization while corrupted_init (109 insns but div/mod + triple-nested
+loops) got the -Olimit FALLBACK (-O0-shape + scheduler). uopt's Olimit
+gates on its internal complexity measure per FUNCTION, not output size or
+the whole file — a smaller function can fall back while a bigger flat one
+optimizes. Practical: when carving a multi-function original TU, test EACH
+function in both modes (-O1 vs -O1 -Olimit 1); per-function carve units
+make the mixed flags trivial to wire.
