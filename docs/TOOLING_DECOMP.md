@@ -834,7 +834,10 @@ f32-heavy = sweet spot (+44..+75pp), f64-heavy = skip or temper.
 THIRD low-yield class (454C4): BITWISE-FP -- float bits moved through
 int regs (high 0x44xxxxxx COP1-move density; m2c types FP-reg temps as
 s32, e.g. 's32 temp_f4'). m2c reconstructs bit-moves as int math; IDO
-emits different sequences (+7pp only). Also: m2c recovering a RECURSIVE self-call
+emits different sequences (+7pp only). THRESHOLD CALIBRATION (5A2CC):
+~11% COP1-move density still grafted fine (+47.9pp); ~15% (454C4)
+killed it -- the line sits between, so measure density and temper
+expectations in the 12-15% band. Also: m2c recovering a RECURSIVE self-call
 (jal to the fn's own address) needs the self-extern dropped -- the
 def is the decl.
 
