@@ -862,7 +862,12 @@ LOST to a 49.2% hand body (scored 48.1; m2c mixed ./->unk chains and
 approximate tables cost more than the tail coverage gained). Rule:
 below ~40% graft; above ~45% refine the hand body (LCS the gaps,
 decode just the missing blocks). Always score-and-compare BEFORE
-committing a graft over a hand body (monotonic rule).
+committing a graft over a hand body (monotonic rule). REFINED (4948):
+the crossover is NOT purely %-based -- a 14.79% body beat a fresh
+graft (14.60) because it already captured the m2c-equivalent skeleton.
+The tell: graft score ~= existing score means the existing body IS
+m2c-equivalent and the divergence is structural (register/shape/tail)
+-- regeneration cannot help; only hand work moves it.
 
 Addendum (B3C): (18) m2c "Label .LX refers to a delay slot" -- IDO
 branch-likely targets another branch's delay insn. Fix iteratively:
