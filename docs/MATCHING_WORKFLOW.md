@@ -8224,3 +8224,17 @@ Method notes: drive the count MONOTONICALLY down per batch
 `build[x+4]==base[x]` shift test before assuming content errors; episodes
 of re-matched former false positives were updated in place (final_source +
 metadata note), none deleted since all became genuinely exact.
+
+## TU merges/splits REQUIRE objdiff.json reconciliation (CI failure 2026-06-10)
+
+Any commit that merges or splits compilation units (the kernel
+relayout merged 051/052/055 into 050 and split 17 units into 33
+pieces) must update objdiff.json in the SAME change: (1) remove dead
+unit entries -- CI's objdiff-cli report hard-fails on the missing
+expected/<dead>.c.o; (2) ADD the new units (Makefile-derived c_flags)
+-- otherwise their code is silently UNTRACKED in the report and the
+displayed % under-counts. Refresh expected/ for new units from the
+default build (legitimate now that the ROM is cmp-identical). Local
+check before pushing: objdiff-cli report generate -p . (the exact CI
+step). Five consecutive CI runs failed before this was caught --
+nothing in the local gates covers objdiff.json consistency.
