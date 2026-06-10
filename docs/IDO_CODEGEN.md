@@ -13556,3 +13556,17 @@ sw-count, all operands correct; A95C's early `move v0,a1` return copy
 matches naturally; early-pseudo neutral). Any record-append shape
 (load count; store count+1; store payload at base+count*4) hits this
 1-decision floor at -O2 -- recognize and stop at 2 diffs.
+
+## PLAIN-branch steering: per-test reloads suppress branch-likely (116C pass 7)
+
+The inverse of the goto-for-beql recipe: when the TARGET has plain
+branches with EMPTY (nop) delays in a test chain, the original re-
+derives the tested value from memory before EACH compare (v1 =
+s0->0x64 reloaded per test; the value held in a plain int for the
+final check). CACHING the pointer/value in C lets IDO fill delays and
+emit branch-likely (bgezl/beqzl) -- the cached web provides fillable
+insns. Recipe: match the target's reload pattern exactly; each
+explicit re-derivation kills the fill candidate and forces beq/bgez +
+nop. Worth +4pp on 116C's clamp arm alone (plus a missing-call-arg
+recovery: an early dead-looking li aN,K is often a later call's
+marshalled argument).
