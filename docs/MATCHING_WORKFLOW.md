@@ -7592,3 +7592,24 @@ the parent (extend size); (4) git rm the false episode; (5) remove the
 unit from objdiff.json (report lists it independently of expected/!);
 (6) refresh expected/ for the parent unit (cp the new build .o, rm the
 stale g3 .o); (7) promote the parent C, rebuild both paths, re-score.
+
+## CIRCULAR FALSE POSITIVES: .s-merge corruption -> self-verified C -> poisoned expected/ (87F4/88A0 retraction)
+
+The worst failure mode found to date (2026-06-10, two landed episodes
+retracted). Chain: (1) a boundary merge wrongly absorbs an adjacent
+leaf into a fn's .s; (2) C is byte-verified against that corrupted .s
+-- "43/43 exact"; (3) expected/ is refreshed FROM OUR OWN BUILD for
+the boundary change, so objdiff scores the wrap against itself -> 100;
+(4) the land script's per-.o byte_verify passes (it checks the same
+circular pair). NOTHING in the standard gate chain touches ROM truth.
+Detection: the Yay0 BLOCK ASSEMBLY failed ("discarded tail is not
+zero" -- the main .o grew past the blob budget); the definitive check
+is decompressing the built block vs the ROM-extracted original
+(assets/<seg>_block_N.bin is GROUND TRUTH for raw-word USOs).
+RULES: (a) any .s boundary change must be re-verified against the
+ORIGINAL module binary, never just the .s; (b) never refresh expected/
+for a unit in the same change that alters that unit's boundaries
+without an independent ROM-side check; (c) after any timproc-class
+land, build the Yay0 asset target -- it is the only gate that catches
+this. (d) Episode-worthy matches in blob-spliced units MUST pass the
+block-assembly + decompressed-diff check before log-exact-episode.
