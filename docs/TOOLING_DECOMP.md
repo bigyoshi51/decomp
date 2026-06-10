@@ -841,3 +841,11 @@ another section). UNLOCK PATH: RE the kernel's game_libs loader
 count) records decoded during the relayout ledger work) to learn the
 hi16 resolution, THEN extract. Until then the dense-table fns keep
 their approximate synthesized tables (graft items 12/16).
+
+Addendum (4118): (17) GRAFT-VS-HAND-BODY crossover -- a full m2c graft
+reliably beats stub/skeletal bodies (<40%: +14..+50pp observed) but
+LOST to a 49.2% hand body (scored 48.1; m2c mixed ./->unk chains and
+approximate tables cost more than the tail coverage gained). Rule:
+below ~40% graft; above ~45% refine the hand body (LCS the gaps,
+decode just the missing blocks). Always score-and-compare BEFORE
+committing a graft over a hand body (monotonic rule).
