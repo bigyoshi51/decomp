@@ -779,3 +779,18 @@ WRONG (emits ori) -- reference an extern symbol and set its address in
 undefined_syms_auto.txt instead. Also: hardcoded thread-entry addresses
 decode like jal thunks (0x896E8 - 0x1466C = USO 0x7507C), identifying
 callee functions for free.
+
+## 1080 contains N64DD (Leo) device-init code: DOM2 descriptor with base 0xA5000000 (2026-06-10)
+
+game_libs_func_0006F038 fills an OSPiHandle-style domain-2 device
+descriptor with base address 0xA5000000 (KSEG1 0x05000000 = the 64DD
+address space) and timing latency=2/pageSize=6/release=2/pulse=6, then
+FALLS THROUGH into gl_func_0006F088 which applies them to the
+PI_BSD_DOM2_* registers -- the osDriveRomInit family. Two implications:
+(1) 1080's game_libs links 64DD support (useful for identifying further
+leo* functions nearby); (2) the fall-through-into-next-symbol two-entry
+init is a recognition pattern: a no-jr-ra store-only "function"
+immediately before a register-writer is usually its defaults
+initializer, and the pair shares one body with two entries (C cap --
+INCLUDE_ASM faithful; merging with an alt-entry label is the long-term
+fix).
