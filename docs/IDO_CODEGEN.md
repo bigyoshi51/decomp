@@ -13590,3 +13590,10 @@ NO tested form (stacked labels over range 0-3, guard+switch,
 A 4-entry jumptable in target asm is NOT producible from these
 compilers' C switches at all -- treat as hand-dispatch/other-compiler
 evidence. (titproc 116C's head: exhaustively negative, 9 forms.)
+
+Addendum to the &arg entry-home trick (2026-06-10, 2BB58): the
+pointer-var form's success is NOT universal across arg slots -- it
+emitted the a0 home at 2DD38 but fails to emit an a1 home in the same
+shape (4 forms swept; store-throughs grow real memory ops). Until a
+counterexample, treat the lever as a0-biased and expect a1+ homes to
+need something else.
