@@ -7667,3 +7667,16 @@ emission interacts with post0b's pre-existing drift). Before any
 boundary split, snapshot-verify in THAT unit; for post0b specifically,
 all splits/promotes go through the relayout session. Ready-body queue
 is now 13 (5AFB0's list-insert added).
+
+Emission-trace progress (2026-06-10, b3 .o data): CONFIRMED -- the
+GLOBAL_ASM pad block starts 8-ALIGNED in the .o (217C ends .o 0x20FC,
+pad block at 0x2100, next C fn at 0x2104; plain C fns pack at 4). The
++4 in the assembled block = the align gap before the pad word. Open
+question for the fix: where the 8-alignment originates -- asm-processor
+emits a placeholder C function per asm block and post-replaces its
+bytes; either the placeholder's generated form makes IDO 8-align it,
+or the splice rounds. Next session step: diff the pre-splice
+placeholder .o vs post-splice (asm-processor --keep-preprocessed or
+equivalent), then either patch the placeholder form or add a noalign
+mode (tools/ patch script per the no-upstream-PR rule). Fix unlocks
+all three damaged blocks.
