@@ -7392,3 +7392,11 @@ documented branch-into-adjacent-leaf caps; 1 fragment); inside game_libs
 the 4 remaining (69F54, 74894, 7488C, 666FC) are blocked on the unit
 relayout. Tiny-leaf template scanning is DONE as a vein until new
 segments are split.
+
+Addendum (2026-06-10, 2DF64 orphan): the catch-all game_libs.c orphan
+INCLUDEs are themselves part of the early-region layout drift --
+game_libs.c.o links at [0..0x8944) yet holds INCLUDEs for addresses far
+outside that range (e.g. 0x2DF64, whose bytes belong inside
+game_libs_post.c.o's span). The relayout session must ALSO re-home these
+cross-object orphans to the unit that actually covers their address;
+until then their bytes cannot be landing where their names claim.
