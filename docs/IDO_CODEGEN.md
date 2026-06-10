@@ -13010,3 +13010,18 @@ the whole file — a smaller function can fall back while a bigger flat one
 optimizes. Practical: when carving a multi-function original TU, test EACH
 function in both modes (-O1 vs -O1 -Olimit 1); per-function carve units
 make the mixed flags trivial to wire.
+
+### -O1 `register` on a call-crossing local perturbs call-site arg handling (2026-06-09)
+
+At IDO -O1 (5.3 AND 7.1, identical), a local that must survive a later
+call gets $s0 ONLY via `register` — plain `int` spills it to a stack slot
+(+1 insn, no s-reg save). BUT the register keyword has a side effect on
+UNRELATED earlier call sites: cc reloads homed args (lw a1, dup lw a0)
+before the first call instead of using the still-live arg registers, and
+the `sw s0` prologue save stops migrating into the first jal's delay slot.
+Net: right frame/saves/round-trip shape, +1-2 insns of arg-reload noise.
+Seen on gl_func_00073034 (call1 / v=call2 / call3() / return v): 11/16
+residual word diffs, all from this perturbation — permuter territory, not
+structure. Also a reminder: re-derive call COUNTS from raw words before
+trusting an old wrap's decode (the prior note said 2 jals + a prologue
+donation; the truth was 3 jals, clean unit).
