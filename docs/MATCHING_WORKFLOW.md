@@ -7285,18 +7285,18 @@ game_libs_func_00073024 into the carve replaced the gl_func_00072E3C_pad.s
 sidecar exactly. Watch game_libs_TEXT_END in the map after every pad/
 TRUNCATE change — it catches 4-byte drifts immediately.
 
-## Mid-file carve PARITY PRE-CHECK: carve span must be 0 mod 8 (2026-06-10)
+## RETRACTED: the mid-file-carve mod-8 'parity rule' was a false diagnosis (2026-06-10)
 
-Before carving a function out of the middle of a game_libs unit, check
-`(carve_span % 8)`. INCLUDE_ASM blocks align within their unit, so a carve
-span that is 4 mod 8 flips the alignment parity of EVERY downstream block
-in the tail unit: some block gains a +4 pad, everything after it shifts,
-and the tail unit comes up 4 bytes short. Caught live on the
-gl_func_00073334 (0x204-span) carve attempt: gl_func_000743C4's block
-shifted +4 and game_libs_TEXT_END dropped to 0x75284. Head/end-of-unit
-carves are immune (nothing downstream IN the same unit). Fixes when parity
-is odd: extend the carve over neighbors until the span is 0 mod 8 (each
-absorbed function must itself match, since the carve compiles everything),
-or defer with the matched C in an NM wrap (done for 73334 — its wrap holds
-the full 129/129-verified body + wiring recipe). ALWAYS check
-game_libs_TEXT_END in the map after any carve/TRUNCATE change.
+The 2026-06-10 entry here claimed carve spans must be 0 mod 8 because the
+gl_func_00073334 carve appeared to shift gl_func_000743C4's block +4.
+WRONG: a pre-split rebuild showed those 743C4-region diffs (and the
+5-word tail-end drift) are PRE-EXISTING on main, unrelated to the carve.
+The carve landed fine (contramwrite.c pair, with a genuine 12-byte
+all-zero SUFFIX absorbing the inter-function pad). THE REAL LESSON — the
+standing one from feedback_standalone_compile_false_cap_verify_in_tree,
+now extended: before diagnosing a layout break from your change, REBUILD
+THE PRE-CHANGE STATE and diff the same region; game_libs has pre-existing
+NM-region drift (743C4's declared 0x100 vs actual 0x108 among others)
+that pattern-matches to 'my carve broke it'. game_libs_TEXT_END remains
+the reliable per-change gate (it DID move in the first broken attempt —
+that attempt had a real but different wiring error).
