@@ -13382,3 +13382,11 @@ the ordering is not C-controllable. Candidates: every cap documented as
 "frame N vs N+8" or "8-byte spill-slot delta" -- e.g. E6E8/E79C (same
 family), the 74C04 frame+8 residual, 7507C's reserved slot. Verify
 in-tree, not just standalone.
+
+Addendum to remove-local-recompute (2026-06-10, 74C04): the lever also
+fixes "+8 frame" residuals at 5.3 -O1 -- a named once-used local (the
+`h` handle copy) costs a slot even when its value CSEs; inlining the
+expression twice keeps ONE load (CSE) and drops the slot, hitting the
+exact target frame. Inverse pairing with the volatile-pad lever: pad
+ADDS a phantom slot, remove-local DROPS a named one -- check which
+direction the frame delta points before choosing.
