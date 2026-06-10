@@ -13257,3 +13257,12 @@ the TAIL FRAGMENT of a larger original that consumed earlier temps --
 diagnostic without any branch analysis. Use it to triage tiny
 high-percent near-miss leaves: mid-sequence temp = boundary problem,
 t6 = genuine standalone (grind shapes instead).
+
+Addendum to the pseudo-order lever family (2026-06-10, timproc 1130
+sweep): the family's DOMAIN is v0/v1 and temp-pool selection only.
+When the target colors a non-arg value into an ARG register (e.g. a
+stride constant in $a0 freed after a jal), none of the three levers
+(BB-split, web-inversion, early-pseudo) move it -- arg-register
+targeting is an allocator decision below the pseudo-creation-order
+surface. Such residuals go to the uoptlist regalloc-dump queue, not
+another shape sweep.
