@@ -13160,3 +13160,15 @@ explicit shifts when the target's decomposition DIFFERS from IDO's
 natural one (the CSE-bust case, where a multi-use multiply must be
 broken). Both directions are now documented; check which case you are
 in by comparing the target's sequence against what plain C emits.
+
+## Inlined full-chain read colors a FRESH temp; named-variable read reuses its web (timproc 1908/1870)
+
+When a target's final reload pair uses a fresh $t temp (lw t6,...;
+lwc1 f0,...(t6)) while your C emits the same insns on the named
+variable's register (a0), replace `sub = self[N]; val = *(...sub...)`
+with the fully-inlined chain `val = *(...(T*)self[N]...)` -- the
+expression result has no named web, so it draws from the temp pool.
+This is the working inverse of the DEC-cap case (where the post-call
+web coalesced with an arg-copy register and could not be split): here
+the variable web simply needs to NOT be referenced. Used to close the
+1908/1870 twins (18 diffs -> 0 along with the arg0=sub decode fix).
