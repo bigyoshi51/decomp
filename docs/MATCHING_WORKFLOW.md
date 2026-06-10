@@ -7430,3 +7430,22 @@ extern emits its own lui. Use ONE array-form extern instead
 symbol valued at the block base: constant indexing folds into %lo and
 the single %hi is shared. Rule of thumb: one lui in the target = one
 SYMBOL in the C, regardless of how many constants it serves.
+
+## Carve-unit section-tail padding: pad sidecar, NOT SUFFIX_BYTES (75264)
+
+When a carve unit must carry trailing zeros to preserve the segment's
+historic SIZEOF (e.g. the old unit's TRUNCATE zero-padded past the last
+fn), use a pad-sidecar GLOBAL_ASM (.word 0x00000000 x N, the
+gl_func_00072550_pad.s pattern), NOT SUFFIX_BYTES:
+- TRUNCATE_TEXT only SHRINKS (never grows) -- it cannot add the zeros.
+- SUFFIX_BYTES grows the named function's st_size in whichever path it
+  runs on; with the usual build/src-only wiring, expected captures the
+  grown symbol while build/non_matching keeps the natural size and
+  objdiff scores 13/18-style fuzzy (symbol-size mismatch), blocking the
+  land gate even though ROM bytes are exact.
+- The pad sidecar emits identically in BOTH paths: symbols equal,
+  report hits 100, section size preserved.
+Also: when re-truncating the PRECEDING unit after carving its tail fn
+out, recompute its TRUNCATE from unit-start to the carve address (do
+not subtract sizes from the old value -- hidden trailing pads make that
+arithmetic wrong; here 0x3D0 became 0x388, not 0x39C).

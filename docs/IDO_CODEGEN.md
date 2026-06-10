@@ -13078,3 +13078,19 @@ reserve it. gl_func_0007507C's target somehow keeps the value in s0
 with NO slot (s0 live range doesn't even cross a call) -- unreproduced;
 candidates: a different uopt path, or settle it with the uoptlist
 regalloc dump (-Wo,-zdbug:6, see project_1080_regalloc_dump_unlocked).
+
+## Unused local allocates an empty frame at -O1 (-O2 drops it); dead-arg overwrite lands in $a1 (75264)
+
+Two levers that dissolved the gl_func_0007526C "empty 8-byte frame on a
+no-local leaf + temps start at t7" cap (2026-06-10):
+- An UNUSED `int unused;` local makes IDO -O1 allocate the stack slot
+  (addiu sp,-8 ... addiu sp,+8 bracket) while emitting NO other code.
+  -O2 drops the local entirely (the old "IDO won't allocate a frame from
+  standard C unless something touches the stack" note is -O2-only).
+- Assigning a loaded value to a DEAD argument (`flag = *(vu32*)ADDR;`
+  where flag is the unused second param) lands the load result in $a1
+  -- not a $t temp -- and the temp counter then starts at t7.
+Recognition: "temps start at tN+1 / something consumed tN" + a value
+arriving in an arg register = suspect (a) a dead-arg overwrite and (b) a
+boundary mis-split where the fn's true first insn sits in a predecessor
+orphan (here 75260's lui/lw was the fn's own first statement).
