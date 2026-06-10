@@ -7459,3 +7459,14 @@ fuzzy drops (66.67 = 12/18 etc.) on long-matched functions. 63/72
 truncated units lack the NM var; harmless for INCLUDE-path units, fix
 per-unit when scripts/list-unstarted.py flags a suspicious near-100
 "BARE" entry that the unit's comments claim is matched.
+
+Addendum (2026-06-10, 3ECDC pad): pad-sidecar .s files consumed via
+#pragma GLOBAL_ASM must contain NO blank lines and use the exact
+working format (single /* comment */ line, then `glabel _pad_<name>,
+local`, then bare .word lines -- mimic gl_func_00072550_pad.s).
+A blank line after the header makes asm-processor fail with
+".text block without an initial glabel"; a `nonmatching X, alignment`
+header fails with a .size-expression error. Also: a leading-nop-only
+"function" (N nops + jr/nop) is usually misattributed inter-fn padding
++ a real empty fn -- split it (INCLUDE restructures are layout-safe,
+verify with the build-vs-build snapshot).
