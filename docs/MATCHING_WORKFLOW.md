@@ -7658,3 +7658,12 @@ between fns; the only false matches were the separately-retracted
 87F4/88A0 .s corruptions). One focused emission-tracing session
 (objdump each boundary's .o bytes, attribute every pad word) fixes all
 three blocks; coordinates are annotated at each unit head.
+
+Addendum to the drift audit (2026-06-10, 5AFB0): INCLUDE-space pad
+splits are UNIT-DEPENDENT -- the 3ECDC recipe (pad sidecar + renamed
+body .s) verified byte-identical in game_libs.c (40EC) but SHIFTS
+post0b by 8129 words from the split point (the GLOBAL_ASM pad block
+emission interacts with post0b's pre-existing drift). Before any
+boundary split, snapshot-verify in THAT unit; for post0b specifically,
+all splits/promotes go through the relayout session. Ready-body queue
+is now 13 (5AFB0's list-insert added).
