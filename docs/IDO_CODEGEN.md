@@ -13407,3 +13407,14 @@ lever:
 Queue outcome: 5 candidates, 3 volatile-pad cracks, 1 inverse-lever
 crack, 1 uoptlist. Always verify in-tree fuzzy after applying (52994
 rule).
+
+Addendum to temp-number forensics (2026-06-10, 6AD68): a FOURTH
+interpretation of an anomalous temp in a tiny leaf -- HANDWRITTEN
+assembly. __osPopThread's t9 is a hand-written register choice (LEAF in
+os/exceptasm.s), not allocator state; a prior wrap ground 5 C variants
+against it, and its 97.5% fuzzy made it look one-diff-close. Updated
+triage order for anomalous-temp tiny leaves: (1) decomp-search the
+shape FIRST (anything near exception/thread/queue machinery is likely
+libreultra handwritten -- high fuzzy % does NOT exclude handwritten);
+(2) shifted-start temp -> fragment; (3) skipped temp -> deleted-expr
+uoptlist; (4) t6-start -> genuine, grind shapes.
