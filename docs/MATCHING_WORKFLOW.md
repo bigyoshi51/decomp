@@ -7486,3 +7486,19 @@ up 0x18C bytes BEFORE the edited symbol). Rules:
   0 errors" does not catch deleted functions.
 - Recovery recipe: git show HEAD:<file>, locate the region between two
   stable anchors (neighboring INCLUDE/#endif lines), splice verbatim.
+
+## Carve-planning facts from the E410 sextet attempt (2026-06-10)
+
+- IDO 7.1 -O2 packs CONSECUTIVE C functions at 4-BYTE alignment -- no
+  inter-fn padding (empirically verified: fa@0x0 size 0x14, fb@0x14).
+  Dense multi-fn regions (fns starting at %8==4) ARE reproducible as a
+  single carve unit; do not assume 8/16 fn alignment.
+- game_libs_tail.c has the post1b-class PRE-EXISTING INTERNAL DRIFT:
+  its .o symbols land offset from their USO names (-0x10 observed) and
+  the .text carries a trailing align pad (+0xC). Any mid-tail split or
+  carve shifts the whole downstream region (103k words on the naive
+  three-way split). Carves from drifted units belong to the relayout
+  session -- verify a unit's internal alignment (map symbol addr vs USO
+  name) BEFORE attempting a split.
+- The E410 sextet unit itself is PROVEN (38/38 zero diffs as one .c) --
+  preserved in the wraps for the relayout promote.
