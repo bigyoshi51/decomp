@@ -12934,4 +12934,11 @@ Two emit facts from the 1080 osContGetReadData match:
   names** (`D_00000000` + `gl_data_00000000` both link to 0): with a single
   shared extern used for both the loop bound and a buffer base, IDO CSEs
   the `la` into one base register; the target loads each placeholder with
-  its own lui/lbu(/addiu) pair.
+  its own lui/lbu(/addiu) pair. For a THIRD+ placeholder, add a named
+  zero-alias to undefined_syms_auto.txt (`D_<off>_<use> = 0x00000000;` —
+  the existing D_2D710_store/load convention). **Global-store SHAPES at
+  -O1** (verified gl_func_0006BD14): direct member of a struct-typed extern
+  (`PIF.pifstatus = 1`) = 2 insns `lui at; sw t0,0x3C(at)` (offset folded
+  into %lo); `*(int*)((char*)&D + 0x3C)` OR array-typed `D[15]` = 3 insns
+  (`lui; addiu; sw`). When the target stores to global+offset in 2 insns,
+  type the placeholder as a struct and use a member.
