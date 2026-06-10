@@ -676,3 +676,16 @@ defs (`fn(a0) int *a0; {`), and macro-wrapped forms. 1080 now has
 sorts by size, flags BARE vs WRAPPED). Refresh report.json first. The
 proc-USO family (boarder1/2, n64proc, eddproc, h2hproc, titproc) was
 verified FULLY matched in the same pass -- don't re-census it.
+
+## log-exact-episode routes to the CWD's episodes/, not the worktree's (87F4, 2026-06-10)
+
+`uv run python -m decomp.main log-exact-episode` (run from the monorepo
+root, as required for uv) writes to `<cwd>/episodes/` by default --
+NOT the agent worktree's episodes/ that land-successful-decomp checks.
+Symptoms in order: "missing episodes/<fn>.json" from the land script,
+then a confusing ls (the monorepo's untracked episodes/ shadows it).
+Fix: pass `--log-dir projects/<wt>/episodes` (or mv the json over).
+Also: the positional function_name comes FIRST and --source-file is
+required; and refresh-report dirties report.json, so `git checkout
+HEAD -- report.json` before landing (the script refuses tracked
+changes).
