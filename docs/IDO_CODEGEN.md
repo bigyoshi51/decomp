@@ -13548,3 +13548,11 @@ nearest float op; if they align, it's this numbering-state class
 (uoptlist-ceiling -- creation order visible, final numbering not; not
 C-steerable). Distinct from the single skipped-temp deleted-expression
 class (C28C).
+
+Addendum to the sw-before-addu scheduler cap (2026-06-10, A95C): the
+cap is a FAMILY -- timproc_b5 A95C re-measures at exactly bootup
+2088's floor (pure 2-insn position swap, addu-record-address vs
+sw-count, all operands correct; A95C's early `move v0,a1` return copy
+matches naturally; early-pseudo neutral). Any record-append shape
+(load count; store count+1; store payload at base+count*4) hits this
+1-decision floor at -O2 -- recognize and stop at 2 diffs.
