@@ -12952,10 +12952,14 @@ Two facts from reconstructing gl_func_00072C88 (-O0, frame 0x130):
   target layout (e.g. `i@0x12C ... inode@0x20, ret@0x1C`), declare in the
   opposite order of the offsets. Verified at both 7.1 and 5.3 -O0.
 - **A target can be -O0-shaped (homed args, per-use reloads) yet have SOME
-  branch-delay slots filled** (e.g. the loop-tail IV store sitting in the
-  `bne` delay) while others are nops. Standalone `cc -O0` (7.1 AND 5.3)
-  leaves those slots unfilled (+N nops, longer emit). The fill mechanism is
-  UNRESOLVED — candidates: a different assembler pass (external GNU `as`
-  with `.set reorder`), or another IDO release. Before declaring an -O0
-  near-miss a cap, check whether ONLY delay-fill (+nop-count) differs;
-  if so it's this open question, not your C.
+  branch-delay slots filled** — RESOLVED 2026-06-09: it's the **IDO -Olimit
+  FALLBACK** (`cc -O1 -Olimit <small>` or a function exceeding the default
+  Olimit at -O1): uopt is skipped (per-use reload, homed args, -O0 layout
+  incl. reverse-decl-order) but the -O1 pipeline still SCHEDULES (fills
+  delay slots, reuses condition operands across adjacent statements).
+  Verified on gl_func_00072C88: plain -O0 = 129 insns/unfilled; -O1
+  -Olimit 1 = 112 insns/filled vs 109 target (residual = value-reuse
+  shapes). Ruled out: cc -S + external GNU as (macro expansion blocks the
+  reorder fill; also chokes on IDO .loc directives — strip them to test).
+  When a "-O0" function has filled delays, build it as -O1 with a per-file
+  `-Olimit 1` override, NOT -O0.
