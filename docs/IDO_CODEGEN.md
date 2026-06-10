@@ -13193,3 +13193,22 @@ with an aligned struct pointer type. The goto-label form compiles
 compact. Also: `short` parameters compared against lh loads cause a
 sign-extension homing explosion (69 insns) -- use int params (callers
 pass sign-extended; the lh side carries the narrowing).
+
+## DECL-ORDER SLOT LEVER: split declarations from assignments to permute float spill slots (5D054)
+
+MAJOR LEVER (2026-06-10): IDO assigns float spill slots in DECLARATION
+order, independent of computation order. When a near-match's only
+residual is a spill-slot PAIR SWAP (e.g. x at 40(sp) vs target 32(sp),
+z reversed -- the "frame-slot allocation artifact" cap class), do NOT
+reorder the computations (that perturbs the schedule, +10-30 diffs).
+Instead SPLIT the declarations from the assignments and permute only
+the declaration list:
+    float w; float z; float y; float x;   /* decl order = slot order */
+    w = ...; x = ...; y = ...; z = ...;   /* compute order unchanged */
+This changed ONLY the two slots and took the quaternion product
+gl_func_0005D054 from a documented permuter-immune "honest cap" (99.95%)
+to 56/56 byte-exact. The permuter cannot find this (its scorer
+normalizes sp offsets -- spill-slot swaps are invisible to it, see the
+false-zero warning). Candidates: every cap documented as "spill-slot/
+frame-slot allocation artifact". Extends the existing interleave-decl-
+spill-slot (int) entry to floats and to the split-decl trick.
