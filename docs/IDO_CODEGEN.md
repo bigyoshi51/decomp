@@ -13335,3 +13335,10 @@ materializes -- byte-exact on all four of the E450/E464/E47C/E490 flag
 set/clear quartet (previously 58-65% wraps). This is the same lever as
 the v0/v1 placement role but exploited for ADDRESSING shape rather than
 register coloring.
+
+Addendum to BB-split role #6 (2026-06-10, eddproc 25C): the lever
+blocks CROSS-BLOCK folding/hoisting only. A lui->addiu pair split by
+reloads WITHIN one block's scheduling window (the 25C final-store
+reorder) is untouchable by any if(1){} placement -- intra-block
+scheduling is the scheduler's own ordering, not block-boundary motion.
+Those stay final-mile scheduler caps.
