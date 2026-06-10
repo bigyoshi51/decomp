@@ -13114,3 +13114,15 @@ hide DECODE errors: this pair's old wrap loaded the first call's arg
 from a global when it was really the function PARAMETER + 4, and used
 two call targets where the target words show one -- re-read the asm
 before re-grinding registers.
+
+## Genuine multu-by-small-constant = VARIABLE stride in the original C (timproc 1130/10E4)
+
+IDO -O2 decomposes `x * 40` (and similar small constants) into
+shift-adds. When the TARGET shows a real `multu vN, aM` with `li aM, 40`
+feeding it, the constant lived in a C VARIABLE (e.g. `stride = 40;
+entry = base + idx * stride`) -- the register operand blocks the
+decomposition. Corollary recognition: an `li` of the stride duplicated
+into a branch-likely delay slot means the assignment sits AFTER the
+conditional in source (IDO copies it into the taken path). Fixing this
+mis-decode took the 1130/10E4 twins from structurally-wrong shift
+bodies to 40/40-insn shapes with only register-renumber residuals.
