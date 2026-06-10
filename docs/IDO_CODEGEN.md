@@ -13492,3 +13492,12 @@ target's jumptable head computes from a tN, inline the dispatch
 expression; m2c always emits the named-temp form, so every m2c-derived
 multi-switch wrap is a candidate for this fix (940: 88.66 -> 89.74
 from two such inlines).
+
+Addendum to the in-tree re-score rule (2026-06-10, 2088 slip): equal
+standalone word-diff COUNTS can hide quality differences -- 2088's
+address-first form scored "2 diffs" like the original, but its swap
+also regressed the addu operand order (the original's 2 diffs are a
+PURE position swap, strictly closer). Compare the diff CONTENT, not
+just the count, and run the in-tree score BEFORE the commit claiming
+improvement -- the rule exists because the slip happened twice now
+(52994, 2088).
