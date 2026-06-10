@@ -13300,3 +13300,21 @@ deleted AFTER numbering. Not C-steerable: dead-load probes get frame
 slots (+8 frame) without taking the temp number. Mark these
 uoptlist-class immediately -- distinct from the shifted-start case
 (fragment evidence) and the +1-shift case (extra earlier consumer).
+
+## Dead-arg overwrite: works for SOURCE-level reuse, never for ALLOCATOR-level arg-reg reloads (E9C0)
+
+The discriminator for the dead-arg-overwrite trick, from three data
+points each way:
+- WORKS when the TARGET's own dataflow assigns through the arg: the
+  value is computed/loaded and the arg register is its DESTINATION at
+  the source level (75264: flag = *SP_STATUS lands in $a1; 8D38:
+  a0 = *(a0+0x154) cursor). Write `arg = expr;` and the register
+  follows.
+- CAP when the target merely RELOADS an unrelated value into a freed
+  arg register by allocator choice (E9C0: lw a1,0x8C(s0) for a color
+  base; 1130: li a0,40 stride; 3ED4: div result in $f12). Writing
+  `arg = expr;` there makes the arg web live-across-calls and REGRESSES
+  (E9C0: 7 -> 48 diffs). Tell them apart: does the arg register's value
+  participate in the function's source-level dataflow (args/returns of
+  visible expressions), or is it just a scratch register that happens
+  to be free? Scratch = uoptlist queue.
