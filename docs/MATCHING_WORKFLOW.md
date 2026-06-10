@@ -7962,3 +7962,83 @@ nothing. Diagnose with .o symtab sizes (objdump -t), never the .s.
 ALSO: a standalone 1-insn alt-entry symbol (3B1A8) folds into the
 successor's block KEEPING ITS REAL GLABEL -- both symbols stay
 addressable, the block emits exactly.
+
+## USO LENGTH CONVERGENCE CLOSED (2026-06-10): the "+0x80 Yay0 blob drift" was never Yay0 {#uso-length-convergence-2026-06-10}
+
+The per-segment ROM length surplus attributed to "recompressed Yay0 USO
+blobs" (boarder2/4/5 +0xC/+0x8/+0x4, gui +0x10, n64proc +0x4, titproc
++0x10, eddproc +0x4, arcproc +0x4, h2hproc +0x14, bootup +0x28) had
+NOTHING to do with crunch64: those segments are **direct-link `c`
+segments** (uncompressed USO text in ROM, pre/post bin sandwiches). The
+only crunch64-recompressed blobs are the six verify-blocks units
+(mgrproc b1, game_uso b1, timproc b1/b3/b5, map4_data b2) — exact by
+construction (YAY0_TEXT_SIZE pad/truncate + gate). boarder1/3 were
+"mysteriously" exact only because their explicit >=2-word `_pad.s`
+blocks landed the .text on its exact original length. Root causes, by
+frequency:
+
+1. **Trailing .text padding** after the last fn (IDO pad and/or
+   sh_addralign=16). Fix: `TRUNCATE_TEXT := <exact segment length>` (=
+   post_bin_start - seg_start). Also kills the addralign-16 link gap in
+   front of follower .o's at non-16-aligned offsets (o0_118E4 case).
+2. **1-word GLOBAL_ASM pad blocks** (+4 each; the documented trap).
+   When both neighbors are matched C, replace with all-zero
+   `SUFFIX_BYTES_FORCE := <preceding_fn>=0x00000000` (FORCE because a
+   zero payload after `jr ra; nop` trips the plain-SUFFIX skip path).
+3. **A split file's TRUNCATE cutting REAL trailing zeros**: o0_12DA4 was
+   0x1E8, clipping the ROM's genuine 8-byte align pad before the next
+   region's first fn (-0x8 net). The truncate value must include
+   original inter-fn padding, not just emitted insns.
+4. **Function defined out of order in the TU** (arcproc tail1: a K&R
+   helper at top of file emitted FIRST → +0x34 copy at segment start +
+   0x34 hole at its real slot; .text order == definition order).
+5. **A genuinely false-matched fn emitting the wrong LENGTH**
+   (func_000100F0, +0x18 — see next entry).
+
+**Audit method**: link the ROM, then per segment compare
+baserom[yaml_start:post_start] vs rom[ROM_START_sym ...] with a
+word-level SequenceMatcher (the ad-hoc resync walker mis-reports around
+repeated code). Function-name-vs-symbol-address (`nm` on the linked ELF,
+USO fns are named by segment offset) localizes insertions instantly.
+
+**Endgame state**: all 12 direct-link USO segments LENGTH-exact;
+boarder1-4, gui, n64proc, titproc, bootup fully BYTE-exact. Residual =
+20 jal-target words (boarder5 3, eddproc 3, arcproc 8, h2hproc 6), ALL
+one class: the original reloc targets sit 4 bytes BEFORE splat's
+function symbols (e.g. orig jal 0x8F8, our fn at 0x8FC) — the
+"reloc-identity ledger", a symbol-boundary question, not codegen.
+Remaining ROM delta +0x6C is audio_bank_uso_tail (+0x60) and game_libs
+(+0xC), different segments entirely.
+
+## Same-length SILENT false matches: byte-audit segments after length convergence (2026-06-10) {#same-length-silent-false-matches}
+
+Once a segment is length-exact, the whole-segment byte walk is cheap and
+it caught SIX matched-C fns in bootup_uso whose default-build bytes were
+wrong at the SAME length (invisible to drift, invisible to objdiff when
+expected/ was refreshed circularly; several date to the 2026-05-14
+land-script byte_verify regression). The fix patterns are reusable
+levers:
+
+- **-O0 embedded-assignment call shape** (func_000100F0 0x7C exact,
+  func_0000F76C): when the target dispatches `(*p->fn)(a0 + p->adj)` and
+  reuses ONE temp for the a0 home-slot load across the p-load and the
+  addu, the p-assignment must be EMBEDDED in the call's argument
+  expression: `(**(void(**)())(p+0x64))( *(short*)((p = *(char**)(a0
+  +0x28)) + 0x60) + (int)a0 );` with `register int *p` (s0). Separate
+  `p = ...;` statement → -O0 reloads a0 per statement → +1 insn and
+  different temps.
+- **-O0 register-var ordering is declaration-order a1,a2,a3,t0,t1...**
+  (func_0000F434/F4CC): a branch using an unexpectedly HIGHER reg for
+  the "same" local means the original had a DISTINCT (5th) register var
+  used only in that branch — declare `register int *t; register int *u;`
+  and use `u` only there. A single shared `t` renumbers everything.
+- **blez vs beq**: `if (lbu_val != 0)` emits `beq $rN,$zero`; the target
+  `blez $rN` requires the signed form `if ((int)lbu_val > 0)` —
+  semantically identical for zero-extended bytes, different encoding.
+  1-word diffs of this kind are essentially invisible to fuzzy %.
+- **NULL substituted for an unresolvable &D ref** (func_0000F76C):
+  `move a0,zero` vs the target's `lui/addiu` %hi/%lo pair. Pass
+  `&D_00000000` (extern char) — never NULL "because it's probably 0".
+
+Episodes for all six were updated in place (retraction step + corrected
+final_source) rather than deleted, since each fn now genuinely matches.
