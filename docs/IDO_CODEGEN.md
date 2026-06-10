@@ -13510,3 +13510,12 @@ exactly. Recognition: target insn count = wrap+1 and the extra is an
 entry-position arg store to its natural home slot (a0->0(sp),
 a1->4(sp), ...). Residual after recovery may be the skipped-temp
 cascade (5B5D8: t6 skip + sll-before-load -- uoptlist class).
+
+Addendum to the &arg entry-home trick (2026-06-10, 2DD38): the lever
+has TWO forms keyed on arg usage. UNUSED arg: plain `(void)&aN;`
+suffices (5B5D8). USED arg: the plain form does NOT emit the home --
+you need the pointer-var form `int *p = &aN; (void)p;` (2DD38, 0 diffs
+standalone). Caveat carried from the wrap: the pointer-var form can be
+STRIPPED by full-TU optimization even when standalone-exact (2DD38
+sits at 85.0 in-tree) -- always in-tree verify; standalone success on
+this lever class does not transfer reliably.
