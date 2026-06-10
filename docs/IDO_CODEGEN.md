@@ -13570,3 +13570,14 @@ explicit re-derivation kills the fill candidate and forces beq/bgez +
 nop. Worth +4pp on 116C's clamp arm alone (plus a missing-call-arg
 recovery: an early dead-looking li aN,K is often a later call's
 marshalled argument).
+
+## IDO never jumptables a 4-case switch (-O2, both 7.1 and 5.3; 116C head)
+
+Empirical: a dense 4-case (0-3) switch compiles to a COMPARE CHAIN at
+-O2 in both IDO 7.1 and 5.3, regardless of case-body size. So a
+genuine 4-entry jumptable in target asm (sltiu at,X,4 + lui/addu/lw/
+jr) cannot come from a plain 4-case switch -- suspect more case labels
+mapping onto 4 unique targets (5+ labels can trigger the table), a
+wider dispatch value range, or hand-rolled dispatch. (The known
+threshold cases: 5 explicit cases + pre-init triggered the table at
+EDD4/87F4.) Open instance: titproc 116C's head.
