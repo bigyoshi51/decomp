@@ -701,3 +701,16 @@ making the byte-diff meaningless. Symptom: standalone diff wildly
 worse than the in-tree fuzzy, with structural "missing arms" the C
 clearly contains. Seen on game_uso_func_00000940 (in-tree 88.66 vs
 bogus standalone 73-diff).
+
+## Ad-hoc .s word extraction: match the 3-field comment, not the rendering (3 failures in one session)
+
+Raw-word USO .s files render lines THREE ways -- plain `.word 0x...`,
+symbolic reloc lines (`lui $at, %hi(sym)` with `/* ... 3C010000 -> sym */`
+or trailing `*/` only), and full-mnemonic lines (titproc style). Any
+extraction regex keyed to `.word` or `-> ` silently DROPS words,
+producing phantom out-branches, shifted byte-diffs, and bogus
+"truncated symbol" conclusions (87F4 lost its lui; 116C appeared to
+have 14 out-branches and a missing 0xD0 tail). The ONLY safe pattern:
+`/\* [0-9A-Fa-f]+ ([0-9A-Fa-f]{8}) ([0-9A-Fa-f]{8}) \*/` -- every line
+carries the addr+word pair in its comment regardless of rendering.
+Better: use scripts/disasm-raw.py instead of ad-hoc regexes.
