@@ -13172,3 +13172,15 @@ This is the working inverse of the DEC-cap case (where the post-call
 web coalesced with an arg-copy register and could not be split): here
 the variable web simply needs to NOT be referenced. Used to close the
 1908/1870 twins (18 diffs -> 0 along with the arg0=sub decode fix).
+
+## Two sequential do-whiles with early returns can EXPLODE under -O2 (timproc 8988: 44 -> 145 insns)
+
+A clean rewrite of a two-loop scanner (strict-predicate loop then
+relaxed-predicate loop over the same cursor, each with a mid-loop
+`return`) ballooned from the target's 44 insns to 145 at IDO 7.1 -O2 --
+the optimizer duplicated/restructured the loop blocks wholesale. When a
+target has compact sequential loops sharing a cursor, prefer the
+m2c-style goto/label form over structured do-whiles; the goto form
+compiles to the compact shape (48 insns here). The explosion is a shape
+diagnostic too: if your structured form explodes, the original source
+was almost certainly goto-based (or the loops shared labels).
