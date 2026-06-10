@@ -13483,3 +13483,12 @@ from standalone C: direct expressions and -g3 emit `andi v0,v0,1`
 consumer in the ORIGINAL context was not the return -- another
 interior-entry/context fingerprint, same family as the 69F54 VI
 reader. Skip the shape sweep when you see this tail.
+
+Addendum to the named-vs-inline coloring rule (2026-06-10, 940):
+SWITCH DISPATCH expressions follow it too -- `switch (named_temp)`
+colors the dispatch value into $v0, while `switch (*(int*)(base+off))`
+(inline load) takes a $t temp (t9/t2 in 940's switches 2/3). When a
+target's jumptable head computes from a tN, inline the dispatch
+expression; m2c always emits the named-temp form, so every m2c-derived
+multi-switch wrap is a candidate for this fix (940: 88.66 -> 89.74
+from two such inlines).
