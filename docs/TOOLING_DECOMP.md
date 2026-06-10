@@ -904,3 +904,16 @@ refinement site (the true form is a local array; declare one when
 hand-refining). Also new mopped classes: hex-base `(void *)0xNNN->unkM`
 (now in the cleaner), halfword *6-stride record reads (s16), and
 comma-expression embedded stores.
+
+Addendum (CI incident, 6B0FC/5A2CC): (22) GRAFT-PLACEMENT SAFETY --
+when grafting onto a BARE INCLUDE (no existing wrap), rfind-based
+'#ifdef'/'#else' anchors can match a PRECEDING function's wrap and
+REPLACE THAT NEIGHBOR'S BODY silently (two wraps clobbered before CI
+caught it). Rules: (a) after inserting, verify the new body's next
+'#else' pairs with the SAME function's INCLUDE (one regex check);
+(b) the local NM gate MUST be from-scratch (rm -rf
+build/non_matching) after any wrap-structure change -- incremental
+builds mask asm-processor's "symbol defined twice" that CI's clean
+build hits; (c) the wrap-pairing audit (body -> next #else -> next
+INCLUDE must name the same fn) across all touched fns costs seconds
+and would have caught both.
