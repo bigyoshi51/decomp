@@ -7420,3 +7420,13 @@ owning symbol). Classification rules from the result table:
   NOT merge those (they have real entries).
 Found: the 275F4 4-symbol chain (merged to 0xC4) and the 27534+8
 four-caller hub in a single census.
+
+Addendum (2026-06-10, timproc 1DB0): when a target accesses TWO OR MORE
+reloc'd constants through ONE lui-at base (e.g. ldc1 184($at) and ldc1
+192($at) after a single lui), distinct offset-valued externs CANNOT
+match -- cc never CSEs %hi across different reloc symbols, so each
+extern emits its own lui. Use ONE array-form extern instead
+(`extern f64 D_dbls[];` accessed as D_dbls[23]/D_dbls[24]) with the
+symbol valued at the block base: constant indexing folds into %lo and
+the single %hi is shared. Rule of thumb: one lui in the target = one
+SYMBOL in the C, regardless of how many constants it serves.
