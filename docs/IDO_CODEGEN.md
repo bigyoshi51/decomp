@@ -13519,3 +13519,14 @@ standalone). Caveat carried from the wrap: the pointer-var form can be
 STRIPPED by full-TU optimization even when standalone-exact (2DD38
 sits at 85.0 in-tree) -- always in-tree verify; standalone success on
 this lever class does not transfer reliably.
+
+## CALL-ARG-MARSHAL REUSE: target reads the move-to-aN copy (46C4C, 1-word class)
+
+A target deriving a value from aN where aN holds another var's value
+ONLY because a preceding call marshalled it there (`move a0,a1; jal;
+... addiu s0,a0,K`) is not C-reachable: an explicit `a0 = a1;` gets
+copy-propagated away, and moving the derivation after the call
+re-schedules the frame. Allocator-level reuse -- 1-word uoptlist
+class. Also: re-measure stale multi-insn residual notes before lever
+work; 46C4C's "3-insn cap" was actually 1 word (the mul.s pair had
+resolved unnoticed).
