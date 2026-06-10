@@ -826,7 +826,11 @@ true table extraction from the USO reloc records, or be grafted with
 tempered expectations. REFINED (2FB74): head COVERAGE is not
 sufficient -- shared case TAILS + sparse case VALUES over wide ranges
 (e.g. {24,34,0x104}) still interleave-collapse m2c's structuring under
-an approximate order; such double-dispatchers are loader-RE-gated. Also: m2c recovering a RECURSIVE self-call
+an approximate order; such double-dispatchers are loader-RE-gated. ALSO low-yield: f64-HEAVY
+fns (ldc1/sdc1/cvt.d density; m2c emits 'second half of f64'
+placeholders) -- m2c f64 reconstruction + IDO f64 register pairing
+diverge structurally (C234: +1pp). Check FP-width before grafting:
+f32-heavy = sweet spot (+44..+75pp), f64-heavy = skip or temper. Also: m2c recovering a RECURSIVE self-call
 (jal to the fn's own address) needs the self-extern dropped -- the
 def is the decl.
 
