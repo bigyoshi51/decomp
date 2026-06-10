@@ -894,3 +894,13 @@ trampolines (3C1A/275A/03400008 = lui k0/addiu k0/jr k0) + sd/ld
 64-bit saves (FFxx/DFxx opcodes) + CP0 density = the __osException
 handler family -- same permanent-INCLUDE verdict, one more fingerprint
 the pre-filter catches before m2c runs.
+
+Addendum (3BE1C): (21) m2c can leak the literal `sp` stack symbol as a
+pointer base (`*(s32 *)((char *)((sp + idx*4)) + 0xBC)`) when the fn
+indexes its own stack frame as an array -- there is no C-expressible
+equivalent under the graft conventions, so placeholder it with a
+MARKED &D read (`/* sp-leak placeholder */`) and treat the marker as a
+refinement site (the true form is a local array; declare one when
+hand-refining). Also new mopped classes: hex-base `(void *)0xNNN->unkM`
+(now in the cleaner), halfword *6-stride record reads (s16), and
+comma-expression embedded stores.
