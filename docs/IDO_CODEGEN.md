@@ -13530,3 +13530,10 @@ re-schedules the frame. Allocator-level reuse -- 1-word uoptlist
 class. Also: re-measure stale multi-insn residual notes before lever
 work; 46C4C's "3-insn cap" was actually 1 word (the mul.s pair had
 resolved unnoticed).
+
+Addendum to BB-split role #6 (2026-06-10, 61878): the lever's
+offset-folding domain is REGISTER-ADDRESSING folds (addiu rN,base,K
+materialization). The R_MIPS_LO16 placement choice (addiu LO16=K vs
+LO16=0 + folded displacements on a SYMBOL+const access) is a distinct
+reloc-encoding mechanism the barrier does not touch (and perturbs FP
+scheduling trying). Don't conflate the two fold classes.
