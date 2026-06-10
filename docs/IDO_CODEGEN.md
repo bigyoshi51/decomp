@@ -12875,3 +12875,30 @@ becomes the filled beq delay) reproduced the exact layout. Related: a
 2-element local pointer ARRAY (`T *p[2]`) is what keeps two adjacent
 sp-slot locals (0x20/0x24) stack-resident with per-iteration stores at -O2
 — scalar locals get register-promoted; array slots don't.
+
+## Force a local into an UNUSED ARG register: declare it as an extra parameter and assign into it (`or a2,a1` tell) — 2026-06-09
+
+When the target copies an incoming arg into a HIGHER arg register it never
+received (`or a2,a1,zero` in a 2-arg function) and keeps the value there, the
+original signature had a third parameter that the body REUSED as a local
+(`f(a0, a1, a2) { a2 = a1; a1 = 0; ... }`). Declaring the extra param in our
+def reproduces the homing exactly — call sites passing fewer args are fine
+(K&R semantics). Do NOT add a 4th param hoping to occupy `$a3` as a
+register-denial trick: an unused ANSI (and K&R) param gets an unwanted
+`sw a3,0xC(sp)` homing store (+1 insn). Verified on gui_func_0000161C.
+
+## Named-local vs expression-temp REGISTER POOLS: a value held in `$aN` wants an unnamed expression; in `$tN` wants no variable name — 2026-06-09
+
+IDO -O2 colors NAMED user locals from `$v0,$v1,<free $aN>,...` (birth order)
+but EXPRESSION TEMPS from the `$t6,$t7,$t8,$t9,$t0..` sequence. A 1-register
+diff where build has `lw $a3` and target `lw $t8` (with every later temp
+shifted one back) means the target value was NOT a named variable — fold it
+into the consuming expression. Conversely a target `$aN` (beyond real args)
+usually means a named local (or reused param, see entry above). On
+gui_func_0000161C the fix for the load was bump-then-RMW:
+`v1 = (int*)((char*)v1 + 0xC); *v1 = *v1 + a2;` — the load becomes an
+expression temp ($t8) and IDO schedules it BEFORE the addiu with the 0xC
+offset folded into the old register (emits `lw t8,0xC(v1); addiu v1,v1,0xC;
+... sw t9,0(v1)`). The permuter signals this pool mismatch by finding a
+score≈5 mutant that references the post-bump pointer with a WRONG offset —
+take the register-pool hint, fix the semantics by hand.
