@@ -9173,3 +9173,16 @@ reused index ONCE into an int (`int idx = msg[3]; if (idx < 8) ...
 [idx]`) -- separate loads for compare and index cost +1 insn and a
 temp. Residual class: periodic skipped temps at case starts
 (t8/t1/t5) + first-pair inversion -- not yet steered from C.
+
+Addendum (2026-06-10, 276B8/275F4): two multi-symbol classes look alike
+but resolve oppositely -- discriminate by the DISPATCHER:
+- jr-tN head present -> shattered jumptable switch: merge the region
+  and decode (273B8 recipe above; the case bodies were never callable).
+- No dispatcher, parent BRANCHES into adjacent tiny leaves that are
+  ALSO jal'd by outside callers -> two-entry/interior-entry parent
+  (6F038 class): the leaves are real entry points into the parent's
+  tail blocks, C cannot express the multi-entry, the region stays
+  INCLUDE_ASM-faithful, and each leaf's standalone-C has a TEMP-SHIFT
+  ceiling (its temps continue the parent's counter -- 276B8's t0/t1
+  after the parent consumed t6..t9 = 95.83 ceiling, explained not
+  grindable).
