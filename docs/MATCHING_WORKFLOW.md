@@ -7189,6 +7189,12 @@ built with **IDO 5.3 -O1** — verbatim libreultra source matches byte-exact whe
    delta for game_libs is +0xDE50D8): new fns EXACT + zero new diff words.
 5. NM wraps riding inside a 5.3 unit compile at 5.3 -O1 in the non_matching
    build — cosmetic fuzzy-% drift, acceptable.
+5b. Moving a function BETWEEN units (e.g. promoting an NM wrap into a carve
+   unit) makes objdiff report fuzzy=None until `expected/` is refreshed —
+   the target symbol doesn't exist in the new unit's baseline .o. Also
+   remember refresh-expected-baseline.py runs `make clean`, wiping
+   build/non_matching/ — rebuild `non_matching_objects` after it or the
+   report shows None for everything in the touched unit.
 6. **CI: a new per-file COMPILER dependency must be added to the workflow's
    toolchain download** — `.github/workflows/build.yml` only fetched IDO 7.1;
    the first ido53-unit push broke `make objects` in CI with Error 127
