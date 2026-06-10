@@ -8169,3 +8169,58 @@ Lessons:
   "drift you must emit" — they're the next asset's content. If you find
   yourself adding zero words to *cover* non-zero base bytes, stop: you're
   about to shift the ROM.
+
+## ROM-EXACT CLOSED (2026-06-10): 414 word diffs -> 0; the four residue classes + fixes {#rom-exact-2026-06-10}
+
+tenshoe.z64 is now **byte-identical** to baserom.z64 (md5
+fa27089c425dbab99f19245c5c997613; `make verify` hard-fails md5+cmp on any
+regression — the `|| echo "ROM MISMATCH"` swallow was removed). The final
+414 positional word diffs decomposed into four classes, all fixed honestly
+(C compiles to target bytes; INCLUDE .s word corrections to ROM truth):
+
+1. **+4 drift via the 1-word GLOBAL_ASM pad trap (306 words in one object).**
+   `gl_func_00073E74_pad.s` (1 word) emitted 2 words (asm-processor 8-byte
+   placeholder minimum), shifting links 743C4..748A0 of post2b_d +4; the
+   trailing pad was then clipped by TRUNCATE_TEXT, keeping length exact and
+   masking the drift. Diagnostic: cluster shows `build[x+4]==base[x]` over
+   the whole run (pure shift, NOT content). Fix: merge the pad word into the
+   preceding fn's .s tail INSIDE the glabel block. NEW GOTCHA: a bare
+   `.word` AFTER `endlabel` fails asm-processor with "incorrectly computed
+   size for section .text" — pad words merged into an INCLUDE .s must sit
+   before `endlabel`.
+2. **Shift-displaced prepend heads (26 words, 10 .s files).** Relayout-era
+   head-prepends duplicated each fn's own prologue instead of the true
+   inter-fn words. Tell: bogus comment columns where col1==col2 (link
+   pasted where ROM belongs), e.g. `/* 008674 00008674 ... */`. Since the
+   ROM is position-aligned, `base[rom]` at each diff offset IS the truth —
+   regex-find `(/\* ([0-9A-F]{6}) 00\2 )` lines, rewrite words+comments.
+3. **Source order != ROM order rotations (33 words, 3 sites).** Active
+   byte-exact fns and INCLUDE pads in the wrong sequence rotate whole runs
+   (4CDA4/4CDB0 swap; 666E4 setter/getter/pad/addr-return; 67A90 run where
+   the 67ABC block carries a `mtc1 $zero,$f12` alt-entry word that must
+   FOLLOW the active fns). Every byte was right; only placement was wrong.
+4. **Resolved-vs-placeholder reference identity (49 words).**
+   - 18 jal sites: base stores RESOLVED intra-game_libs targets while
+     active matched C called `gl_func_00000000` (jal-0). These were
+     **ROM-level false positives of objdiff reloc-blindness** (.o matched,
+     linked bytes didn't). Fix: `gl_ref_XXXXX = 0xXXXXX;` undefined_syms
+     absolutes (game_libs links at VA 0, so `jal gl_ref_X` emits
+     `0x0C000000|X>>2` exactly). Targets may be mid-block addresses inside
+     other INCLUDE fns or the text2 binary region — absolutes, not externs.
+   - 11 lui/lo sites: collapsed-&D offsets were +0x10000 too high (hi half
+     one too big after lo sign-extension — a relocated-runtime-dump
+     misread) or baked a wrong literal where base stores the zero pair
+     (= `&D_00000000` runtime-reloc ref).
+   - 20 USO jals (arcproc 8, h2hproc 6, boarder5 3, eddproc 3): every
+     intra-segment call targets **fn-4** — a leading nop is the TRUE entry
+     (base never calls the splat-named entries; verified by scanning both
+     ROMs for jal->fn vs jal->fn-4: 0/20 vs 20/0). Fix per the
+     h2hproc_uso_func_h2h_4DC precedent: per-segment undefined_syms
+     absolutes + caller call-site swaps. Compiled-C callees can't emit a
+     leading nop, so the boundary stays; the absolute IS the honest entry.
+
+Method notes: drive the count MONOTONICALLY down per batch
+(`sum(a[i:i+4]!=b[i:i+4])`); classify clusters FIRST with a
+`build[x+4]==base[x]` shift test before assuming content errors; episodes
+of re-matched former false positives were updated in place (final_source +
+metadata note), none deleted since all became genuinely exact.
