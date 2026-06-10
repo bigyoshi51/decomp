@@ -7582,3 +7582,13 @@ suspect -- check before trusting (and before building carve machinery
 around) tiny standalone matches. Fix path: dissolve the carve blob,
 extend the parent symbol, promote the parent's C (88A0's proven body
 waits in its wrap).
+
+Addendum (2026-06-10): the 8940 dissolution procedure VALIDATED (88A0
+landed 100.0, net +284 code bytes). The complete step set -- missing
+any one leaves a phantom: (1) concat recipe: drop the blob dep +
+objcopy line + python arg, adjust asserts AND keep m[p3:] whole; (2)
+delete the g3 .c + its OPT_FLAGS/TRUNCATE lines; (3) merge the .s into
+the parent (extend size); (4) git rm the false episode; (5) remove the
+unit from objdiff.json (report lists it independently of expected/!);
+(6) refresh expected/ for the parent unit (cp the new build .o, rm the
+stale g3 .o); (7) promote the parent C, rebuild both paths, re-score.
