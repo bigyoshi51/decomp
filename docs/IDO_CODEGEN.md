@@ -13368,3 +13368,17 @@ Operational rule reinforced: a standalone word-diff improvement can
 REGRESS the in-tree objdiff fuzzy (barriers cost more in dispatch
 context than they fix) -- ALWAYS rebuild the NM .o and re-score
 in-tree before updating a wrap body that claims improvement.
+
+## VOLATILE-PAD: the -O2 phantom-slot maker (E910 family frame gap cracked)
+
+`volatile int pad;` -- declared and NEVER accessed -- reserves a stack
+slot at -O2 without emitting a single instruction. (Plain unused locals
+are dropped entirely; 75264's `int unused;` worked only at -O1.) This
+cracks "+8 frame / frame-alignment gap" caps: E910 went 99.77 -> 99.93
+in-tree. Limits found so far: the volatile local always takes the
+BOTTOM slot of the local area; if the target wants a SPILL below the
+phantom (E910's last 3 diffs) or the phantom BETWEEN spills (685C0),
+the ordering is not C-controllable. Candidates: every cap documented as
+"frame N vs N+8" or "8-byte spill-slot delta" -- e.g. E6E8/E79C (same
+family), the 74C04 frame+8 residual, 7507C's reserved slot. Verify
+in-tree, not just standalone.
