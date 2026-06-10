@@ -794,3 +794,21 @@ immediately before a register-writer is usually its defaults
 initializer, and the pair shares one body with two entries (C cap --
 INCLUDE_ASM faithful; merging with an alt-entry label is the long-term
 fix).
+
+## 1080 game_libs contains Plauger-libc printf internals with caller-set s-reg args (73904 = _Genld)
+
+gl_func_00073904 (0x568) is Plauger's _Genld (printf %e/%f/%g layout
+pass over the _Pft state struct: f_8 buf, f_14 n0, f_18 nz0, f_1C n1,
+f_20 nz1, f_24 prec, f_28 width, f_30 flags). Its FIVE args arrive in
+$s0-$s4 (prologue stores the caller's s-regs above its own frame, then
+masks s16/s16/u8) -- a custom intra-libc calling convention, permanent
+INCLUDE_ASM (IDO C cannot receive s-reg args). Recognition leads:
+- The neighbors are the rest of the printf float path: gl_func_00073E74
+  (0x54C, likely _Ldtob/the mantissa converter) and the [0x73Exx-0x743xx]
+  cluster -- expect the same s-reg convention; identify via 0x30/0x2E/
+  0x2B/0x2D/0x65 character literals and _Pft field offsets.
+- An s-reg-reading prologue that STORES the caller's s-regs above its
+  own frame = this class; do not mistake it for a fragment.
+- The bare jr-ra stub at [0x73E6C..0x73E74) (the drift-region dropped
+  symbol) sits right between _Genld and 73E74 -- probably an empty
+  stub in the same libc object.
