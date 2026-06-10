@@ -7680,3 +7680,19 @@ placeholder .o vs post-splice (asm-processor --keep-preprocessed or
 equivalent), then either patch the placeholder form or add a noalign
 mode (tools/ patch script per the no-upstream-PR rule). Fix unlocks
 all three damaged blocks.
+
+EMISSION MECHANISM SOLVED (2026-06-10, minimal repro in /tmp/aptest):
+it is NOT alignment. asm-processor emits a placeholder C fn per
+GLOBAL_ASM block; for a 3+-word block it adds volatile-store filler
+statements and the size is EXACT; for a 2-word block the empty fn
+(jr+nop = 8 bytes) is exact; but a **1-WORD block gets the 8-byte
+empty-fn placeholder = +4** (C cannot express a 4-byte function).
+This exactly explains b3's 217C +4 and (likely) game_uso_block1's +4
+insertion sites -- audit those for 1-word pad sidecars. RULE: NEVER
+create a 1-word pad sidecar in an asm-processor unit. Fix routes for
+existing ones: (a) fold the pad word into an adjacent INCLUDE block's
+.s (if one exists); (b) un-match one adjacent C fn and absorb fn+pad
+into a single GLOBAL_ASM (costs a match, restores the block); (c) a
+tools/asm-processor patch to shrink 1-insn placeholders post-splice
+(ecvt-patch style, kept as an in-repo script). b1's -0xC needs its own
+repro (its 3-word pad should be exact -- something else there).
