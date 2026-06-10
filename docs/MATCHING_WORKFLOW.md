@@ -7939,3 +7939,26 @@ would carry high-risk ELF surgery). Instead:
   exact length and only reloc-field diffs (jal-vs-jal / same-top16
   lo16). Run it after ANY change to a Yay0 unit; it would have caught
   every defect in this entry at introduction time.
+
+## RELAYOUT CLOSED (2026-06-10): .game_libs layout-perfect; the last-8 playbook
+
+Final state: 0 shift events, 0 net shift over the whole 0x75288
+section; 394 positional residuals = reloc-field ledger only. The
+last 8 alignment-class events fell to three recipes keyed on WHO
+NEIGHBORS THE PAD:
+1. Pad next to an INCLUDE block -> delete the 1-word sidecar (-8: its
+   word + placeholder leftover) and fold the ROM pad word into the
+   INCLUDE .s (head-fold with a local glabel, or tail-append) -- exact
+   emission per the >=2-word rule.
+2. Pad between two MATCHED C fns (no host) -> route b: convert ONE fn
+   (prefer the smaller) to a combined [pad+fn] INCLUDE block with the
+   proven C kept in an NM wrap (4D0B4, 67370).
+3. Surplus at a unit END -> TRUNCATE_TEXT cut (game_libs_tail 0x565c).
+TRAP (burned twice): a .s file existing in asm/nonmatchings does NOT
+mean the symbol builds from it -- grep for an ACTIVE C definition
+first (`^(void|int|...) name(`). Edits to a decorative .s are silently
+inert; 67394's "INCLUDE host" was active C and two fold attempts did
+nothing. Diagnose with .o symtab sizes (objdump -t), never the .s.
+ALSO: a standalone 1-insn alt-entry symbol (3B1A8) folds into the
+successor's block KEEPING ITS REAL GLABEL -- both symbols stay
+addressable, the block emits exactly.
