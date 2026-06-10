@@ -917,3 +917,13 @@ builds mask asm-processor's "symbol defined twice" that CI's clean
 build hits; (c) the wrap-pairing audit (body -> next #else -> next
 INCLUDE must name the same fn) across all touched fns costs seconds
 and would have caught both.
+
+Addendum (kernel 5C50): (23) KERNEL BOUNDARY CAVEAT -- the kernel
+relayout verified SECTION bytes, not internal symbol boundaries;
+unmatched kernel INCLUDEs still carry splat's boundary guesses. Tell:
+a named jumptable whose ROM-true entries (readable directly from the
+byte-exact ROM at VRAM-0x400+0x1000) land inside ANOTHER symbol's
+span, and/or neighbors starting without prologues (bnez first insn =
+fragment). Such regions need a boundary-merge analysis before any
+graft/decode -- the kernel's symbolic .s feeds m2c directly once
+boundaries are right (no raw-word pipeline needed there).
