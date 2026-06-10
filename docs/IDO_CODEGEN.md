@@ -13318,3 +13318,20 @@ points each way:
   participate in the function's source-level dataflow (args/returns of
   visible expressions), or is it just a scratch register that happens
   to be free? Scratch = uoptlist queue.
+
+## BB-split lever role #6: ADDRESS MATERIALIZATION (offset-folding blocker; E450 quartet exact)
+
+When a target computes an explicit pointer base (`addiu v0, a0, N`)
+and accesses through 0(v0), but every plain C pointer-local folds into
+direct lw/sw N(a0) offsets ((int)casts, volatile, array forms all
+fold), place the if(1){} BB-split BETWEEN the pointer assignment and
+its uses:
+    int *p;
+    p = (int *)(a0 + 0x18);
+    if (1) {}
+    *p = *p | 8;
+IDO will not fold the address across the block boundary, so the addiu
+materializes -- byte-exact on all four of the E450/E464/E47C/E490 flag
+set/clear quartet (previously 58-65% wraps). This is the same lever as
+the v0/v1 placement role but exploited for ADDRESSING shape rather than
+register coloring.
