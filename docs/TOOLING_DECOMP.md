@@ -736,3 +736,17 @@ b5: +0.34pp). Rule: convert per-file ONLY with the unit measure gate,
 and check a sample site's target asm for the lui/addiu+reloc pair
 first. game_libs pools (post 204, game_libs.c 58, post0b 48) are OFF
 the sweep list.
+
+## uoptlist verbosity ceiling (2026-06-10): order questions yes, color questions no
+
+-zdbug:6 gives the candidate/pseudo table (CREATION ORDER -- answers
+temp-numbering and pseudo-order questions directly). :7 adds per-node
+dataflow sets (av/ant live-range data, numlr counts). Higher values
+(8/10/16/22/38/70) plateau at the :6 content; hex args don't parse.
+The FINAL COLOR ASSIGNMENT (which lr -> which register) is not printed
+at any probed level -- numcoloredlr prints 0 even for fns with v0/v1
+pair residuals. Consequence for the "uoptlist queue": creation-order
+class residuals (273B8 temp pattern, 5B5D8 skip) are inspectable;
+pure coloring-choice residuals (E04 spill slot, ECEC/56814 pairs,
+46C4C marshal-reuse) are NOT -- escalation would be reading uopt's
+source in ido-static-recomp or patching more print paths (ecvt-style).
