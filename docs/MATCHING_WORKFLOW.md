@@ -7270,3 +7270,17 @@ the pair's shared return-0 tail but is a separately-matched -O2 -g3 leaf
 next function's body (the shared-tail dispatch family) — that's normal and
 does NOT mean the leaf belongs inside the merge. Recovery if you already
 deleted the .s: git checkout -- <file>, then trim the merged parent.
+
+## GLOBAL_ASM pad sidecars 16-align their block — breaks placement after unit-first C fns (2026-06-09)
+
+A `#pragma GLOBAL_ASM(..._pad.s)` block carries its own 16-byte alignment.
+Mid-file after INCLUDE_ASM blocks this is invisible (already aligned), but
+when a small C function starts a unit and the pad pragma follows it, the
+align inflates the gap (fn 0xC -> align16 0x10 -> +4 pragma = 0x14 instead
+of 0x10) and everything downstream shifts. Fix: drop the sidecar and let
+cc's NATURAL function padding supply the small pad — compile the tiny
+preceding function in the same unit (a 3-insn leaf emits 0xC + 4-byte pad
+nop natively). Verified on the ido53_72C88 carve extension: moving
+game_libs_func_00073024 into the carve replaced the gl_func_00072E3C_pad.s
+sidecar exactly. Watch game_libs_TEXT_END in the map after every pad/
+TRUNCATE change — it catches 4-byte drifts immediately.
