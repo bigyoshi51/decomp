@@ -13103,3 +13103,14 @@ with -g3: always 9 insns (preset-default v0 or branch-likely), never
 the 10-insn two-separate-return-blocks form. Distinguishing test: the
 75264 case had a FRAME + arg-register anomaly (boundary artifacts);
 pure two-block return leaves with no frame are the real cap.
+
+Addendum to the if(1){} v0/v1 BB-lever (2026-06-10, timproc 2030/2240
+twins, now 4-for-4): placement matters -- the split goes INSIDE each
+branch arm, immediately AFTER the jal and BEFORE the volatile stores;
+a split before the if() does nothing. Effect: the cur-pointer address
+temp colors into $v0 (reusing the dead call-result reg) and the li-1
+into $v1. Also a reminder that "register-allocator cap" verdicts can
+hide DECODE errors: this pair's old wrap loaded the first call's arg
+from a global when it was really the function PARAMETER + 4, and used
+two call targets where the target words show one -- re-read the asm
+before re-grinding registers.
