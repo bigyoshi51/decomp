@@ -7718,3 +7718,18 @@ objdump the .o for the orphan's own symbol -- present = standalone
 (fine); absent AND the parent's size covers it = absorbed (fine);
 absent AND nothing covers it = dropped bytes (block damage). Trust the
 .o, not the comment.
+
+## In-place C-for-INCLUDE swaps are SAFE for byte-exact bodies (2026-06-10, 12 promotions)
+
+The "mid-file swaps shift downstream content" constraint is now
+precisely scoped: it applies to byte-INEXACT swaps only. A body whose
+C compiles to exactly the target bytes is size-identical to its
+INCLUDE, so the swap leaves the section byte-identical -- verified by
+objcopy snapshot on 12 promotions in one pass (game_libs tail/post0b/
+game_libs.c units, including the drifted ones). Protocol: swap, full
+rebuild, objcopy section snapshot vs pre-swap -- must be IDENTICAL;
+revert on any diff. Exception found: a body whose INCLUDE carries a
+leading 1-word pad (5AFB0) cannot swap until the pad emits correctly
+(the asm-processor 1-word placeholder bug) -- and that bug also
+explains why the 5AFB0 pad-split shifted post0b where 2-word-pad
+splits (40EC, 3ECDC) verified identical.
