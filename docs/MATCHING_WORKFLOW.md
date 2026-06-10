@@ -7242,3 +7242,18 @@ value: if the head offset appears and the suspect offset appears NOWHERE,
 the suspect is not an entry point and the merge is byte-safe. Verified on
 gui_uso 0x8C0/0x918 (merged after 0x918 showed zero references; the
 "implicit $v0-input convention" was the fall-through).
+
+## -Olimit carve units: CC_ONLY_FLAGS plumbing + both-paths var gotcha (2026-06-09)
+
+Two wiring requirements for `-O1 -Olimit 1` carve units (the -Olimit-fallback
+recipe, see docs/IDO_CODEGEN):
+1. **`-Olimit N` must not reach asm-processor** (it rejects unrecognized
+   args). The Makefile compile lines now take `$(CC_ONLY_FLAGS)` appended
+   after `$(OPT_FLAGS)` — set `OPT_FLAGS := -O1` (asm-processor sees this)
+   and `CC_ONLY_FLAGS := -Olimit 1` (cc only) per target.
+2. **Per-file CC/OPT_FLAGS/CC_ONLY_FLAGS must be declared for BOTH
+   `build/src/...` AND `build/non_matching/src/...` targets** (one line,
+   two targets — copy the game_libs_ido53_718C0 pattern). If only the
+   default path gets them, the NM .o silently compiles with 7.1 -O2 and
+   report.json shows ~88% for a function that is byte-exact in the ROM.
+   Symptom: in-tree bytes EXACT but fuzzy < 100 → check the NM build vars.
