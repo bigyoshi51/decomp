@@ -823,7 +823,10 @@ tables (bound ~= distinct case bodies; 2E354's 5/11) synthesize fine
 heavily shared bodies) defeat block-walk head inference and m2c's
 structuring collapses (+14pp only). Dense-table fns should wait for
 true table extraction from the USO reloc records, or be grafted with
-tempered expectations. Also: m2c recovering a RECURSIVE self-call
+tempered expectations. REFINED (2FB74): head COVERAGE is not
+sufficient -- shared case TAILS + sparse case VALUES over wide ranges
+(e.g. {24,34,0x104}) still interleave-collapse m2c's structuring under
+an approximate order; such double-dispatchers are loader-RE-gated. Also: m2c recovering a RECURSIVE self-call
 (jal to the fn's own address) needs the self-extern dropped -- the
 def is the decl.
 
