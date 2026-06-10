@@ -167,6 +167,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Yay0 block P0 CLOSED: 1-word-pad / dropped-orphan damage fixed across all six blocks; `make verify-blocks` is the gate](#yay0-block-p0-closed-2026-06-10) — _game_uso_block1 (+0x90), timproc b1 (-0xC), b3 (-0x4C) and mgrproc b1 (-0x18+size) all repaired to ROM truth (exact length, only reloc-field diffs). Root causes: 1-word GLOBAL_ASM pad sidecars (+4 each, C placeholder minimum is 8 bytes), stolen-prologue orphans silently dropped by the 2026-05-23 SUFFIX_BYTES purge, an over-extended .s duplicating its children, an out-of-order C def, and stale YAY0_TEXT_SIZE values. Run `make verify-blocks` after touching any Yay0 unit._
 - [Standalone >=2-word GLOBAL_ASM orphan blocks emit EXACTLY — the honest replacement for orphan SUFFIX_BYTES absorption](#standalone-orphan-global-asm-blocks) — _A free-standing `#pragma GLOBAL_ASM` block with `glabel _orphan_X, local` + N>=2 `.word`s placed between two fns emits byte-exactly at -O2 (skip-1 + N-1 fillers). Keeps BOTH neighbor fns matched C; robust to future re-matching (unlike .s-folds or "C-emit absorption"). Used for all restored stolen-prologue orphans 2026-06-10._
 - [1-word pads in asm-processor units: only two legal shapes (adjacent-asm fold, or recipe-level asserted-zero drop)](#one-word-pad-legal-shapes) — _A 1-word .text GLOBAL_ASM block emits +4 (8-byte placeholder minimum; route (c) tools patch rejected as too invasive — needs .text splice + symbol/reloc/jumptable/mdebug rebase in fixup_objfile). If a neighbor is an asm block: fold the word into its .s. If stuck between two MATCHED C fns and the pad is ZERO: keep the sidecar and drop the asserted-zero leftover in the Yay0 recipe (game_uso C0BC pattern). Never create new 1-word sidecars._
+- [Relayout fn-level events CLOSED: dropped SUFFIX-orphans, a wrong-word orphan merge, and the truncate-deficit signature](#relayout-fn-level-events-closed) — _All 4 fn-level shift events were self-inflicted; no false matches. Two were 2026-05-23 SUFFIX-purge orphan drops (restore as raw-.word INCLUDE_ASM + TRUNCATE bump); one was a size-neutral WRONG WORD from a botched orphan-merge (shift walker can't see it — always finish with a full word-diff under the known shift schedule); two were TRUNCATE_TEXT mis-measurements chopping the PREDECESSOR unit's last-fn tail, which the walker mis-anchors at the NEXT unit's carve head ("carve head short" is the red herring — check the predecessor's endlabel words vs map .text size first). TRUNCATE must equal ROM span + current in-unit alignment bloat._
 - [GLOBAL_ASM .s gotchas: multi-line /* */ comments break asm-processor; lone %hi symbolization breaks bake-data-relocs; stale half-built .o after post-process failure](#global-asm-s-gotchas-2026-06-10) — _Single-line comments only in .s (multi-line blocks throw "without an initial glabel" or "incorrectly computed size"). Symbolizing a lui to %hi(sym) while its addiu partner stays a raw .word leaves a lone trailing R_MIPS_HI16 that bake-data-relocs rejects. A failed asm-processor post-process leaves a cc-only .o full of _asmpp_* placeholder fillers that make won't rebuild (.s files aren't deps) — rm the .o._
 
 
@@ -7763,11 +7764,45 @@ unit BY ADDRESS SPAN, not by grepping INCLUDE lines.
 REMAINING 12 (branch agent-b, not merged): 8 = asm-processor block-
 start 8-alignment after active-C fns ending %8=4 (the .s cannot fix
 these -- prepending a pad word stacks ON the aligner pad; needs the
-tools-side fix); 4 = fn-level shorts (2DF00/5FDCC matched-C emits
-missing 0xC prologue-class; 6BC44/70194 ido53 carve heads short
-0x8/0x18 -- review whether those matches verified against poisoned
-expected/). Until all 12 close, the net -0x18 displaces the validated
-region, so the branch must not merge to main.
+tools-side fix); 4 = fn-level shorts.
+UPDATE 2026-06-10 (later same day): the 4 fn-level events are CLOSED
+(see next section); walker now shows exactly the 8 alignment +4 events,
+final shift +0x20. Branch still must not merge until the tools-side
+alignment fix lands.
+
+## Relayout fn-level events CLOSED (2026-06-10): root causes + the truncate-deficit signature {#relayout-fn-level-events-closed}
+
+All four were self-inflicted, none required un-matching (the suspected
+"poisoned expected/" false matches were real matches, just displaced):
+
+1. **0x2DF00 -0xC** = dropped SUFFIX-absorbed orphan
+   `game_libs_func_0002DEF4` (3-word alt-entry sll/addu/addiu) — the
+   2026-05-23 SUFFIX_BYTES purge deleted the absorbed words with no
+   re-home. Fix: standalone raw-.word INCLUDE_ASM fragment + unit
+   TRUNCATE +0xC. Same class as the Yay0-block orphan drops.
+2. **0x2DF64 wrong word** (size-neutral, invisible to the shift
+   walker!): the WIP's orphan-merge prepended the WRONG word to
+   gl_func_0002DF68.s — duplicated the prologue word 0x27BDFFE8
+   instead of the orphan's mtc1 0x44856000. LESSON: after prepending an
+   orphan word to a successor .s, byte-diff the region against ROM;
+   the shift walker only sees SIZE deltas, not content corruption. Run
+   a full word-diff under the known shift schedule as the final gate.
+3. **0x5FDCC -0xC** = same dropped-orphan class
+   (game_libs_func_0005FDC0, nop+lui/lw $a2 setup).
+4. **0x6BC44 -0x8 / 0x70194 -0x18** = TRUNCATE_TEXT mis-measurement on
+   post1b (0x8ce4, needs 0x8CEC = ROM span 0x8CE0 + 0xC in-unit
+   alignment bloat) and post1b2 (0x4368, needs the pre-WIP 0x4380).
+   The truncate chopped the LAST fn's tail (jr/nop; 6-word break-check
+   epilogue). **Signature**: the walker anchors the event at the NEXT
+   unit's carve head and it looks like "carve head short / stolen
+   prologue missing" — but word-diff shows the carve already carries
+   its head words; the deficit is the PREDECESSOR unit's chopped tail.
+   Check `endlabel` words of the predecessor's last .s vs the .text
+   size in the map before suspecting the carve.
+   NOTE: post1b TRUNCATE 0x8CEC must drop to 0x8CE0 when the
+   asm-processor block-alignment defect (3 in-unit +4 events) is fixed.
+
+Closed in commits cefc951dc..b5fb6ae2e on agent-b.
 
 ## Yay0 block P0 CLOSED (2026-06-10): all six blocks restored to ROM truth {#yay0-block-p0-closed-2026-06-10}
 
