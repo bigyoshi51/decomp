@@ -13429,3 +13429,14 @@ through a TEMP float reg -- cannot come from standalone C: the cvt's
 operand web belonged to a larger parent expression (cross-tail-share /
 interior-entry class). Treat as a context fingerprint; don't sweep
 shapes (18-combo negative tabulated at game_uso 7ABC).
+
+## `beqz v0` at entry does NOT always mean caller-set-v0 (ECEC revises the diagnostic)
+
+game_uso ECEC's head tests $v0 with no prior load -- pattern-matching
+the caller-set-int-reg cap class -- yet plain C with idx as the SECOND
+ARG byte-matches the entire head: IDO coalesces a dead-after-dispatch
+arg's web into $v0 naturally (the switch temp chain frees a1
+immediately). Diagnostic update: before declaring caller-set-reg,
+TEST the normal-arg C first; the cap is only real if the arg-form
+emits a separate copy/test of aN. (The genuine caller-set class --
+$s0-$s4 marshalling like _Genld -- still stands.)
