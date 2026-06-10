@@ -12985,3 +12985,16 @@ counter resets per VALUE, not per statement). If a target shows the
 fresh-dest form (`lw $t(N+1),%lo($tN)`) with the %lo still folded, no
 known C/qualifier/version axis produces it; treat as the documented
 fresh-dest -O0 cap (func_00012818).
+
+### -O0 register vars take s-regs in DECLARATION order (lever for s-reg renumber diffs) (2026-06-09)
+
+At IDO -O0, `register` locals are assigned $s0,$s1,$s2,... in declaration
+order (the complement of the reverse-decl-order rule for stack locals,
+which applies to NON-register locals). If an -O0 near-miss shows pure
+s-reg renumbering (target `or s2,s1` vs build `or s1,s0`, same shape),
+read off the target's s-reg map from the restores/moves and reorder the
+register declarations to match — func_0000F2EC went 98.93->99.90 by
+declaring `q` first (target map q=s0, p1=s1, p2=s2, src=s3). The leftover
+"locals block sits N bytes low / hole between saves and locals" residual
+is the gl_func_00008A40 frame-packing cap family (bottom pads allocate in
+the hole but regrow the frame).
