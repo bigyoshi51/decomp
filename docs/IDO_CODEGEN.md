@@ -13452,3 +13452,16 @@ v0/v1 pair, check liveness asymmetry across the final branches before
 concluding uoptlist-class. Practical: the -zdbug:6 dump (ecvt patch)
 emits the candidate/pseudo table -- creation-order questions are now
 answerable directly instead of inferred from emit.
+
+## ARRAY-INDEX FORM inverts a load pair's temp order (4D014 rename-cap cracked)
+
+For `*(base + idx*4 + K)` chains where the target's two loads carry
+INVERTED temp numbers (idx=t7 loaded first, base=t6 -- creation order
+base-first, scheduler emits idx first for its longer dep chain), write
+the read as ((int *)(base_expr + K))[idx_expr] -- folding K into the
+pointer BEFORE indexing creates base's pseudo first. The flat-sum form
+pins idx-first creation (t6/t7 dense, 4 diffs); named locals take
+a/v regs entirely. Extends the func_00010324 array-form lift: the
+array form controls PSEUDO CREATION ORDER, not just addressing shape.
+Diagnostic: inverted adjacent temp pairs on independent loads = try
+the array form before calling it a rename cap.
