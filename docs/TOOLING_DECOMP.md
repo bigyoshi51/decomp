@@ -826,3 +826,18 @@ true table extraction from the USO reloc records, or be grafted with
 tempered expectations. Also: m2c recovering a RECURSIVE self-call
 (jal to the fn's own address) needs the self-extern dropped -- the
 def is the decl.
+
+## game_libs jumptable TRUE-table extraction: negative result + leads (2026-06-10)
+
+Searched for the 2E354/2BB7C jumptable words (data+0x5860/0x5880 per
+the lw lo16s): NOT in assets/game_libs_post.bin (len 0x2d5c < the
+offset!), NOT in game_libs_dl_data.bin (RSP ucode at that offset),
+no pointer runs under raw/+0x24/-0x24 conventions anywhere in
+post.bin. Conclusion: the lui %hi reloc does NOT resolve to the
+post.bin data base; the true table lives wherever the BOOT-TIME
+game_libs reloc processing maps it (possibly a heap-built table or
+another section). UNLOCK PATH: RE the kernel's game_libs loader
+(the reloc records at the segment tail -- 3-word (0x62-type, offset,
+count) records decoded during the relayout ledger work) to learn the
+hi16 resolution, THEN extract. Until then the dense-table fns keep
+their approximate synthesized tables (graft items 12/16).
