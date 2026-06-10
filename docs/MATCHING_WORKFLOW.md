@@ -7316,3 +7316,17 @@ members do); (3) at .o level the %lo fields still show 0+reloc — verify
 against LINKED output, or wildcard reloc positions (readelf -r offsets)
 when comparing the .o. Established on timproc C710 (28/54 residual is
 scheduling, not symbol mechanics).
+
+## Nested double-wrap can silently swallow a FOLLOWING fragment's INCLUDE_ASM in NM builds (2026-06-10)
+
+Parallel-agent wrap nesting (#ifdef NM [draft A] #else [#ifdef NM
+[draft B] #else INCLUDE(fn) #endif] ... INCLUDE(tail_fragment) #endif)
+puts everything after the inner wrap -- including a SIBLING fragment's
+INCLUDE_ASM -- inside the outer #else. Default builds are correct, but
+-DNON_MATCHING builds take the outer draft and silently drop the tail
+fragment from .text. The NM gate still passes (it only checks compile,
+not .text completeness), so this hides for weeks. When you find a
+double-wrapped function: flatten to ONE wrap first, keeping the better
+body (grep `#ifdef NON_MATCHING` count per function). Found on timproc
+CB40 where the old draft's comment even described a .s merge that was
+never executed.
