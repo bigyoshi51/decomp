@@ -13576,8 +13576,10 @@ marshalled argument).
 Empirical: a dense 4-case (0-3) switch compiles to a COMPARE CHAIN at
 -O2 in both IDO 7.1 and 5.3, regardless of case-body size. So a
 genuine 4-entry jumptable in target asm (sltiu at,X,4 + lui/addu/lw/
-jr) cannot come from a plain 4-case switch -- suspect more case labels
-mapping onto 4 unique targets (5+ labels can trigger the table), a
-wider dispatch value range, or hand-rolled dispatch. (The known
-threshold cases: 5 explicit cases + pre-init triggered the table at
-EDD4/87F4.) Open instance: titproc 116C's head.
+jr) cannot come from a plain 4-case switch -- RESOLVED HARDER
+(2026-06-10): 5 labels IS the hard threshold and gives sltiu 5 -- and
+NO tested form (stacked labels over range 0-3, guard+switch,
+4+default, double-switch, -O1, -g3, 5.3) yields a 4-entry table.
+A 4-entry jumptable in target asm is NOT producible from these
+compilers' C switches at all -- treat as hand-dispatch/other-compiler
+evidence. (titproc 116C's head: exhaustively negative, 9 forms.)
