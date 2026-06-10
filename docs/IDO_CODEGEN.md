@@ -13353,3 +13353,18 @@ shape but pins the COLORING -- if the target also needs a specific
 v0/v1 assignment on that pair, the residual is uoptlist-class. (The
 E450 family avoided this because the whole fn was one statement-group
 after the barrier.)
+
+## TRIPLE-CONSTRAINT CAPS: individually-crackable residuals whose C fixes are mutually exclusive (52994)
+
+A new cap classification from gl_func_00052994 (86.93%): its residual
+decomposes into three constraints that each have a KNOWN lever --
+per-arm addiu RMW form (role-#6 barrier), 12-before-1 dispatch order
+(if-chain), case-1 beql polarity (switch) -- but applying any one
+lever breaks another (barriers perturb the dispatch layout, if-chain
+loses the beql, switch sorts cases ascending). Mark these as
+multi-constraint caps and stop sweeping single levers; they need
+uoptlist/per-function-RE, not shape search.
+Operational rule reinforced: a standalone word-diff improvement can
+REGRESS the in-tree objdiff fuzzy (barriers cost more in dispatch
+context than they fix) -- ALWAYS rebuild the NM .o and re-score
+in-tree before updating a wrap body that claims improvement.
