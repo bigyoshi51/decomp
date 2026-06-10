@@ -164,6 +164,10 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Per-function `-O0` opt override inside a Yay0-compressed USO: `REPLACE_FUNC_BODY` donor-object splice (NOT a patch)](#feedback-replace-func-body-o0-donor) — _A Yay0 USO block is extracted from ONE `.c.o`'s `.text`, so you can't just put an `-O0` function in a separately-linked file. Mechanism (template: timproc_uso_b1): (1) donor `src/<seg>/<seg>_o0_<off>.c` with the function as a plain def + externs; (2) `filter-out` the donor from `C_FILES`; (3) `build/...<seg>_o0_<off>.c.o ...: OPT_FLAGS := -O0`; (4) `build/src/...<seg>.c.o build/non_matching/...<seg>.c.o: REPLACE_FUNC_BODY := <fn>=<donor.o>` → `scripts/replace-function-body.py` splices the donor's genuine `-O0` bytes into the main `.o` (both build paths). Legitimate (real compiler output at the correct opt level, not instruction-forcing). Detect the need: function builds at the file's `-O2` with a pure delay-slot-order diff (e.g. `return 0` → `jr;move` 2 insns vs target `move;jr;nop` 3 insns = `-O0` unfilled). CAVEAT: precedent logs NO episode for donor'd funcs (two-stage build; report-only match). Region-boundary care needed — `-O0` runs can contain cross-fn shared-epilogue tangles (mgrproc 0x140 `bne`→0x15C). Focused-session task, not a 60s tick._
 - [Stale-cap sweep: byte-verify every NM wrap's non_matching `.o` against expected — some are ALREADY byte-exact and just need unwrapping](#stale-cap-sweep) — _Symbolization / later fixes silently close near-miss residuals (esp. reloc-presence) without anyone re-checking, leaving correct C bodies stuck behind `#ifdef NON_MATCHING`. Sweep: for each NM-wrapped fn, `objcopy --only-section=.text` both `build/non_matching/<f>.c.o` and `expected/<f>.c.o`, slice by symbol addr+size, diff; 0-diff same-size → unwrap + commit. **MUST use a STRICT filter:** only count a fn whose `#ifdef NON_MATCHING` branch has a REAL asm-free C def — a loose `func\(...\)\s*\{` regex matches `// void f(...) {` COMMENT sketches on BARE-INCLUDE_ASM funcs, whose non_matching build IS the asm (tautological false match). A loose sweep returned 78; the strict one returned 6 real (72 were bare-INCLUDE_ASM tautologies). Landed 9 byte-exact this way 2026-05-31 (game_uso_func_00011124/00010C4C/00011168/0000D8EC/000104A4/0000EE84/00011460, gl_func_00039C8C, bootup func_00006734)._
 - [Donor functions touching a `D_xxxx` data global cap at ~99.9% (reloc-blind residual — do NOT re-attack)](#feedback-replace-func-body-o0-donor) — _`replace-function-body.py` drops the donor's relocs in the spliced range. For `jal gl_func_00000000` (symbol@0) the baked `jal 0` matches; but a data store `D_0000014C = x` keeps the 0x14C in the (dropped) reloc's symbol value, so the spliced `%lo` field stays 0 while reloc-blind expected/.o has 0x14C baked → one-insn diff, 99.95%. Verified dead-ends (timproc_uso_b1_func_0000065C, 2026-05-24): symbol form = 2 insns field 0 (best, 99.95%); `&D_00000000+0x14C` = 3 insns at -O0; `*(int*)0x14C` = 1 insn zero-relative; keeping the reloc = 99.67% (objdiff resolves undefined `D_xxxx` to 0, not 0x14C — reloc-aware equivalence only fires for *defined* symbols like `func_X`). Real fix = reloc-aware expected (spimdisasm USO migration), not a tick._
+- [Yay0 block P0 CLOSED: 1-word-pad / dropped-orphan damage fixed across all six blocks; `make verify-blocks` is the gate](#yay0-block-p0-closed-2026-06-10) — _game_uso_block1 (+0x90), timproc b1 (-0xC), b3 (-0x4C) and mgrproc b1 (-0x18+size) all repaired to ROM truth (exact length, only reloc-field diffs). Root causes: 1-word GLOBAL_ASM pad sidecars (+4 each, C placeholder minimum is 8 bytes), stolen-prologue orphans silently dropped by the 2026-05-23 SUFFIX_BYTES purge, an over-extended .s duplicating its children, an out-of-order C def, and stale YAY0_TEXT_SIZE values. Run `make verify-blocks` after touching any Yay0 unit._
+- [Standalone >=2-word GLOBAL_ASM orphan blocks emit EXACTLY — the honest replacement for orphan SUFFIX_BYTES absorption](#standalone-orphan-global-asm-blocks) — _A free-standing `#pragma GLOBAL_ASM` block with `glabel _orphan_X, local` + N>=2 `.word`s placed between two fns emits byte-exactly at -O2 (skip-1 + N-1 fillers). Keeps BOTH neighbor fns matched C; robust to future re-matching (unlike .s-folds or "C-emit absorption"). Used for all restored stolen-prologue orphans 2026-06-10._
+- [1-word pads in asm-processor units: only two legal shapes (adjacent-asm fold, or recipe-level asserted-zero drop)](#one-word-pad-legal-shapes) — _A 1-word .text GLOBAL_ASM block emits +4 (8-byte placeholder minimum; route (c) tools patch rejected as too invasive — needs .text splice + symbol/reloc/jumptable/mdebug rebase in fixup_objfile). If a neighbor is an asm block: fold the word into its .s. If stuck between two MATCHED C fns and the pad is ZERO: keep the sidecar and drop the asserted-zero leftover in the Yay0 recipe (game_uso C0BC pattern). Never create new 1-word sidecars._
+- [GLOBAL_ASM .s gotchas: multi-line /* */ comments break asm-processor; lone %hi symbolization breaks bake-data-relocs; stale half-built .o after post-process failure](#global-asm-s-gotchas-2026-06-10) — _Single-line comments only in .s (multi-line blocks throw "without an initial glabel" or "incorrectly computed size"). Symbolizing a lui to %hi(sym) while its addiu partner stays a raw .word leaves a lone trailing R_MIPS_HI16 that bake-data-relocs rejects. A failed asm-processor post-process leaves a cc-only .o full of _asmpp_* placeholder fillers that make won't rebuild (.s files aren't deps) — rm the .o._
 
 
 ---
@@ -7616,6 +7620,12 @@ block-assembly + decompressed-diff check before log-exact-episode.
 
 ## ROM-truth audit of ALL Yay0 blocks (2026-06-10, post-retraction): MORE DAMAGE FOUND
 
+> **CLOSED 2026-06-10** — all six blocks repaired and verifying exact
+> (see "Yay0 block P0 CLOSED" at the end of this doc; gate = `make
+> verify-blocks`). The triage notes below contain stale guesses (b1's
+> 1F60/1F64 blame and b3's "-8 from 0x21FC / 0xFC behind" were wrong);
+> kept for archaeology only.
+
 Applying the new decompressed-block-vs-ROM-asset gate retroactively:
 - game_uso_block1: LEN MISMATCH (built +0x90 vs ROM 0x11B30) -- the
   unit emits 0x90 too much text. P0 investigation.
@@ -7758,3 +7768,139 @@ missing 0xC prologue-class; 6BC44/70194 ido53 carve heads short
 0x8/0x18 -- review whether those matches verified against poisoned
 expected/). Until all 12 close, the net -0x18 displaces the validated
 region, so the branch must not merge to main.
+
+## Yay0 block P0 CLOSED (2026-06-10): all six blocks restored to ROM truth {#yay0-block-p0-closed-2026-06-10}
+
+Final state (`make verify-blocks`, exact length + only reloc-field diffs):
+
+- mgrproc_uso_block1:  len 0x3420, jal=8  lo16=0  other=0
+- game_uso_block1:     len 0x11B30, jal=47 lo16=2  other=0
+- timproc_uso_block1:  len 0x2EE0, jal=8  lo16=24 other=0
+- timproc_uso_block3:  len 0x30E0, jal=6  lo16=21 other=0
+- timproc_uso_block5:  len 0xE620, jal=8  lo16=7  other=0
+- map4_data_uso_block2: len 0xD0,  jal=1  lo16=0  other=0
+
+Per-block root causes and fixes (all verified with a reloc-aware dynamic
+shift tracker — match words, on mismatch probe +-0x40-word shifts with a
+24-word window treating jal-vs-jal and same-top16 as wildcards):
+
+**game_uso_block1 (+0x90)**: (1) +4 at 0x3F4 — 1-word pad sidecar
+(0x44800000, 39C's stray trailing mtc1) folded into the HEAD of
+func_000003F8.s (neighbor is asm). (2) func_00000B14 was DEFINED OUT OF
+ORDER in the .c (stranded after 2FF8, emitting at ~0x2FF4) — moved to
+address order; Yay0 layout is definition-order. (3) +4 at 0xC0EC — 1-word
+ZERO pad between two MATCHED C fns; kept as sidecar + the block recipe
+drops the asserted-zero placeholder leftover at 0xC0F0. (4) +0x80 at
+0xD5BC — func_0000D458.s was over-extended, duplicating children
+D5BC/D5DC/D5F8/D634 which the unit also emits separately; trimmed to
+0x164. (5) +8 tail = derivative 16-align padding, vanished with the fixes.
+
+**timproc_uso_block1 (-0xC)**: the old P0 triage (1F60 pre-pad / 1F64
+sidecar) was WRONG — the 3-word sidecar emits exactly. Real causes: two
+stolen-prologue orphans dropped by the 2026-05-23 SUFFIX_BYTES purge
+(0x19B8: lui $at,0x3F80; mtc1 $at,$f0 — the 1.0f that func_000019C0
+stores from "uninitialized" $f0; 0x2028: lui/lw $a0 head of 2030), both
+restored as standalone 2-word GLOBAL_ASM blocks, keeping the neighbor
+matches (1908, 1FE4, 2030) and their episodes intact. Plus stale
+YAY0_TEXT_SIZE 0x2ED4 -> 0x2EE0 (must equal the asset length).
+
+**timproc_uso_block3 (-0x4C residual)**: func_000021F4's .s existed but
+the unit had NO INCLUDE_ASM line for it (dropped at some point) — every
+later fn emitted 0x4C early. Restored, plus the 0x2238 2-word orphan
+(twin of b1's 0x2028) as a standalone block. The earlier "-8 from 0x21FC
+/ .o runs 0xFC behind" note was a stale misread.
+
+**mgrproc_uso_block1 (found same-class while building verify-blocks)**:
+two purge-dropped orphans (0x1BD4: 4-word donation to 1BE4 — the old
+4-entry SUFFIX_BYTES; 0x2E34: lui/mtc1 1.0f twin) restored as standalone
+blocks; YAY0_TEXT_SIZE 0x3410 -> 0x3420.
+
+NO instruction bytes were created or patched anywhere: orphan words are
+emitted by honest GLOBAL_ASM blocks; the only recipe-level byte op is
+DROPPING an asserted-all-zero word (alignment-class, policy-legal). No
+match was un-matched; no episode was retracted (the b3 217C un-match
+predates this session). The pad-to-YAY0_TEXT_SIZE steps are now
+truncate-tolerant (assert the discarded tail is zero), since .text
+section 16-align can add trailing zeros past the asset length.
+
+## Standalone >=2-word GLOBAL_ASM orphan blocks emit EXACTLY {#standalone-orphan-global-asm-blocks}
+
+Validated in the /tmp/aptest repro and 5-for-5 in tree (timproc b1 x2,
+b3 x1, mgrproc x2): a free-standing
+
+    #pragma GLOBAL_ASM(".../<seg>_orphan_<VRAM>.s")
+
+with
+
+    glabel _orphan_<seg>_<VRAM>, local
+        .word 0x...   /* N >= 2 words */
+    endlabel _orphan_<seg>_<VRAM>
+
+between two function definitions emits byte-exactly at -O2/-O1
+(asm-processor placeholder = skip_instr_count 1 + N-1 volatile-store
+fillers; IDO fills the jr delay, total = N insns). This is the honest
+mechanism for stolen-prologue orphans / inter-fn instruction words that
+used to ride on (banned) instruction-appending SUFFIX_BYTES or fragile
+"C-emit absorption":
+- both neighbor fns stay matched C (no route-b un-matching needed);
+- the orphan survives future re-matching of either neighbor (a fold into
+  a neighbor's .s silently vanishes when that fn is matched to C — that
+  is exactly how the 2026-05-23 purge losses went unnoticed);
+- raw .word values = ROM truth (USO blocks ship reloc fields unfilled).
+Only the 1-WORD case cannot use this (see next entry). When auditing,
+trust the .o: orphan symbol present = fine; absent and covered by the
+parent's size = fine; absent and uncovered = dropped bytes.
+
+## 1-word pads: the two legal shapes (route-c tools patch REJECTED as too invasive) {#one-word-pad-legal-shapes}
+
+Root cause recap: parse_source gives every GLOBAL_ASM .text block a C
+placeholder fn; min emission for an empty fn is 8 bytes (jr ra; nop), so
+a 1-word block leaves +4 garbage/zero after the splice ("too much
+[placeholder] ... indistinguishable from a static symbol" — asm-processor
+explicitly cannot detect overshoot). A real tools fix would have to
+DELETE 4 bytes from .text in fixup_objfile and rebase: all later symbol
+st_values, .rel.text r_offsets, R_MIPS_32 jumptable words in .rodata
+addended against the .text section symbol, and mdebug/gptab PDR
+addresses. Rejected 2026-06-10 (gitignored tool, ecvt-style patch script
+would carry high-risk ELF surgery). Instead:
+- **Neighbor is an asm block** -> fold the pad word into that .s (head or
+  tail; game_uso 3F8 pattern). Caveat: re-matching that neighbor later
+  must move the pad word out first.
+- **Both neighbors are MATCHED C and the pad is ZERO** -> keep the 1-word
+  sidecar pragma (documents ROM truth at the right offset) and add a
+  Yay0-recipe python step that drops the asserted-zero placeholder
+  leftover at the known block offset (game_uso C0BC pattern, Makefile
+  ~line 477). Pure alignment-data op; delete the step if asm-processor
+  ever learns 4-byte blocks.
+- NEVER create new 1-word sidecars (scripts/trim-trailing-nops.py output
+  must be audited for this).
+
+## GLOBAL_ASM .s gotchas found during the block repair (2026-06-10) {#global-asm-s-gotchas-2026-06-10}
+
+- **Multi-line `/* ... */` comments in a .s break asm-processor** — before
+  the first glabel they throw `.text block without an initial glabel`;
+  after it they corrupt the size computation (`incorrectly computed size
+  for section .text`). Use one `/* ... */` per line (and ASCII only, per
+  the earlier em-dash entry).
+- **Partial %hi symbolization breaks bake-data-relocs**: symbolizing only
+  the lui (`lui $t6, %hi(import_X)`) while the partner addiu stays a raw
+  .word creates a lone R_MIPS_HI16; if it lands after the file's last
+  LO16, `bake-data-relocs.py` hard-fails ("HI16 reloc(s) without a
+  matching LO16"). Symbolize hi+lo pairs together or keep both raw
+  (byte-identical for import_* — USO load-time relocs ship raw). Hit on
+  mgrproc_uso_func_00003358.s (from the 48-.s symbolization sweep).
+- **A failed asm-processor post-process leaves a poisoned .o**: cc has
+  already written the .o; if the post-process step then errors, the .o
+  keeps its `_asmpp_funcN` placeholders (runs of `sw $zero,0($zero)` =
+  0xAC000000 fillers in .text) and make will NOT rebuild it on the next
+  run when only a .s changed (.s files are not Makefile deps). Symptom:
+  blocks full of ac000000; fix: `rm` the .o and rebuild.
+- **YAY0_TEXT_SIZE must equal the asset block length** (`assets/<seg>_
+  block_N.bin`), not whatever the build happened to emit when the line
+  was added. Two of four were stale (b1 0x2ED4->0x2EE0, mgrproc
+  0x3410->0x3420).
+- **`make verify-blocks`** (scripts/verify-yay0-blocks.py) is the
+  permanent gate: decompress every built block vs its asset, require
+  exact length and only reloc-field diffs (jal-vs-jal / same-top16
+  lo16). Run it after ANY change to a Yay0 unit; it would have caught
+  every defect in this entry at introduction time.
