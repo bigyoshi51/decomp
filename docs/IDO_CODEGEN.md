@@ -12919,3 +12919,19 @@ cursor-advance load into the `$t1` expression-temp pool and `v1` into
 plain extended scope (dead-code eliminated INCLUDING liveness). The
 permuter surfaces both ingredients separately as frame-bloated mutants
 (`if (new_var) {}` trailers, compound-assignment stores) — combine by hand.
+
+## Direct u8 struct fields vs byte-casts; distinct placeholder externs vs la-CSE (gl_func_0006BC44) — 2026-06-09
+
+Two emit facts from the 1080 osContGetReadData match:
+- **Byte access through a cast (`((u8*)&fmt.button)[1]`) emits
+  `addiu base,sp,N; lbu rX,5(base)` (pointer+offset); a DIRECT u8 struct
+  field (`fmt.button_lo`) emits the direct `lbu rX,0x11(sp)`.** When the
+  target reads stack-struct bytes sp-relative, give the struct real u8
+  fields (split a u16 into hi/lo bytes if the target reads them
+  separately). Also: target `lbu` for a stick/byte field means the field is
+  `u8`, not `s8` (`lb`).
+- **Two different runtime-patched USO globals need TWO DISTINCT extern
+  names** (`D_00000000` + `gl_data_00000000` both link to 0): with a single
+  shared extern used for both the loop bound and a buffer base, IDO CSEs
+  the `la` into one base register; the target loads each placeholder with
+  its own lui/lbu(/addiu) pair.
