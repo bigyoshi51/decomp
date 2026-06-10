@@ -13292,3 +13292,11 @@ result the target colors into $f12 (the freed FP call-arg register) is
 as unreachable as the 1130 $a0 stride case; FP early-pseudo is neutral
 and arg-then-result single-web forms disturb jal-delay scheduling.
 INT and FP arg-reg residuals both go to the uoptlist queue.
+
+Addendum to temp-number forensics (2026-06-10, C28C): a SKIPPED temp in
+the target's sequence (t6,t7,...,t9 with no t8 anywhere) means the
+original had an expression consuming that temp which the optimizer
+deleted AFTER numbering. Not C-steerable: dead-load probes get frame
+slots (+8 frame) without taking the temp number. Mark these
+uoptlist-class immediately -- distinct from the shifted-start case
+(fragment evidence) and the +1-shift case (extra earlier consumer).
