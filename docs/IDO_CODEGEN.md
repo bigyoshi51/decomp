@@ -13146,3 +13146,17 @@ emit scaled-first. A target with `addu rd, <base>, <scaled>`
 binary; treat those (and their dependent loads) as the same cosmetic
 cap class as the documented beq operand order. Spotting it: the diff
 word pair differs only in rs/rt swap (e.g. 004F1821 vs 01E21821).
+
+## Spell multiplies PLAINLY: hand-written shift decompositions split the register chain (timproc 2EEC)
+
+The inverse of the explicit-shift CSE-bust lever: a wrap stuck at 98%
+spelled the x24 index as ((a1<<2)-a1)<<3 to "force the target's shape",
+which made IDO assign each shift stage a FRESH temp (t6/t7/t8). Plain
+`a1 * 24` emits IDO's own decomposition -- the exact same
+(a1<<2 - a1)<<3 instruction sequence but with single-register t6 reuse
+and the first sll hoisted above the prologue -- 23/23 exact at both 7.1
+and 5.3. Rule: write the arithmetic naturally FIRST; only reach for
+explicit shifts when the target's decomposition DIFFERS from IDO's
+natural one (the CSE-bust case, where a multi-use multiply must be
+broken). Both directions are now documented; check which case you are
+in by comparing the target's sequence against what plain C emits.
