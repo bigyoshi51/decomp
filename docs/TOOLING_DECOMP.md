@@ -789,3 +789,14 @@ compiles it; apply in this order and re-grep after each:
    `((void (*)())...)`.
 Each class is one regex; the whole graft (2106 insns) took ~7 cycles
 of compile-and-fix. Expect 2-5% -> 40-55% structural in one tick.
+
+Addendum to the graft checklist (7C1C, +38.5pp): (8) m2c emits
+collapsed jal-0 calls as `NULL(...)` too (not just `0(...)`) -- handle
+both; (9) double-chained `->unk` on parenthesized bases needs a
+paren-BALANCED fixer (regex char classes fail on nested parens);
+(10) anchor body edits at the DEF line including the `{` -- anchoring
+on the function NAME alone finds the extern declaration first and
+silently patches the wrong span (burned: a whole fixer pass no-op'd);
+(11) if m2c says "label .LXXXX does not exist", the .s window is
+UNDERSIZED (branch past declared end) -- re-extract through the gap
+from the verified block asset / byte-exact ROM, not the .s.
