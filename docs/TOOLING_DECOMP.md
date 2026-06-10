@@ -877,4 +877,8 @@ busy-wait bne loops + cross-symbol backwards branches = a HANDWRITTEN
 system block (permanent INCLUDE, reference_1080_mips3_runtime_helpers
 class), not a splat fragment -- do not graft, merge, or decode. Caught
 at game_libs [0x31DF8..0x32884) after one wasted m2c attempt; the
-pre-filter costs one objdump grep.
+pre-filter costs one objdump grep. EXTENDED (6A5F0): k0-register
+trampolines (3C1A/275A/03400008 = lui k0/addiu k0/jr k0) + sd/ld
+64-bit saves (FFxx/DFxx opcodes) + CP0 density = the __osException
+handler family -- same permanent-INCLUDE verdict, one more fingerprint
+the pre-filter catches before m2c runs.
