@@ -7613,3 +7613,23 @@ without an independent ROM-side check; (c) after any timproc-class
 land, build the Yay0 asset target -- it is the only gate that catches
 this. (d) Episode-worthy matches in blob-spliced units MUST pass the
 block-assembly + decompressed-diff check before log-exact-episode.
+
+## ROM-truth audit of ALL Yay0 blocks (2026-06-10, post-retraction): MORE DAMAGE FOUND
+
+Applying the new decompressed-block-vs-ROM-asset gate retroactively:
+- game_uso_block1: LEN MISMATCH (built +0x90 vs ROM 0x11B30) -- the
+  unit emits 0x90 too much text. P0 investigation.
+- timproc_uso_block1: LEN MISMATCH (built -0xC SHORT vs ROM 0x2EE0) --
+  possibly a b1-land-era boundary error. P0.
+- timproc_uso_block3: 963 word diffs in [0x690..0x30D0] -- content
+  drift; the b3 twins landed yesterday; needs the corrupted-merge
+  check against assets/timproc_uso_block_3.bin. P0.
+- timproc_uso_block5: 15 diffs (the known reloc-jal class + 894C
+  region) -- acceptable baseline post-retraction.
+- map4_data_uso_block2: 1 diff @0xAC (reloc-jal class, acceptable).
+- mgrproc_uso_block1: build target name differs -- audit pending.
+EVERY P0 must be checked the 87F4 way: per-symbol vs the
+assets/<seg>_block_N.bin ground truth; any C "match" whose .s
+disagrees with the block bin is suspect, and any episode whose region
+diffs is candidate-false. The audit script one-liner is in this entry's
+git commit.
