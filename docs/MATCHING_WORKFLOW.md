@@ -7449,3 +7449,13 @@ Also: when re-truncating the PRECEDING unit after carving its tail fn
 out, recompute its TRUNCATE from unit-start to the carve address (do
 not subtract sizes from the old value -- hidden trailing pads make that
 arithmetic wrong; here 0x3D0 became 0x388, not 0x39C).
+
+Addendum (2026-06-10, 11D40): the NM build rule reads
+NON_MATCHING_TRUNCATE_TEXT, NOT TRUNCATE_TEXT (separate by design --
+NM bodies usually diverge). For PURE-C truncated units (single-fn -O0
+splits, carve units) the missing NM-side var makes objdiff compare a
+truncated expected symbol against an untruncated NM symbol -> phantom
+fuzzy drops (66.67 = 12/18 etc.) on long-matched functions. 63/72
+truncated units lack the NM var; harmless for INCLUDE-path units, fix
+per-unit when scripts/list-unstarted.py flags a suspicious near-100
+"BARE" entry that the unit's comments claim is matched.
