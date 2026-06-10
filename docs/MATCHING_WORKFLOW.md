@@ -7359,3 +7359,20 @@ inter-block alignment (7369C's 0x188 odd-end packs tight, yet the
 relayout the whole [0x73904..0x748A4) tail alignment-aware in one pass
 -- focused-session item, NOT tick-safe. Status quo (306-diff drift)
 deliberately restored and verified.
+
+## In-place C matches in INCLUDE_ASM units: ONLY safe at unit-END positions; and the -0x24 ROM-verify mapping only holds for [0x71864..0x75288] (2026-06-10)
+
+Two hard-won constraints from the template-scan batch:
+(1) Replacing a mid-file INCLUDE_ASM with an equivalent C function shifts
+ALL downstream unit content (1836-word build-vs-build diff for a 3-insn
+swap at 69F54; same failure mode at 74894 and the 73904 size fix) -- the
+C emit + sidecar alignment never reproduces the INCLUDE block layout
+exactly. The successful in-place matches (75254, 74894-style) were at
+unit-END positions where TRUNCATE/natural padding absorbs the delta.
+Rule: mid-file template finds need a carve split, not an in-place swap.
+(2) The .game_libs ELF-section byte-verify mapping (section = USO-0x24)
+is ONLY valid in [0x71864..0x75288] (the libultra tail). At 0x69F50 the
+delta is 0x40 and the ROM windows do not appear in the build AT ALL --
+earlier regions have additional pre-existing layout drift. VERIFY
+build-vs-build identity (objcopy snapshots before/after) for any change
+outside the libultra tail; ROM-compare lies there.
