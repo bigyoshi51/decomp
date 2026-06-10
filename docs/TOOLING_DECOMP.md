@@ -874,7 +874,11 @@ branch-likely targets another branch's delay insn. Fix iteratively:
 move the label off the delay insn, add a continuation label right
 after it, retarget the offending branch to an appended tail block
 [duplicated delay insn; b continuation]. Loop until m2c passes (B3C
-needed 3). (19) m2c pointer-typed locals compared/arith'd with ints
+needed 3). FIXER GOTCHA (6E224): blanket deref-cast sweeps can match
+their OWN OUTPUT across iterations, producing runaway chains
+(*(s32 *)(s32 *)(s32 *)... ). Guard sweeps with (?<!\*\)) style
+negative lookbehinds or collapse afterwards with
+re.sub(r'(\*\(s32 \*\))(\(s32 \*\))+', r'', s). (19) m2c pointer-typed locals compared/arith'd with ints
 need (s32) cast sweeps -- expect "Unacceptable operand of ==" tails.
 
 Addendum (31F4C): (20) GRAFT PRE-FILTER -- if the disasm shows branch
