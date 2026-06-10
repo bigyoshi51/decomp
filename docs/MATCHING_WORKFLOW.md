@@ -7160,6 +7160,36 @@ Two findings from the Ghidra-reconstruction vein (which took `gl_func_0005E288` 
 
 Burned and pushed-broken: inserting a doc comment before a reconstructed function with a python `t.replace('extern ...();\n<signature> {', 'extern ...();\n/* comment */')` SILENTLY DROPPED the `<signature> {` line (the replacement string omitted it), leaving `... */\n    short s1, s2; ...` with no function header → the NON_MATCHING body no longer compiles (`cfe: Empty declaration specifiers`). The pre-commit check `make RUN_CC_CHECK=0` PASSED because it builds the `#else INCLUDE_ASM` path, not the `#ifdef NON_MATCHING` C — so a broken NM body reached origin/main, which FREEZES that function's decomp.dev % (the NM .o silently fails to build). Two rules: (1) when inserting a comment via string-replace, anchor on a line you KEEP and prepend, never on `signature {` (or re-include the signature in the replacement) — safest is `t.replace('void fn(args) {', '/* comment */\nvoid fn(args) {')` and then assert the signature still occurs. (2) The commit gate for ANY edit to an NM-wrapped function's file — INCLUDING comment-only edits — must be `make non_matching_objects RUN_CC_CHECK=0` (compiles the C body), NOT `make RUN_CC_CHECK=0` (compiles only INCLUDE_ASM). Running the full `make non_matching_objects` also conveniently re-verifies every other NM body in the tree at once.
 
+## game_libs IDO 5.3 carve (statically-linked libultra): per-file CC override recipe (2026-06-09)
+
+game_libs contains statically-linked libultra code (contpfs run at 0x71864+:
+`__osSumcalc`/`__osIdCheckSum`/`__osRepairPackId`...) whose original objects were
+built with **IDO 5.3 -O1** — verbatim libreultra source matches byte-exact where
+7.1 provably can't (the residency+filled-slots shape). Recipe, validated by the
+0x71864/0x718C0 landing:
+
+1. Per-file Makefile override works for the COMPILER too, not just flags:
+   `build/src/game_libs/<unit>.c.o build/non_matching/src/game_libs/<unit>.c.o: CC := $(IDO53_DIR)/cc`
+   (+ `OPT_FLAGS := -O1`). `IDO53_DIR := $(TOOLS)/ido-static-recomp/build/5.3/out`
+   is defined next to IDO_DIR. asm-processor accepts -O1 and processes 5.3 .o's fine.
+2. **Alignment is in LINK space, which is -0x24 off USO-offset space** (USO
+   header). An INCLUDE_ASM-carrying unit has `.text` sh_addralign=16 and WILL
+   get linker padding at almost any boundary — the fix is `TRUNCATE_TEXT :=
+   <exact .text size>` (a size-noop is fine): truncate-elf-text.py also
+   normalizes sh_addralign 16→4, which is what actually lets carve units sit at
+   arbitrary word offsets. This is how ALL existing splits sit flush.
+3. Splitting mid-file: parent file keeps `[start..carve)`; remember the parent's
+   own `TRUNCATE_TEXT` must shrink to its new exact size (stale old-size rule
+   silently no-ops and the parent keeps a pad → +8 shift). Tail unit takes
+   `[carve_end..old_end)` and needs `TRUNCATE_TEXT := old_end - carve_end`
+   (compute in hex CAREFULLY — a 0x2000 typo truncates real code and the link
+   silently shrinks; verify `game_libs_TEXT_END` against the pre-change map).
+4. Verify by byte-comparing the linked `.game_libs` ELF section against baserom
+   over the whole touched span (anchor with an asm-comment ROM addr; USO→ROM
+   delta for game_libs is +0xDE50D8): new fns EXACT + zero new diff words.
+5. NM wraps riding inside a 5.3 unit compile at 5.3 -O1 in the non_matching
+   build — cosmetic fuzzy-% drift, acceptable.
+
 ## game_libs per-file -O1 split: only works for byte-exact-at-O1 LEAF functions (2026-06-06)
 
 game_libs defaults to `-O2` but contains `-O1` functions (e.g. gl_func_00071D40, gl_func_0006CDB4 — tell: homed-and-reloaded params `sw aN,X(sp)`/`lw _,X(sp)`, recomputed address bases; the -O2 build is SMALLER than the target because it CSEs what -O1 recomputes). Detect by writing the faithful body and compiling standalone at both -O1 and -O2 (`tools/ido-static-recomp/build/7.1/out/cc -c -G0 -non_shared -Xcpluscomm -Wab,-r4300_mul -O{1,2} -mips2 -32`); compare insn count to the target's `.s` word count.
