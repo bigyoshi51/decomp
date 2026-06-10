@@ -830,7 +830,11 @@ an approximate order; such double-dispatchers are loader-RE-gated. ALSO low-yiel
 fns (ldc1/sdc1/cvt.d density; m2c emits 'second half of f64'
 placeholders) -- m2c f64 reconstruction + IDO f64 register pairing
 diverge structurally (C234: +1pp). Check FP-width before grafting:
-f32-heavy = sweet spot (+44..+75pp), f64-heavy = skip or temper. Also: m2c recovering a RECURSIVE self-call
+f32-heavy = sweet spot (+44..+75pp), f64-heavy = skip or temper.
+THIRD low-yield class (454C4): BITWISE-FP -- float bits moved through
+int regs (high 0x44xxxxxx COP1-move density; m2c types FP-reg temps as
+s32, e.g. 's32 temp_f4'). m2c reconstructs bit-moves as int math; IDO
+emits different sequences (+7pp only). Also: m2c recovering a RECURSIVE self-call
 (jal to the fn's own address) needs the self-extern dropped -- the
 def is the decl.
 
