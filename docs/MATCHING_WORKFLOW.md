@@ -7502,3 +7502,21 @@ up 0x18C bytes BEFORE the edited symbol). Rules:
   name) BEFORE attempting a split.
 - The E410 sextet unit itself is PROVEN (38/38 zero diffs as one .c) --
   preserved in the wraps for the relayout promote.
+
+## Relayout-session drift audit (2026-06-10): the unit-alignment check + results
+
+Method (one command per unit): compare the unit's map .text base + a
+symbol's .o offset against the symbol's USO-named address. Results for
+the ready-body hosts:
+- game_libs_post0b: first symbol gl_func_00034458 sits at .o offset 0
+  but the unit's map base is 0x34414 -> -0x44 drift FROM THE START.
+- game_libs_tail: starts ALIGNED (gl_func_0000959C at base 0x959C) but
+  accumulates internal drift by mid-unit (E368 lands -0x10; trailing
+  +0xC pad) -- missing internal pads.
+- game_libs.c (catch-all): holds cross-object orphans (separately
+  documented).
+Consequence: ALL 10 ready byte-exact bodies (5D054, 3ECE4, the E410
+sextet, 52A7C, 40F4) need the relayout session; no quick carve exists.
+The relayout fix = reconciling each unit's INCLUDE sequence with the
+ROM's inter-fn pads (insert missing _pad sidecars until map addr ==
+USO name for every symbol), then carving/promoting becomes mechanical.
