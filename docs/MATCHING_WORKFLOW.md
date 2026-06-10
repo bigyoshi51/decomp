@@ -7345,3 +7345,17 @@ land only via .o-vs-expected identity; (3) the real fix is the 743C4
 boundary correction (+8 size), a focused-session item that will realign
 the whole region. Until then treat [0x743C4..0x748A0] like the known
 752A4 tail drift.
+
+## Drift-region root cause FOUND: gl_func_00073904 size 0x568 vs ROM 0x570 -- but the naive fix overshoots (alignment-aware relayout needed) (2026-06-10)
+
+Block-layout audit of game_libs_post2b_d pinpointed the drift source:
+ROM has a bare `jr ra; nop` stub at [0x73E6C..0x73E74) after 73904's own
+dual-exit end -- splat's 0x568 size drops those 2 words, shifting every
+later block. HOWEVER appending them (size -> 0x570) moved downstream
+content +8 instead of realigning: the INCLUDE_ASM unit inserts hidden
+inter-block alignment (7369C's 0x188 odd-end packs tight, yet the
+0x570-ended block got +8 before the next), and earlier compensations
+(the file-end 747F4_pad, TRUNCATE pad-up) interact. A correct fix must
+relayout the whole [0x73904..0x748A4) tail alignment-aware in one pass
+-- focused-session item, NOT tick-safe. Status quo (306-diff drift)
+deliberately restored and verified.
