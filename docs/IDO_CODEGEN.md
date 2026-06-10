@@ -13605,3 +13605,18 @@ prologue interleave in single-call wrappers (bootup 6204, 4 forms
 negative), (c) the lui->addiu intra-block split (eddproc 25C). When a
 trivial fn sits at exactly 2 position-swapped diffs with correct
 operands, check these three before sweeping.
+
+## Address-constant returns: the undefined_syms route (666FC, VALIDATED 2026-06-10)
+
+A fn returning an address constant with `lui;addiu` (ADDRESS style)
+cannot match from a literal (`return 0x41310` emits lui+ORI). Route:
+define `D_gl_<addr> = <addr>;` in undefined_syms_auto.txt (fed to ld
+via -T) and `return (int)&D_gl_<addr>;` -- emits lui/addiu with relocs
+that ld resolves to the exact target bytes. TWO GOTCHAS: (1) the
+INCLUDE being replaced may carry leading inter-fn pad words -- count
+them in the .s and preserve via a standalone >=2-word orphan pad
+block, then verify the SECTION is byte-identical, not just the fn;
+(2) the land script's pre-link .o byte_verify FALSE-NEGATIVES this
+class (build .o has relocs, expected .o had baked literals) -- refresh
+the unit's expected/ baseline (justified by the post-ld section gate,
+which is strictly stronger) and re-land.
