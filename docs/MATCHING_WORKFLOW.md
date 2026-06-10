@@ -7567,3 +7567,18 @@ Treat ALL drift fixes as attempt-with-snapshot-and-revert until the
 relayout session traces emissions exactly (objdump the .o before/after
 each edit, not just the symbol table). Confirmed second B5AC-class
 site: [0x70A0C..0x70A14) = 709DC's dropped FP-constant suffix.
+
+## False-attribution matches: a "100%" tiny leaf may be another fn's funnel (8940, 2026-06-10)
+
+timproc_uso_b5_func_00008940 (move v0,zero; jr ra; nop) was "matched"
+standalone as a -g3 unfilled-delay return-0 leaf -- but it is actually
+the goto-z funnel of the adjacent dispatcher 88A0 (whose branches
+target 0xA0/0xA4 = INTO it), and its nop is -O2 alignment pad, not an
+unfilled delay. Identical bytes, wrong attribution; the byte claim is
+true but the carve infrastructure (g3 blob + concat offsets) encodes
+the wrong model and BLOCKS the parent's land. Detection: any matched
+<=3-insn leaf whose PREDECESSOR's branches point past its own end is
+suspect -- check before trusting (and before building carve machinery
+around) tiny standalone matches. Fix path: dissolve the carve blob,
+extend the parent symbol, promote the parent's C (88A0's proven body
+waits in its wrap).
