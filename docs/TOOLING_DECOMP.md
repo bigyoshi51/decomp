@@ -922,7 +922,11 @@ build/non_matching) after any wrap-structure change -- incremental
 builds mask asm-processor's "symbol defined twice" that CI's clean
 build hits; (c) the wrap-pairing audit (body -> next #else -> next
 INCLUDE must name the same fn) across all touched fns costs seconds
-and would have caught both.
+and would have caught both. (d) EXTENSION (36224): an INCLUDE inside
+an EXISTING wrap's #else accepts a nested insert that compiles but is
+DEAD CODE (inner #ifdef NM inside outer #else never fires) -- the tell
+is a perfectly FLAT score. Check for an enclosing wrap (is the nearest
+preceding unmatched #ifdef/#else pair open?) before any insert.
 
 Addendum (kernel 5C50): (23) KERNEL BOUNDARY CAVEAT -- the kernel
 relayout verified SECTION bytes, not internal symbol boundaries;
