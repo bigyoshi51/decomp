@@ -8122,3 +8122,50 @@ honestly retracted (func_800058C0: -O1 won't pair two srl/andi/sb
 statements into srl;srl;andi;andi;sb;sb with a shared lui; NM-wrapped,
 episode deleted). Episodes for fixed fns got their final_c corrected
 in place + a relayout_note field.
+
+## game_libs +0xC tail overhang CLOSED (2026-06-10): the segment-end pad is BIN-BOUNDARY truth, not "drift to cover" {#game-libs-tail-pad-bin-boundary}
+
+The last full-ROM length defect (+0xC, everything from 0xE5A37C shifted) was
+NOT an extra reloc-table record. The `game_libs_post` table at 0xE5A378 is a
+**splat `bin` asset** (`[0xE5A378, bin, game_libs_post]` → `assets/
+game_libs_post.bin.o`, content fixed, position = wherever the preceding
+linked segment ends). What looked like "the build inserts record
+`00000028 00840002 00000000` at 0xe5a3c0" was a genuine base record observed
+shifted: the linked `.game_libs` section had grown to `TEXT_END=0x752AC`
+instead of the base-true **0x752A0** (= 0xE5A378 − 0xDE50D8), pushing the bin
++0xC. New ld-level relocs/symbols in C files (the suspected
+`&D_gl_00041310` / `D_00000000` returns) were innocent — those live in the
+.o reloc ledger, they cannot add table records to a bin asset.
+
+How the overhang crept in (two commits, same day, each "byte-verified"
+against the previous *build* snapshot, not the base ROM):
+
+1. contramread carve (83a5843ff) grew `gl_func_0007526C_pad.s` 2→4 words,
+   misreading base's `00000001 00007D58` words at 0xE5A37C/0xE5A380 as
+   "pre-existing drift to be covered by assembler zero-padding". **Those are
+   the first words of game_libs_post.bin itself.** In a correct-length build
+   they match automatically; they only looked like drift because the segment
+   was being compared while already/about-to-be overhung.
+2. the 75264 boundary re-carve (0704241e4) then preserved that wrong tail
+   "byte-identically" and carved the new pad as 5 words (TRUNCATE 0x48),
+   locking in +0xC.
+
+Fix (407581d36): pad sidecar 5→2 words (base truth: last fn ends VRAM
+0x75298, two zero words to 0x752A0), `TRUNCATE_TEXT 0x48→0x3C`, expected/.o
+refreshed. Result: ROM length delta 0; `game_libs_post` + everything after
+byte-exact; full-ROM residue = 414 positional word diffs = 394 reloc-ledger
+words in game_libs (0xDE5698..0xE59978) + 20 unresolved-jal words (arcproc 8,
+h2hproc 6, boarder5 3, eddproc 3).
+
+Lessons:
+- **A segment-tail pad's length is fixed by the NEXT segment's yaml start,
+  full stop.** `pad_words = (next_seg_rom_start − fn_end_rom)/4`. Never size
+  it "to match the previous build's tail" — that propagates overhangs.
+- **"Byte-identical to the pre-change snapshot" is the wrong gate at a
+  segment boundary.** Snapshot-relative verification preserves an existing
+  layout bug forever. At any boundary-touching change, also check the map:
+  `grep <seg>_TEXT_END build/tenshoe.map` vs the yaml-derived truth.
+- Non-zero base bytes right after your segment's zero pad are almost never
+  "drift you must emit" — they're the next asset's content. If you find
+  yourself adding zero words to *cover* non-zero base bytes, stop: you're
+  about to shift the ROM.
