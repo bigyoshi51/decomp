@@ -13056,3 +13056,14 @@ block with explicit C control flow. Register-class note: a value crossing
 the block lives in an s-reg; with two `register int` locals the
 DECLARATION ORDER sets s0/s1 (first-declared = s0). Matched verbatim on
 gl_func_00074DB4 (74/74).
+
+### -Olimit fallback: assignment-in-condition avoids the temp's home slot (2026-06-10)
+
+Under the -O1 -Olimit 1 fallback every named local gets a stack home --
+including a temp introduced just to avoid a double-read. When a target
+loads a value once and reuses the register WITHOUT a home store (e.g.
+lhu t7; sh t7 -> global; bnez t7), the source used assignment-in-
+condition: `if ((global = expr) == 0) global = 1;` -- the condition
+reads the assignment expression's value register directly. A named
+`v = expr; global = v; if (v == 0)...` emits an extra sh v,home(sp).
+Found on gl_func_0007507C (PI-manager thread main).
