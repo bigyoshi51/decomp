@@ -7520,3 +7520,16 @@ sextet, 52A7C, 40F4) need the relayout session; no quick carve exists.
 The relayout fix = reconciling each unit's INCLUDE sequence with the
 ROM's inter-fn pads (insert missing _pad sidecars until map addr ==
 USO name for every symbol), then carving/promoting becomes mechanical.
+
+## SUFFIX-removal fallout class: audit every former instruction-SUFFIX site (B5AC, 2026-06-10)
+
+The 2026-05-23 ban on instruction-appending SUFFIX_BYTES removed the
+mechanism but, at least at gl_func_0000B560/B5AC, did NOT re-home the
+bytes: 16 bytes of real ROM code [0xB59C..0xB5AC) are now emitted by
+NOBODY, despite the site comment claiming "those bytes now belong to
+B5AC's own symbol". Audit lead: grep src/ for "REMOVED 2026-05-23"
+near SUFFIX mentions and verify each site's former suffix bytes are
+actually emitted (per-symbol drift scan of the unit, or check the
+successor .s starts at the pre-suffix address). Each unfixed site is
+both missing ROM code AND a drift contributor. Fixes belong to the
+relayout balanced pass (they change unit sizes).
