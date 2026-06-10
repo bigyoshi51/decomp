@@ -7227,3 +7227,18 @@ per-fragment wraps into one C body). Verified on gui_uso [0x00..0x148)
 char→glyph mapper (12 fragments → 1 fn, byte-identical post-merge).
 Residual blocker there: a 2-insn USO entry-0 loader trampoline prefix
 (`b <far>; sw a0,0(sp)`) before the mapper body — PREFIX_BYTES territory.
+
+## USO merge-safety proof: scan the module's section tables for the suspect entry offset (2026-06-09)
+
+When a fall-through fragment merge is blocked on "is offset X also an
+independent runtime entry?", answer it from the USO module tables:
+`scripts/uso-reloc-symbolize.py <segment> <module_rom_offset>` (or a direct
+typed-section scan). GOTCHA: the module argument is the ROM offset of the
+MODULE header magic, not the filesystem TOC entry — e.g. gui.uso's fs entry
+is at 0x58D484 (magic + name) but the module with the typed section table
+is the SECOND magic at 0x58D4AC ("no Text/TextReloc" means you passed the
+fs entry). Scan the non-text sections for the suspect offset as a word
+value: if the head offset appears and the suspect offset appears NOWHERE,
+the suspect is not an entry point and the merge is byte-safe. Verified on
+gui_uso 0x8C0/0x918 (merged after 0x918 showed zero references; the
+"implicit $v0-input convention" was the fall-through).
