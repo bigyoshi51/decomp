@@ -13276,3 +13276,12 @@ Combined rule: match the TARGET's loop structure first (compact -> goto
 form per 8988/21D2C; unrolled+pipelined -> do-while), then tune the
 counter. The 5BDC0 "IV cap" class narrows to counter-form residuals
 once the structure matches.
+
+Addendum to the decl-order slot lever (2026-06-10, 685C0): the lever's
+full domain is NAMED, SPILLED, -O1/-O2 variables. When the slot
+residual belongs to UNNAMED caller-save temps (values spilled across
+calls by the allocator, e.g. assertion-call argument temps), the decl
+list has nothing to grip -- all 6 permutations were byte-neutral on
+685C0. Triage order for slot residuals: (1) is the spilled value a
+named C variable? -> decl-order lever; (2) unnamed caller-save temp or
+-O0 internal temp? -> cap (8C3C/685C0 class), queue for uoptlist.
