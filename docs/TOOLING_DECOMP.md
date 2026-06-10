@@ -857,3 +857,13 @@ after it, retarget the offending branch to an appended tail block
 [duplicated delay insn; b continuation]. Loop until m2c passes (B3C
 needed 3). (19) m2c pointer-typed locals compared/arith'd with ints
 need (s32) cast sweeps -- expect "Unacceptable operand of ==" tails.
+
+Addendum (31F4C): (20) GRAFT PRE-FILTER -- if the disasm shows branch
+targets far outside the fn (0x400xxxx-class) or backwards past the
+start, dump the raw words first: 0x40xxxxxx = mfc0/mtc0 (CP0) words
+that objdump renders as bogus branches. CP0 + zero-pad lead-ins +
+busy-wait bne loops + cross-symbol backwards branches = a HANDWRITTEN
+system block (permanent INCLUDE, reference_1080_mips3_runtime_helpers
+class), not a splat fragment -- do not graft, merge, or decode. Caught
+at game_libs [0x31DF8..0x32884) after one wasted m2c attempt; the
+pre-filter costs one objdump grep.
