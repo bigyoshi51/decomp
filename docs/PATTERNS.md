@@ -9153,3 +9153,23 @@ When a game_uso NM wrap is N insns short of target, do NOT assume a missing logi
 ### Gotcha: NULL/threshold gates often fall through to a COMMON TAIL, not return (2026-06-02)
 
 In game_uso builders, early gates like `if (r1==0) goto X` frequently target a COMMON TAIL (e.g. a counter bump + flag clear that must run on every path), NOT the function epilogue. Decoding them as `if (r1==0) return;` skips the tail and caps the match. Check where the `beq ...,zero,OFF` targets land: if OFF is a block of work BEFORE the `lw ra; jr ra` epilogue (e.g. `lw a2,0x5C(a3); addiu a2,1; sw a2,0x5C(a3); ... and ~4 ...`), it's a shared tail — model the gates as nested `if (ok) { ... }` and put the tail after, unconditional. game_uso_func_0000A7F8: the r1/m/r2-NULL and FP-threshold gates all fall through to `cnt=obj->0x5C+1; obj->0x5C=cnt; if(cnt>=10) obj->0x68&=~4;`. Fixing the early-`return`s to fall-through (plus decoding the dead-alloc cross-product middle) took it 12.9%->36.1%.
+
+## Shattered jumptable switch: byte-twin leaves + shared-tail targets = ONE function (273B8, 13->1)
+
+Recognition: a dense region of tiny "functions" where (a) several
+symbols are byte-twins differing only in offsets/temps, (b) multiple
+symbols branch forward into one short symbol's interior (the "hub"),
+(c) temp numbers are mid-sequence (not t6-start), and (d) the first
+symbol ends with `jr tN` (register jump, not jr ra) -- that region is
+ONE jumptable switch that splat shattered at case-body boundaries.
+The "hub" is the default/epilogue; the byte-twins are sibling cases.
+Recipe: verify zero out-branches over the WHOLE region (word-scan),
+merge all .s bodies into the first symbol (INCLUDE-space, layout-
+safe), then decode as `switch` on the dispatch load -- IDO emits the
+jumptable in .rodata (reloc'd) and the case bodies in source order.
+game_libs_func_000273B8: 13 symbols -> one 14-case message handler,
+structurally complete same-tick. Case-body authoring rule: load a
+reused index ONCE into an int (`int idx = msg[3]; if (idx < 8) ...
+[idx]`) -- separate loads for compare and index cost +1 insn and a
+temp. Residual class: periodic skipped temps at case starts
+(t8/t1/t5) + first-pair inversion -- not yet steered from C.
