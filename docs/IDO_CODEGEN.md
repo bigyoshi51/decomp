@@ -13501,3 +13501,12 @@ PURE position swap, strictly closer). Compare the diff CONTENT, not
 just the count, and run the in-tree score BEFORE the commit claiming
 improvement -- the rule exists because the slip happened twice now
 (52994, 2088).
+
+Addendum to the &arg entry-home trick (2026-06-10, 5B5D8): when a
+frameless target STARTS with `sw aN, home(sp)` and the wrap emits one
+insn short, the original source ADDRESS-TAKES that arg (even an
+otherwise-unused one) -- `(void)&aN;` recovers the entry store
+exactly. Recognition: target insn count = wrap+1 and the extra is an
+entry-position arg store to its natural home slot (a0->0(sp),
+a1->4(sp), ...). Residual after recovery may be the skipped-temp
+cascade (5B5D8: t6 skip + sll-before-load -- uoptlist class).
