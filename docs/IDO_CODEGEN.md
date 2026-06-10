@@ -13094,3 +13094,12 @@ Recognition: "temps start at tN+1 / something consumed tN" + a value
 arriving in an arg register = suspect (a) a dead-arg overwrite and (b) a
 boundary mis-split where the fn's true first insn sits in a predecessor
 orphan (here 75260's lui/lw was the fn's own first statement).
+
+Addendum to branch-into-adjacent-return-leaf-cap (2026-06-10): the 75264
+boundary-dissolves-cap precedent (merge the pair, re-test) does NOT
+generalize to this family. Merged mgrproc 140+15C as one fn and swept
+if/return, goto-label, if/else, and named-temp shapes at 7.1 -O1/-O2
+with -g3: always 9 insns (preset-default v0 or branch-likely), never
+the 10-insn two-separate-return-blocks form. Distinguishing test: the
+75264 case had a FRAME + arg-register anomaly (boundary artifacts);
+pure two-block return leaves with no frame are the real cap.
