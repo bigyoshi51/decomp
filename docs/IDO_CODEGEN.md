@@ -13465,3 +13465,10 @@ a/v regs entirely. Extends the func_00010324 array-form lift: the
 array form controls PSEUDO CREATION ORDER, not just addressing shape.
 Diagnostic: inverted adjacent temp pairs on independent loads = try
 the array form before calling it a rename cap.
+
+Addendum to WEB-ORDER INVERSION (2026-06-10, 2A8C): the lever's domain
+is SINGLE-BLOCK chains (E04: one block, two webs, CSE-merge color
+follows first pseudo). In multi-arm shapes where each arm re-derives
+the same chain after DIFFERENT preceding calls, inlining is neutral --
+the v0-reuse-after-void-call coloring dominates per-arm. Those pairs
+are uoptlist class.
