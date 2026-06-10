@@ -724,3 +724,15 @@ Converting all 8 such sites in game_uso 940 to the
 in-tree (89.74 -> 97.24). SWEEP LEAD: grep src/ for
 `\*\((s32|u32|char|int) \*\)0x[0-9A-Fa-f]+\b` inside NM wraps -- every
 m2c-lifted USO wrap is a candidate for the same mechanical fix.
+
+CAVEAT to the raw-absolute sweep (2026-06-10): the conversion is
+UNIT-CONVENTION-DEPENDENT. game_libs_post's 241 sites REGRESSED the
+unit 47.0 -> 19.1 (reverted; the measure gate caught it): in game_libs
+wraps, m2c's bare absolutes are placeholders for OTHER loaded bases
+(not &D) -- converting adds wrong lui/addiu pairs and size-shifts
+dozens of mid-% wraps. The conversion is only correct where the TARGET
+materializes the D base at those sites (game_uso 940: +7.5pp; timproc
+b5: +0.34pp). Rule: convert per-file ONLY with the unit measure gate,
+and check a sample site's target asm for the lui/addiu+reloc pair
+first. game_libs pools (post 204, game_libs.c 58, post0b 48) are OFF
+the sweep list.
