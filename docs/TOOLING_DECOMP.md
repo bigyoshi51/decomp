@@ -714,3 +714,13 @@ have 14 out-branches and a missing 0xD0 tail). The ONLY safe pattern:
 `/\* [0-9A-Fa-f]+ ([0-9A-Fa-f]{8}) ([0-9A-Fa-f]{8}) \*/` -- every line
 carries the addr+word pair in its comment regardless of rendering.
 Better: use scripts/disasm-raw.py instead of ad-hoc regexes.
+
+Addendum (2026-06-10, 940 in-tree): the raw-absolute gotcha is not
+just a harness issue -- m2c lifts of USO code leave D-references as
+bare `*(s32 *)0xNN` / `*(char *)0xNN` absolutes IN WRAP BODIES, which
+compile to folded small-address loads (wrong shape AND wrong relocs).
+Converting all 8 such sites in game_uso 940 to the
+`*(int *)((char *)&D_00000000 + 0xNN)` extern form was worth +7.5pp
+in-tree (89.74 -> 97.24). SWEEP LEAD: grep src/ for
+`\*\((s32|u32|char|int) \*\)0x[0-9A-Fa-f]+\b` inside NM wraps -- every
+m2c-lifted USO wrap is a candidate for the same mechanical fix.
