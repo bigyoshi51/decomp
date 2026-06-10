@@ -7400,3 +7400,23 @@ outside that range (e.g. 0x2DF64, whose bytes belong inside
 game_libs_post.c.o's span). The relayout session must ALSO re-home these
 cross-object orphans to the unit that actually covers their address;
 until then their bytes cannot be landing where their names claim.
+
+## Region-wide out-branch census: classify a shattered tiny-symbol field in one pass (2026-06-10)
+
+When a candidate's m2c fails on a missing label inside a DENSE field of
+tiny symbols (the [0x27300..0x276E4) game_libs region had 31 symbols of
+0x8-0x68), don't analyze symbols one at a time: scan ALL of them at once
+(parse every .s word, decode branch opcodes, resolve each target to its
+owning symbol). Classification rules from the result table:
+- cross-branches landing at +0/+4 of the NEXT symbol's start = ONE
+  shattered function -> merge the chain (sum of sizes must equal the
+  span). INCLUDE-to-INCLUDE merges are LAYOUT-SAFE (verify with a
+  build-vs-build objcopy snapshot: byte-identical) -- unlike C-for-
+  INCLUDE swaps.
+- multiple callers branching to the MIDDLE of one small symbol = a
+  shared-tail hub (branch-into-adjacent-leaf cap family); keep separate,
+  document the hub members.
+- branches into already-MATCHED C leaves = also the shared-tail cap; do
+  NOT merge those (they have real entries).
+Found: the 275F4 4-symbol chain (merged to 0xC4) and the 27534+8
+four-caller hub in a single census.
