@@ -13025,3 +13025,21 @@ residual word diffs, all from this perturbation — permuter territory, not
 structure. Also a reminder: re-derive call COUNTS from raw words before
 trusting an old wrap's decode (the prior note said 2 jals + a prologue
 donation; the truth was 3 jals, clean unit).
+
+### 5.3 -O1: typed struct members do NOT force per-use arg reloads (unlike -O0); register-var reuse reads as one C variable (2026-06-10)
+
+Two findings from gl_func_00074C04 (84-insn 1080 process-state handler):
+- At 5.3 -O1, a homed pointer arg accessed via typed struct members still
+  gets CSE'd within a basic block (the second access reuses the earlier
+  loaded reg) — the "typed members force reloads" lever is an -O0/-O1
+  RESIDENCY effect for the FIRST load per block, not a per-use guarantee.
+  If a target reloads the arg inside a same-block arm, that needs a
+  different lever (BB boundary via statement restructure, or the volatile
+  pointer-fetch trick) — typed members alone won't do it.
+- When a target's $sN holds DIFFERENT values across the function (e.g.
+  s1 = state early, s1 = a call result later), read it as ONE C variable
+  reused (`register int x; x = p->st; ... x = call(); use(x);`) — that
+  single-variable shape is what makes IDO allocate one s-reg for both
+  lifetimes. Two separate locals produce different allocation.
+Also: `if (x != 1) { if (x == 8) {...} } else {...}` produces the
+beq-to-far-arm + bne-to-tail layout (the ==1 body placed LAST).
