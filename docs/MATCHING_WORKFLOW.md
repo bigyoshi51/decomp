@@ -7647,3 +7647,14 @@ stands and block3's downstream symbols must not be ROM-byte-verified.
 Pad-sidecar caution extended: in asm-processor Yay0 units, a sidecar's
 EMITTED size can differ from its .word count -- verify the assembled
 block, not the .s.
+
+P0 sweep COMPLETE (2026-06-10): all Yay0 audit findings characterize
+to ONE root cause -- asm-processor pad/alignment emission around
+matched C in Yay0 units. Manifestations: timproc_b3 +4 (217C sidecar
+double-emit), timproc_b1 -0xC (1F64 missing pre-pad + short sidecar
+region), game_uso_block1 +0x90 (6+ inter-fn insertion sites, +4..+0xC
+each). No function MATCH is implicated anywhere (insertions sit
+between fns; the only false matches were the separately-retracted
+87F4/88A0 .s corruptions). One focused emission-tracing session
+(objdump each boundary's .o bytes, attribute every pad word) fixes all
+three blocks; coordinates are annotated at each unit head.
