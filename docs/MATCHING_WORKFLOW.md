@@ -168,6 +168,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Standalone >=2-word GLOBAL_ASM orphan blocks emit EXACTLY — the honest replacement for orphan SUFFIX_BYTES absorption](#standalone-orphan-global-asm-blocks) — _A free-standing `#pragma GLOBAL_ASM` block with `glabel _orphan_X, local` + N>=2 `.word`s placed between two fns emits byte-exactly at -O2 (skip-1 + N-1 fillers). Keeps BOTH neighbor fns matched C; robust to future re-matching (unlike .s-folds or "C-emit absorption"). Used for all restored stolen-prologue orphans 2026-06-10._
 - [1-word pads in asm-processor units: only two legal shapes (adjacent-asm fold, or recipe-level asserted-zero drop)](#one-word-pad-legal-shapes) — _A 1-word .text GLOBAL_ASM block emits +4 (8-byte placeholder minimum; route (c) tools patch rejected as too invasive — needs .text splice + symbol/reloc/jumptable/mdebug rebase in fixup_objfile). If a neighbor is an asm block: fold the word into its .s. If stuck between two MATCHED C fns and the pad is ZERO: keep the sidecar and drop the asserted-zero leftover in the Yay0 recipe (game_uso C0BC pattern). Never create new 1-word sidecars._
 - [Relayout fn-level events CLOSED: dropped SUFFIX-orphans, a wrong-word orphan merge, and the truncate-deficit signature](#relayout-fn-level-events-closed) — _All 4 fn-level shift events were self-inflicted; no false matches. Two were 2026-05-23 SUFFIX-purge orphan drops (restore as raw-.word INCLUDE_ASM + TRUNCATE bump); one was a size-neutral WRONG WORD from a botched orphan-merge (shift walker can't see it — always finish with a full word-diff under the known shift schedule); two were TRUNCATE_TEXT mis-measurements chopping the PREDECESSOR unit's last-fn tail, which the walker mis-anchors at the NEXT unit's carve head ("carve head short" is the red herring — check the predecessor's endlabel words vs map .text size first). TRUNCATE must equal ROM span + current in-unit alignment bloat._
+- [KERNEL RELAYOUT CLOSED: small shift-ledgers can be artifacts of a wholesale unit-order scramble; the truth-tiling + piece-TRUNCATE playbook](#kernel-relayout-closed-2026-06-10) — _Histogram walker worddiffs per KB first: ~100% density = the ld object order is wrong, not local events. Recover truth from name-encoded VRAM + objdump symtabs + content verify; split units at truth transitions (TRUNCATE_TEXT both trims and align-lowers); ld zero-fill covers pads before 16-aligned starts. New levers: IDO 32-aligns unreachable-epilogue blocks (TU-offset-mod-32 constraint => TU merge); post-prologue alt entries via undefined_syms absolutes + def rename; K&R no-arg call sinks $a0 home into jal delay; (T*)(void*)p double-cast flips a t-reg pair; (t=x) pins addu rs. 9 false/divergent matches found by tiling, 1 retracted (58C0)._
 - [GLOBAL_ASM .s gotchas: multi-line /* */ comments break asm-processor; lone %hi symbolization breaks bake-data-relocs; stale half-built .o after post-process failure](#global-asm-s-gotchas-2026-06-10) — _Single-line comments only in .s (multi-line blocks throw "without an initial glabel" or "incorrectly computed size"). Symbolizing a lui to %hi(sym) while its addiu partner stays a raw .word leaves a lone trailing R_MIPS_HI16 that bake-data-relocs rejects. A failed asm-processor post-process leaves a cc-only .o full of _asmpp_* placeholder fillers that make won't rebuild (.s files aren't deps) — rm the .o._
 
 
@@ -8042,3 +8043,82 @@ levers:
 
 Episodes for all six were updated in place (retraction step + corrected
 final_source) rather than deleted, since each fn now genuinely matches.
+
+## KERNEL RELAYOUT CLOSED (2026-06-10): segment byte+length-exact; the unit-order playbook {#kernel-relayout-closed-2026-06-10}
+
+Final state: kernel ROM range [0x1000..0xBBC0) is fully byte+length-exact
+vs baserom (walker: 0 events, 0 net shift, 0 residual word-diffs; global
+ROM delta dropped to whatever the remaining non-kernel segments owe).
+Branch agent-a commits 4fda399c9 + expected-refresh.
+
+**The real diagnosis beats the ledger.** The 9-event "+0x60 ledger" was a
+walker ARTIFACT: from kern+0x29B0 to 0x9E60 the build's unit ORDER never
+matched ROM at all (linker script order + several intra-unit definition
+orders were wrong since the original split). A ±0x80-probe shift walker
+walks a scrambled region as a worddiff sea and "resyncs" on coincidental
+16-word runs, producing a small fake ledger. ALWAYS histogram the
+worddiffs per KB before trusting a ledger: ~100% diff density = layout
+scramble, not local events.
+
+**Truth recovery without guessing**: every kernel fn name encodes its true
+VRAM (`func_8000XXXX`); objdump -t each unit .o for (offset,size,name),
+content-verify each symbol's bytes against baserom at its name address
+(reloc-tolerant: skip 0x0C/0x3C-headed and zero-lo16 words), pin the
+non-conforming names (`__osSetFpcCsr` etc.) by exact byte search, then
+sort by truth and tile. GAP/OVL annotations of +-4..0x14 are unit-end
+16-align pads and size-attribution slop; bigger ones are real defects.
+
+**The piece machinery** (all pre-existing, just applied at scale):
+- One .o per ROM-contiguous piece; split .c files at truth-transition
+  boundaries (33 new pieces from 17 units). Pieces inherit the parent's
+  OPT_FLAGS. End-of-block-based cuts (the closing `}`/`#endif`/INCLUDE
+  line of the PREVIOUS fn), never "back up from the next def over
+  comments" — NM-wrap blocks open with `#ifdef NON_MATCHING` + externs
+  long before the def and a start-based cutter strands them in the wrong
+  piece (burned once; also `git checkout --` on a half-split tree reverts
+  uncommitted fn fixes — reapply scripts, not memory).
+- TRUNCATE_TEXT = ROM span for every piece that is followed at a non-16-
+  aligned boundary (it also lowers sh_addralign to 4 = the bootup_uso
+  pattern). A piece whose .text already equals the span but STARTS
+  unaligned still needs a no-trim TRUNCATE just for the align-lowering
+  (kernel_029).
+- ld zero-fills gaps created by the NEXT object's 16-alignment — a 4-byte
+  ROM pad before a 16-aligned unit start needs NO mechanism at all.
+  Pads that alignment can't produce (0x10 of zeros between TUs at an
+  already-aligned boundary) = a >=2-word all-zero GLOBAL_ASM block
+  (kernel_019 0x7E90).
+
+**New codegen findings** (full details in the commit):
+- **IDO 32-byte-aligns an unreachable epilogue block** (forever-loop fns:
+  `goto loop` + dead epilogue). Pad-free emission requires the fn to sit
+  at the right TU offset mod 32 — kernel_055's fn only matches at TU
+  offset 0x130, which forced MERGING kernel_051+050+052+055 into the one
+  original TU (kernel_050.c). If a fn shows 4 dead nops before its
+  unreachable epilogue at offset X, check (X%32) before blaming the C
+  (also: top-test `while` vs `do-while` adds the same 4 nops there).
+- **Post-prologue alt entries**: ROM callers `jal fn+4` (skipping the
+  `addiu sp` word). Keep the C match by renaming the DEF to the true
+  start (fn-4 name) and defining the old name as a link-time absolute in
+  undefined_syms_auto.txt (prior art func_80009000/9030). Symbol-blind
+  per-.o verification can NEVER catch these — only resolved-jal word
+  compare can. 3 cases: func_800056F0, func_80008BB4, func_80008D4C.
+- **K&R no-arg call sinks the $a0 home into the jal delay slot**: when ROM
+  shows `jal; sw a0,N(sp)` but C emits `sw a0; jal; lw a0(delay)`, declare
+  the callee `extern s32 f();` and call `f()` with no args ($a0 passes
+  through untouched, runtime-identical) — func_800092B0.
+- **Double-cast `(T*)(void*)p` flips a t-reg allocno pair** in a pointer
+  compare without any extra emission (func_80006110 t1/t2 swap; the
+  `(t = p)` assignment-pin also flips it but homes t = dead sw).
+- **`(t = x)` assignment-expr pins x as addu rs** (integer commutative
+  operand-order lever, works where source-order swap does nothing) —
+  func_80000C88.
+- 5-word struct ASSIGNMENT (t7/t6-alternating block-copy idiom + store-
+  forwarding defeat) vs field-by-field copies — func_80000480; spot the
+  t7-FIRST alternating lw/sw pattern.
+
+**False matches surface as size deltas under the truth tiling**: 9 fns
+were divergent (sizes/regs off vs ROM), 8 fixed to byte-exact, 1
+honestly retracted (func_800058C0: -O1 won't pair two srl/andi/sb
+statements into srl;srl;andi;andi;sb;sb with a shared lui; NM-wrapped,
+episode deleted). Episodes for fixed fns got their final_c corrected
+in place + a relayout_note field.
