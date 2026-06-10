@@ -7257,3 +7257,16 @@ recipe, see docs/IDO_CODEGEN):
    default path gets them, the NM .o silently compiles with 7.1 -O2 and
    report.json shows ~88% for a function that is byte-exact in the ROM.
    Symptom: in-tree bytes EXACT but fuzzy < 100 → check the NM build vars.
+
+## Fragment-merge pre-check: grep EVERY fragment symbol across all src files (carve-outs!) (2026-06-09)
+
+Before merging splat fragments into a parent, grep each fragment's symbol
+across ALL of src/ (not just the segment's main .c) — a "fragment" may
+already be a MATCHED function living in its own carve-out unit with
+Makefile/linker placement. Caught live on timproc_uso_b5: the 87F4/88A0
+dispatcher-pair merge nearly swallowed func_00008940, which looked like
+the pair's shared return-0 tail but is a separately-matched -O2 -g3 leaf
+(timproc_uso_b5_g3_8940.c). The dispatcher's branches TAIL-SHARE into the
+next function's body (the shared-tail dispatch family) — that's normal and
+does NOT mean the leaf belongs inside the merge. Recovery if you already
+deleted the .s: git checkout -- <file>, then trim the merged parent.
