@@ -13266,3 +13266,13 @@ stride constant in $a0 freed after a jal), none of the three levers
 targeting is an allocator decision below the pseudo-creation-order
 surface. Such residuals go to the uoptlist regalloc-dump queue, not
 another shape sweep.
+
+Addendum to the loop-form rules (2026-06-10, 5E190): the unroll cuts
+BOTH ways. A target whose loop shows x4-unrolled body + software
+pipeline (peeled final iteration, next-element preload inside the body)
+NEEDS the do-while form to trigger IDO's unroller -- a flat for-loop
+suppresses it and emits the compact by-4 element-counter loop instead.
+Combined rule: match the TARGET's loop structure first (compact -> goto
+form per 8988/21D2C; unrolled+pipelined -> do-while), then tune the
+counter. The 5BDC0 "IV cap" class narrows to counter-form residuals
+once the structure matches.
