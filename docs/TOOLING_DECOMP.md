@@ -800,3 +800,18 @@ silently patches the wrong span (burned: a whole fixer pass no-op'd);
 (11) if m2c says "label .LXXXX does not exist", the .s window is
 UNDERSIZED (branch past declared end) -- re-extract through the gap
 from the verified block asset / byte-exact ROM, not the .s.
+
+Addendum (2E354): (12) inline jumptables in direct-linked game_libs --
+extract-uso-jumptable.py needs a standalone USO module and does not
+apply; SYNTHESIZE for m2c instead: case heads = the blocks after the
+jr, delimited by unconditional-b convergence (block-walk); entries in
+address order. The case ORDER is approximate -- expect m2c switch
+structuring to wobble (flatten broken switches to goto-blocks with
+case markers); refine later from the USO reloc records. (13) m2c
+resolves REAL stored jal targets as absolute fn-ptr casts
+`(T (*)(...))0xADDR(...)` -- convert to named externs (these are
+recovered callee identities!). (14) ORDER MATTERS: run the *0/*(T*)N
+absolute-deref conversions AFTER NULL->0 (or convert *NULL first) --
+NULL->0 mints new `*0`s. (15) m2c `M2C_ERROR(unset register)` reads +
+assignments from void-typed calls: placeholder with a loud marker
+comment, fix in refinement.
