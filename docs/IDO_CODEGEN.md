@@ -13126,3 +13126,11 @@ into a branch-likely delay slot means the assignment sits AFTER the
 conditional in source (IDO copies it into the taken path). Fixing this
 mis-decode took the 1130/10E4 twins from structurally-wrong shift
 bodies to 40/40-insn shapes with only register-renumber residuals.
+
+Addendum (2026-06-10, timproc 19C0): IDO 7.1 homes even an UNINITIALIZED
+`register float` -- `float g; buf[i]=g;` (plain or register) always
+emits lwc1-from-home before the stores. A target that stores $f0 N
+times with NO prior load/set of $f0 (incoming-garbage register) is
+therefore C-unreachable; it distinguishes the REAL caps in the
+quad-store family from the decode-error "caps" (contrast the 2030/2240
+and 1130/10E4 twin pairs, which fell to re-decode).
