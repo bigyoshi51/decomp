@@ -13212,3 +13212,9 @@ normalizes sp offsets -- spill-slot swaps are invisible to it, see the
 false-zero warning). Candidates: every cap documented as "spill-slot/
 frame-slot allocation artifact". Extends the existing interleave-decl-
 spill-slot (int) entry to floats and to the split-decl trick.
+
+Addendum to the decl-order slot lever (2026-06-10, 8C3C): the lever is
+-O1/-O2 ONLY. At -O0 every named local gets a slot AND frame space, so
+pad declarations GROW the frame instead of permuting slots; and -O0
+"temp-slot" residuals usually neighbor unnamed compiler-internal temps
+(no decl list to permute). -O0 temp-slot caps (8C3C class) stand.
