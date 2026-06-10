@@ -7189,6 +7189,13 @@ built with **IDO 5.3 -O1** — verbatim libreultra source matches byte-exact whe
    delta for game_libs is +0xDE50D8): new fns EXACT + zero new diff words.
 5. NM wraps riding inside a 5.3 unit compile at 5.3 -O1 in the non_matching
    build — cosmetic fuzzy-% drift, acceptable.
+6. **CI: a new per-file COMPILER dependency must be added to the workflow's
+   toolchain download** — `.github/workflows/build.yml` only fetched IDO 7.1;
+   the first ido53-unit push broke `make objects` in CI with Error 127
+   (run 27246956960) while every local check passed (tools/ is local-only,
+   land script doesn't run CI's recipe). decompals v1.2 ships
+   `ido-5.3-recomp-linux.tar.gz`; fetch into
+   `tools/ido-static-recomp/build/5.3/out`. Fixed 2026-06-09.
 
 ## game_libs per-file -O1 split: only works for byte-exact-at-O1 LEAF functions (2026-06-06)
 
