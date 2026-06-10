@@ -7470,3 +7470,19 @@ header fails with a .size-expression error. Also: a leading-nop-only
 "function" (N nops + jr/nop) is usually misattributed inter-fn padding
 + a real empty fn -- split it (INCLUDE restructures are layout-safe,
 verify with the build-vs-build snapshot).
+
+## Wrap-rewrite scripts: never anchor on rindex('/*') -- and ALWAYS snapshot-verify (52A7C incident)
+
+When programmatically replacing an #ifdef NON_MATCHING wrap, anchoring
+the region start with rindex('/*', 0, ifdef_pos) walks back to the
+NEAREST comment open -- which may belong to a PRECEDING function,
+silently deleting matched neighbors (the 52A7C rewrite deleted the
+matched 52918 + the 52994 wrap + two accessors; first divergence showed
+up 0x18C bytes BEFORE the edited symbol). Rules:
+- Anchor the start at the '#ifdef NON_MATCHING' line itself; put new
+  comments INSIDE the ifdef, never above it.
+- After ANY src surgery in a layout-sensitive unit, diff the section
+  against the pre-change objcopy snapshot BEFORE committing; "build has
+  0 errors" does not catch deleted functions.
+- Recovery recipe: git show HEAD:<file>, locate the region between two
+  stable anchors (neighboring INCLUDE/#endif lines), splice verbatim.
