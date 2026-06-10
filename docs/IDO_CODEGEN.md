@@ -12902,3 +12902,20 @@ offset folded into the old register (emits `lw t8,0xC(v1); addiu v1,v1,0xC;
 ... sw t9,0(v1)`). The permuter signals this pool mismatch by finding a
 score≈5 mutant that references the post-bump pointer with a WRONG offset —
 take the register-pool hint, fix the semantics by hand.
+
+## Zero-cost live-range extension: trailing empty `if (x) {}` parks a dead value in its register (companion to the register-pool entry) — 2026-06-09
+
+When a register-pool fix needs `$v0` (or any reg) OCCUPIED across a region
+but the occupying value is semantically dead there, name it and add a
+trailing **empty** `if (x) {}` after the region: IDO eliminates the test
+AFTER liveness/allocation, so the web extends with ZERO emitted
+instructions. Combine with the assignment-expression form
+`r = (*(int*)(addr) = call(...))` when the store must stay at its early
+scheduled position but the stored value needs a name. Verified on
+gl_func_0003D914 (38/38 exact): `r = (*(int*)(s0+0x2C) = fn(...)); ...
+s0 = v1; if (r) {}` parked r in `$v0` through the loop tail, forcing the
+cursor-advance load into the `$t1` expression-temp pool and `v1` into
+`$v1`. Contrast with `return r` (conservative loop liveness -> spill) and
+plain extended scope (dead-code eliminated INCLUDING liveness). The
+permuter surfaces both ingredients separately as frame-bloated mutants
+(`if (new_var) {}` trailers, compound-assignment stores) — combine by hand.
