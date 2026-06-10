@@ -12850,3 +12850,28 @@ When a constant multiply `x * N` (N a small const like 6, 12, 10) is used MULTIP
 Inverse problem of cse-bust-via-distinct-externs: sometimes the TARGET reloads a value (e.g. a struct pointer `obj->field`) before every use, while clean C gets CSE'd to a single load. Common case: a series of stores THROUGH a pointer `obj->p->x = ...; obj->p->y = ...;` — the target reloads `obj->p` each time (IDO can't prove the through-pointer stores don't alias `obj->p` itself), but a repeated identical `*(T**)(obj+off)` deref in C gets locally CSE'd to one load (fewer insns than target).
 
 **Lever:** make the pointer-FETCH volatile so each use reloads. For loading an `int*` from `obj+8` and indexing it: `#define P (*(int * volatile *)((char*)obj + 8))` then `P[0]=..; P[1]=..;`. The `volatile` is on the pointer being read (forces reload each `P`), not on the store target. arcproc_uso_func_00000688: 50.5% → 54.5% (the per-store `lw ...,8(a0)` reloads then matched the target). Residual there was an unrelated loop-counter spill. Use when the only divergence is "target reloads, mine CSE'd".
+
+## `b .+1` (branch to next insn) with a load in its delay = if/ELSE whose one-insn else-arm was hoisted above the branch
+
+When target -O2 code shows an unconditional `b` targeting the IMMEDIATELY
+following instruction with a meaningful load in its delay slot, e.g.:
+```
+or   v1,zero,zero      # <- else-arm (v1=0) HOISTED above the test
+beq  t0,zero,.MERGE
+ sw  t0,0x20(sp)       # delay: first if-body insn (safe speculative)
+lw   t1,4(t0)
+sw   t1,0x24(sp)
+b    .MERGE            # .MERGE is the very next insn
+ lw  v1,0(t0)          # delay: last if-body insn (overwrites the hoisted 0)
+.MERGE: bne v1,...
+```
+this is NOT `v1 = 0; if (...) {...}` (common-init) — it is `if (...) {...}
+else { v1 = 0; }` where IDO hoisted the single-insn else-arm above the
+branch and kept the if-body's jump-over-else (now jumping over nothing).
+Writing it as hoisted-common-init compiles to an inverted `bne +N` guard
+with a separate exit block instead. Verified on gl_func_0003D914
+(16.4→99.7%): the if/else form + `p[0]=p[1]` hoisted above the test (which
+becomes the filled beq delay) reproduced the exact layout. Related: a
+2-element local pointer ARRAY (`T *p[2]`) is what keeps two adjacent
+sp-slot locals (0x20/0x24) stack-resident with per-iteration stores at -O2
+— scalar locals get register-promoted; array slots don't.
