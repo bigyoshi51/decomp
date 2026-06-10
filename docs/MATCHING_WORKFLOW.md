@@ -7330,3 +7330,18 @@ double-wrapped function: flatten to ONE wrap first, keeping the better
 body (grep `#ifdef NON_MATCHING` count per function). Found on timproc
 CB40 where the old draft's comment even described a .s merge that was
 never executed.
+
+## game_libs pre-existing drift region mapped: [0x743C4..0x748A0] -- ROM-compare unusable there (2026-06-10)
+
+The known pre-existing NM-region drift (743C4 declared 0x100 vs actual
+0x108) was precisely mapped: build-vs-ROM diffs cluster EXACTLY in
+[0x743C4..0x748A0] (306 words, a 4-byte content shift) and nowhere else
+in game_libs (besides the final 8-byte tail). Consequences: (1) any
+byte-verify window overlapping this range shows shift diffs that are NOT
+caused by your change -- compare PRE-change build vs POST-change build
+instead; (2) in-place C matches inside the range (e.g. the
+74894 int-reader, found via template scan) cannot be ROM-verified and
+land only via .o-vs-expected identity; (3) the real fix is the 743C4
+boundary correction (+8 size), a focused-session item that will realign
+the whole region. Until then treat [0x743C4..0x748A0] like the known
+752A4 tail drift.
