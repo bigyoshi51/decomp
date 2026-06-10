@@ -7633,3 +7633,17 @@ assets/<seg>_block_N.bin ground truth; any C "match" whose .s
 disagrees with the block bin is suspect, and any episode whose region
 diffs is candidate-false. The audit script one-liner is in this entry's
 git commit.
+
+Block3 P0 triage (2026-06-10): the 963 diffs = ONE +4 shift at the
+217C/21B0 boundary, latent since the 2026-04-20 217C match. The
+1-word pad sidecar emits as TWO words in the assembled block (suspect:
+asm-processor aligns the GLOBAL_ASM splice to 8 before emitting);
+removing it emits zero; an empty .s block is dropped entirely. The
+2026-06-09 b1/b3 twin lands are EXONERATED -- their regions show only
+reloc-jal-class diffs. Fix needs an asm-processor emission trace
+(objdump the .o around the boundary, find what owns each zero word) --
+queued as the focused-session item; until then the +4 status quo
+stands and block3's downstream symbols must not be ROM-byte-verified.
+Pad-sidecar caution extended: in asm-processor Yay0 units, a sidecar's
+EMITTED size can differ from its .word count -- verify the assembled
+block, not the .s.
