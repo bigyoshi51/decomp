@@ -13134,3 +13134,15 @@ times with NO prior load/set of $f0 (incoming-garbage register) is
 therefore C-unreachable; it distinguishes the REAL caps in the
 quad-store family from the decode-error "caps" (contrast the 2030/2240
 and 1130/10E4 twin pairs, which fell to re-decode).
+
+## addu operand-order canonical: scaled-index-first is the only C-reachable form (timproc 2740)
+
+For `base + idx*K` address computation (shift-decomposed multiply into
+a temp, then addu), IDO 7.1 always emits `addu rd, <scaled>, <base>`
+regardless of the C spelling -- tested ptr+int, int+ptr, (char*)base
+arith, &arr[idx], struct-pointer indexing, and K*idx vs idx*K: all six
+emit scaled-first. A target with `addu rd, <base>, <scaled>`
+(base-first) is the OTHER canonical and not C-reachable with our
+binary; treat those (and their dependent loads) as the same cosmetic
+cap class as the documented beq operand order. Spotting it: the diff
+word pair differs only in rs/rt swap (e.g. 004F1821 vs 01E21821).
