@@ -13285,3 +13285,10 @@ list has nothing to grip -- all 6 permutations were byte-neutral on
 685C0. Triage order for slot residuals: (1) is the spilled value a
 named C variable? -> decl-order lever; (2) unnamed caller-save temp or
 -O0 internal temp? -> cap (8C3C/685C0 class), queue for uoptlist.
+
+Addendum 2 to the pseudo-order family domain (2026-06-10, game_uso
+3ED4): the arg-register boundary covers FP arg registers too -- a div
+result the target colors into $f12 (the freed FP call-arg register) is
+as unreachable as the 1130 $a0 stride case; FP early-pseudo is neutral
+and arg-then-result single-web forms disturb jal-delay scheduling.
+INT and FP arg-reg residuals both go to the uoptlist queue.
