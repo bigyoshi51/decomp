@@ -13218,3 +13218,14 @@ Addendum to the decl-order slot lever (2026-06-10, 8C3C): the lever is
 pad declarations GROW the frame instead of permuting slots; and -O0
 "temp-slot" residuals usually neighbor unnamed compiler-internal temps
 (no decl list to permute). -O0 temp-slot caps (8C3C class) stand.
+
+## WEB-ORDER INVERSION: inline the first chain to flip v0/v1 web coloring (h2hproc E04, 12->2)
+
+When target colors two derived pointers root=v1/slot=v0 but C emits the
+swap (root assigned first -> v0), drop the named root and INLINE the
+full chain into the slot assignment, then re-derive root inline at its
+use. IDO's CSE merges the duplicate base loads back to ONE instruction,
+but the merged web takes the color of the FIRST-created pseudo -- so
+making slot's chain textually first flips the pair. Companion to the
+inlined-chain temp-pool lever (1908) and the if(1){} BB lever; try this
+when those two do not bite on a v0/v1-order residual.
