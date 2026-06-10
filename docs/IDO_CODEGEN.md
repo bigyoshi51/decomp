@@ -13043,3 +13043,16 @@ Two findings from gl_func_00074C04 (84-insn 1080 process-state handler):
   lifetimes. Two separate locals produce different allocation.
 Also: `if (x != 1) { if (x == 8) {...} } else {...}` produces the
 beq-to-far-arm + bne-to-tail layout (the ==1 body placed LAST).
+
+### FCSR save/set/cvt.w.s/check/retry block = ONE C `(u32)float` cast; lui 0x4F800000 add = `(float)(u32)` (2026-06-10)
+
+When target asm shows the ~20-insn sequence `cfc1 tA,$31; ctc1 1,$31;
+cvt.w.s; cfc1; andi 0x78; [retry with sub.s of 0x4F000000 + or 0x80000000
+| li -1]; ctc1 tA,$31`, that is IDO's INLINE float->unsigned conversion --
+write a single `(unsigned)floatexpr` cast in C and the whole block emits
+verbatim (5.3 and 7.1, -O1/-O2, -mips2). Similarly `mtc1; cvt.s.w; bgez
+skip; add 0x4F800000` = `(float)(u32)intvar`. Do NOT try to reproduce the
+block with explicit C control flow. Register-class note: a value crossing
+the block lives in an s-reg; with two `register int` locals the
+DECLARATION ORDER sets s0/s1 (first-declared = s0). Matched verbatim on
+gl_func_00074DB4 (74/74).
