@@ -7557,3 +7557,13 @@ SUFFIX-fallout audit, first pass (2026-06-10):
   audit needs the uncompressed .text.bin comparison method instead.
 Method note: relative transitions WITHIN a unit are meaningful even
 when the unit-wide base offset is uncertain.
+
+Addendum to the relayout audit (2026-06-10, post1c attempt): symbol-gap
+arithmetic that sums to NET ZERO can still grow the unit -- the
+post1c fix (+8 prepend, two -4 pad deletions) grew the section and
+shifted diffs to the end; some emission contributor (align directives,
+a pad consumed differently) is invisible to the per-symbol gap math.
+Treat ALL drift fixes as attempt-with-snapshot-and-revert until the
+relayout session traces emissions exactly (objdump the .o before/after
+each edit, not just the symbol table). Confirmed second B5AC-class
+site: [0x70A0C..0x70A14) = 709DC's dropped FP-constant suffix.
