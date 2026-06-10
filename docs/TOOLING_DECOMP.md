@@ -666,3 +666,13 @@ confirm with the direct word-scan -- it is ~10 lines of python and
 decides merges definitively. (Same scan also catches the size-vs-word-
 count mismatches from lowercase-hex comment lines that simple regexes
 miss.)
+
+## Candidate census: use report.json, never grep src for definitions (2026-06-10)
+
+Three false "unstarted" candidates in one tick: grep-based "has no C
+def" checks miss pointer-return defs (`void *fn(`), K&R implicit-int
+defs (`fn(a0) int *a0; {`), and macro-wrapped forms. 1080 now has
+`scripts/list-unstarted.py` (parses report.json fuzzy_match_percent,
+sorts by size, flags BARE vs WRAPPED). Refresh report.json first. The
+proc-USO family (boarder1/2, n64proc, eddproc, h2hproc, titproc) was
+verified FULLY matched in the same pass -- don't re-census it.
