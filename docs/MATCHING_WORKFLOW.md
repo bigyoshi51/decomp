@@ -7708,3 +7708,13 @@ assembled block -- built runs -8 from 0x21FC while the sibling
 absorption (1870) works. Suspect: the block-extraction objcopy or the
 concat takes the DECLARED size somewhere. One absorption works, one
 doesn't -- diff those two paths next.
+
+Addendum (2026-06-10, b3 archaeology): "C-emit-absorbed orphan"
+comments can be STALE in all directions -- b3's listed two: one (1920)
+was never absorbed (it works as its own 8-byte NM symbol after the
+parent's emit), the other (21F4) no longer exists as a symbol AT ALL
+(absorber deleted/renamed; its region emits -8 short). Verification:
+objdump the .o for the orphan's own symbol -- present = standalone
+(fine); absent AND the parent's size covers it = absorbed (fine);
+absent AND nothing covers it = dropped bytes (block damage). Trust the
+.o, not the comment.
