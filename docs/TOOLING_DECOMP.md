@@ -689,3 +689,15 @@ Also: the positional function_name comes FIRST and --source-file is
 required; and refresh-report dirties report.json, so `git checkout
 HEAD -- report.json` before landing (the script refuses tracked
 changes).
+
+## Standalone-cc harnesses: never keep USO FW absolute-address reads as bare constants (940)
+
+When pulling an NM body into a standalone test file, FW(p, o) forms
+that read *(s32*)0xNN (USO D_-symbol references flattened to small
+absolute addresses) MUST be rewritten as `extern char D_base;` +
+offsets -- IDO compiles bare small-address loads differently (folds
+the lui/addiu, can even drop a comparison arm from an OR-chain),
+making the byte-diff meaningless. Symptom: standalone diff wildly
+worse than the in-tree fuzzy, with structural "missing arms" the C
+clearly contains. Seen on game_uso_func_00000940 (in-tree 88.66 vs
+bogus standalone 73-diff).
