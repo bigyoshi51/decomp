@@ -7733,3 +7733,28 @@ leading 1-word pad (5AFB0) cannot swap until the pad emits correctly
 (the asm-processor 1-word placeholder bug) -- and that bug also
 explains why the 5AFB0 pad-split shifted post0b where 2-word-pad
 splits (40EC, 3ECDC) verified identical.
+
+## THE RELAYOUT SESSION (2026-06-10, branch agent-b): method + state
+
+Method that finally worked: a full-section ROM WALK with a dynamic
+shift tracker (match 4-byte words; on mismatch, probe shift deltas
+-0x40..+0x40 and require a 16-word run to confirm) -- yields every
+shift event with exact ROM/build positions and gap contents,
+sidestepping all address-naming conventions. 40 events found (net
+-0x24): 14 stolen-prologue code drops (PROLOGUE_STEALS-removal
+fallout; fixed by prepending ROM words to the symbol's .s + bumping
+the unit TRUNCATE), ~20 surplus zero pads (historic drift
+compensations incl. a SUFFIX_BYTES_FORCE; removed), 1 cross-object
+orphan (70A0C re-homed into 70A14's .s), pad-sidecar absorptions.
+CRITICAL OPERATIONAL RULE: unit TRUNCATE_TEXT values MUST be bumped by
+each unit's net content delta or the truncation silently undoes the
+fixes (cuts prepends, re-pads trims) -- attribute every event to its
+unit BY ADDRESS SPAN, not by grepping INCLUDE lines.
+REMAINING 12 (branch agent-b, not merged): 8 = asm-processor block-
+start 8-alignment after active-C fns ending %8=4 (the .s cannot fix
+these -- prepending a pad word stacks ON the aligner pad; needs the
+tools-side fix); 4 = fn-level shorts (2DF00/5FDCC matched-C emits
+missing 0xC prologue-class; 6BC44/70194 ido53 carve heads short
+0x8/0x18 -- review whether those matches verified against poisoned
+expected/). Until all 12 close, the net -0x18 displaces the validated
+region, so the branch must not merge to main.
