@@ -13229,3 +13229,20 @@ but the merged web takes the color of the FIRST-created pseudo -- so
 making slot's chain textually first flips the pair. Companion to the
 inlined-chain temp-pool lever (1908) and the if(1){} BB lever; try this
 when those two do not bite on a v0/v1-order residual.
+
+## EARLY-PSEUDO TRICK: dead initializer flips v0/v1 for boolean-return chains (game_uso 674, 30 diffs -> 0)
+
+For a pure boolean-expression return (`return cond1 || cond2 ...`)
+where the target loads into $v0 and computes the boolean in $v1 but
+your emit has them swapped (or vice versa): write
+    int r = 0;
+    r = <the boolean expression>;
+    return r;
+The dead `= 0` initializer creates the RESULT pseudo before any load
+pseudo, so the result takes the first color and the loads shift over --
+flipping the entire cascade (30 diffs -> 0 on game_uso_func_00000674,
+previously documented "not C-flippable; fixed by expression-tree
+walker"). Third member of the pseudo-order family: if(1){} BB-split
+(post-call placement swaps), web-order inversion (inline first chain),
+and now early-pseudo (result-vs-load order). Pick by where the pseudo
+creation order needs to change.
