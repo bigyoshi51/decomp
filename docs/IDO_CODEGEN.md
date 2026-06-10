@@ -13390,3 +13390,20 @@ expression twice keeps ONE load (CSE) and drops the slot, hitting the
 exact target frame. Inverse pairing with the volatile-pad lever: pad
 ADDS a phantom slot, remove-local DROPS a named one -- check which
 direction the frame delta points before choosing.
+
+## FRAME-RESIDUAL TRIAGE TREE (consolidated 2026-06-10 after the full queue resolved)
+
+For any "frame N vs M" residual, answer two questions before picking a
+lever:
+1. DIRECTION: target bigger than build -> volatile-pad (add a phantom
+   slot: E910/E6E8/E79C, 99.93 each). Build bigger than target -> a
+   named once-used local is costing a slot -> remove-local-recompute
+   (inline the expression; CSE keeps one load: 74C04 hit the exact
+   frame).
+2. OWNER: if the surplus slot belongs to an UNNAMED compiler temp
+   (switch-internal: 7507C; -O0 internal: 8C3C) or the deficit slot
+   must interleave with caller-save spill temps (685C0), neither lever
+   grips -- uoptlist class, stop sweeping.
+Queue outcome: 5 candidates, 3 volatile-pad cracks, 1 inverse-lever
+crack, 1 uoptlist. Always verify in-tree fuzzy after applying (52994
+rule).
