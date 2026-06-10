@@ -13418,3 +13418,14 @@ shape FIRST (anything near exception/thread/queue machinery is likely
 libreultra handwritten -- high fuzzy % does NOT exclude handwritten);
 (2) shifted-start temp -> fragment; (3) skipped temp -> deleted-expr
 uoptlist; (4) t6-start -> genuine, grind shapes.
+
+## Unfolded zero-cvt fingerprint: `mtc1 zero,$fN; cvt.s.w` is context, not C (7ABC)
+
+IDO -O2 constant-folds (float)0 from EVERY C zero-source (literal,
+local, dead-arg overwrite, x-x, volatile, if(1){} barrier) to a direct
+`mtc1 zero,$f0` with NO cvt; -O1/-O0 grow a frame. So a frameless
+`mtc1 zero,$f2; cvt.s.w $f0,$f2` in target asm -- the conversion kept,
+through a TEMP float reg -- cannot come from standalone C: the cvt's
+operand web belonged to a larger parent expression (cross-tail-share /
+interior-entry class). Treat as a context fingerprint; don't sweep
+shapes (18-combo negative tabulated at game_uso 7ABC).
