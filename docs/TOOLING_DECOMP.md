@@ -849,3 +849,11 @@ approximate tables cost more than the tail coverage gained). Rule:
 below ~40% graft; above ~45% refine the hand body (LCS the gaps,
 decode just the missing blocks). Always score-and-compare BEFORE
 committing a graft over a hand body (monotonic rule).
+
+Addendum (B3C): (18) m2c "Label .LX refers to a delay slot" -- IDO
+branch-likely targets another branch's delay insn. Fix iteratively:
+move the label off the delay insn, add a continuation label right
+after it, retarget the offending branch to an appended tail block
+[duplicated delay insn; b continuation]. Loop until m2c passes (B3C
+needed 3). (19) m2c pointer-typed locals compared/arith'd with ints
+need (s32) cast sweeps -- expect "Unacceptable operand of ==" tails.
