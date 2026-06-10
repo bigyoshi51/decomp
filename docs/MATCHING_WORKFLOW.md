@@ -7696,3 +7696,15 @@ into a single GLOBAL_ASM (costs a match, restores the block); (c) a
 tools/asm-processor patch to shrink 1-insn placeholders post-splice
 (ecvt-patch style, kept as an in-repo script). b1's -0xC needs its own
 repro (its 3-word pad should be exact -- something else there).
+
+Addendum (2026-06-10): fix route (b) VALIDATED on b3's 217C -- un-match
+the adjacent fn, absorb fn+pad into one GLOBAL_ASM (#ifdef NM keeps the
+proven C; asm-processor's post-process skips ifdef'd blocks via the
+missing-placeholder check, so the wrap pattern works with raw #pragma
+GLOBAL_ASM in the #else). Boundary now ROM-true. NEW DEFECT CLASS
+isolated in the same block: a documented "C-emit-absorbed orphan"
+(21F4: decl 0x44, .o 0x4C, absorbing _00002238) does NOT reach the
+assembled block -- built runs -8 from 0x21FC while the sibling
+absorption (1870) works. Suspect: the block-extraction objcopy or the
+concat takes the DECLARED size somewhere. One absorption works, one
+doesn't -- diff those two paths next.
