@@ -12974,3 +12974,14 @@ the scheduler, so its emit is SHORTER for the same C (gl_func_00008A40:
 NEVER match a true -O0 target). Also verified: `-g/-g2/-g3` do NOT change
 IDO -O0 frame layout or emit at 7.1 (identical bytes at every level) — -g
 is not a lever for -O0 frame-packing residuals.
+
+### -O0 value-load reg reuse is version-invariant; temp counter resets per value (2026-06-09)
+
+The `lui $tN,%hi; lw $tN,%lo($tN)` base-register reuse for a global value
+load at -O0 is identical at IDO 5.3 and 7.1, unaffected by `volatile`, and
+unaffected by chaining adjacent statements into one expression (&& adds
+insns; the comma operator emits identically — the -O0 expression-temp
+counter resets per VALUE, not per statement). If a target shows the
+fresh-dest form (`lw $t(N+1),%lo($tN)`) with the %lo still folded, no
+known C/qualifier/version axis produces it; treat as the documented
+fresh-dest -O0 cap (func_00012818).
