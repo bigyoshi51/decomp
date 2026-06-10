@@ -815,3 +815,14 @@ absolute-deref conversions AFTER NULL->0 (or convert *NULL first) --
 NULL->0 mints new `*0`s. (15) m2c `M2C_ERROR(unset register)` reads +
 assignments from void-typed calls: placeholder with a loud marker
 comment, fix in refinement.
+
+Addendum (2BB7C): (16) YIELD PREDICTOR for graft target selection --
+check the jumptable sltiu bounds vs fn size BEFORE grafting. Sparse
+tables (bound ~= distinct case bodies; 2E354's 5/11) synthesize fine
+(+39pp); DENSE tables (2BB7C: bounds 66/41/97 over 778 insns =
+heavily shared bodies) defeat block-walk head inference and m2c's
+structuring collapses (+14pp only). Dense-table fns should wait for
+true table extraction from the USO reloc records, or be grafted with
+tempered expectations. Also: m2c recovering a RECURSIVE self-call
+(jal to the fn's own address) needs the self-extern dropped -- the
+def is the decl.
