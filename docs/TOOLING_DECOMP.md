@@ -837,7 +837,13 @@ s32, e.g. 's32 temp_f4'). m2c reconstructs bit-moves as int math; IDO
 emits different sequences (+7pp only). THRESHOLD CALIBRATION (5A2CC):
 ~11% COP1-move density still grafted fine (+47.9pp); ~15% (454C4)
 killed it -- the line sits between, so measure density and temper
-expectations in the 12-15% band. Also: m2c recovering a RECURSIVE self-call
+expectations in the 12-15% band. SHARPENED (5BE20, 19 COP1 + 12 f64 in
+281 insns): bitwise-FP grafts can come out OVERSIZE (lw+mtc1 pairs vs
+lwc1) past objdiff's alignment window -> fuzzy=None = ZERO metric
+value (worse than the honest INCLUDE); and retyping the s32-typed
+temp_fN vars INVERTS into cvt bloat when the values genuinely cross
+int contexts. Mixed bitwise+f64 fns: skip the graft, leave bare,
+typed hand decode only. Also: m2c recovering a RECURSIVE self-call
 (jal to the fn's own address) needs the self-extern dropped -- the
 def is the decl.
 
