@@ -7533,3 +7533,11 @@ actually emitted (per-symbol drift scan of the unit, or check the
 successor .s starts at the pre-suffix address). Each unfixed site is
 both missing ROM code AND a drift contributor. Fixes belong to the
 relayout balanced pass (they change unit sizes).
+
+Worklist for the audit (files with "REMOVED 2026-05-23" mentions, found
+2026-06-10): mgrproc_uso.c, kernel_020.c, kernel_000.c,
+timproc_uso_b5.c, game_uso.c, bootup_uso.c, game_libs_post1c.c,
+game_libs_post0b.c, game_libs_post.c (plus game_libs_tail.c = the
+confirmed B5AC case). Not every mention is an instruction-suffix site
+(some were all-zero pads, which are fine) -- check each for the
+"successor .s starts after the dropped bytes" signature.
