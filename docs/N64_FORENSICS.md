@@ -770,3 +770,12 @@ data symbols (proposed naming: gl_dref_00045230 = 0x00045230; in
 undefined_syms_auto.txt) and reference them as extern objects — same
 mechanism as gl_ref jal thunks. Functions mixing these with reloc'd
 globals (zeroed lui/lw pairs) need BOTH symbol kinds.
+
+Addendum (2026-06-10, gl_func_00074EFC): the lui-pair SECOND instruction
+discriminates the source construct -- `addiu` = symbol+%lo reloc (use a
+gl_dref extern), `ori` = literal integer constant cast to pointer. If the
+target shows lui X/addiu X, a `(char *)0x45230`-style literal in C is
+WRONG (emits ori) -- reference an extern symbol and set its address in
+undefined_syms_auto.txt instead. Also: hardcoded thread-entry addresses
+decode like jal thunks (0x896E8 - 0x1466C = USO 0x7507C), identifying
+callee functions for free.
