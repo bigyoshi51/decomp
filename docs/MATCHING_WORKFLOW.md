@@ -7300,3 +7300,19 @@ NM-region drift (743C4's declared 0x100 vs actual 0x108 among others)
 that pattern-matches to 'my carve broke it'. game_libs_TEXT_END remains
 the reliable per-change gate (it DID move in the first broken attempt —
 that attempt had a real but different wiring error).
+
+## Placeholder data syms with NON-ZERO addends: set the sym VALUE to the in-USO offset (2026-06-10)
+
+The zero-alias convention (D_xxx = 0x00000000) only byte-matches when the
+target's reloc'd %lo field is 0. When the target load carries a baked-in
+addend (e.g. `lwc1 $f0, 0x368($at)` for a USO global at base+0x368),
+define the placeholder AT that offset: `D_C710_dflt = 0x00000368;` in
+undefined_syms_auto.txt — %hi stays 0, %lo becomes 0x368, and the LINKED
+bytes match. Three companions: (1) use DISTINCT float/int externs per
+constant — the `*(T*)(&D_00000000 + 0x368)` cast-arith form materializes
+an la (lui+addiu) instead of folding; (2) a big padded struct extern ALSO
+materializes la (member offset does not fold the way small typed-extern
+members do); (3) at .o level the %lo fields still show 0+reloc — verify
+against LINKED output, or wildcard reloc positions (readelf -r offsets)
+when comparing the .o. Established on timproc C710 (28/54 residual is
+scheduling, not symbol mechanics).
