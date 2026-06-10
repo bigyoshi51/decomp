@@ -7541,3 +7541,19 @@ game_libs_post0b.c, game_libs_post.c (plus game_libs_tail.c = the
 confirmed B5AC case). Not every mention is an instruction-suffix site
 (some were all-zero pads, which are fine) -- check each for the
 "successor .s starts after the dropped bytes" signature.
+
+SUFFIX-fallout audit, first pass (2026-06-10):
+- n64proc_uso: CLEAN (no internal drift transitions; its PREFIX/SUFFIX
+  mention was an all-zero pad case).
+- game_libs_post1c: REAL internal transitions -- relative to its unit
+  base, gl_func_00070A14 sits -8 and gl_func_00070B04 -4 vs neighbors,
+  re-aligning by gl_func_00070C44; i.e. ~2 missing pads/byte-drops in
+  [0x70314..0x70C44). Candidate for the same dropped-suffix class as
+  B5AC; needs the gap-content check (real insns vs zeros).
+- kernel_000/kernel_020: audit needs the kernel VRAM base correction
+  (symbols are 0x8000xxxx-named; the naive USO math gives bogus
+  drifts). TODO with the right base.
+- mgrproc/timproc_b5/game_uso: Yay0 block units -- not in the map;
+  audit needs the uncompressed .text.bin comparison method instead.
+Method note: relative transitions WITHIN a unit are meaningful even
+when the unit-wide base offset is uncertain.
