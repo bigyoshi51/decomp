@@ -761,3 +761,31 @@ contiguous `delete` runs (116C: one 27-insn run = an entire undecoded
 sub-block; the rest were 2-3-insn shape gaps). Far faster than eyeball
 side-by-side for 200+ insn fns; pairs with the multi-run convention --
 each big delete run is one pass's decode target.
+
+## m2c full-body graft: the cleanup-class checklist (90CC, 2.74->53.24)
+
+For big-swing grafts of raw m2c output over a stub wrap (the pipeline:
+.s comment words -> objdump 0-based blob -> label-resolved .s -> m2c),
+the output needs a FIXED set of mechanical conversions before IDO
+compiles it; apply in this order and re-grep after each:
+1. collapsed callees: m2c emits bare `0(...)` calls for jal-0 -- regex
+   `(?<![\w.])0\(` -> `func_00000000(`.
+2. `->unkNN` -> `*(s32 *)((char *)(X) + 0xNN)` -- THREE forms: plain
+   identifier, NEGATIVE offsets (`->unk-4`), and parenthesized bases
+   (nested parens defeat one-shot regexes; fix leftovers by hand).
+   TRAP: the identifier regex SPLITS hex literals -- `0x868C->unk1`
+   matches `x868C` as the base, producing `0` + `(x868C)` garbage;
+   sweep for `\bx[0-9A-Fa-f]{3,}\b` afterwards.
+3. absolute derefs (`*0`, `*(s32 *)4`, `*(f32 *)0x8B0`, `*(void *)4`)
+   -> `*(T *)((char *)&D_00000000 + N)`; mind that a naive `0` regex
+   also hits the 0 in `0x..` (the `+ 0)x34` mangle) -- repair with
+   `\+ 0\)x([0-9A-Fa-f]+)` -> `+ 0x\1)`.
+4. `void *` locals -> `char *` (IDO rejects void* arithmetic); keep
+   the signature.
+5. float stores m2c typed as s32: `*(s32 *)(...) = (f32)` -> `*(f32 *)`.
+6. m2c struct-ish stack vars (`spA.unkN`) -> `*((s32 *)&spA + N/4)` +
+   declare the extra spilled words it references (sp60/sp64 class).
+7. vtable calls `*(s32 *)((char *)(X) + 0xNN)(args)` -> cast through
+   `((void (*)())...)`.
+Each class is one regex; the whole graft (2106 insns) took ~7 cycles
+of compile-and-fix. Expect 2-5% -> 40-55% structural in one tick.
