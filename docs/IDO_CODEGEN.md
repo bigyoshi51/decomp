@@ -13067,3 +13067,14 @@ condition: `if ((global = expr) == 0) global = 1;` -- the condition
 reads the assignment expression's value register directly. A named
 `v = expr; global = v; if (v == 0)...` emits an extra sh v,home(sp).
 Found on gl_func_0007507C (PI-manager thread main).
+
+### -Olimit: a switch's INTERNAL temp reserves a stack slot no named variable can absorb (2026-06-10)
+
+Under -O1 -Olimit 1 (and plain -O1 here), `switch (expr)` materializes
+the dispatch value into a compiler-internal temp that gets its own
+reserved stack slot (+8 frame after rounding) -- register vars, plain
+locals, and reusing an existing slotted local as the value all still
+reserve it. gl_func_0007507C's target somehow keeps the value in s0
+with NO slot (s0 live range doesn't even cross a call) -- unreproduced;
+candidates: a different uopt path, or settle it with the uoptlist
+regalloc dump (-Wo,-zdbug:6, see project_1080_regalloc_dump_unlocked).
