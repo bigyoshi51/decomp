@@ -812,3 +812,14 @@ INCLUDE_ASM (IDO C cannot receive s-reg args). Recognition leads:
 - The bare jr-ra stub at [0x73E6C..0x73E74) (the drift-region dropped
   symbol) sits right between _Genld and 73E74 -- probably an empty
   stub in the same libc object.
+
+Addendum (2026-06-10, 73E74): gl_func_00073E74 = Plauger _Ldtob (the
+%e/%f/%g double converter; IEEE decompose, 0x2588/0x258C Inf/NaN
+strings, pow10 chunk table at data 0x2540, log10(2) = *0x7597/100000
+idiom). It takes NORMAL args -- decompilable, unlike _Genld. Its final
+call targets game_libs_func_0007488C (0x14 = 5 insns): almost certainly
+the S-REG MARSHALLING THUNK that loads $s0-$s4 and jumps into _Genld --
+the mechanical explanation of the cluster's custom ABI. Implication:
+7488C (currently in the drift-region blocked list) is a 5-insn
+load+jump shim, and the _Genld "cap" boundary is THUNK+callee; if the
+relayout session restores 7488C, decode it first to confirm.
