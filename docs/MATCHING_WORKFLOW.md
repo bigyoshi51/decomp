@@ -7197,3 +7197,20 @@ game_libs defaults to `-O2` but contains `-O1` functions (e.g. gl_func_00071D40,
 **To LAND an -O1 game_libs function you must carve it into its own `.c` unit** (the Makefile already has the per-file `OPT_FLAGS := -O1` override mechanism, lines ~29; `find`-based source discovery auto-picks new files; add the new `.o` to `tenshoe.ld`'s `.game_libs` text list in vaddr order). post2.c-style 3-way split is clean: per-function decls (FW `#ifndef` guards, GP typedefs, `extern gl_func_00000000`) travel with each function block; only the file header (common.h + `extern D_00000000` + shared typedefs) must be copied to the new tail file.
 
 **HARD CONSTRAINT — the carved unit must be COMPILED C that's byte-exact, NOT INCLUDE_ASM.** asm-processor emits INCLUDE_ASM `.text` at **align 16**; compiled C is **align 4**. When a separate `.o` starts with INCLUDE_ASM, the linker pads the previous `.o`'s `.text` up to 16 → ~20 bytes of zero padding per `.o` boundary → every following function shifts → ROM breaks (verified: splitting gl_func_00071D40 as INCLUDE_ASM added 40 bytes, shifting `.game_libs`; `SUBALIGN(4)` on the output section does NOT override it). All existing splits (g3_*/o0_*) are byte-exact compiled C precisely for this reason. **Consequence:** the -O1 split only helps functions that compile byte-exact at -O1 — i.e. **-O1 LEAF functions with no reloc-blind calls** (raw-word USO `jal`s resolve to `gl_func_00000000` placeholder → wrong symbol → not byte-exact). Those leaves become real episodes. Call-heavy -O1 functions (71D40: 4 calls, 6CDB4: 7 calls) CANNOT be split this way; leave them as -O2 NM wraps. Vein = unwrapped `-O1` **leaf** functions only.
+
+## Over-split `bnel` early-return chain: N consecutive 6-insn "functions" each ending in jr ra (2026-06-09)
+
+Fingerprint: a run of consecutive tiny (0x18) USO fragments, each shaped
+`li at,K1; bnel v0,at,<past own end>; li at,K2 (delay); li a0,V; jr ra;
+andi v0,a0,0xFF`. These are NOT accessor templates and NOT N independent
+caller-set-$v0 caps — they are ONE if-chain mapper that splat split at every
+early-return `jr ra`. Tells: (1) the `bnel` target lands INSIDE the next
+fragment; (2) the branch-likely DELAY slot loads the NEXT link's comparison
+constant (`li at,K2` executes only when taken = chain continues); (3)
+`find-misplit-pairs.py` does NOT flag it because every fragment has its own
+`jr ra`. Recovery = full-cluster merge into the head symbol (concatenate
+words, fix the `nonmatching` size header, delete fragment .s, collapse the
+per-fragment wraps into one C body). Verified on gui_uso [0x00..0x148)
+char→glyph mapper (12 fragments → 1 fn, byte-identical post-merge).
+Residual blocker there: a 2-insn USO entry-0 loader trampoline prefix
+(`b <far>; sw a0,0(sp)`) before the mapper body — PREFIX_BYTES territory.
