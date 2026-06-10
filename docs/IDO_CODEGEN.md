@@ -13537,3 +13537,14 @@ materialization). The R_MIPS_LO16 placement choice (addiu LO16=K vs
 LO16=0 + folded displacements on a SYMBOL+const access) is a distinct
 reloc-encoding mechanism the barrier does not touch (and perturbs FP
 scheduling trying). Don't conflate the two fold classes.
+
+Addendum to temp-number forensics (2026-06-10, 273B8 uoptlist read): a
+FIFTH interpretation -- PERIODIC skips that correlate with float
+operations. In 273B8's switch, the int-temp counter skips exactly
+where float-compare cases create their lwc1 pseudos (int cases stay
+dense): the target's compile numbered float-load pseudos through the
+int-temp counter where ours does not. Diagnostic: map each skip to the
+nearest float op; if they align, it's this numbering-state class
+(uoptlist-ceiling -- creation order visible, final numbering not; not
+C-steerable). Distinct from the single skipped-temp deleted-expression
+class (C28C).
