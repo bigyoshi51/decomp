@@ -7376,3 +7376,19 @@ delta is 0x40 and the ROM windows do not appear in the build AT ALL --
 earlier regions have additional pre-existing layout drift. VERIFY
 build-vs-build identity (objcopy snapshots before/after) for any change
 outside the libultra tail; ROM-compare lies there.
+
+## Template/byte-signature scans: filter by C-definition presence FIRST -- ~1200 stale .s files are intentional (2026-06-10)
+
+asm/nonmatchings/ retains the .s files of ~1206 ALREADY-MATCHED functions
+(timproc_uso_b5, game_uso, game_libs at minimum) because logged episodes
+reference those paths for provenance -- do NOT mass-delete them. Any
+byte-signature scan over asm/nonmatchings/ therefore returns mostly
+already-done work: ALWAYS post-filter candidates by (a) an INCLUDE_ASM/
+GLOBAL_ASM reference still existing in src/ AND (b) no plain C definition
+of the symbol in src/. Cross-USO tiny-leaf census 2026-06-10: after
+filtering, the entire <=5-insn lui/lw-headed leaf space outside game_libs
+is exhausted (13 timproc setters + 2 game_uso matched previously; 2
+documented branch-into-adjacent-leaf caps; 1 fragment); inside game_libs
+the 4 remaining (69F54, 74894, 7488C, 666FC) are blocked on the unit
+relayout. Tiny-leaf template scanning is DONE as a vein until new
+segments are split.
