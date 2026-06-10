@@ -13184,3 +13184,12 @@ m2c-style goto/label form over structured do-whiles; the goto form
 compiles to the compact shape (48 insns here). The explosion is a shape
 diagnostic too: if your structured form explodes, the original source
 was almost certainly goto-based (or the loops shared labels).
+
+Addendum (2026-06-10, game_libs 21D2C): the loop-explosion rule extends
+to SINGLE counted loops -- a plain `do {...} while (i < n)` table scan
+got x4-UNROLLED with an alignment-versioning prologue (andi p,3 test +
+two loop bodies, 64 insns vs the target's 22) at IDO 7.1 -O2, even
+with an aligned struct pointer type. The goto-label form compiles
+compact. Also: `short` parameters compared against lh loads cause a
+sign-extension homing explosion (69 insns) -- use int params (callers
+pass sign-extended; the lh side carries the narrowing).
