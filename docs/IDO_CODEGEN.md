@@ -13246,3 +13246,14 @@ walker"). Third member of the pseudo-order family: if(1){} BB-split
 (post-call placement swaps), web-order inversion (inline first chain),
 and now early-pseudo (result-vs-load order). Pick by where the pseudo
 creation order needs to change.
+
+## TEMP-NUMBER FORENSICS: a mid-sequence temp in a tiny leaf marks a fragment (274E0 trio)
+
+IDO's expression-temp order is t6,t7,t8,t9,t0,t1,t2,t3. A standalone
+leaf's first temp is ALWAYS t6 (verified 7.1/5.3 x O0-O3; TU position
+does not advance the counter -- it resets per function). So a 3-insn
+"function" whose single temp is t1 (the sixth) or t9 (the fourth) is
+the TAIL FRAGMENT of a larger original that consumed earlier temps --
+diagnostic without any branch analysis. Use it to triage tiny
+high-percent near-miss leaves: mid-sequence temp = boundary problem,
+t6 = genuine standalone (grind shapes instead).
