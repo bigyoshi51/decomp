@@ -750,3 +750,14 @@ class residuals (273B8 temp pattern, 5B5D8 skip) are inspectable;
 pure coloring-choice residuals (E04 spill slot, ECEC/56814 pairs,
 46C4C marshal-reuse) are NOT -- escalation would be reading uopt's
 source in ido-static-recomp or patching more print paths (ecvt-style).
+
+## Mnemonic-LCS diff for distributed-gap NM wraps (116C pass 5, +9.4pp in one block)
+
+When an NM emit is N insns short and position-based word-diff shows
+"everything differs", run difflib.SequenceMatcher over the two
+MNEMONIC lists (opcodes only, build .o disasm vs target words disasm)
+and print the delete/insert opcodes: missing CODE BLOCKS pop out as
+contiguous `delete` runs (116C: one 27-insn run = an entire undecoded
+sub-block; the rest were 2-3-insn shape gaps). Far faster than eyeball
+side-by-side for 200+ insn fns; pairs with the multi-run convention --
+each big delete run is one pass's decode target.
