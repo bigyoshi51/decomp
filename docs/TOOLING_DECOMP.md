@@ -652,3 +652,17 @@ Using `scripts/ghidra-decompile-func.sh <fn>` to drive an m2c-collapsed/stub rec
 4. **regalloc-dump triage (verified 2026-06-04, gl_func_0004880C): before grinding a `$s`-register near-miss with the `-Wo,-zdbug:6` dump, FIRST check whether the dump's final coloring already MATCHES the target.** The `./uoptlist` tail prints `<candidate>: <n> assigned (constrained) <hardreg>` (hardreg 16=$s0, 17=$s1, 18=$s2, …). On gl_func_0004880C the dump assigned a0→$s2, a1→$s1, i→$s0 — IDENTICAL to the target — yet the build still diffs at 99.2%, because the 3 `move $sN, <arg>` prologue-init instructions EMIT in a different ORDER (target s2,s0,s1; IDO s1,s2,s0). That is allocno/move-emission SCHEDULING, NOT coloring, and the dump cannot fix it (no candidate-priority knob changes instruction order; decl reorder doesn't flip it either — it's permuter-class). **Rule: the regalloc-dump only helps a near-miss whose COLORING differs (a true `$sX`↔`$sY` value swap). If `uoptlist` shows the colors already correct, stop — the residual is scheduling, and you're better off on the permuter or moving on.**
 
 **Band survey (2026-06-04): the regalloc-dump vein is nearly empty — the `$s` near-miss band is emission-ORDER-dominated, not coloring.** Surveyed all game_libs ≤6-diff 95-99% `$s`-register near-misses: gl_func_0004880C (3d), gl_func_00033B6C (4d), gl_func_00041148 (4d) — every one is the SAME instructions (same `$s` coloring) emitted in a different ORDER (prologue arg-saves, or the pointer-init `addiu $sN,&base,off` block, emitted ascending `$s0..$s3` where the target is descending). True coloring swaps (same position, different `$s` register) were NOT found in the band. The decl/assign-separation trick (declare in coloring order, ASSIGN in target emission order) REGRESSES (gl_func_00033B6C 4→8 diffs): IDO re-couples the assignment order back into the coloring, so you can't get target-emission-order AND target-coloring at once — the first-emitted init takes the highest `$s`, exactly the FP `$f14`-first coupling in IDO_CODEGEN.md's "if(1){}" scope-caveat #2. Net: these are permuter-class scheduling caps; don't open the regalloc-dump for them.
+
+## disasm-func --m2c can emit PHANTOM out-of-function labels (mis-based branches) (2026-06-10)
+
+On timproc 1DB0, `scripts/disasm-func.py --m2c` failed with "label
+.L1CC0 does not exist" -- implying a backward branch into the PREVIOUS
+function. A direct word-scan (decode branch opcodes 1/4/5/6/7/20-23,
+compute addr+4+off*4 against the symbol range) showed the only
+out-of-range branch was FORWARD (bnezl -> +4 past the declared end, the
+usual tail-fragment family). The tool mis-based at least one branch.
+Rule: before acting on an m2c/disasm-func cross-function branch claim,
+confirm with the direct word-scan -- it is ~10 lines of python and
+decides merges definitively. (Same scan also catches the size-vs-word-
+count mismatches from lowercase-hex comment lines that simple regexes
+miss.)
