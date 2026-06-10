@@ -13429,6 +13429,13 @@ through a TEMP float reg -- cannot come from standalone C: the cvt's
 operand web belonged to a larger parent expression (cross-tail-share /
 interior-entry class). Treat as a context fingerprint; don't sweep
 shapes (18-combo negative tabulated at game_uso 7ABC).
+RESOLVED instance (2026-06-10): 7ABC is game_uso 7A98's shared
+else-tail -- the parent's beqzl zeroes $f2 in its delay and jumps to
+7ABC+4, while 7ABC's own first insn (mtc1 zero,$f2) is a 1-insn
+alt-entry prefix for direct callers; the cvt can't fold because the
+zero arrives at runtime from either entry. DIAGNOSTIC UPGRADE: on this
+fingerprint, scan PRECEDING fns for a branch targeting fn+4 -- the
+pair resolves together.
 
 ## `beqz v0` at entry does NOT always mean caller-set-v0 (ECEC revises the diagnostic)
 
