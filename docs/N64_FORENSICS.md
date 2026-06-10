@@ -756,3 +756,17 @@ question.
 
 **Origin:** 2026-05-17, 1080 bootup_uso, while triaging the func_0000E270
 NM wrap (size-1 vein exhausted; this was the highest-value real %-mover lead).
+
+## game_libs hardcoded RUNTIME DATA addresses (data analog of the jal thunks) (2026-06-10)
+
+Besides build-time-patched jals (gl_ref_NNNNN fixed-address call symbols,
+e.g. 0x87BA4 = USO fn + reloc base 0x1466C), game_libs also embeds
+hardcoded runtime DATA addresses as plain lui/addiu immediates with NO
+relocs — e.g. gl_func_00074EFC builds its message queue/records/thread/
+stack at absolute 0x44080/0x45230/0x45248/0x45260/0x45278 (bootup-region
+block). These look like small absolute constants in the disasm (lui
+a0,0x4; addiu a0,21040). To match such functions, define fixed-address
+data symbols (proposed naming: gl_dref_00045230 = 0x00045230; in
+undefined_syms_auto.txt) and reference them as extern objects — same
+mechanism as gl_ref jal thunks. Functions mixing these with reloc'd
+globals (zeroed lui/lw pairs) need BOTH symbol kinds.
