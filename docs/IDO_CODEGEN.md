@@ -13597,3 +13597,11 @@ emitted the a0 home at 2DD38 but fails to emit an a1 home in the same
 shape (4 forms swept; store-throughs grow real memory ops). Until a
 counterexample, treat the lever as a0-biased and expect a1+ homes to
 need something else.
+
+Addendum: 1-SWAP FLOOR CLASSES (unified 2026-06-10). Three scheduler
+choices produce permanent 2-insn position swaps that no C shape flips:
+(a) sw-before-addu in record-appends (2088/A95C), (b) lui-before-sw-ra
+prologue interleave in single-call wrappers (bootup 6204, 4 forms
+negative), (c) the lui->addiu intra-block split (eddproc 25C). When a
+trivial fn sits at exactly 2 position-swapped diffs with correct
+operands, check these three before sweeping.
