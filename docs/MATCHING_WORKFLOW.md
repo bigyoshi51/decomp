@@ -7284,3 +7284,19 @@ nop natively). Verified on the ido53_72C88 carve extension: moving
 game_libs_func_00073024 into the carve replaced the gl_func_00072E3C_pad.s
 sidecar exactly. Watch game_libs_TEXT_END in the map after every pad/
 TRUNCATE change — it catches 4-byte drifts immediately.
+
+## Mid-file carve PARITY PRE-CHECK: carve span must be 0 mod 8 (2026-06-10)
+
+Before carving a function out of the middle of a game_libs unit, check
+`(carve_span % 8)`. INCLUDE_ASM blocks align within their unit, so a carve
+span that is 4 mod 8 flips the alignment parity of EVERY downstream block
+in the tail unit: some block gains a +4 pad, everything after it shifts,
+and the tail unit comes up 4 bytes short. Caught live on the
+gl_func_00073334 (0x204-span) carve attempt: gl_func_000743C4's block
+shifted +4 and game_libs_TEXT_END dropped to 0x75284. Head/end-of-unit
+carves are immune (nothing downstream IN the same unit). Fixes when parity
+is odd: extend the carve over neighbors until the span is 0 mod 8 (each
+absorbed function must itself match, since the carve compiles everything),
+or defer with the matched C in an NM wrap (done for 73334 — its wrap holds
+the full 129/129-verified body + wiring recipe). ALWAYS check
+game_libs_TEXT_END in the map after any carve/TRUNCATE change.
