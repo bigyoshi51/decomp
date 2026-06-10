@@ -12963,3 +12963,14 @@ Two facts from reconstructing gl_func_00072C88 (-O0, frame 0x130):
   reorder fill; also chokes on IDO .loc directives — strip them to test).
   When a "-O0" function has filled delays, build it as -O1 with a per-file
   `-Olimit 1` override, NOT -O0.
+
+### Addendum: distinguishing TRUE -O0 from -Olimit fallback; -g is layout-inert (2026-06-09)
+
+Both emit -O0-style bodies (homed args, per-use reloads). Tell them apart
+before picking flags: TRUE -O0 has unfilled delay slots (nops after
+branches) and the longer emit; the -Olimit fallback fills delays and runs
+the scheduler, so its emit is SHORTER for the same C (gl_func_00008A40:
+41 insns true-O0 vs 37 at -Olimit 1 — fallback over-schedules and can
+NEVER match a true -O0 target). Also verified: `-g/-g2/-g3` do NOT change
+IDO -O0 frame layout or emit at 7.1 (identical bytes at every level) — -g
+is not a lever for -O0 frame-packing residuals.
