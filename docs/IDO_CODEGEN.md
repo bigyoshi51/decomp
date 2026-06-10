@@ -13342,3 +13342,14 @@ reloads WITHIN one block's scheduling window (the 25C final-store
 reorder) is untouchable by any if(1){} placement -- intra-block
 scheduling is the scheduler's own ordering, not block-boundary motion.
 Those stay final-mile scheduler caps.
+
+Addendum to BB-split role #6 (2026-06-10, 56814): when the barrier's
+own pointer variable is USED ON BOTH SIDES of the split (assigned
+before, dereferenced after), its web is live-across-BB and the v0/v1
+pair ordering of it vs subsequent variables resists ALL pseudo-order
+levers (early-pseudo and one-variable-reuse each flip the pair the
+WRONG way; block-scoping is neutral). The barrier wins the ADDRESSING
+shape but pins the COLORING -- if the target also needs a specific
+v0/v1 assignment on that pair, the residual is uoptlist-class. (The
+E450 family avoided this because the whole fn was one statement-group
+after the barrier.)
