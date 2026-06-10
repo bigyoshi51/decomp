@@ -13440,3 +13440,15 @@ immediately). Diagnostic update: before declaring caller-set-reg,
 TEST the normal-arg C first; the cap is only real if the arg-form
 emits a separate copy/test of aN. (The genuine caller-set class --
 $s0-$s4 marshalling like _Genld -- still stands.)
+
+Addendum to EARLY-PSEUDO (2026-06-10, ECEC uoptlist run): the
+"first-created pseudo colors $v0" rule is CONTEXT-DEPENDENT. ECEC's
+-zdbug:6 dump proves v's pseudo is created (table idx 25) before
+base's (29) and my emit colors v=v0 accordingly -- yet the TARGET has
+v=v1/base=v0 from presumably identical source structure. Suspect
+factor: which web stays live across the branchy tail (v is read in
+both arms; base only in one). When the early-pseudo lever fails on a
+v0/v1 pair, check liveness asymmetry across the final branches before
+concluding uoptlist-class. Practical: the -zdbug:6 dump (ecvt patch)
+emits the candidate/pseudo table -- creation-order questions are now
+answerable directly instead of inferred from emit.
