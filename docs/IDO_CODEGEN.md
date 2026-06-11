@@ -14225,6 +14225,14 @@ instead; trailing-simple-var spellings change nothing). Consequences:
 - Pass kills (-zscm/-zstor) don't remove the pull (zcomo/zcopy are
   load-bearing); it's in the tree build/reassoc, not a killable pass.
 How the ORIGINAL reached such orders is still open on 578B4.
+CONSTRUCTIVE USE: when ALL operands are complex, every rotation is
+reachable — write the operand the target evaluates FIRST in the LAST
+position (the pull grabs exactly it): `[G,A,B]` emitted from spelling
+`A|B|G`; 7-chain `[G,t2,t3,E,t4,t5,C]` from `t2|t3|E|t4|t5|C|G`
+(t2-t5 simple is fine — pull takes the last COMPLEX = G). Combined
+with (x-1)<<2 shapes this closed 11 statement sites in one pass
+(578B4 LCS 1519→1661). Only simple-FIRST target orders with a
+mid-chain complex stay unreachable (the pack class).
 
 ## UGEN TEMP ROTATION MECHANISM: a 10-register circular scratch queue t6→t7→t8→t9→t0→…→t5→t6, advanced per uncolored-value materialization, never reset within a function
 
