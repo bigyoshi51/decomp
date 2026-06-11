@@ -13699,3 +13699,15 @@ build has addiu rN,rN,0 + lw/sw <lo16>(rN). 61878: 3 IMM diffs -> 0,
 ROM byte-identical, landed. CHECK THE OTHER IMM-DIFF NEAR-MISSES for
 the same shape (288AC, F2EC, 685C0, 5E190, 7C74, 8C3C surveyed
 2026-06-10).
+
+## IDO software-pipelined loop tells: vs-register bound + double increment + negative-offset stores (5E190)
+
+Target shape: `li aN,<bound>` then `beq counter,aN` (REGISTER compare),
+counter incremented TWICE per trip, pointer advanced once per half
+with stores at NEGATIVE offsets (swc1 -16..-4(vN)) and a peeled
+epilogue half = IDO's rotated 2-units/trip pipeline. IDO emits this
+only from specific source shapes; a plain constant-bound do-while gets
+strength-reduced (step-4 flat) and a small-constant-trip loop (4) gets
+FULLY UNROLLED instead. Reproducing needs the register bound (s-reg-
+const class) + a 2-unit body. Tell to recognize before grinding
+counter forms: the double-increment + negative-offset-store signature.
