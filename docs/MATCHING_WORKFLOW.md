@@ -77,6 +77,10 @@ OPEN INSTANCE (gl_func_00063964 2026-06-10): a graft with only +0x10
 size delta and NONE of the documented artifacts (no empty ifs, no
 no-op gotos, real symbols) still scored None -- the trigger list is
 not exhaustive; an uninvestigated alignment-breaking shape exists.
+NEW SUBSPECIES (gl_func_0004F2F4 2026-06-10): m2c can re-render SHARED
+TAILS once per path, DOUBLING the emission (0x810 vs 0x410 target) ->
+None. Tell: emitted size ~2x target. Fix path: hand re-derivation with
+explicit shared blocks (goto a common label), not regeneration.
 - [m2c empty `if (ret != 0) { }` blocks are lost error-propagation early-returns — add `return ret;` to recover the result-check branches](#feedback-m2c-empty-retval-if-is-lost-early-return) — _Chained error-check calls render as empty `if(sp74!=0){}` (the `return` dropped, often from a reloc-collapsed call); empty if compiles to nothing so the per-call `sw v0;lw;beq` result-check is omitted. Put `return ret;` back. gl_func_00071928 26.6→34.78%. When paired with m2c's spurious `goto block_N;` no-op fall-throughs the function scores fuzzy=None (unalignable, not just low) — fill returns + delete the no-op gotos: gl_func_00071384 None→46.3%._
 - [Fake/undefined-extern NM bodies build but report fuzzy=None (UNMEASURED) — they contribute 0 to decomp.dev while looking decomp'd; rewrite with real symbols](#feedback-fake-extern-nm-body-unmeasured) — _A structural NM body that invents placeholder externs (`extern int D_global_sym; extern float D_pos_x;` or calls `gl_func_00000000` as a stand-in) compiles into build/non_matching/.o, but objdiff can't align it to the expected symbol and reports `fuzzy_match_percent: None`. None = uncounted, so the function reads as "has an NM wrap" yet moves the metric by ZERO. Grep existing wraps for invented `D_*`/`gl_func_00000000`-placeholder externs and rewrite from the asm with real `&D_00000000+off` / real callees to make them measurable. 2026-06-03 gl_func_00065060: None -> 76.76%._
 - [objdiff treats functions with .NON_MATCHING symbol alias as unscored (None) regardless of byte match](#feedback-objdiff-skips-nonmatching-alias) — _The `nonmatching` macro in .s files emits a `.NON_MATCHING` data alias at the same address as the function symbol. objdiff sees this alias and skips fuzzy_match scoring entirely (reports None) — even when the…
@@ -3596,7 +3600,11 @@ _When the built .o's symbol size differs significantly from the expected .o's sy
 OPEN INSTANCE (gl_func_00063964 2026-06-10): a graft with only +0x10
 size delta and NONE of the documented artifacts (no empty ifs, no
 no-op gotos, real symbols) still scored None -- the trigger list is
-not exhaustive; an uninvestigated alignment-breaking shape exists. Don't read `None` as "function missing" or "objdiff error" — it specifically means "the two symbols are too different in length for instruction alignment to make scoring meaningful." Verified 2026-05-04 on func_80000568 NM wrap: built emit was 16 bytes (4 insns of `return 0` boilerplate), expected was 36 bytes (9 insns of shared-epilogue with caller-frame teardown). objdiff returned `None`, not a small percentage. The wrap IS valid (compiles, has doc, has best-effort C body) — `None` just means the bytes are structurally too different for fuzzy alignment to apply._
+not exhaustive; an uninvestigated alignment-breaking shape exists.
+NEW SUBSPECIES (gl_func_0004F2F4 2026-06-10): m2c can re-render SHARED
+TAILS once per path, DOUBLING the emission (0x810 vs 0x410 target) ->
+None. Tell: emitted size ~2x target. Fix path: hand re-derivation with
+explicit shared blocks (goto a common label), not regeneration. Don't read `None` as "function missing" or "objdiff error" — it specifically means "the two symbols are too different in length for instruction alignment to make scoring meaningful." Verified 2026-05-04 on func_80000568 NM wrap: built emit was 16 bytes (4 insns of `return 0` boilerplate), expected was 36 bytes (9 insns of shared-epilogue with caller-frame teardown). objdiff returned `None`, not a small percentage. The wrap IS valid (compiles, has doc, has best-effort C body) — `None` just means the bytes are structurally too different for fuzzy alignment to apply._
 
 **The trap**:
 
