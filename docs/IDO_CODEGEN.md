@@ -19,6 +19,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
+- [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
@@ -13973,6 +13974,26 @@ tools/ido-static-recomp libc_impl, see TOOLING_DECOMP). Map (from
   compute_save/firstUseCost). Diagnostic only — flipping it confirms
   "this diff is a coloring-margin artifact" but is not a matching
   tool (project flags are fixed).
+
+## INNER-SCOPE DECL: named-var coloring without the frame cost (gl_func_0004ACD4 CRACKED)
+
+(2026-06-11, wave 2; 99.29→100.0.) Companion to the named-vs-inline
+coloring rule: when a target's global-deref chain starts in $v0 (named
+var) but naming the base at FUNCTION scope grows the frame (cfe gives
+the new local an 8-byte-aligned slot that uopt does not pack away:
+0x20→0x28 on 4ACD4), declare it in an INNER BLOCK after the prior
+locals are dead:
+
+    { int *g = *(int **)((char *)&D + 0x214); ... use g ...; }
+
+cfe overlays sibling/inner-scope locals onto dead outer slots → frame
+stays 0x20, g still colors $v0. Reusing an EXISTING dead named var
+(`i = ...`) avoids the slot but inherits that variable's candidate
+color (i's loop web colored a0 → chain lands a0, wrong). `register`
+does NOT suppress the slot. Decision table for a named-chain-base
+residual: fresh function-scope name = right regs + frame bloat; reuse
+dead var = right frame + wrong color; inner-scope fresh name = both
+right.
 
 ## BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput swaps ==/!= when LEFT isn't an isvar; struct-field reads are isvar, array-element reads are not (uso_skip_to_end CRACKED)
 
