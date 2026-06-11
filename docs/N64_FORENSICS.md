@@ -823,3 +823,16 @@ the mechanical explanation of the cluster's custom ABI. Implication:
 7488C (currently in the drift-region blocked list) is a 5-insn
 load+jump shim, and the _Genld "cap" boundary is THUNK+callee; if the
 relayout session restores 7488C, decode it first to confirm.
+
+## Biased-index jumptable: the %lo symbol can point PAST the table (kernel 5C50 dispatcher)
+
+A dispatch of the form `lui at,%hi(SYM); addu at,at,tN; lw tN,%lo(SYM)(at)`
+indexes from SYM, but if the case index tN is BIASED (derived as
+(cmd - K) << 2 with K > 0 checked by the sltiu bound), the effective
+table starts BELOW the symbol address (SYM + min_bias). Splat then
+labels whatever sits AT the symbol -- which can be an adjacent block
+(kernel 5C50: ASCII command strings at 0x8000A770, with a real
+44-entry handler table ending right below at 0xA740). Recognition:
+"jumptable" reads as non-address data -> check the index derivation
+for a subtract/bias before the shift, and scan for an address-run
+table adjacent to the symbol.
