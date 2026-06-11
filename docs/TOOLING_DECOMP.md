@@ -878,7 +878,10 @@ the crossover is NOT purely %-based -- a 14.79% body beat a fresh
 graft (14.60) because it already captured the m2c-equivalent skeleton.
 The tell: graft score ~= existing score means the existing body IS
 m2c-equivalent and the divergence is structural (register/shape/tail)
--- regeneration cannot help; only hand work moves it.
+-- regeneration cannot help; only hand work moves it. The tell holds
+at BOTH ends of the scale: at ~5% (4FD18: hand 4.56, fresh graft 5.30)
+it means something STRUCTURAL is broken (caller-set regs, unalignable
+shape) -- diagnose the mechanism, don't regenerate.
 
 Addendum (B3C): (18) m2c "Label .LX refers to a delay slot" -- IDO
 branch-likely targets another branch's delay insn. Fix iteratively:
