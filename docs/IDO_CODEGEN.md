@@ -13711,3 +13711,12 @@ strength-reduced (step-4 flat) and a small-constant-trip loop (4) gets
 FULLY UNROLLED instead. Reproducing needs the register bound (s-reg-
 const class) + a 2-unit body. Tell to recognize before grinding
 counter forms: the double-increment + negative-offset-store signature.
+
+## -O0 punishes goto forms: flat double-check beats nested fail-goto (8C3C)
+
+At -O0, an alloc chain written as nested fail-checks (`if(!p){p=alloc;
+if(!p) goto skip;}`) emits extra b/label traffic and REGRESSED 8C3C
+99.79 -> 91.5; the flat double-check form (`if(!p) p=alloc; if(p){...}`)
+is the -O0-correct shape even when the target's bnez/beqz pattern
+visually suggests nesting. At -O2 the preference can invert. Check the
+unit's OPT_FLAGS before choosing a control-flow re-derivation shape.
