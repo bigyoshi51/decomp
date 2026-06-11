@@ -7,6 +7,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 ## Index
 
 - [references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)](#referencesido-the-decompiled-uopt-source--dump-flag-instrumentation-2026-06-11) — _n64decomp/ido clone = uopt allocator source with original symbol names; -Wo,-zdbug:1/2/5/6, -dowhyuncolor, pass kill-switches, -zmovc. Grep it before theorizing about regalloc caps; derived rules in IDO_CODEGEN._
+- [578B4 pass 8: slot-map closed via decl-order relayout + per-arm web splits (81.52)](#578b4-pass-8-slot-map-closed-via-decl-order-relayout--per-arm-web-splits-8152-2026-06-11) — _Recipe: target slot map from m2c spXXX names -> decl reorder (addr = offset-frame); split shared webs by renaming arm temps to the spXXX vars; volatile locals for selector-CSE temploc + dead stores; drop m2c phantom call args. NEGATIVES: temp_t1_3 per-arm split cascades scratch rotation -300 LCS; goto-dispatch collapses; fuzzy underweights sp-offset fixes ~25:1 (track exact-word LCS + offset histogram)._
 - [Hybrid emit (m2c temp coalescing): the spill-home frame-bloat fix for big SSA grafts](#hybrid-emit-m2c-temp-coalescing-the-spill-home-frame-bloat-fix-for-big-ssa-grafts-578b4-pass-7-2026-06-11) — _Big SSA graft frame bloat = spill homes for "not colored (-ve save)" webs (142 on 578B4), NOT temp pressure. `scripts/m2c-hybrid-emit.py` coalesces same-(reg,type) disjoint-textual-range temps: 578B4 75.07->81.22, frame 1280->496 exact. Tune per class (a/v win, t0/ra hurt); useless vs structural drift (44F4 negative: s-reg phi merges crash 51->39)._
 - [`discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates](#feedback-discover-has-source-misleading) — Discover treats any mention of a symbol in `src/` as "has source", including bare `INCLUDE_ASM(...)` lines. For source-3 picks (small unstarted), use a Python filter that checks for an actual C function definition (`(void|int|...) name(...)` syntax), not just the symbol name.
 - [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used code and naturally drives type discovery.
@@ -1141,6 +1142,52 @@ diffs + structural drift. uopt home assignment is NOT pure decl order
 (probe: sp50 lands at 244 vs target 80 even at matching frame size),
 so per-slot home alignment needs uopt layout RE (open) or per-arm
 register-shape rewrites.
+
+## 578B4 pass 8: slot-map closed via decl-order relayout + per-arm web splits (81.52, 2026-06-11)
+
+The pass-7 "open" home-order question is SOLVED — full rule + frame
+budget in docs/IDO_CODEGEN.md "FRAME-SLOT HOME ASSIGNMENT RULE".
+Applied to 578B4: every memory-resident web now homes at its target
+offset (sp-offset histogram exact at 32-492, frame 496); exact-word
+LCS 467 -> 875/2419, fuzzy 81.22 -> 81.52 committed (agent-w).
+RECIPE for a big graft:
+1. Decode target slot map from m2c spXXX names; required frontend addr
+   = offset - framesize. Reorder ALL decls so each spXXX sits at its
+   addr (4 bytes/slot from -4 down; colored vars are free gap fillers;
+   volatile pads top up; keep total span <= the frame budget).
+2. SPLIT shared webs: one C var = one home. m2c's per-arm copies
+   (`spFC = temp_a2;`) are copyprop'd away — RENAME the arm's temp to
+   the spXXX var (def + arm-scoped uses, delete the self-copy). The
+   web then homes (colored caller-save OR uncolored) at its own decl
+   slot.
+3. Selector-CSE trap: `switch(x)` + `FW(...)` re-read of the selector
+   in the default arm CSEs into one dispatch->default web = anonymous
+   temploc below the locals (frame +8/+16). Break it: assign the
+   re-read to a VOLATILE named local in the default block.
+4. Target dead stores (sw with no load) = volatile named local.
+5. m2c phantom call args (extra `move a1,a3` before a call whose extra
+   arg m2c hallucinated): drop the arg; K&R externs don't care.
+NEGATIVES (don't repeat):
+- Per-arm renames of the switch-1 t1-pointer (temp_t1_3 -> 4 arm vars)
+  cascade-regressed the ugen scratch rotation across all arm bodies
+  (-300 LCS words) even though the homes were right. Interaction-only
+  effect: single-group ablation showed 0, removing all four showed
+  +309. KEEP shared temps when per-arm split regresses; pin the shared
+  decl at the FIRST arm's slot.
+- goto-label dispatch (to reproduce the target's unsorted beq chain;
+  build's switch sorts comparisons ascending) collapsed LCS 875->307.
+  if-else chains inline arm 1 behind bnel. Keep the plain switch.
+- Statement-order and +-operand-order swaps in arm bodies: codegen
+  no-ops (uopt GCM reorders).
+MEASUREMENT GOTCHA: objdiff fuzzy weights an sp-offset-only sw/lw diff
+near zero — ~70 offset fixes moved fuzzy +0.02 but LCS +116. Track
+big-graft progress with an exact-word LCS + sp-offset histogram
+(decode sw/lw base=sp), not fuzzy alone. jal words always differ in a
+.o (unfilled relocs) — exclude ~30 from any byte count.
+REMAINING to 100 (in the wrap comment too): ~250 scratch-rotation
+coloring diffs in switch-1 arms 2-5; 4 webs the target SPLIT-spills
+mid-arm (spF0/spB8/sp9C/sp80) but we keep colored; var_a2 tail web;
+dispatch comparison order; prologue scheduling pair-swaps.
 
 ## references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)
 
