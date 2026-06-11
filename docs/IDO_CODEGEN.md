@@ -14,6 +14,15 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 
 ## Quick reference by sub-topic
 
+### uopt internals (allocator opened, 2026-06-11)
+
+- [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
+- [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
+- [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
+- [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
+- [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
+- [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
+
 ### branch likely / bnel
 
 - [Isolated-compile vs full-TU IDO -O2 codegen can DIVERGE for the same function — verify decodes against the full `make` build, never an isolated cc](#feedback-isolated-vs-full-tu-o2-divergence) — _A function body can compile to the exact target shape (12 insns, plain beq/bne, nop delays) when cc'd IN ISOLATION with the exact project flags, yet the full-TU `make` build of the same source (asm-processor phase-1 output verified identical) produces a different, worse shape (17 insns, beql/bnel, loop rotation) at the SAME -O2. IDO's optimizer is TU-context-dependent. Implication: a "proven-correct in isolation" decode can still be sub-80 in the real build — that's NOT a logic error, don't re-derive; it's permuter / TU-robust-form territory. Always measure against the build .o. Verified 2026-05-16 game_libs_func_0003D9E4._
@@ -13853,3 +13862,208 @@ undefined_syms `= 0x00000000;`, same convention as the _ff float
 alias) -- the return is provably dead and the next load takes $v0.
 Standalone-verified shape flip (lw v1 -> lw v0). Tell: post-call base
 load v1-vs-v0 diff where the call result is discarded in C.
+
+## UOPT INTERNALS OPENED: the allocator source is readable at references/ido
+
+(2026-06-11.) The IDO 7.1 register-allocator "black box" is open. uopt
+(written in Pascal at MIPS Computer Systems, lineage = Fred Chow's
+Stanford U-Code global optimizer; allocator = Chow & Hennessy
+**priority-based coloring**, TOPLAS 1990) was decompiled WITH ITS
+ORIGINAL PROCEDURE NAMES by the n64decomp project. Local clone:
+`references/ido` (github.com/n64decomp/ido). Key files under
+`src/uopt/`:
+- `uoptmain.c` — the full pass pipeline (order matters; see below).
+- `uoptinput.c` (`readnxtinst`) — ucode reader; builds the itab
+  (expression hash table / ichains). Operand order of every binary op
+  is FIXED HERE from the front end's push order; commutative-op CSE
+  (`uoptitab.c`) matches either operand order but the FIRST-built
+  ichain's order wins for emission.
+- `uoptloc.c` (`linearize`/"restructure") — tree reassociation
+  `a + (b op c) -> (a op b) + c`; explains addend regrouping.
+- `uoptreg1.c` (`makelivranges`), `uoptreg2.c` (`regdataflow`,
+  `localcolor`, `spilltemps`, `globalcolor`, `compute_save`,
+  `cupcosts`, `isconstrained`, `needsplit`, `split`) — the allocator.
+- `uoptemit.c` (`emit_expr`, `reemit`, `gettemp`) — re-emission;
+  spill-store placement; emit-time temp allocation.
+- Pass order (uoptmain): tail_recursion -> controlflow -> analoop ->
+  loopunroll -> patchvectors -> copypropagate -> redundant-store
+  removal -> findinduct -> codemotion -> eliminduct -> getexpsources
+  -> makelivranges -> regdataflow -> localcolor -> spilltemps ->
+  globalcolor -> opt_saved_regs -> reemit.
+The companion `udb.py` in that repo is an ncurses debugger that runs
+the decompiled uopt on a TU (needs 32-bit build; not required — the
+dump flags below cover most needs). ugen and cfe are NOT decompiled;
+their behavior must still be probed empirically (see the addu-order
+and call-spill entries below for what was derived).
+
+## UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules
+
+From `uoptreg2.c` (decompiled 7.1 binary, original symbols):
+1. **Candidates** = ichains (exprs/vars) with live ranges
+   (`makelivranges`). Each LR gets a `bitpos` = itab insertion order =
+   first occurrence order in the ucode. THIS ORDER IS THE TIEBREAK
+   EVERYWHERE — first-occurrence order, not declaration order.
+2. **Priority** (`compute_save`): `adjsave = total (loads+stores
+   saved, frequency-weighted, minus reload/store-back costs) /
+   span-factor` where span-factor ~ number of live units (BBs),
+   compressed above 2 (`(n-2)/4 + 2`). Doubles get ×2. If
+   `adjsave <= 0` the LR is REJECTED: "not colored (-ve save)" in the
+   zdbug:6 trace → it lives in memory (a spill home). This is the
+   mechanism behind every "+N frame words of spill homes" gap.
+3. **Coloring order**: constrained LRs first (those whose
+   forbidden-set leaves <= colors-left; `isconstrained`), picked by
+   MAX adjsave; then unconstrained LRs in PLAIN BITPOS ORDER (the
+   `for i in 0..bitposcount` loop in `globalcolor`).
+4. **Register choice within a LR**: scan caller-saved class regs
+   ascending (`firsterreg..lasterreg`), then callee-saved
+   (`firsteereg..lasteereg`, each use of a NEW ee-reg costs
+   `firstUseCost` = clamp(movcost*BBs*0.25, 4..60) extra). Cost per
+   reg = `cupcosts` (call-crossing penalty). STRICT `<` comparison =
+   the LOWEST-NUMBERED register among equal-cost non-forbidden ones
+   wins. So equal-class temps renumber by (a) coloring order (bitpos
+   / priority) and (b) lowest-free-register-first.
+5. If the best register's cost >= the LR's own value
+   (`adjsave * span <= best`), the LR is SPLIT (`split`/`needsplit`)
+   instead of colored — live-range splitting, the mechanism the
+   inline-deref lever (h2hproc 15F0 entry) exploits.
+6. `spilltemps` assigns memory homes (templocs) for uncolored items
+   in BITPOS ORDER, reusing an existing same-SIZE slot when the two
+   items are never co-live in any BB region (`setofspills`). So spill
+   home OFFSETS are first-occurrence-ordered with region-based
+   slot-sharing — NOT decl order ("sp50 lands 244 vs target 80"-class
+   diffs in gl_func_000578B4 come from occurrence-order/sharing
+   differences, plus persistent holes from optimized-out named locals,
+   see the dead-local entry).
+Consequences you can actually use: to move a value OUT of the
+colored set, kill its priority (fewer uses / shorter span / inline
+recompute); to move it IN, lengthen the span or add uses; to change
+WHICH temp gets the lower register, change first-occurrence order of
+the competing exprs (statement order, nesting), not decl order.
+
+## UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends
+
+All write to `./uoptlist` (needs the ecvt patch in
+tools/ido-static-recomp libc_impl, see TOOLING_DECOMP). Map (from
+`uoptmain.c`):
+- `-Wo,-zdbug:1` — **itab dump** (printtab after local opt +
+  printitab after store-removal): every ichain with kind/op/operands;
+  `isvar M 3 -8` lines = cfe locals & compiler temps with their M3
+  frame offsets; `isop uadd{A}{B}` lines show BINARY OPERAND ORDER —
+  the ground truth for operand-order questions. Plus per-BB bitvector
+  sets (antlocs/avlocs/alters/...).
+- `-Wo,-zdbug:2` — printlinfo + printtab AFTER reemit (post-allocation
+  itab: colored vars show `R 0 <reg>`).
+- `-Wo,-zdbug:3` — printcm (code motion).
+- `-Wo,-zdbug:4` — printscm (global CSE sources, after getexpsources).
+- `-Wo,-zdbug:5` — printregs: per-BB regalloc dataflow sets (ppin
+  etc.) + LR statistics block (numlr/numlu/numcalls/...).
+- `-Wo,-zdbug:6` — the **coloring trace** (known "uoptlist"):
+  `ichain_bitpos: lr_bitpos assigned (constrained|unconstrained) R` /
+  `not colored (-ve save)` lines emitted live from globalcolor.
+- `-Wo,-zdbug:7` — printinterproc + printsav.
+- `-Wo,-zdbug:8` — loop-relation dump (print_loop_relations ×2).
+- `-Wo,-dowhyuncolor` — extra whyuncolored() diagnostics for LRs that
+  fail for reasons OTHER than -ve save; combine with -zdbug:N (any N
+  >0 opens the list file).
+- Pass kill-switches for bisection (value 0 disables): `-Wo,-zcopy:0`
+  (copy propagation), `-Wo,-zcomo:0` (code motion), `-Wo,-zstor:0`
+  (redundant-store removal), `-Wo,-zscm:0` (global CSE).
+- `-Wo,-zmovc:N` — sets `movcostused` (the move-cost constant inside
+  compute_save/firstUseCost). Diagnostic only — flipping it confirms
+  "this diff is a coloring-margin artifact" but is not a matching
+  tool (project flags are fixed).
+
+## ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first; flat ptr-arith emits deeper-operand-first (timproc twins CRACKED)
+
+(2026-06-11; cracked timproc_uso_b3_func_0000294C +
+timproc_uso_b1_func_00002740, both 100.0 + ROM byte-identical, after
+573k+289k failed permuter iterations.) The "allocator-chosen"
+commutative `addu rd,rs,rt` operand order for ADDRESS SUMS
+(base + idx*scale) is actually decided BEFORE the allocator, by which
+ucode shape cfe emits:
+- **Flat pointer arithmetic or int arithmetic** (`base + idx*0xA` on
+  int*, `(int)base + idx*0x28`, char* casts, &arr[idx] spelled as
+  ptr+off): cfe lowers through the ADD path and evaluates the
+  DEEPER/more-complex operand first (Sethi-Ullman). An inline
+  `base[i]*K` subtree is deeper than `(int)base`, so the mpy is
+  pushed first → ichain `uadd[umpy, base]` → **`addu rd, scaled,
+  base`**. Source operand order is preserved ONLY when complexities
+  are equal (e.g. both simple vars — hoisting `int idx = base[31];`
+  makes `(int)base + idx*K` emit base-first, but the hoisted local
+  becomes a coloring candidate and renumbers the temp pool).
+- **True 2D-array row indexing** (`typedef int Row[10]; Row *base;
+  int *slot = base[idx];` — also struct-member arrays
+  `&base->recs[idx]`): cfe emits the IXA ucode form, which lowers as
+  **`addu rd, base, scaled`** (base FIRST) while keeping the index
+  ilod in the ugen temp pool (t6/t7...) exactly like the inline form.
+RECIPE for a terminal `addu rd,A,B` vs `addu rd,B,A` diff on an
+address sum: read which operand the target puts first. Scaled-first →
+flat ptr-arith spelling. Base-first → array/row indexing spelling
+(`Row294C` pattern above). Verify the ichain order directly with
+`-Wo,-zdbug:1` (the `uadd{A}{B}` line). Permuter never finds this
+because it mutates expressions, not declared TYPES.
+NOTE the twins' second site (`base2 + (base2[0x7C/4]*0xA)` feeding a
+fn-ptr call with the m2c artifact `[(0x90^0)/(new_var=4)]`) emits
+base-first WITHOUT the array type — a non-constant outer subscript
+with an embedded assignment also flips evaluation; keep that artifact
+verbatim when porting such bodies.
+
+## CALL-RESULT SPILL ANATOMY: cfe allocates the spill homes; nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)
+
+(2026-06-11.) When a call result must survive a later call at -O2
+with no free callee-saved reg, the sw/lw pair you see is NOT a uopt
+temploc — **cfe itself creates a compiler temp (an `isvar M 3 -N`
+local) and stores the result**, visible in the zdbug:1 itab dump as
+`ustr` statements. Rules derived (standalone-verified, matrix in
+/tmp/uoptlab):
+1. **Nested form** `f(g1() >> 10, g2() >> 10)`: cfe temps BOTH call
+   results (right-to-left allocation: arg3's temp gets the first M3
+   slot -4, arg2's gets -8); the surviving store is emitted by
+   reemit's call handling (func_0042AADC) AFTER the next call's arg
+   marshal → ucode order [lui, addiu, sw, jal] → as1 fills the jal
+   delay with the SW (`jal; sw v0,N(sp)` target shape).
+2. **Named-var form** `r2 = g1(); f(r2 >> 10, g2() >> 10)`: the store
+   is the assignment statement → ucode [sw, lui, addiu, jal] → as1
+   fills the delay with the ADDIU instead. Same instructions,
+   DIFFERENT schedule. So delay-slot-position of a result spill tells
+   you nested-vs-named in the original source.
+3. Named vars are allocated M3 slots at DECLARATION (before cfe call
+   temps); cfe call temps right-to-left per call; M3 -4 = highest sp
+   offset of the local area. Slot offsets in the binary follow.
+4. **Dead named locals still consume frame** (see next entry) — and
+   redundant-store removal deletes dead temp stores but NOT the slots.
+gl_func_00042144 verdict: the old 99.86 wrap used a wrong-arity 4-arg
+call to fake the spill. The TRUE shape is the fully-nested 3-arg form
+— it reproduces all 36 instructions including the famous
+`srl a1,a1,0xa` marshal (vs build `srl a3,a1`) and the call-time sw
+schedule; the SOLE residue is the spill home offset 24-vs-28 = cfe's
+right-to-left temp allocation puts arg3's (dead) temp at -4 where the
+target's original source had the spilled value at -4. Every probed
+spelling (prototypes/varargs, casts, /1024 vs >>10, comma forms,
+embedded assignments, distinct callees) leaves cfe's temp order
+invariant; the function stays NM at the 2-word offset residue with
+honest C. DO NOT re-run permuters on the operand-register diff — the
+nested form already kills it.
+
+## FRAME-SIZE GAPS: dead/optimized-away NAMED locals persist in the frame — count them, don't fight the allocator (func_0001304C verdict)
+
+(2026-06-11.) cfe gives every named local an M3 home at declaration;
+uopt never shrinks the M3 area even when all accesses are
+optimized away (only stores get deleted). So a target frame LARGER
+than your build's by N words usually means the ORIGINAL source had
+extra named locals (often m2c-invisible: fully optimized into
+registers, or genuinely dead), NOT a different allocator outcome.
+Validated on func_0001304C (bootup_uso_tail4): build frame -72 vs
+target -96; adding 7 dead `int` pads reproduced -96 EXACTLY at -O2
+with zero code change. (Plain dead ints suffice at -O2 — no volatile
+needed, unlike the -O2 phantom-slot lever for SPILL slots; M3 var
+area is below the temploc area so pads also shift temploc offsets
+upward, which is how you can steer a spill from 24(sp) to 28(sp)
+without changing instructions... at the cost of +8 frame per 2 pads.)
+Diagnosis flow for any frame mismatch: (1) frame delta /4 = words;
+(2) zdbug:1 dump both sides if possible, count `isvar M 3` entries;
+(3) reconstruct plausibly-real locals (or add pads in NM wraps,
+flagged as such) — and for gl_func_000578B4-class bloat the
+INVERSE holds: the build's m2c temp mass creates "-ve save" rejected
+LRs whose homes inflate the frame (PASS 7 entry) — fewer named
+single-use temps, not more.

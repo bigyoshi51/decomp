@@ -6,6 +6,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 ## Index
 
+- [references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)](#referencesido-the-decompiled-uopt-source--dump-flag-instrumentation-2026-06-11) — _n64decomp/ido clone = uopt allocator source with original symbol names; -Wo,-zdbug:1/2/5/6, -dowhyuncolor, pass kill-switches, -zmovc. Grep it before theorizing about regalloc caps; derived rules in IDO_CODEGEN._
 - [Hybrid emit (m2c temp coalescing): the spill-home frame-bloat fix for big SSA grafts](#hybrid-emit-m2c-temp-coalescing-the-spill-home-frame-bloat-fix-for-big-ssa-grafts-578b4-pass-7-2026-06-11) — _Big SSA graft frame bloat = spill homes for "not colored (-ve save)" webs (142 on 578B4), NOT temp pressure. `scripts/m2c-hybrid-emit.py` coalesces same-(reg,type) disjoint-textual-range temps: 578B4 75.07->81.22, frame 1280->496 exact. Tune per class (a/v win, t0/ra hurt); useless vs structural drift (44F4 negative: s-reg phi merges crash 51->39)._
 - [`discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates](#feedback-discover-has-source-misleading) — Discover treats any mention of a symbol in `src/` as "has source", including bare `INCLUDE_ASM(...)` lines. For source-3 picks (small unstarted), use a Python filter that checks for an actual C function definition (`(void|int|...) name(...)` syntax), not just the symbol name.
 - [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used code and naturally drives type discovery.
@@ -1140,3 +1141,26 @@ diffs + structural drift. uopt home assignment is NOT pure decl order
 (probe: sp50 lands at 244 vs target 80 even at matching frame size),
 so per-slot home alignment needs uopt layout RE (open) or per-arm
 register-shape rewrites.
+
+## references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)
+
+`references/ido` = local clone of github.com/n64decomp/ido — the IDO
+7.1 uopt (ucode global optimizer, the register allocator) decompiled
+to C WITH ORIGINAL Pascal procedure names (`globalcolor`,
+`compute_save`, `spilltemps`, `makelivranges`, `linearize`,
+`gettemp`, ...). This is the primary instrument for "allocator cap"
+questions — grep it before theorizing. The full derived-rules writeup
+(algorithm, priority function, slot assignment, addu operand order,
+cfe call-result temps, dead-local frame persistence) lives in
+docs/IDO_CODEGEN.md under "uopt internals (allocator opened)".
+Companion instrumentation, all standalone-cc compatible:
+`-Wo,-zdbug:1` (itab: binary-op operand order + `isvar M 3 -N` local
+homes), `:2` (post-reemit), `:5` (regalloc dataflow), `:6` (coloring
+trace), `-Wo,-dowhyuncolor`, pass kill-switches `-zcopy:0 -zcomo:0
+-zstor:0 -zscm:0`, and `-Wo,-zmovc:N` (move-cost knob). Dumps land in
+`./uoptlist` (cwd-relative; needs the ecvt patch in
+tools/ido-static-recomp/libc_impl.c — re-apply after clean checkout,
+see the regalloc-dump memo). The repo also ships `udb.py`, an
+interactive ncurses debugger over the decompiled uopt (32-bit build
+required) — not needed so far; the dump flags cover slot/coloring
+forensics.
