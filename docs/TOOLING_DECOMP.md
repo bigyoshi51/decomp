@@ -1057,3 +1057,19 @@ scoping all 395 temps into innermost blocks left the score flat and
 GREW the frame 1256->1504 -- C scope does not inform uopt frame
 allocation). The only remaining instruments are per-arm hand rewrite
 against the .s, or re-emitting m2c with different folding flags.
+
+## m2c --reg-vars all: the temp-collapse instrument for big grafts (578B4 pass 4)
+
+For m2c graft bodies drowning in SSA temps (578B4: 398 temps, frame
++760B over target), re-emit with `--reg-vars all` -- one variable per
+register instead of per-SSA-value (398 -> 36 temps + ~55 var_ decls,
+directly mirroring the target's register allocation). Pipeline:
+`python3 scripts/disasm-func.py <fn> --obj expected/<unit>.c.o` (the
+TARGET .o -- default obj is the BUILD, wrong frame!) -> `uv run m2c
+--target mips-ido-c --reg-vars all` -> `m2c-graft-clean.py <out> <fn>`.
+CAVEAT: the emit has ~30 type-conflict sites (a register var used as
+both int and pointer; s16 var assigned 0x20000). Do NOT blanket-retype
+to s32 -- that breaks m2c's pointer-arithmetic scaling (578B4 scored
+56.8 vs the 75.0 graft). Fix conflicts site-by-site preserving m2c's
+types: switch-expr casts, deref casts at the conflicted uses only,
+s16->s32 widenings where the assigned value overflows.
