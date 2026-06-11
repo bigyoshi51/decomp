@@ -834,7 +834,12 @@ f32-heavy = sweet spot (+44..+75pp), f64-heavy = skip or temper.
 THIRD low-yield class (454C4): BITWISE-FP -- float bits moved through
 int regs (high 0x44xxxxxx COP1-move density; m2c types FP-reg temps as
 s32, e.g. 's32 temp_f4'). m2c reconstructs bit-moves as int math; IDO
-emits different sequences (+7pp only). THRESHOLD CALIBRATION (5A2CC):
+emits different sequences (+7pp only). REVISED 2026-06-10: 454C4
+jumped 7.24->29.77 once its (u32)float FCSR-dance decompositions were
+recomposed (now automatic in m2c-graft-clean.py) -- HIGH COP1 DENSITY
+IS AMBIGUOUS between u32-cast dances (fixable) and true reinterpret
+moves (the real cap). Diagnose by grepping the m2c output for the
+2.1474836e9f signature BEFORE classifying as bitwise-FP. THRESHOLD CALIBRATION (5A2CC):
 ~11% COP1-move density still grafted fine (+47.9pp); ~15% (454C4)
 killed it -- the line sits between, so measure density and temper
 expectations in the 12-15% band. SHARPENED (5BE20, 19 COP1 + 12 f64 in
