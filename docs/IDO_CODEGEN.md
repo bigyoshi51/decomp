@@ -13748,8 +13748,11 @@ orders -- (a) hold the array INDEX in a variable (new_var = 0x48/4;
 fully inlined ((p[0x7C/4]*0x28) + (char*)p + 0x90). 99.52 -> 99.76
 in-tree. The hand-enumeration missed these because they look
 pointless; add both to the spelling matrix for this class. The LAST
-swap resisted 67k permuter iterations (genuinely allocator-internal
-or needs more run time).
+swap resisted 170k+ permuter iterations (genuinely allocator-internal
+or needs more run time). TRANSFER NOTE: the two shapes are CONTEXT-
+SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
+vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
+function (run import.py per fn), not pattern-applied across a class.
 
 ## Volatile-pad sizing is NOT bytes/4 -- probe N±1 (9B4 MATCHED 100.0)
 
