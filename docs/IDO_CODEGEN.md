@@ -156,6 +156,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Drop the `int *s2 = a0;` alias when `a0` is deeply used across calls — alias forces IDO to allocate TWO distinct $s regs](#feedback-ido-arg-alias-doubles-s-reg-when-used-across-calls) — _When `a0` is referenced both as the loop-base AND passed unchanged as an arg to inner calls, an explicit `int *s2 = a0;` alias makes IDO allocate $s2 for the alias AND $s3 for the original `a0` ($s3 = a0 spill, retained for the post-call passthrough). Drop the alias and use `a0` directly throughout — IDO collapses to a single $s register, saving 3 spill insns. Counters the older "alias is DCE'd at -O2" claim from `feedback-ido-3save-vs-2save-arg-preserve` (different live-range shape). Verified 2026-05-08 on `gl_func_00068524` (88.72% → 100% with this + entry-test type fix)._
 - [Identical C body in different .c files can emit DIFFERENT frame sizes — file-context affects IDO's spill-slot allocator](#feedback-ido-file-context-affects-frame-size) — _Three siblings (eddproc_uso_func_000003BC, arcproc_uso_func_00002334, mgrproc_uso_func_00003358) share IDENTICAL C body (same volatile-ptr-to-arg lever, same control flow, same cross-call shape). eddproc matches at 100 % with frame 0x28; arcproc and mgrproc both land at ~89 % with frame 0x20. Only difference is which .c file the function lives in. The 8-byte frame discrepancy can't be closed with C-level levers — OPT_FLAGS are nominally identical, and the volatile-ptr lever is already applied. Suspect file-level state (other functions' codegen perturbing IDO's allocator pseudo-numbering or live-range analysis). When you see this pattern, NM-wrap and document; don't grind. Verified 2026-05-08 across three functions. (BUT FIRST try the declaration-order-permutation lever below — that crack post-dates this entry.)_
 - [Frame-size / spill-slot-offset 8-byte near-miss CRACKED by INTERLEAVING int and pointer local declarations — brute-force all decl permutations](#feedback-ido-interleave-decl-spill-slot-alignment) — _A non-leaf orchestrator whose ONLY diffs are an 8-byte-too-big frame (mine 0x30 vs target 0x28) plus the shifted home/spill/reload offsets that follow from it. Root cause: IDO assigns int spill-slot offsets in local-declaration order, and the alignment/packing depends on how int decls are INTERLEAVED with pointer decls. Grouped decls (`int *v0; int *p0; int *p1; int n0,n1;`) packed the int spills 4-aligned/adjacent (n1@0x1C, n0@0x20) and grew the frame; the target uses 8-aligned slots with gaps (n1@0x18, n0@0x20, frame 0x28). LEVER: brute-force every permutation of the local declarations through standalone IDO (each `cc -c` ~0.1s; objdump + word-diff vs the target `.s`) — `int *v0; int n0; int *p0; int n1; int *p1;` (interleaved) byte-matched. 120 perms = a few seconds. Verified 2026-05-28 mgrproc_uso_func_00001AD0 (34 insns, 9 diffs → 0, landed). DIRECTLY COUNTERS the "don't grind 8-byte frame discrepancies, NM-wrap" advice above for the pure-spill-slot-offset subclass (regalloc-only, NOT file-context). Always run the perm brute-force before NM-wrapping a frame-size-only near-miss. Builds on [feedback-ido-sreg-order-not-decl-driven](#feedback-ido-sreg-order-not-decl-driven)'s note that STACK OFFSETS (unlike $s-reg choice) ARE declaration-order-driven._
+- [FRAME-SLOT HOME ASSIGNMENT DERIVED (uopt source): M-class named locals home at framesize+frontend-decl-order addr; anonymous spill templocs allocate by tempdisp in first-need order with same-size region-sharing](#feedback-ido-frame-slot-home-assignment-rule) — _Decl order IS the slot map for named locals; sequence: -4,-8,... from frame top. Derived from references/ido uoptreg2.c spilltemps + uopttemp.c gettemp + -Wo,-zdbug:6 `isvar M 3 <addr>` lines. Validated on gl_func_000578B4 (moved 5 hot locals to decl head → homes 476-492 byte-exact). Full mechanics + frame-size budget in the section below._
 - [SYSTEMATIC game_uso cap: target keeps the entity ptr in caller-saved $a2 (register early, spill/reload only around calls); IDO C can't reproduce it](#feedback-ido-game-uso-entity-ptr-a2-cap) — _Across game_uso spine/helper functions that take an entity/struct pointer used many times across calls, the target keeps that pointer in caller-saved **$a2** — `move a2,a0` at entry, used register-resident early, spilled to its home slot and reloaded only around the calls that clobber it, saving NO extra $s register. IDO C produces one of two non-matching shapes instead: (a) normal `a0` use → promotes to a callee-saved **$s** (extra $s save, bigger frame); (b) the `int* volatile p=arg` knob → reloads on EVERY use (over-corrects, regresses). Neither matches "register-early, reload-after-call-only". No C knob pins a many-use value to a caller-saved reg with selective spill. Confirmed across game_uso_func_000044F4 ($s2 variant), _00001DDC (volatile knob got +0.88pp partial but a0 still mis-located), _000043D8 (no-call: a1→$s0 vs target $a3), _0000B750 (a0+a1→$s0/$s1 vs target a1→$s0 only; knob regressed 71→67%). This caps the PROLOGUE and cascades, so these functions plateau well below 100% regardless of body correctness. Don't grind the prologue with $s/volatile/register tricks — it's a whole-function allocno-weight divergence; needs the permuter (impractical on 300+ insn fns) or the original cc. NM-wrap and move on._
 - [Model an adjacent-stack-slot pair (cur/next cursor) as `T *arr[2]` to force STACK-residency — defeats s-reg promotion of loop-carried pointers](#feedback-ido-stack-slot-pair-as-array) — _When the target keeps a loop-carried pair of pointers in two ADJACENT stack slots (e.g. `sw cur,0x18(sp)` / `sw next,0x1C(sp)`, reloaded each iteration) instead of promoting them to `$s` regs, declare them as a 2-element ARRAY (`int *cursor[2];`, cur=cursor[0], next=cursor[1]). Arrays are never register-promoted, so IDO keeps them sp-resident and reloads per use — matching the target's no-s-reg loop. Plain `T *cur, *next;` locals get promoted to s0/s1 (extra saves, bigger frame). COMBINE with: (a) SEPARATE vars for the loop's entry-test (`v1`) vs the bottom continue-test (`v0`) — reusing one var makes it loop-carried → promoted; (b) `&self` (or `&param`) to keep a cross-call param stack-homed+reloaded rather than s-reg-promoted. Took `gl_func_00041EDC` (cb-scope list-walk + vtable dispatch) 58% → 80.2% (2026-05-28). Residual: the last loop-continue temp still promotes to s0 (target uses zero s-regs) — the C can't force a total no-s-reg allocation. Recognition: target loop body starts with `lw rX,N(sp); lw rY,M(sp)` for the cursor pair + saves only `ra`. Sibling family: gl_func_0003E2B0 / 00040640 / 00040974._
 - [Indexed double-deref accessor (`return base[idx*4+K]->[J]`) — SOLVED via addu operand-order lever (was mislabeled a cap)](#feedback-ido-indexed-double-deref-allt-cap) — _Tiny leaf chaining 2-3 indexed pointer loads. NOT a cap: fully inline (no named locals) AND write the scaled index FIRST in each addu (`idx*4 + base`, not `base + idx*4`) — for a LOADED base the C-second operand becomes the addu rs, emitting the target's all-$t order. Cracked the whole family 2026-05-23 byte-exact (timproc_uso_b5 8C1C/8AD4/8A38/8A64/8A90), no INSN_PATCH. Residual cap only when the base is the PARAMETER (a0+idx*4 with int-cast forces index-first; try pointer-arith param-first first)._
@@ -14275,3 +14276,47 @@ exactly by the dead-local rule (7 dead ints; renumber residual
 remains). The remaining cohort (C28C, 12818, uso_skip_to_end,
 E6E8/E910/E79C, 525F0, 4ACD4, 4880C, D9B8, 35834, A9C, 9696C, 42144)
 was not reached -- re-run the sweep to continue.
+
+## FRAME-SLOT HOME ASSIGNMENT RULE (derived from uopt source, validated on gl_func_000578B4) <a name="feedback-ido-frame-slot-home-assignment-rule"></a>
+
+Where every sp-relative slot offset comes from, derived 2026-06-11 from
+`references/ido/src/uopt/` and validated empirically with `-Wo,-zdbug:6`:
+
+1. **Named (M-class) locals: final offset = framesize + frontend addr,
+   and frontend addr is PURE DECLARATION ORDER** (-4, -8, -12, ... from
+   the top of the frame, aligned by size; an s16 takes 2 bytes and the
+   next 4-byte decl re-aligns). cfe assigns the addr; uopt never repacks
+   named-var homes (colored vars leave DEAD SPACE at their addr — frame
+   does not shrink). The `-Wo,-zdbug:6` uoptlist dump prints these as
+   `{ichain|n} BIT isvar M 3 <addr>vreg`. So reordering declarations is
+   a byte-exact lever for every memory-resident named local's slot.
+2. **Anonymous spill temps (isop/issvar/isilda webs): templocs allocated
+   from the `tempdisp` counter in FIRST-NEED ORDER** (program/emit
+   order), each `disp = -tempdisp` (uoptreg2.c `spilltemps`, uopttemp.c
+   `gettemp`, uoptreg1.c IV temps — all draw the same counter).
+   Sharing: spilltemps lets a web reuse the lowest-indexed existing
+   temploc of the SAME SIZE whose current occupants don't share a
+   region/BB (`setofspills`); gettemp reuses freed (`not_spilled`)
+   same-size templocs. The temp area sits BELOW the named locals
+   (just above the reg saves at 0x18/0x1C).
+3. **Caller-save spills of COLORED webs around calls go to the web's
+   temploc too** (uoptemit `spilltemplodstr` when `inreg()` fails) — an
+   original `hdr` var colored to $a2 still owns a frame slot that eats
+   a temploc position in first-need order.
+4. **Frame size budget**: frame = args(16) + saves + temp area + named
+   span, rounded up (observed: named span 458→frame 496, 464→504,
+   466→512 in a 2-call 2-save fn). Adding/removing one decl can bump
+   the frame by 8-16; tune with `volatile s32` pads (zero insns).
+5. **m2c spXXX names in a graft = the TARGET's slot map** (sp1EC lives
+   at 0x1EC). For an original compiled from few named locals, the
+   target frame is nearly ALL temp area (first-need order); a hybrid
+   m2c body inverts this (all M-class decls). You can OVERLAY the
+   target's temploc layout by declaring named vars in the right order
+   so each memory-resident web's home coincides with the target offset
+   (validated: 5 hot webs moved to decl head → sw/lw 0x1DC-0x1EC(sp)
+   byte-exact).
+
+CAVEAT: objdiff fuzzy_match gives near-zero weight to immediate-offset
+diffs in sw/lw, so fixing dozens of slot offsets barely moves the
+score — but it IS byte-progress; verify with an offset histogram
+(decode sw/lw base=sp imm) instead of the fuzzy %.
