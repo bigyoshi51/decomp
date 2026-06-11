@@ -1052,6 +1052,8 @@ CAUTION -- mass single-hop temp inlining BACKFIRES: inlining 59
 call-free single-use temps (of 398) grew the frame 1256 -> 1576;
 recompute duplication creates MORE pseudos than the temps it removes.
 The inline-recompute lever works per-hot-variable, not en masse. For
-chained-SSA temp populations the instruments are block-scoping the
-decls (live-range shortening without duplication) or per-arm hand
-rewrite against the .s.
+chained-SSA temp populations: block-scoping is ALSO DEAD (pass 3:
+scoping all 395 temps into innermost blocks left the score flat and
+GREW the frame 1256->1504 -- C scope does not inform uopt frame
+allocation). The only remaining instruments are per-arm hand rewrite
+against the .s, or re-emitting m2c with different folding flags.
