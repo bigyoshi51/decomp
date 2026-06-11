@@ -13668,3 +13668,18 @@ immediate compares by IDO (score exactly flat). Single-use constants
 do not win s-regs. Open: needs a multi-use or volatile-read liveness
 forcer, or the shape is a -g-level artifact. Recognize the shape by
 li sN,<small const> ahead of a jal with the compare after it.
+
+## INVERTED SLOT ORDERING cap class: spill-high/unused-low at constant frame (E6E8, E04)
+
+Two confirmed members (gl_func_0000E6E8 99.93, h2hproc E04 99.95):
+the target frame places a spill slot ABOVE an unused/gap slot; IDO
+from any tried C packs the spill at the temp-area TOP with the gap
+above it. Exhaustively probed: E6E8 (volatile double/int/int[2] pads,
+early-pseudo 4 permutations), E04 (16 standalone variants -- decl
+orders, leading/trailing/interleaved dummies, volatile, arrays,
+double, register). No C shape raises the spill without growing the
+frame (arrays/doubles grow it past target). The tell: a 2-insn
+sw/lw-pair diff with offsets 4 apart at identical frame size.
+Disposition: irreducible from C; classify and move on. Only an
+allocator-internal account (uoptlist occupant trace) could name the
+mechanism -- and even named, no C lever is known to act on it.
