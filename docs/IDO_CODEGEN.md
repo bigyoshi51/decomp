@@ -13683,3 +13683,19 @@ sw/lw-pair diff with offsets 4 apart at identical frame size.
 Disposition: irreducible from C; classify and move on. Only an
 allocator-internal account (uoptlist occupant trace) could name the
 mechanism -- and even named, no C lever is known to act on it.
+
+## gl_ref absolute CRACKS the "LO16-placement cap" (61878 MATCHED 100.0)
+
+The documented claim "no C form flips IDO's address-fold choice
+(addiu full-address vs lw/sw displacement folding); a dedicated
+symbol would be reloc-faking" is WRONG on both counts: the
+established gl_ref_ undefined-syms convention (Class-A ledger
+identities, 618F8 etc.) IS the legitimate C form. `extern int
+gl_ref_0002XXXX;` + `gl_ref_0002XXXX = 0x0002XXXX;` in
+undefined_syms_auto.txt materializes the full address (lui %hi;
+addiu %lo; lw/sw 0(rN)) byte-exactly. Recognition: pure-IMM diff
+cluster where target has addiu rN,rN,<lo16> + lw/sw 0(rN) and the
+build has addiu rN,rN,0 + lw/sw <lo16>(rN). 61878: 3 IMM diffs -> 0,
+ROM byte-identical, landed. CHECK THE OTHER IMM-DIFF NEAR-MISSES for
+the same shape (288AC, F2EC, 685C0, 5E190, 7C74, 8C3C surveyed
+2026-06-10).
