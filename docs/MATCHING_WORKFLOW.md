@@ -8264,7 +8264,13 @@ imm=0 (unresolved %lo/%hi) while the target words are resolved.
 individual D_ externs that link correctly) + 1 real (a mul.s operand).
 Filter before triaging: a diff at an instruction with a reloc record
 (objdump -r) is not a diff unless the SYMBOL or which-insn-carries-lo
-differs. objdiff's reloc-aware fuzzy already handles this -- trust the
+differs. SECOND ARTIFACT (3ED4): USO .s files encode jal lines in a
+TRAILING-comment format (`jal name   /* ADDR WORD -> target */`)
+that the standard leading-comment word regex MISSES -- the extracted
+target drops the jals, every later insn shifts, and the diff shows
+phantom "extra jal" insertions in the build. Cross-check extracted
+word count x4 against the symbol size (objdiff size field) before
+trusting any raw diff; mismatch = extraction bug, not code diff. objdiff's reloc-aware fuzzy already handles this -- trust the
 fuzzy %'s composition over a naive word diff, and use the diff-class
 survey only on reloc-free instructions. (The gl_ref crack at 61878 was
 real because the lo16 moved BETWEEN instructions -- addiu vs lw -- a
