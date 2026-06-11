@@ -13769,7 +13769,12 @@ addu diff; 573k and 289k iterations respectively) -- a symmetric
 terminal plateau across independent runs is strong evidence the
 residual is genuinely allocator-internal, not search-budget. Stop the
 run; more iterations will not help. Contrast 27BC, whose last diff
-fell at ~250k. TRANSFER NOTE: the two shapes are CONTEXT-
+fell at ~250k. FINAL CALIBRATION (1304C): MULTI-diff structural
+residuals (3 spill slots + a deep loop-body renumber) do NOT fall --
+fast early descent (7060->4570 in 18k) then ~97k flat. The permuter
+cracks SINGLE-operand/single-choice gates; reserve it for those and
+budget ~250k; concede multi-diff allocator residuals to uopt-internals
+research. TRANSFER NOTE: the two shapes are CONTEXT-
 SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
 vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
 function (run import.py per fn), not pattern-applied across a class.
