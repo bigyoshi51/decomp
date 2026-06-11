@@ -13780,7 +13780,16 @@ import.py scoping fix and is INVALID as a permuter verdict -- the
 2026-06-11 few-diff re-scan (reloc-filtered true diffs 1-3 in the
 97-100 band) surfaced 27 such candidates. Re-derive permuter verdicts
 with a properly scoped scratch before trusting any old immunity
-claim. TRANSFER NOTE: the two shapes are CONTEXT-
+claim. PROVEN ON A NAMED CAP CLASS: 288AC's mul.s fs/ft operand order
+-- documented as "operand-canonicalization cap, not C-flippable" (cf.
+520B8/52104) -- fell to a scoped run at ~160k iterations, and 46C4C
+(base score 30) fell the same morning. Named cap CLASSES are also
+stale as permuter verdicts, not just per-fn notes. When promoting a
+permuter win, remember the FULL-LINK check: placeholder externs
+(gl_retf_*, gl_fn_*, D_*_str) need undefined_syms_auto entries (jal-0
+placeholders = 0x0; address-named fns = their hex name; USO-reloc
+strings = 0x0), and gate on make EXIT CODE + cmp, not cmp alone
+(a failed link leaves a stale ROM that cmp happily passes). TRANSFER NOTE: the two shapes are CONTEXT-
 SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
 vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
 function (run import.py per fn), not pattern-applied across a class.
