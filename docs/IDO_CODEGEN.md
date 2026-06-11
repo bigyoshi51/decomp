@@ -13770,3 +13770,16 @@ CRITERION REFINED (E368 negative): the shared variable must span
 CALLS between its uses -- call-free arm temps with the same RHS are a
 different (still-capped) constrained-pool story. Sweep signature =
 repeated identical assignment AND an intervening jal.
+
+## VOID-ALIAS LEVER: dead-return $v0 reuse (27BC, 99.29 -> 99.52)
+
+The INVERSE of the if(1){} dead-return-parking lever, previously "no
+known C form": when the TARGET reuses $v0 for a fresh load right
+after a call whose result is unused, and the build avoids it (picks
+v1), the cause is the K&R `extern int f()` prototype -- the int
+return is not provably dead, so IDO protects v0. Fix: call through a
+VOID-PROTOTYPED alias (extern void gl_func_00000000_void(int); +
+undefined_syms `= 0x00000000;`, same convention as the _ff float
+alias) -- the return is provably dead and the next load takes $v0.
+Standalone-verified shape flip (lw v1 -> lw v0). Tell: post-call base
+load v1-vs-v0 diff where the call result is discarded in C.
