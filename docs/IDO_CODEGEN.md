@@ -13737,3 +13737,13 @@ regalloc. BOUNDARY (timproc 294C/2740): the lever NEEDS a constant
 term to bind ((base+const)+scaled); a pure 2-operand base+scaled sum
 canonicalizes identically from int-ptr, char-cast, and array forms --
 those stay allocator-chosen.
+
+## Volatile-pad sizing is NOT bytes/4 -- probe N±1 (9B4 MATCHED 100.0)
+
+Closing a 0x20 frame gap took `volatile int pad[7]` (28 bytes), not
+pad[8]: IDO's frame rounding absorbed part of the pad, and pad[8]
+overshot to 99.96 while pad[7] hit 100.0 exactly. When using the
+phantom-slot lever for an unused-stack gap, probe array sizes around
+gap/4 (N-1, N, N+1) instead of assuming the arithmetic. Full 9B4
+recipe: addend swaps (lw pair order) + mul operand swap (FP rotation)
++ pad[7] = 14 true diffs -> 0, landed.
