@@ -13758,7 +13758,12 @@ These perturb pseudo creation order in ways no principled enumeration
 would try. VERDICT REVISED: the 2026-05-28 "permuter resists
 reg/operand caps" finding was a SCOPING failure -- with import.py
 per-fn scratches the permuter cracks single-operand allocator gates;
-budget ~300k iterations (~30 min at -j6). TRANSFER NOTE: the two shapes are CONTEXT-
+budget ~300k iterations (~30 min at -j6). IMPORT GOTCHA (1304C): the
+permuter's score weights diffs DIFFERENTLY from objdiff's fuzzy -- a
+"better" permuter output can score WORSE in the report (4715-metric
+output scored 91.69 vs the 4725 output's 92.21). Verify EVERY import
+against objdiff in-tree before keeping; the monotonic rule applies to
+the OBJDIFF number. TRANSFER NOTE: the two shapes are CONTEXT-
 SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
 vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
 function (run import.py per fn), not pattern-applied across a class.
