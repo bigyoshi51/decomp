@@ -1081,4 +1081,10 @@ spill-heavy); reg-vars 53.1 with frame UNDER target (allocation-
 faithful, structure-drifted: register-transfer statements add moves
 and shift control-flow placement). NEITHER is a drop-in for a big fn;
 use the SSA emit for structure and the reg-vars emit as the
-allocation reference during per-arm hand rewrites.
+allocation reference during per-arm hand rewrites. PREMISE CHECK
+(pass 6): a hand rewrite of one switch arm with 5 reused locals (vs
+~21 SSA temps) was CODEGEN-EQUIVALENT -- IDO coalesces short-lived
+within-arm temps on its own, so SSA temp COUNT is not the frame-
+pressure source. For a big-fn frame delta, do NOT assume temps:
+run the uoptlist occupant trace (-Wo,-zdbug:6) and map the EXTRA
+frame slots to their C variables before choosing a transform.
