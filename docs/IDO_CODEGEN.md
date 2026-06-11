@@ -21,7 +21,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
 - [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
-- [UGEN TEMP ROTATION MECHANISM: 10-reg circular scratch queue](#ugen-temp-rotation-mechanism-a-10-register-circular-scratch-queue-t6t7t8t9t0t5t6-advanced-per-uncolored-value-materialization-never-reset-within-a-function) — _free list order t6,t7,t8,t9,t0..t5; head-take/tail-append = rotation; advanced by every uncolored materialization (expr temps, spill reloads); calls/BBs don't reset. A t8↔t9 diff = ±1 scratch consumption earlier; fix the PHASE via -Wc,-d trace alignment._
+- [UOPT OR-CHAIN ROTATION: written (X|Y)|Z evaluates Z first](#uopt-or-chain-rotation-written-xyz-evaluates-z-subtree-first--fix-statement-shapes-per-statement-by-spelling-permutation-not-by-chasing-downstream-register-noise) — _|-chain of complex subtrees emits LAST operand's subtree first; brute 6 spellings per statement w/ register-blind alignment + positional windows (global LCS see-saws until a whole arm is consistent). Also: (x-1)*4 distributes to x*4-4 (spell (x-1)<<2); +-operand order picks load order; store-stmt pairs keep source order. 578B4 875→1435._ — _free list order t6,t7,t8,t9,t0..t5; head-take/tail-append = rotation; advanced by every uncolored materialization (expr temps, spill reloads); calls/BBs don't reset. A t8↔t9 diff = ±1 scratch consumption earlier; fix the PHASE via -Wc,-d trace alignment._
 - [REDUCED PIPELINES: -O0/-O1 run NO uopt — ugen is the whole optimizer](#reduced-pipelines--o0-o1-run-no-uopt--ugen-is-the-whole-optimizer-phase-map-verified) — _-O0/-O1 pipeline = cfe→ugen→as1 (no uopt). ugen at -O0 = Build+Translate only (unfilled delays, all-vars-via-home); -O1 adds localopt+label phases. No webs/coloring/copy-prop at ≤O1 — uopt levers inapplicable; use -Wc,-d + decl order + register kw + as1 rules._
 - [AS1 BRANCH-DELAY FILL PRIORITY + the `| 0` register-move lever](#as1-branch-delay-fill-priority--the--0-register-move-lever-ugen-session-func_00000a9c-anatomy) — _as1 fill order: from-before > steal-exclusive-target > LIKELY-copy-shared-target (the beql cap mechanism) > nop; jr-fill moves the label; as1 deletes/renames ugen moves. `x | 0` survives to a literal `or rd,rs,zero` (`+0` folds) = C-level register-move materializer._
 - [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
@@ -14163,6 +14163,46 @@ This is the ground truth for every "ugen temp" question; combine with
 `-Wo,-zdbug:N` for the uopt side. Works with full project flags
 (`-Xcpluscomm -Wab,-r4300_mul -O2 -mips2 -32`). Strip // comments as
 usual. The dump is per-TU and can be large; grep `opc =|emit_`.
+
+## UOPT OR-CHAIN ROTATION: written `(X|Y)|Z` evaluates Z-subtree FIRST — fix statement shapes per-statement by spelling permutation, NOT by chasing downstream register noise
+
+(2026-06-12, gl_func_000578B4 pass 9, LCS 875→1435 in one batch.) For
+a commutative |-chain of complex subtrees at -O2, uopt does NOT
+evaluate the written source order: written `A | C | B` (3 operands,
+A/B complex subtrees, C a 32-bit const) emits the LAST operand's
+subtree first — observed transform `(X|Y)|Z → or(or(Z,X),Y)`. The
+transform is NOT a fixed rotation across statement families (operand
+complexity matters): treat it as per-statement-EMPIRICAL. Recipe that
+cracked five statement templates in one session:
+1. Align target-vs-build with a REGISTER-BLIND canonicalization
+   (zero rs/rt/rd fields naming t0-t9; SequenceMatcher per anchored
+   arm region, anchors = distinctive lui constants). Register-only
+   diffs vastly outnumber structural ones (994 vs 432 here); fix
+   STRUCTURAL (register-blind) diffs first — every structural fix
+   also realigns the downstream ugen scratch-rotation phase for free.
+2. For each mis-shaped |-chain statement, brute the 6 operand-order
+   permutations in a standalone-cc harness (~0.3 s/build) and judge
+   by a POSITIONAL byte window over just that statement plus
+   per-region exact counts — NOT global LCS, which see-saws from
+   cross-arm web/coloring interactions while shapes are mixed.
+3. Related shape rules found the same way: `(x - 1) * 4` gets
+   distributed by uopt to `x*4 - 4` (sll;addiu -4) — spell
+   `(x - 1) << 2` to keep target's addiu -1;sll order. Operand order
+   inside a +: `FW(..) + lh` vs `lh + FW(..)` controls which load
+   materializes first (= which scratch reg each value gets). Adjacent
+   `FW(p,4)=..; FW(p,0)=..;` store statements: uopt does NOT reorder
+   them; if target stores 4-then-0 but evaluates the 0-value first,
+   the SOURCE had the statements in the other order (swap them; the
+   m2c graft order follows store address, not source order).
+4. Template leverage: in N-arm switch bodies (RDP packet builders
+   etc.) each shape fix replicates per arm — validate on arm 1,
+   then regex the same spelling into all arms (here 5 statements × 5
+   arms ≈ +560 LCS words).
+Metric caveat (repeats pass-8 lesson): while ANY arm still has a
+wrong-shape statement, global exact-word LCS can DROP when an
+individual statement is fixed (downstream phase shifts); the
+register-blind LCS and per-region exact counts are the monotonic
+ladder. Global LCS jumps once a whole arm's shapes are consistent.
 
 ## UGEN TEMP ROTATION MECHANISM: a 10-register circular scratch queue t6→t7→t8→t9→t0→…→t5→t6, advanced per uncolored-value materialization, never reset within a function
 
