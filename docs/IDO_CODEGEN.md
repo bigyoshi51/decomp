@@ -14204,6 +14204,28 @@ individual statement is fixed (downstream phase shifts); the
 register-blind LCS and per-region exact counts are the monotonic
 ladder. Global LCS jumps once a whole arm's shapes are consistent.
 
+REFINED MODEL (same session, switch-2 7-chains): the canonicalization
+= uopt pulls the LAST COMPLEX operand (deepest to-be-materialized
+subtree, scanning for the last one) of a flat commutative |-chain to
+the FRONT of evaluation; simple operands (colored vars, consts) keep
+relative order. Verified by operand-permutation matrix on a 7-chain
+(`t2|c|t3|E|t4|t5|C` emits [C,t2,c,t3,E,t4,t5]; swapping E/C pulls E
+instead; trailing-simple-var spellings change nothing). Consequences:
+- A target order starting with a SIMPLE operand and a complex operand
+  NOT at front is UNREACHABLE by any flat | spelling (tested 12+
+  forms: paren nests, rotate-left, inline-vs-named operands — all
+  no-ops or worse; named-var/inline spellings are ucode-identical
+  after copyprop, so that axis is dead).
+- Mixed spine `((a|c|b) + E) | d | e) + C` reproduces the EXACT target
+  order (+ nodes are not or-canonicalized) at the cost of `addu`
+  bytes where target has `or` — order-true but 2 wrong words; useful
+  as a diagnostic, not a match.
+- Assignment-expr pins `(var = E)` inside the chain extend the var's
+  web across regions and wreck global coloring — don't.
+- Pass kills (-zscm/-zstor) don't remove the pull (zcomo/zcopy are
+  load-bearing); it's in the tree build/reassoc, not a killable pass.
+How the ORIGINAL reached such orders is still open on 578B4.
+
 ## UGEN TEMP ROTATION MECHANISM: a 10-register circular scratch queue t6→t7→t8→t9→t0→…→t5→t6, advanced per uncolored-value materialization, never reset within a function
 
 (2026-06-11, derived empirically via -Wc,-d toys; confirms and
