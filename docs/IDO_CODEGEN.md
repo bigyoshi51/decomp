@@ -13627,9 +13627,10 @@ When target asm converts float->int via the FCSR dance (cfc1 save,
 ctc1 set-rounding-mode, cvt.w.s, mfc1, ctc1 restore) it is NOT a plain
 C `(s32)f` cast -- IDO -mips2 emits trunc.w.s for that. An m2c graft
 of such code emits library-call jals instead (the cast got softened).
-The construct producing the inline dance is unidentified (candidates:
-specific float-to-int idioms under different rounding semantics,
-roundf-style +0.5 forms, or -mips1-era patterns); finding it unlocks
-the conversion sites in FP-heavy fns (3 sites in bootup 1304C alone).
-Recognition: cfc1/ctc1 pairs around cvt.w.s = flag the site, don't
-assume cast.
+SOLVED (same day): the construct is the UNSIGNED cast -- (u32)float
+emits the full inline dance at -mips2 ((s32) emits trunc.w.s; -mips1
+(s32) also dances). m2c DECOMPOSES the expansion into 2^31-subtract
+branches guarded by M2C_ERROR(/* cfc1 */) -- the recognition in graft
+output: '(s32)(X - 2.1474836e9f) | 0x80000000' next to a plain
+(s32) X branch = recompose to a single (u32) X. One-site fix closed
+3 conversion gaps at 1304C (+6.6pp).
