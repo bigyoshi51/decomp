@@ -13741,7 +13741,15 @@ diff on address arithmetic = try addend regrouping before calling it
 regalloc. BOUNDARY (timproc 294C/2740): the lever NEEDS a constant
 term to bind ((base+const)+scaled); a pure 2-operand base+scaled sum
 canonicalizes identically from int-ptr, char-cast, and array forms --
-those stay allocator-chosen.
+those stay allocator-chosen. PARTIAL CRACK (27BC via permuter,
+2026-06-11): two randomizer-found shapes fix ONE of the two addu
+orders -- (a) hold the array INDEX in a variable (new_var = 0x48/4;
+... a0[new_var]) and (b) spell the deref multiply-FIRST with the base
+fully inlined ((p[0x7C/4]*0x28) + (char*)p + 0x90). 99.52 -> 99.76
+in-tree. The hand-enumeration missed these because they look
+pointless; add both to the spelling matrix for this class. The LAST
+swap resisted 67k permuter iterations (genuinely allocator-internal
+or needs more run time).
 
 ## Volatile-pad sizing is NOT bytes/4 -- probe N±1 (9B4 MATCHED 100.0)
 
