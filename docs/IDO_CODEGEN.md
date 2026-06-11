@@ -20,6 +20,8 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
+- [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
+- [UGEN TEMP ROTATION MECHANISM: 10-reg circular scratch queue](#ugen-temp-rotation-mechanism-a-10-register-circular-scratch-queue-t6t7t8t9t0t5t6-advanced-per-uncolored-value-materialization-never-reset-within-a-function) — _free list order t6,t7,t8,t9,t0..t5; head-take/tail-append = rotation; advanced by every uncolored materialization (expr temps, spill reloads); calls/BBs don't reset. A t8↔t9 diff = ±1 scratch consumption earlier; fix the PHASE via -Wc,-d trace alignment._
 - [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
@@ -14129,6 +14131,63 @@ flagged as such) — and for gl_func_000578B4-class bloat the
 INVERSE holds: the build's m2c temp mass creates "-ve save" rejected
 LRs whose homes inflate the frame (PASS 7 entry) — fewer named
 single-use temps, not more.
+
+## UGEN OPENED: -Wc,-d is the ugen debug dump (tree phases + per-op register trace + emission trace)
+
+(2026-06-11, ugen-crack session.) ugen — the code generator
+downstream of uopt, NOT decompiled by n64decomp — is also Pascal
+(`.p` units visible in its error strings: ugen.p, translate.p,
+eval.p, labelopt.p, reg_mgr.p, temp_mgr.p, symbol.p) and HAS its own
+debug switch. **The cc phase letter for ugen is `c`**: `-Wc,<args>`
+passes args to /usr/lib/ugen (`-Wb` goes to as1, `-Wo` to uopt; cc
+duplicates `-Wab` args to as0+as1). ugen usage line (from strings):
+`ugen [-o binfile] [-l listfile] [-e dumpfile] [-t symbolfilename]
+[-d] [-trapuv] [-G smallsize] [-p] file.F`. **`-Wc,-d` prints to
+STDOUT** (not the listfile):
+1. "Tree dump after Build / Translate / 1st localopt / 1st label
+   phase / 2nd label phase [/ cross jumping]" — the ucode statement
+   trees (node ids, opc, dtype/mtype, offsets, op1/op2 links) at each
+   internal ugen phase, plus per-label L-in/out sets.
+2. A **per-ucode-op register-assignment trace**: `current_line = N
+   opc = umpy reg = xr14 ref_count = 1` — every tree node with the
+   FINAL register ugen bound to it, in evaluation order. xr numbering
+   = MIPS: xr2=v0, xr4..7=a0..a3, xr8..15=t0..t7, xr24/25=t8/t9,
+   xr29=sp, xr31=ra. `xnoreg` = no register (stores, structure ops).
+3. An **emission trace**: `emit_rrr: zaddu xr3 xr14 xr5` — one line
+   per emitted instruction (f_emit_* family), final order.
+This is the ground truth for every "ugen temp" question; combine with
+`-Wo,-zdbug:N` for the uopt side. Works with full project flags
+(`-Xcpluscomm -Wab,-r4300_mul -O2 -mips2 -32`). Strip // comments as
+usual. The dump is per-TU and can be large; grep `opc =|emit_`.
+
+## UGEN TEMP ROTATION MECHANISM: a 10-register circular scratch queue t6→t7→t8→t9→t0→…→t5→t6, advanced per uncolored-value materialization, never reset within a function
+
+(2026-06-11, derived empirically via -Wc,-d toys; confirms and
+completes the gl_func_0000C28C prior finding.) ugen's reg_mgr keeps
+scratch registers on a FREE LIST in fixed initial order **t6, t7,
+t8, t9, t0, t1, t2, t3, t4, t5**; get_reg takes the HEAD and
+free_reg appends back at the TAIL, so the pool behaves as a circular
+queue: each successive scratch request gets the NEXT register in the
+cycle even though all previous temps are already dead. Verified
+properties (toy traces):
+- Consumers that advance the queue: any value ugen must materialize
+  that uopt did NOT color — expression temps (mpy/ilod results
+  feeding a colored target counts only the intermediates), RELOADS
+  of spill homes (`zlw xr14 24(sp)` consumes), address temps.
+- NON-consumers: ops whose result lands directly in a uopt-colored
+  register (params a0-a3, colored v0/v1/sN destinations), stores.
+- A call does NOT reset the index (continues after jal where it left
+  off); a BB boundary does NOT reset it; only function entry resets
+  (starts at t6). Wrap: after t5 comes t6 again.
+Consequence for matching: a single t8↔t9-class diff = the build's
+ucode has exactly ±1 scratch materialization somewhere EARLIER in
+the function relative to the target (any distance back — even the
+first statement). Diagnosis: dump `-Wc,-d`, list the `reg = xr*`
+trace, align against the target's temp sequence from the .s, find
+the eviction/consumption count mismatch; then adjust the C to
+add/remove one uncolored intermediate at any earlier point (e.g.
+named-vs-inline deref converts a colored LR to a scratch reload or
+vice versa). The phase, not the site, is what you fix.
 
 ## Rules-sweep wave 2 results (2026-06-11, remaining cohort completed)
 
