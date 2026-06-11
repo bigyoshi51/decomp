@@ -8298,6 +8298,12 @@ purely from the pad (kernel_038's osCreateThread sat at 98.75 while
 the ROM was byte-exact with that C). Diagnose: default .o .text size
 != NM .o .text size on a unit with ZERO #ifdef NON_MATCHING wraps.
 Fix: `build/non_matching/<unit>.c.o: NON_MATCHING_TRUNCATE_TEXT :=
-<true size>` in the Makefile. Sweep check 2026-06-10: kernel_038
-(fixed, 98.75 -> 100.0) and kernel_017 (pad present but score already
-100; truncate added as hygiene) were the only wrap-free cases.
+<true size>` in the Makefile. FULL SWEEP 2026-06-10 (all segments): 33 wrap-free units carry the
+pad; only TWO had sub-100 report entries -- kernel_038/5B10 (fixed ->
+100.0) and kernel_018/func_800066EC, which is NOT this class but the
+.NON_MATCHING-alias unscored case (objdiff skips aliased symbols
+permanently; the fn is matched in the byte-exact ROM; truncate does
+not apply). The other 31 units score 100 despite the pad -- the
+artifact only bites when the pad lands inside the LAST symbol's size
+attribution AND objdiff's aligner gives up. Metric now honest across
+all wrap-free units.
