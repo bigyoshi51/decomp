@@ -8275,3 +8275,15 @@ fuzzy %'s composition over a naive word diff, and use the diff-class
 survey only on reloc-free instructions. (The gl_ref crack at 61878 was
 real because the lo16 moved BETWEEN instructions -- addiu vs lw -- a
 structural difference visible to objdiff, not a resolution artifact.)
+
+## 95-98 band lever-survey NEGATIVE (2026-06-10): no pure-frame / pure-swap gates remain
+
+The reloc-filtered classifier (commutative swaps, frame-only gaps,
+sp-offset shifts) over the full 95-98 fuzzy band found ZERO functions
+whose true diffs reduce to a single simple-lever class -- and zero
+0.00-fuzzy bare functions remain at ANY size (40B+). The cadence-cost
+exact-match space is swept: remaining near-misses are the named
+allocator-internal classes (temp-pool renumber, inverted slot order,
+reload-site coloring, FP coloring, -O0 temps) with probe histories at
+their wraps. New exacts now come from focused sessions: uoptlist
+occupant traces, kernel boundary merges, or new lever discoveries.
