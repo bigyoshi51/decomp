@@ -13644,4 +13644,9 @@ unfillable branch delay = plain beqz/nop. If the C reads them as
 with filled delay. So beql-vs-plain at constant selectors is decided
 by SYMBOL GRANULARITY, not control flow -- match the unit's
 symbolization (splat's individual pool syms where they exist).
-+2.2pp at 1304C from switching 5 reads.
++2.2pp at 1304C from switching 5 reads. COROLLARY (pass 5): the switch
+also moved the FP REGISTER ALLOCATION -- the per-arm lui changes float
+liveness enough that the selector value lands in callee-saved f20+
+(the sdc1 prologue appeared as a side effect). Pool-symbol granularity
+affects branch shape AND allocation; expect frame changes when
+switching.
