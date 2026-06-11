@@ -13784,7 +13784,13 @@ claim. PROVEN ON A NAMED CAP CLASS: 288AC's mul.s fs/ft operand order
 -- documented as "operand-canonicalization cap, not C-flippable" (cf.
 520B8/52104) -- fell to a scoped run at ~160k iterations, and 46C4C
 (base score 30) fell the same morning. Named cap CLASSES are also
-stale as permuter verdicts, not just per-fn notes. When promoting a
+stale as permuter verdicts, not just per-fn notes. PERMUTER-0 FALSE POSITIVE (mgrproc 140/170): a scratch
+whose BASE score is 0 does NOT mean the fn matches -- the permuter
+diffs branches SYMBOLICALLY, so a branch-into-neighbor (shared-tail)
+fn whose only diff is a cross-symbol branch offset scores 0 while the
+raw words differ (15CF0004 vs 15CF0002). Before celebrating a 0-base,
+check the raw word diff; branch-into-adjacent-return-leaf caps stay
+caps. When promoting a
 permuter win, remember the FULL-LINK check: placeholder externs
 (gl_retf_*, gl_fn_*, D_*_str) need undefined_syms_auto entries (jal-0
 placeholders = 0x0; address-named fns = their hex name; USO-reloc
