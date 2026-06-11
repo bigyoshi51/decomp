@@ -944,7 +944,16 @@ byte-exact ROM at VRAM-0x400+0x1000) land inside ANOTHER symbol's
 span, and/or neighbors starting without prologues (bnez first insn =
 fragment). Such regions need a boundary-merge analysis before any
 graft/decode -- the kernel's symbolic .s feeds m2c directly once
-boundaries are right (no raw-word pipeline needed there).
+boundaries are right (no raw-word pipeline needed there). METHOD
+(5C50 region, 2026-06-10): derive the TRUE function map straight from
+the byte-exact ROM -- disasm the region (kernel ROM offset = VRAM -
+0x80000400 + 0x1000) and mark every `addiu sp,sp,-N` that follows a
+`jr ra`+delay as a real prologue. The [0x5C50..0x65B0) region is 7
+real functions where splat drew 9+; the map lives at the kernel_010
+wrap. Caveat: validate jumptable attribution against the map before
+trusting it (the E->F dispatch paradox is unresolved -- a dispatch
+whose %lo-resolved table targets another mapped fn means either
+misattributed relocs or a wrong boundary; resolve before decoding).
 
 Addendum (1304C pass 7): (24) M2C GOTO-LOOP SNAPSHOT = PHANTOM S-REG.
 When m2c renders a nested loop as goto-loop_N spaghetti, it can
