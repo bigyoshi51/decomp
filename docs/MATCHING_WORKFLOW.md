@@ -8287,3 +8287,17 @@ allocator-internal classes (temp-pool renumber, inverted slot order,
 reload-site coloring, FP coloring, -O0 temps) with probe histories at
 their wraps. New exacts now come from focused sessions: uoptlist
 occupant traces, kernel boundary merges, or new lever discoveries.
+
+## asm-processor NM-path 16-align can create FALSE sub-100 fuzzies on wrap-free C units (5B10)
+
+The build/non_matching rule pipes through asm-processor, which
+16-aligns .text and attributes a pad nop to the last symbol; the
+default rule for plain-C kernel units is bare cc (4-aligned). A
+wrap-free, fully-matched unit can therefore score <100 in the report
+purely from the pad (kernel_038's osCreateThread sat at 98.75 while
+the ROM was byte-exact with that C). Diagnose: default .o .text size
+!= NM .o .text size on a unit with ZERO #ifdef NON_MATCHING wraps.
+Fix: `build/non_matching/<unit>.c.o: NON_MATCHING_TRUNCATE_TEXT :=
+<true size>` in the Makefile. Sweep check 2026-06-10: kernel_038
+(fixed, 98.75 -> 100.0) and kernel_017 (pad present but score already
+100; truncate added as hygiene) were the only wrap-free cases.
