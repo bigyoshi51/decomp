@@ -13795,7 +13795,15 @@ permuter win, remember the FULL-LINK check: placeholder externs
 (gl_retf_*, gl_fn_*, D_*_str) need undefined_syms_auto entries (jal-0
 placeholders = 0x0; address-named fns = their hex name; USO-reloc
 strings = 0x0), and gate on make EXIT CODE + cmp, not cmp alone
-(a failed link leaves a stale ROM that cmp happily passes). TRANSFER NOTE: the two shapes are CONTEXT-
+(a failed link leaves a stale ROM that cmp happily passes).
+OBJDIFF MASKS WRONG SYMBOLS (42438): objdiff scores relocations
+SYMBOLICALLY -- an imported scratch body that inlines (&D_00000000 +
+0x240) scores 100.0 even though it LINKS to a different address than
+the original symbol did (lo16 0x900 vs 0x240 in the ROM). The
+full-ROM cmp is the ONLY gate that verifies symbol-reference
+correctness; after any permuter import that touches D_/extern
+references, diff the ROM and re-point stray (&D+const) inlines at the
+proper direct symbols before landing. TRANSFER NOTE: the two shapes are CONTEXT-
 SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
 vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
 function (run import.py per fn), not pattern-applied across a class.
