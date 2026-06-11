@@ -13747,9 +13747,18 @@ orders -- (a) hold the array INDEX in a variable (new_var = 0x48/4;
 ... a0[new_var]) and (b) spell the deref multiply-FIRST with the base
 fully inlined ((p[0x7C/4]*0x28) + (char*)p + 0x90). 99.52 -> 99.76
 in-tree. The hand-enumeration missed these because they look
-pointless; add both to the spelling matrix for this class. The LAST
-swap resisted 170k+ permuter iterations (genuinely allocator-internal
-or needs more run time). TRANSFER NOTE: the two shapes are CONTEXT-
+pointless; add both to the spelling matrix for this class. COMPLETED (290k iterations): the run
+reached score 0 -- 27BC MATCHED 100.0 and LANDED, the project's first
+permuter-completed match. The winning output-40 shapes (beyond the
+score-50 pair): a pre-declared unused-index variable (new_var2 =
+0x7C/4 hoisted BEFORE the deref), a comma-expression compare
+(!= ((0, 0))), an assignment-in-index (a0[new_var = 0x48/4]), and a
+displacement-in-variable (new_var3 = 0x90 inside the address sum).
+These perturb pseudo creation order in ways no principled enumeration
+would try. VERDICT REVISED: the 2026-05-28 "permuter resists
+reg/operand caps" finding was a SCOPING failure -- with import.py
+per-fn scratches the permuter cracks single-operand allocator gates;
+budget ~300k iterations (~30 min at -j6). TRANSFER NOTE: the two shapes are CONTEXT-
 SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
 vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
 function (run import.py per fn), not pattern-applied across a class.
