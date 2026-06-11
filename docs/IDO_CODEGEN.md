@@ -14515,3 +14515,26 @@ run BEFORE fighting the allocator):
   (fp-constant luis were already breaking the live range); whether
   base-CSE-busting helps is body-shape-dependent — retest after any
   structural rewrite instead of trusting an old negative.
+
+## 4244 ladder levers (agent killed pre-docs; reconstructed from commit messages, 53.60 -> 99.76)
+
+The largest-function full-stack climb validated these (details in the
+agent-y commit messages 4c4611123..f04879ed6):
+- PER-UNIT AGGREGATE STRUCTS: V4/flag structs whose aggregate copies
+  defeat IDO const-forwarding/DSE where scalar spellings get folded.
+- DEPOOL: split a multi-use data symbol into per-offset zero-base
+  aliases to kill lui-pool s-reg webs (87 aliases here).
+- UN-NAME to spill: a NAMED unit ptr steals an s-reg; the anonymous
+  web spills to a temploc like the target (coloring-order inverse of
+  inline-don't-name).
+- SINGLE-USE CONST ALIASES: a 31-use constant formed one LR colored
+  to an s-reg; per-unit symbol aliases make each use single-use, so
+  consts materialize AT USE (after the call) and the s-reg cascade
+  snaps into place.
+- NAME-PAIRING for web merges: pair/triple-merge var_a0_N temps under
+  one name to keep per-web a0+home-spill coloring while shedding decl
+  slots (frame snapped to target 1864).
+- Decl-layout + volatile pads finished the frame/slot map (q@0x8C,
+  paired ptrs above sp78, pads for the gap).
+Residual at 99.76: ~87 words (LCS 2392/2479), uncharacterized tail --
+re-attack candidate.
