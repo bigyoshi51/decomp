@@ -22,6 +22,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
 - [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
 - [UGEN TEMP ROTATION MECHANISM: 10-reg circular scratch queue](#ugen-temp-rotation-mechanism-a-10-register-circular-scratch-queue-t6t7t8t9t0t5t6-advanced-per-uncolored-value-materialization-never-reset-within-a-function) — _free list order t6,t7,t8,t9,t0..t5; head-take/tail-append = rotation; advanced by every uncolored materialization (expr temps, spill reloads); calls/BBs don't reset. A t8↔t9 diff = ±1 scratch consumption earlier; fix the PHASE via -Wc,-d trace alignment._
+- [AS1 BRANCH-DELAY FILL PRIORITY + the `| 0` register-move lever](#as1-branch-delay-fill-priority--the--0-register-move-lever-ugen-session-func_00000a9c-anatomy) — _as1 fill order: from-before > steal-exclusive-target > LIKELY-copy-shared-target (the beql cap mechanism) > nop; jr-fill moves the label; as1 deletes/renames ugen moves. `x | 0` survives to a literal `or rd,rs,zero` (`+0` folds) = C-level register-move materializer._
 - [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
@@ -14189,6 +14190,41 @@ the eviction/consumption count mismatch; then adjust the C to
 add/remove one uncolored intermediate at any earlier point (e.g.
 named-vs-inline deref converts a colored LR to a scratch reload or
 vice versa). The phase, not the site, is what you fix.
+
+## AS1 BRANCH-DELAY FILL PRIORITY + the `| 0` register-move lever (ugen session, func_00000A9C anatomy)
+
+(2026-06-11.) Derived empirically (A9C probe battery) — the
+reorganizing assembler as1 (-O2) fills a conditional branch's delay
+slot by this priority:
+1. **From-before**: the instruction preceding the branch, unless it
+   feeds the branch's operands (e.g. the `li at,X` of the very test).
+2. **Steal from an EXCLUSIVE target block**: if the branch is the
+   ONLY predecessor of its target, as1 moves the target's first insn
+   into the (plain) delay slot — even an insn that writes a register
+   dead on fallthrough (`or v0,v1` stolen while fallthrough redefines
+   v0). Target block keeps its label, loses its head.
+3. **Likely-copy from a SHARED target block**: if the target has other
+   predecessors, as1 converts beq→beql / bne→bnel, COPIES the target's
+   first insn into the likely slot, and retargets the branch PAST it.
+   This is the mechanism behind the documented "-O2-size but regular
+   branch where we emit branch-likely" cap class: the original only
+   keeps a plain beq+nop when the shared target's first insn is
+   NON-HOISTABLE (jr/branch).
+4. **nop.**
+Also verified: as1 fills a `jr ra` delay by sinking the preceding
+insn AND MOVING THE LABEL onto the jr (that's why label-block returns
+are `.Lxxx: jr ra; li v0,X`); and as1 DELETES redundant ugen moves
+and RENAMES registers across its scheduling (ugen emits lw t8,0(s0),
+final shows lw t8,0(a1)) — so never reason about register BASES from
+the final bytes when attributing diffs to ugen; only temp IDENTITIES
+survive as1.
+**The `| 0` lever**: `return r | 0;` (or any `x | 0`) SURVIVES cfe and
+uopt all the way to ugen and emits a literal `or rd,rs,zero` — the
+`move` encoding — while `x + 0` folds away. This is the C-level way
+to materialize a register-to-register move / keep a staged value OUT
+of the coalesced result register (A9C: li v1,8 + or v0,v1 both
+byte-exact via `r = 8; ... return r | 0;`). Pair with rule 3 to
+predict whether the move lands in a delay slot or triggers a beql.
 
 ## Rules-sweep wave 2 results (2026-06-11, remaining cohort completed)
 
