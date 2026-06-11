@@ -20,6 +20,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
+- [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
@@ -14128,6 +14129,71 @@ flagged as such) — and for gl_func_000578B4-class bloat the
 INVERSE holds: the build's m2c temp mass creates "-ve save" rejected
 LRs whose homes inflate the frame (PASS 7 entry) — fewer named
 single-use temps, not more.
+
+## Rules-sweep wave 2 results (2026-06-11, remaining cohort completed)
+
+Continuation of the partial sweep below; all 12 remaining capped
+near-misses re-litigated with the uopt-source rules. **7 of 12 cracked
+to verified 100.0** (NM bodies committed on agent-w, pending land):
+
+CRACKED, by diff class:
+- **Branch operand order** (1/1): uso_skip_to_end via the new
+  BEQ/BNE-operand-shape rule (u32[3] buffer → 3-word STRUCT; uoptinput
+  ==/!= isvar swap; see its own entry above).
+- **Spill-home position** (3/3): gl_func_0000E6E8/E79C/E910 via
+  `volatile int pad[2]` — the 8-BYTE phantom (a 4-byte `volatile int
+  pad` fixed the frame SIZE but left the CSE spill at 0x24; matching
+  the dead-gap's true size drops it to 0x20 = rule-4 sizing matters,
+  not just presence).
+- **Named-vs-inline chain coloring** (1/1): gl_func_0004ACD4 — name
+  the first deref of a global chain (colors $v0) AND declare it in an
+  INNER SCOPE to avoid the frame cost (new lever, own entry above).
+- **Entry-copy emission order** (1/1): gl_func_0004880C — the 3
+  prologue `or sN,aN` moves order is REGION PLACEMENT, not allocno
+  scheduling: copy the param into a fresh local INSIDE the loop guard
+  (`if (n>0) { p = a1; do{...} }`) and its entry-copy moves into the
+  guard's delay slot while `i = 0` stays above. "Allocno-tiebreaker,
+  permuter-only" verdict overturned.
+- **Mid-arg-reg temp** (1/1): gl_func_0000D9B8 — a temp landing in
+  $a3 (not $a1) in a tiny wrapper means $a1/$a2 are LIVE: the original
+  is a 3-arg function passing a1/a2 THROUGH to the callee. Unused
+  named params spill (+2 insns); pass-through args occupy silently.
+  Recognition rule: mid-arg-reg temp = hidden pass-through arity.
+
+NOT cracked (all documented in their wraps, with mechanism):
+- gl_func_0000C28C (99.83): ugen temp-rotation skip (t8→t9); rotation
+  is sequential per temp-consuming statement (toy-verified); no C form
+  burns a slot invisibly (12 probes: casts, comma, dup-store, struct
+  views). ugen is not decompiled; cap stands.
+- gl_func_000525F0 (99.55) + gl_func_00035834 (99.38): the ugen
+  CROSS-BB TEMPLOC-BINDING class — zdbug:6 shows the contested value
+  is NOT a colored LR (-ve save); ugen binds a register to the spill
+  home at the value's pre-call piece and REUSES it at the reload.
+  Web-split C forms are all undone by copy-prop (9 + 5 variants:
+  identity ops |0/^0/+0, if(1), arrays, address-taken). uoptlist
+  cannot see it; permuter floors. This class needs ugen-level insight.
+- func_00000A9C (97.83): the v1-staged 8 + `or v0,v1` IS C-producible
+  via `cond ? 2 : 8` (select arms don't coalesce with the result
+  pseudo — NEW partial lever: ternary else-arm staging), but the
+  select places its merge block adjacent to the tests (target has it
+  last, after the label blocks) — needs select-staging + block
+  placement simultaneously; no single C shape found.
+- func_8000969C (99.65, -O1): target reloads msg ONCE into s0 after
+  call 1 (delay slot); -O1 either double-loads (named p after guard),
+  spills a named ret to memory, or per-use-reloads a0 (msg direct /
+  register param). -O1 won't split a param web from C.
+- func_00012818 (99.73, -O0): fresh-dest value load with folded %lo —
+  zero-lo array base (D_A0000000[0x80]) gets the fresh dest + 0x200
+  offset but keeps `addiu base,base,0`. -O0 cap stands.
+- gl_func_00042144 (99.86): cfe right-to-left call-temp slots are
+  grammar-invariant (named/hybrid/embedded forms fail the
+  slot+schedule trifecta); 2-word residue unreachable.
+
+Sweep verdict: rules 1-4 plus the wave additions cracked every
+NON-ugen cap in the cohort. The surviving caps cluster in exactly two
+compiler components we have no source for: ugen's temp
+rotation/temploc binding (C28C, 525F0, 35834, A9C-placement) and
+-O0/-O1 reduced-pipeline behavior (969C, 12818). That's the frontier.
 
 ## Rules-sweep 2026-06-11 results (partial -- agent died mid-cohort on API overload)
 
