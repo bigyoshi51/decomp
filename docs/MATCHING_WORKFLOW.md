@@ -8334,3 +8334,13 @@ distinctive instruction signature on BOTH sides (1304C's "+0x85C
 missing record-bump block" -- both binaries hold exactly 27; the
 delete line was pure alignment noise). Signature counting is
 alignment-immune where LCS is not.
+
+## 2026-06-11 00:15: the 98-100 band's lever-tell survey is CLOSED
+
+The full-kit tell scan (void-alias v0/v1-after-jal, commutative swaps,
+reloc-filtered true diffs) over all 63 fns in 98-100 returns ONLY the
+three 294C-class functions (27BC + the timproc twins, each 2-3 true
+diffs, all addu operand order). Six functions reached 100 on
+2026-06-10 via the documented levers; what remains in the band needs
+the permuter, uopt internals, or a lever not yet discovered. Do not
+re-run tell scans until new levers exist or new wraps land.
