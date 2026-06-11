@@ -27,6 +27,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
+- [STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (44F4 79.57 -> 100.0)](#feedback-ido-struct-by-value-marshalling-lever) — _`sw a2,8(sp)` in jal delay = struct-by-value arg homed to its own arg slot; `addiu sN,sp,K` held in s-reg = struct local (ILDA web colorable — char* &local never is); store-direct+load-via-pointer pair = struct copy; `bne base,-K` = `if (base+K == NULL)`; iter alloc-fail can skip to NEXT iter, not epi._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
 
@@ -14386,3 +14387,61 @@ CAVEAT: objdiff fuzzy_match gives near-zero weight to immediate-offset
 diffs in sw/lw, so fixing dozens of slot offsets barely moves the
 score — but it IS byte-progress; verify with an offset histogram
 (decode sw/lw base=sp imm) instead of the fuzzy %.
+
+## STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (game_uso_func_000044F4 79.57 -> 100.0, 2026-06-11) <a name="feedback-ido-struct-by-value-marshalling-lever"></a>
+
+A constellation of four asm tells that all come from ONE source fact —
+a 4-byte `struct { char *p; }` local used as a call-marshalling slot —
+cracked the 4.7KB game.uso spine constructor in one rewrite:
+
+1. **`sw a2,8(sp)` in a jal delay slot (a register arg stored to its
+   OWN home slot in the outgoing-arg area)** = that argument is a small
+   STRUCT passed BY VALUE. IDO homes struct-by-value args to the arg
+   area in the caller even when they fit a register. Probe-verified:
+   `g(p, q, *s2, 1)` with `S *s2` emits `lw <t>,0(s2); sw <t>,8(sp);
+   jal; or a2,<t>,zero` (K&R and prototyped alike); no varargs
+   prototype emits this. Distinguish from a K&R duplicate-5th-arg call,
+   which stores at 0x10(sp) (first stack-arg slot) — the home offset
+   (8 = a2's own slot) is the fingerprint.
+2. **`addiu sN,sp,K` materialized once and held in a CALLEE-SAVED reg
+   for sp-relative accesses** (the "IDO never registers a known
+   sp+const" cap) = the object at sp+K is a STRUCT. Struct accesses go
+   through ILDA (address) ucode, not isvar direct addressing, so a
+   high-refcount call-crossing `&struct_local` web is a colorable
+   candidate and wins an s-reg. A `char *p = &char_local;` can NEVER
+   reproduce this — uopt folds the sp+const into every lw/sw.
+3. **store-direct + load-via-materialized-pointer pair on the same
+   slot** (`sw t8,0xB4(sp)` then `addiu t9,sp,0xB4; lw t1,0(t9)`) =
+   struct COPY read: `slotK.p = x;` stores direct (member store), but
+   `*s2 = slotK;` (struct assignment) loads the source via a
+   materialized ILDA pointer. Each such materialization advances the
+   ugen t6..t5 rotation queue, which is what makes per-iteration
+   scratch regs rotate in unrolled bodies.
+4. **41 one-`sw`-only descending sp slots** = 41 NAMED struct locals,
+   homes in pure decl order per the FRAME-SLOT HOME ASSIGNMENT RULE
+   (decl list = slot map; colored vars + `volatile int` pads fill the
+   dead slots at exact target offsets).
+
+Sibling semantic re-derivations from the same session (cheap checks to
+run BEFORE fighting the allocator):
+- **`bne base,<-K>,...` sentinel compares** = natural source
+  `p = base + K; if (p == NULL) ...` — IDO folds the null test of a
+  pointer-plus-constant into a compare of the BASE against -K. A
+  whole-function table of (slot, sentinel) pairs exposed an earlier
+  misread (sentinels had been paired with the NEXT iter's slot,
+  producing a bogus `SLOT - 0x100` formula); when a sentinel table
+  looks irregular, re-extract it aligned per-block.
+- **alloc-failure branch targets**: in unrolled init chains check each
+  `beq v0,zero,<target>` — failures can SKIP TO THE NEXT ITERATION
+  (per-iter `goto skip_##ID` labels), not to the epilogue; and an
+  early alloc failure can still run the tail/finalize phase. Wrong
+  fail-edges poison ~40% of a big function's words while fuzzy still
+  reads ~79 (phase-shifted LCS alignment hides it: build iter k pairs
+  with target iter k+n).
+- **Finalize-phase base-CSE**: 5 float loads off one `&D` base CSE'd
+  into a held reg (`lui v1; addiu v1,0`) where the target reloads
+  `lui at` per access — fixed with per-load unique externs
+  (D_44F4_st12_*). The same split was BYTE-NEUTRAL on the old body
+  (fp-constant luis were already breaking the live range); whether
+  base-CSE-busting helps is body-shape-dependent — retest after any
+  structural rewrite instead of trusting an old negative.
