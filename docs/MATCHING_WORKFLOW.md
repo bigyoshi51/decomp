@@ -8321,4 +8321,11 @@ landed improvement before choosing the next probe. Bonus from the
 corrected map: most of 1304C's true residuals were DECODE ERRORS
 (int-store of a float constant, a 0-vs-&D argument, a wrong ori
 constant, a missing duplicated block) -- worth checking for semantic
-errors before assuming allocator caps at any sub-90 score.
+errors before assuming allocator caps at any sub-90 score. CAVEAT
+(pass 13): in a heavily-RENUMBERED midsection the word-level LCS pairs
+unrelated statements -- an apparent "constant diff" there (1304C's
+ori 0x1402-vs-0x1001) can be two different, both-correct statements
+misaligned. Before treating an LCS line as a decode error, grep the C
+for BOTH values: if both exist, it is alignment noise, not an error
+(a swap probe was score-neutral). Trust LCS diffs only in regions
+where the surrounding lines pair cleanly.
