@@ -957,7 +957,10 @@ kept values on the stack). Diagnose: disasm the build, find each
 extra s-reg's first def; if it's a `move sN,<other loop reg>` right
 before an inner loop, it's the snapshot artifact. Fix = re-derive the
 nest as clean for-loops (score-volatile; do it in a focused pass, not
-a cadence tick).
+a cadence tick). VALIDATED on the source case (1304C pass 8): nested
+fors + row<<5 recompute killed BOTH the snapshot s-reg and the offset
+accumulator; register set matched the target exactly; +1.4pp
+(86.32->87.76) and -0x20 frame in one edit.
 
 Addendum (20A28): (25) `M2C unset $fN` / `M2C unset $vN` markers in
 m2c output = CALLER-SET REGISTER detector -- the fn reads a register
