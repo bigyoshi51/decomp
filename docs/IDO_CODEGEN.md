@@ -13665,8 +13665,13 @@ jal (li s3,2; li s2,3; jal; ...; bne s3,v0 / bne s2,v0 = REGISTER
 compares). The naive forcer -- plain locals assigned before the call
 (const_two = 2; ...; if (v == const_two)) -- gets refolded to
 immediate compares by IDO (score exactly flat). Single-use constants
-do not win s-regs. Open: needs a multi-use or volatile-read liveness
-forcer, or the shape is a -g-level artifact. Recognize the shape by
+do not win s-regs. STRENGTHENED (pass 11): the multi-use spelling
+(const_three - const_two for the literal 1, giving each const 2 uses)
+is ALSO folded flat by constant propagation -- IDO propagates and
+refolds regardless of use count when the values are compile-time
+constants. Remaining candidates: volatile-read consts (adds loads,
+likely wrong) or the -g-level hypothesis. The class is effectively
+C-unreachable at -O2. Recognize the shape by
 li sN,<small const> ahead of a jal with the compare after it.
 
 ## INVERTED SLOT ORDERING cap class: spill-high/unused-low at constant frame (E6E8, E04)
