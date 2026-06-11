@@ -13747,3 +13747,22 @@ phantom-slot lever for an unused-stack gap, probe array sizes around
 gap/4 (N-1, N, N+1) instead of assuming the arithmetic. Full 9B4
 recipe: addend swaps (lw pair order) + mul operand swap (FP rotation)
 + pad[7] = 14 true diffs -> 0, landed.
+
+## SHARED-VARIABLE CONSTRAINT EDGE: inline the deref to split the live range (15F0 MATCHED 100.0 -- first uoptlist-guided fix)
+
+THE CRACK for (part of) the temp-pool renumber class. Mechanism, per
+the uoptlist dump: a variable read fresh in several blocks (src =
+self->0x44 re-read per block) still forms ONE live range when declared
+as a single C variable -- the lr spans the intervening CALLS, lands in
+the constrained pool, and colors $v1 (constrained-pool preference)
+where the target has $t0/$t3 per block. Fix: ELIMINATE the variable
+and inline the full deref expression at each use site
+(*(int*)((char*)*(int*)((char*)self+0x44)+off)) -- each use becomes
+its own short lr, colored from the t-pool exactly like the target.
+15F0: 16 diffs -> 0, landed. DIAGNOSTIC FLOW for v1-vs-tN renumber
+near-misses: (1) does the contested temp come from a variable used in
+multiple call-separated blocks? -> inline it. (2) confirm with the
+uoptlist dump: the "(constrained)" line disappears / re-pools.
+RE-CHECK CANDIDATES: every wrap classified "temp-pool renumber" or
+"v1-vs-t0 cascade" where a helper variable is re-read across blocks
+(NOT spill-reloads -- those are the 525F0/E04 class, still capped).
