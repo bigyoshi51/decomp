@@ -1036,3 +1036,22 @@ must contain ONLY the target function -- use
 tools/decomp-permuter/import.py with the PERMUTER=1 Makefile mode to
 build the scratch properly (import.py extracts the per-fn context and
 target). function.txt alone does NOT scope the diff.
+
+## m2c spXXX local names ARE the target's frame offsets (578B4 pass 1-2)
+
+In m2c graft bodies, the generated stack-local names encode the
+TARGET function's frame offsets directly: `sp1EC` lives at frame
+offset 0x1EC, matching the target's `sw v0,492(sp)`. So the target's
+true stack layout (which locals are real frame slots, and the frame
+size = highest spXXX + width, rounded) is readable straight off the
+m2c output -- compare against the BUILD's `addiu sp,sp,-N` to measure
+spill-pressure delta precisely (578B4: target 496 vs build 1256 =
+the ~400 m2c SSA temps' overflow).
+
+CAUTION -- mass single-hop temp inlining BACKFIRES: inlining 59
+call-free single-use temps (of 398) grew the frame 1256 -> 1576;
+recompute duplication creates MORE pseudos than the temps it removes.
+The inline-recompute lever works per-hot-variable, not en masse. For
+chained-SSA temp populations the instruments are block-scoping the
+decls (live-range shortening without duplication) or per-arm hand
+rewrite against the .s.
