@@ -13763,7 +13763,13 @@ permuter's score weights diffs DIFFERENTLY from objdiff's fuzzy -- a
 "better" permuter output can score WORSE in the report (4715-metric
 output scored 91.69 vs the 4725 output's 92.21). Verify EVERY import
 against objdiff in-tree before keeping; the monotonic rule applies to
-the OBJDIFF number. TRANSFER NOTE: the two shapes are CONTEXT-
+the OBJDIFF number. PLATEAU CALIBRATION (timproc twins): byte-
+identical functions plateau at the IDENTICAL permuter score (60 = one
+addu diff; 573k and 289k iterations respectively) -- a symmetric
+terminal plateau across independent runs is strong evidence the
+residual is genuinely allocator-internal, not search-budget. Stop the
+run; more iterations will not help. Contrast 27BC, whose last diff
+fell at ~250k. TRANSFER NOTE: the two shapes are CONTEXT-
 SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
 vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
 function (run import.py per fn), not pattern-applied across a class.
