@@ -1025,3 +1025,14 @@ the diagnosis question becomes "what made the original lr longer/
 constrained", answerable only with uopt allocator internals
 (preference-order + constrained-point semantics). Open research item;
 candidates: ido-static-recomp uopt RE notes, community uopt source.
+
+## Permuter scratch: hand-rolled target.o scores TU-WIDE (27BC attempt)
+
+A hand-built permuter scratch (base.c + the expected TU .o copied as
+target.o + function.txt) RUNS but the diff metric covers the entire
+TU (~247k base score for a 2-insn gate = meaningless signal; the
+"improvements" it logs are noise elsewhere in the TU). The target.o
+must contain ONLY the target function -- use
+tools/decomp-permuter/import.py with the PERMUTER=1 Makefile mode to
+build the scratch properly (import.py extracts the per-fn context and
+target). function.txt alone does NOT scope the diff.
