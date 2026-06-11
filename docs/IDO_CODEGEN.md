@@ -13774,7 +13774,13 @@ residuals (3 spill slots + a deep loop-body renumber) do NOT fall --
 fast early descent (7060->4570 in 18k) then ~97k flat. The permuter
 cracks SINGLE-operand/single-choice gates; reserve it for those and
 budget ~250k; concede multi-diff allocator residuals to uopt-internals
-research. TRANSFER NOTE: the two shapes are CONTEXT-
+research. VERDICT-STALENESS WARNING: every "permuter-immune" or
+"permuter resists" cap note written BEFORE 2026-06-11 predates the
+import.py scoping fix and is INVALID as a permuter verdict -- the
+2026-06-11 few-diff re-scan (reloc-filtered true diffs 1-3 in the
+97-100 band) surfaced 27 such candidates. Re-derive permuter verdicts
+with a properly scoped scratch before trusting any old immunity
+claim. TRANSFER NOTE: the two shapes are CONTEXT-
 SPECIFIC -- they did not move the timproc twins (int-ptr x0xA scaling
 vs 27BC's byte x0x28); permuter-found shapes must be re-derived per
 function (run import.py per fn), not pattern-applied across a class.
