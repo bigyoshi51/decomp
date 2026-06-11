@@ -986,3 +986,22 @@ in place (the fixer's flatten rule). Costs structure: the target's
 true shape is a goto-into-switch / shared-arm form, so expect a
 modest score (26D64: 3.74->19.58 only). Also new cleaner classes:
 (bitwise s8/s16) -> plain int casts, (bitwise uN) -> (uN).
+
+## Reading the uoptlist global-coloring section (15F0 trace, 2026-06-10)
+
+The -Wo,-zdbug:6 dump's tail (after "reg alloc preparation") is the
+global coloring log, one line per candidate decision:
+  `  90:   90 assigned (constrained)   3`
+= candidate(live-range) 90, live-unit 90, got REGISTER 3 by a
+CONSTRAINT (copy to/from a precolored node), where the number is the
+MIPS register index (2=v0, 3=v1, 4-7=a0-a3, 8-15=t0-t7, 24=t8).
+`live range 90: 90 split out 113` lines show live-range splitting;
+`not colored (-ve save)` = spilled (negative save = not worth a reg).
+For 15F0: the contested src temp IS candidate 90 -> reg 3 ($v1)
+"(constrained)" -- v1 is forced by a constraint edge, not a free pick;
+the C-side levers fail because they don't break that edge. Next: find
+which copy creates the constraint (the candidate table's isop lines
+referencing {90|x}) and restructure THAT expression. This makes the
+temp-pool renumber class mechanically diagnosable: dump, find the
+contested candidate's "(constrained)" line, trace its constraint
+source.
