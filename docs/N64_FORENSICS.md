@@ -836,3 +836,14 @@ labels whatever sits AT the symbol -- which can be an adjacent block
 "jumptable" reads as non-address data -> check the index derivation
 for a subtract/bias before the shift, and scan for an address-run
 table adjacent to the symbol.
+
+## Jumptable in .data = NOT compiler output (kernel 5C50 closed)
+
+IDO emits switch jumptables into .rodata. A `jr`-dispatch whose table
+address lives in the .data segment (writable) is a RUNTIME-REGISTERED
+handler table -- handwritten-class code (debugger/handler frameworks
+register pointers at init; at load time the slot can hold unrelated
+bytes, e.g. 5C50's table address holds the command-name STRINGS).
+Disposition: permanent INCLUDE_ASM; no C can match a handwritten
+runtime-table dispatch. Check the table's SECTION before attempting
+any jumptable synthesis or graft.
