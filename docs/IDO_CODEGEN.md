@@ -19,6 +19,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
+- [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
@@ -13972,6 +13973,45 @@ tools/ido-static-recomp libc_impl, see TOOLING_DECOMP). Map (from
   compute_save/firstUseCost). Diagnostic only — flipping it confirms
   "this diff is a coloring-margin artifact" but is not a matching
   tool (project flags are fixed).
+
+## BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput swaps ==/!= when LEFT isn't an isvar; struct-field reads are isvar, array-element reads are not (uso_skip_to_end CRACKED)
+
+(2026-06-11, rules sweep wave 2; cracked uso_skip_to_end 99.72→100.0,
+a documented "beq operand-order structural cap, permuter floors,
+don't re-run".) The emitted operand order of `beq/bne/beql/bnel
+rA,rB` from an ==/!= comparison is decided at UOPT INPUT TIME by this
+rule in references/ido src/uopt/uoptinput.c (readnxtinst, ~line 2298):
+
+    } else if (OPC == Uequ || OPC == Uneq) {
+        if (stexpr1->type != isvar) { swap(stexpr1, stexpr2); }
+    }
+
+i.e. for ==/!= only, if the LEFT operand ichain is not an `isvar` at
+the moment the ucode is read, the operands are swapped — even if the
+right side isn't a var either. C-SOURCE OPERAND ORDER IS IRRELEVANT
+(`11 != x` vs `x != 11` emit identically; cfe canonicalizes before
+uopt sees it); what matters is the ICHAIN TYPE of the compared value:
+- **Local ARRAY element** (`header[0]`, u32 header[3]): cfe lowers as
+  lda+ilod → at read time the left operand is an `isop`, NOT isvar →
+  swap fires → promoted-constant-FIRST branch (`bnel s3,t0`). (It
+  prints as `isvar M 3 -off` in the zdbug:1 itab, but that conversion
+  happens AFTER the swap decision — don't be fooled by the dump.)
+- **Local STRUCT field** (`header.type`, struct {u32 type;...}): cfe
+  emits a direct var reference → isvar at read time → NO swap →
+  variable-FIRST branch (`bnel t0,s3`).
+- Plain scalar locals (`pad`) are isvar → variable-first.
+
+So a branch-operand-order diff where the build has const-first and
+the target var-first against a register-promoted constant means the
+BUFFER TYPE is wrong: u32[3] ↔ 3-word struct. Everything else
+(escaped-local conservative reloads, fresh reemit temps, frame) stays
+byte-identical. Funnel variables (`pad2 = header[0]; while (pad2 !=
+11)`) also flip the order but regress allocation (the load gets
+CSE'd/colored into v0 instead of staying a fresh reemit temp) — use
+the struct spelling, not a funnel.
+
+This is the branch cousin of the ADDU/IXA ucode-shape rule below:
+operand order is ucode shape, not allocator behavior.
 
 ## ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first; flat ptr-arith emits deeper-operand-first (timproc twins CRACKED)
 
