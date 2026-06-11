@@ -8307,3 +8307,18 @@ not apply). The other 31 units score 100 despite the pad -- the
 artifact only bites when the pad lands inside the LAST symbol's size
 attribution AND objdiff's aligner gives up. Metric now honest across
 all wrap-free units.
+
+## Re-LCS before every refinement probe -- stale gap maps send you chasing ghosts (1304C passes 10-11)
+
+After ANY structural edit lands (e.g. a loop re-derivation), the
+previous gap analysis is stale: 1304C's pass-8 rewrite had already
+fixed the s-reg-const selector shape, but the wrap still carried the
+pass-5 map, and two full probe passes (10/11) "tested" levers against
+diffs that no longer existed -- both came back flat because there was
+nothing to fix. Rule: a FLAT probe result is a re-diff trigger, not a
+prompt for the next lever; and re-run the LCS gap map after every
+landed improvement before choosing the next probe. Bonus from the
+corrected map: most of 1304C's true residuals were DECODE ERRORS
+(int-store of a float constant, a 0-vs-&D argument, a wrong ori
+constant, a missing duplicated block) -- worth checking for semantic
+errors before assuming allocator caps at any sub-90 score.
