@@ -1072,4 +1072,13 @@ both int and pointer; s16 var assigned 0x20000). Do NOT blanket-retype
 to s32 -- that breaks m2c's pointer-arithmetic scaling (578B4 scored
 56.8 vs the 75.0 graft). Fix conflicts site-by-site preserving m2c's
 types: switch-expr casts, deref casts at the conflicted uses only,
-s16->s32 widenings where the assigned value overflows.
+s16->s32 widenings where the assigned value overflows. (An iterative
+error-driven fixer works: parse cfe error lines, apply the matching
+cast at that line only, rebuild; 578B4 converged in 3 iterations.)
+OUTCOME CALIBRATION (578B4 pass 5): the two emits err in OPPOSITE
+directions -- SSA graft 75.0 with frame +760B (structure-faithful,
+spill-heavy); reg-vars 53.1 with frame UNDER target (allocation-
+faithful, structure-drifted: register-transfer statements add moves
+and shift control-flow placement). NEITHER is a drop-in for a big fn;
+use the SSA emit for structure and the reg-vars emit as the
+allocation reference during per-arm hand rewrites.
