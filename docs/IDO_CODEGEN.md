@@ -13244,7 +13244,11 @@ flipping the entire cascade (30 diffs -> 0 on game_uso_func_00000674,
 previously documented "not C-flippable; fixed by expression-tree
 walker"). Third member of the pseudo-order family: if(1){} BB-split
 (post-call placement swaps), web-order inversion (inline first chain),
-and now early-pseudo (result-vs-load order). Pick by where the pseudo
+and now early-pseudo (result-vs-load order). SCOPE (E6E8 2026-06-10):
+the trick moves REGISTER COLORING order only -- it does NOT move
+SPILL-SLOT ordering (4 decl-order x init permutations left E6E8's
+inverted spill position untouched at 99.93). Slot-position caps stay
+allocator-internal (uoptlist territory). Pick by where the pseudo
 creation order needs to change.
 
 ## TEMP-NUMBER FORENSICS: a mid-sequence temp in a tiny leaf marks a fragment (274E0 trio)
