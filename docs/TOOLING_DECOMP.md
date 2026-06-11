@@ -942,3 +942,16 @@ span, and/or neighbors starting without prologues (bnez first insn =
 fragment). Such regions need a boundary-merge analysis before any
 graft/decode -- the kernel's symbolic .s feeds m2c directly once
 boundaries are right (no raw-word pipeline needed there).
+
+Addendum (1304C pass 7): (24) M2C GOTO-LOOP SNAPSHOT = PHANTOM S-REG.
+When m2c renders a nested loop as goto-loop_N spaghetti, it can
+materialize a SNAPSHOT local of a loop variable (taken before the
+inner loop, compared at the back-edge) that the original C never had
+-- the build then saves an extra callee-saved pair (move sN,tX +
+bne sN,tY back-edge is the asm tell; prologue saves N+1 s-regs vs
+target N with a SMALLER target frame... or larger if the original
+kept values on the stack). Diagnose: disasm the build, find each
+extra s-reg's first def; if it's a `move sN,<other loop reg>` right
+before an inner loop, it's the snapshot artifact. Fix = re-derive the
+nest as clean for-loops (score-volatile; do it in a focused pass, not
+a cadence tick).
