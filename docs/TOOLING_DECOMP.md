@@ -6,6 +6,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 ## Index
 
+- [Hybrid emit (m2c temp coalescing): the spill-home frame-bloat fix for big SSA grafts](#hybrid-emit-m2c-temp-coalescing-the-spill-home-frame-bloat-fix-for-big-ssa-grafts-578b4-pass-7-2026-06-11) — _Big SSA graft frame bloat = spill homes for "not colored (-ve save)" webs (142 on 578B4), NOT temp pressure. `scripts/m2c-hybrid-emit.py` coalesces same-(reg,type) disjoint-textual-range temps: 578B4 75.07->81.22, frame 1280->496 exact. Tune per class (a/v win, t0/ra hurt); useless vs structural drift (44F4 negative: s-reg phi merges crash 51->39)._
 - [`discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates](#feedback-discover-has-source-misleading) — Discover treats any mention of a symbol in `src/` as "has source", including bare `INCLUDE_ASM(...)` lines. For source-3 picks (small unstarted), use a Python filter that checks for an actual C function definition (`(void|int|...) name(...)` syntax), not just the symbol name.
 - [Decomp prioritization — call-graph DFS from entry point beats by-segment-size mass-match](#feedback-decomp-call-graph-priority) — When a project has a clear entry point (USO loader → main loop → per-frame update), depth-first decomp from there reveals the actually-used code and naturally drives type discovery.
 - [m2c on .word-only USO asm — assemble + objdump round-trip to get mnemonics](#feedback-m2c-word-only-asm) — splat emits `.word 0xNNNNNNNN` for USO functions whose lui-relocations spimdisasm can't resolve; m2c then errors with "Function contains no instructions". Round-trip the bytes through `mips-linux-gnu-as` + `objdump -d -M no-aliases` to get readable mnemonics for hand-paste into a temp .s.
@@ -1088,3 +1089,54 @@ within-arm temps on its own, so SSA temp COUNT is not the frame-
 pressure source. For a big-fn frame delta, do NOT assume temps:
 run the uoptlist occupant trace (-Wo,-zdbug:6) and map the EXTRA
 frame slots to their C variables before choosing a transform.
+
+## Hybrid emit (m2c temp coalescing): the spill-home frame-bloat fix for big SSA grafts (578B4 pass 7, 2026-06-11)
+
+THE DIAGNOSIS (closes the pass-6 open question): a big m2c SSA graft's
+frame bloat (578B4: build 1280 vs target 496) is spill HOMES, not
+register pressure. The -zdbug:6 dump showed 142 of 483 uopt candidates
+"not colored (-ve save)" -- each such web reserves a per-VARIABLE home
+slot in the frame even when the emitted code barely touches it (the
+1280B frame had only 48 distinct slots accessed). The target frame, by
+contrast, is 100% named m2c spXXX locals: every target sp-slot maps to
+an spXXX name, ZERO anonymous spill slots -- the original's webs all
+colored.
+
+THE FIX: `scripts/m2c-hybrid-emit.py` (monorepo root) renames m2c
+temps of the same register whose textual live ranges ([first-assign,
+last-use] lines) don't overlap into one shared variable, preserving
+each temp's exact type (same-(reg,type) groups only; never retype).
+Safety: m2c temps are SSA and per-path execution order == textual
+order in loop-free structured bodies, so disjoint textual ranges can
+never clobber; ranges partially intersecting a loop span get expanded
+to the whole span; goto/label bodies are refused without --force.
+
+RESULTS (gl_func_000578B4, 9.7KB, src/game_libs/game_libs_post0b.c):
+  --regs a0,a1,a2,a3,v0,v1,t1,t2,t3,t4,t5,t8 --include-vars --pad 2
+  => fuzzy 75.07 -> 81.22, frame 1280 -> 496 EXACT, not-colored webs
+  142 -> 90, insn profile converged (build 2423 vs target 2419 insns;
+  sw 347/348, lw 581/586).
+CALIBRATION -- coalescing is NOT codegen-neutral (uopt candidate count
+drops ~4x; webs join), so tune per register class against the score:
+a/v merges were the big win (+4.7pp), t1-t5/t8 score-neutral but
+frame-shrinking, --include-vars (var_ phis, same textual rule) +1.0pp,
+volatile --pad to the exact target frame +0.01pp; t0 (the dense
+bitfield-pack scratch) and ra merges HURT (-5.2/-2.5pp) -- exclude any
+register whose merge drops the score.
+
+WHERE IT DOES NOT PAY (game_uso_func_000044F4, 4.7KB): the in-tree
+hand body (79.57) already has the target frame (232/232) -- no
+spill-home bloat to reclaim. A fresh SSA graft scores 51.2 (frame
+544); on it, v0-temp coalescing is score-NEUTRAL (frame 544->368) and
+s-reg phi coalescing (var_s0 stanza pointers, callee-saved,
+call-crossing) CRASHES the score to 39.1. Hand body kept. Rule: the
+lever applies when the residual is frame/spill-home bloat (SSA-temp
+mass + "not colored (-ve save)" dump lines); it does NOT fix
+structural drift, and it makes callee-saved phi-webs WORSE.
+
+REMAINING GAP on 578B4 (81 -> 100 path): mnemonic stream is 90.6%
+aligned; residual = ~250 register-coloring diffs + ~125 sp-slot-OFFSET
+diffs + structural drift. uopt home assignment is NOT pure decl order
+(probe: sp50 lands at 244 vs target 80 even at matching frame size),
+so per-slot home alignment needs uopt layout RE (open) or per-arm
+register-shape rewrites.
