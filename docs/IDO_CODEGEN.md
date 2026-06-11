@@ -13720,3 +13720,17 @@ if(!p) goto skip;}`) emits extra b/label traffic and REGRESSED 8C3C
 is the -O0-correct shape even when the target's bnez/beqz pattern
 visually suggests nesting. At -O2 the preference can invert. Check the
 unit's OPT_FLAGS before choosing a control-flow re-derivation shape.
+
+## Commutative addu operand order follows C addend grouping (67084 MATCHED 100.0)
+
+Target `addu a0,a0,t8` (base first) vs build `addu a0,t8,a0` (scaled
+first) on an address sum: C `a0 + 104*a1 + 0x1228` emits scaled-first;
+regrouping as `(a0 + 0x1228) + 104*a1` emits base-first -- IDO binds
+the addiu constant to the base, then adds the scaled term as the RIGHT
+operand. Plain reorder `104*a1 + a0 + 0x1228` is NEUTRAL (canonicalized
+back); the parenthesized base+const grouping is what flips it. Paired
+with inline-recompute (remove the addr local, recompute per call arm =
+frame shrink + per-arm addu duplication matching the target), this took
+67084 from 8 diffs to MATCHED. Tell: a commutative-op operand-order
+diff on address arithmetic = try addend regrouping before calling it
+regalloc.
