@@ -8254,3 +8254,18 @@ default build (legitimate now that the ROM is cmp-identical). Local
 check before pushing: objdiff-cli report generate -p . (the exact CI
 step). Five consecutive CI runs failed before this was caught --
 nothing in the local gates covers objdiff.json consistency.
+
+## Raw .o-vs-target byte diffs OVERCOUNT at reloc sites (288AC survey artifact)
+
+When byte-diffing a build/non_matching .o's .text against target .s
+words, every reloc site shows a FALSE "IMM diff": the .o carries
+imm=0 (unresolved %lo/%hi) while the target words are resolved.
+288AC's "8 IMM diffs" were 7 false (lwc1 %lo displacements on
+individual D_ externs that link correctly) + 1 real (a mul.s operand).
+Filter before triaging: a diff at an instruction with a reloc record
+(objdump -r) is not a diff unless the SYMBOL or which-insn-carries-lo
+differs. objdiff's reloc-aware fuzzy already handles this -- trust the
+fuzzy %'s composition over a naive word diff, and use the diff-class
+survey only on reloc-free instructions. (The gl_ref crack at 61878 was
+real because the lo16 moved BETWEEN instructions -- addiu vs lw -- a
+structural difference visible to objdiff, not a resolution artifact.)
