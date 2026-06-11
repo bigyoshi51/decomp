@@ -968,3 +968,13 @@ placeholders, IDO constant-folds the expressions away, and the result
 goes fuzzy=None (undersized/unalignable). Keep the existing measurable
 body, classify at the wrap. Add `grep "M2C unset"` to the post-m2c
 pre-filter alongside the 2.1474836e9f check.
+
+Addendum (26D64): (26) M2C DUFF'S-DEVICE CASE FALL-INS -- on dense
+dispatchers where a case head is also a branch target from another
+arm, m2c emits `case 0xNN:` labels INSIDE else-branches or OUTSIDE
+the switch's closing brace ("case or default label appears outside a
+switch statement"). Flatten to a comment + duplicate the arm's logic
+in place (the fixer's flatten rule). Costs structure: the target's
+true shape is a goto-into-switch / shared-arm form, so expect a
+modest score (26D64: 3.74->19.58 only). Also new cleaner classes:
+(bitwise s8/s16) -> plain int casts, (bitwise uN) -> (uN).
