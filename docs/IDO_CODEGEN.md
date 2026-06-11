@@ -14067,3 +14067,25 @@ flagged as such) — and for gl_func_000578B4-class bloat the
 INVERSE holds: the build's m2c temp mass creates "-ve save" rejected
 LRs whose homes inflate the frame (PASS 7 entry) — fewer named
 single-use temps, not more.
+
+## Rules-sweep 2026-06-11 results (partial -- agent died mid-cohort on API overload)
+
+First in-tree application of the uopt-source rules to the capped
+near-miss cohort. CRACKED (4 of the first ~6 attempted, all verified
+100.0 + ROM byte-identical + landed): game_uso_func_000000A0 and
+game_libs_func_0005D588 via RIGHT-NESTED FP REDUCTION GROUPING (a
+float a+b+c+... reduction chain must be grouped right-nested --
+a+(b+(c+...)) -- to reproduce the target's FP operand order; left
+flat associativity emits the mirrored adds); gl_func_00035188 via
+INLINE-DON'T-NAME the vtable base (coloring-order rule: naming the
+base gave it an early bitpos and the wrong color; inlining the deref
+removes the LR); gl_func_00054A14 via FLOAT-TYPED 4TH PARAM (the
+li-a3-0-vs-move-a3-zero zero-materialization diff: the target passes
+0.0f -- a float literal zero through an int register materializes as
+addiu (li), while integer 0 copies $zero (move/or); fix = declare the
+param float and pass 0.0f). Earlier same-day singles by the same
+rules family: timproc twins via array-IXA. ALSO: 1304C's frame fixed
+exactly by the dead-local rule (7 dead ints; renumber residual
+remains). The remaining cohort (C28C, 12818, uso_skip_to_end,
+E6E8/E910/E79C, 525F0, 4ACD4, 4880C, D9B8, 35834, A9C, 9696C, 42144)
+was not reached -- re-run the sweep to continue.
