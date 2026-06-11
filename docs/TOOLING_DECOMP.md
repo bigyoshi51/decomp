@@ -967,7 +967,12 @@ variant). Do NOT graft such output: m2c renders the read as `* 0`
 placeholders, IDO constant-folds the expressions away, and the result
 goes fuzzy=None (undersized/unalignable). Keep the existing measurable
 body, classify at the wrap. Add `grep "M2C unset"` to the post-m2c
-pre-filter alongside the 2.1474836e9f check.
+pre-filter alongside the 2.1474836e9f check. CORRECTED (47B40): run
+the grep on the CLEANED output (or both) -- the raw m2c file can carry
+the marker in a form the simple grep misses while the cleaned body
+shows `/* M2C unset $t6 */` inline; 47B40's $t6+$f4 caller-set
+markers slipped past the raw-file grep and were caught by eye in the
+cleaned head.
 
 Addendum (26D64): (26) M2C DUFF'S-DEVICE CASE FALL-INS -- on dense
 dispatchers where a case head is also a branch target from another
