@@ -22,6 +22,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
 - [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
 - [UGEN TEMP ROTATION MECHANISM: 10-reg circular scratch queue](#ugen-temp-rotation-mechanism-a-10-register-circular-scratch-queue-t6t7t8t9t0t5t6-advanced-per-uncolored-value-materialization-never-reset-within-a-function) — _free list order t6,t7,t8,t9,t0..t5; head-take/tail-append = rotation; advanced by every uncolored materialization (expr temps, spill reloads); calls/BBs don't reset. A t8↔t9 diff = ±1 scratch consumption earlier; fix the PHASE via -Wc,-d trace alignment._
+- [REDUCED PIPELINES: -O0/-O1 run NO uopt — ugen is the whole optimizer](#reduced-pipelines--o0-o1-run-no-uopt--ugen-is-the-whole-optimizer-phase-map-verified) — _-O0/-O1 pipeline = cfe→ugen→as1 (no uopt). ugen at -O0 = Build+Translate only (unfilled delays, all-vars-via-home); -O1 adds localopt+label phases. No webs/coloring/copy-prop at ≤O1 — uopt levers inapplicable; use -Wc,-d + decl order + register kw + as1 rules._
 - [AS1 BRANCH-DELAY FILL PRIORITY + the `| 0` register-move lever](#as1-branch-delay-fill-priority--the--0-register-move-lever-ugen-session-func_00000a9c-anatomy) — _as1 fill order: from-before > steal-exclusive-target > LIKELY-copy-shared-target (the beql cap mechanism) > nop; jr-fill moves the label; as1 deletes/renames ugen moves. `x | 0` survives to a literal `or rd,rs,zero` (`+0` folds) = C-level register-move materializer._
 - [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
@@ -14190,6 +14191,35 @@ the eviction/consumption count mismatch; then adjust the C to
 add/remove one uncolored intermediate at any earlier point (e.g.
 named-vs-inline deref converts a colored LR to a scratch reload or
 vice versa). The phase, not the site, is what you fix.
+
+## REDUCED PIPELINES: -O0/-O1 run NO uopt — ugen is the whole optimizer (phase map verified)
+
+(2026-06-11, ugen session; verified with `cc -v` + `-Wc,-d`.)
+- Pipeline by level: **-O0/-O1 = cfe → ugen → as1** (uopt NOT in the
+  pipeline at all); -O2/-O3 insert uopt before ugen.
+- ugen internal phases by level (from the -Wc,-d tree dumps):
+  **-O0 = Build + Translate ONLY** — no localopt, no label phases.
+  Pure tree-walk emission: every variable through its memory home,
+  no branch simplification, unfilled delays (the known -O0
+  signatures: unfilled jal delays, `b .+1`). **-O1 adds 1st localopt
+  + 1st/2nd label phases** — the SAME ugen phase set -O2 uses; the
+  "cross jumping" phase exists in the binary's strings but did not
+  fire at any opt level tested. as1 still schedules at both levels
+  (its -O flag follows cc's).
+- Consequence for matching -O1 functions: there are NO uopt webs,
+  no coloring, no copy-prop, no CSE, no code motion. Register
+  assignment = ugen translate-time mechanics only — the circular
+  scratch queue (same as -O2 entry above), per-BB vreg content
+  tracking, map_pars_to_regs/map_pdefs_to_regs for params and
+  `register` locals (s-regs), plus as1's fill rules. So uopt levers
+  (bitpos/occurrence order, -ve-save priority, if(1) BB tricks,
+  zdbug dumps) are ALL inapplicable at -O0/-O1 — diagnose with
+  `-Wc,-d` instead; steer with decl order (M3 home order), the
+  `register` keyword, statement shapes, and as1 fill behavior.
+  This closes the "how do the reduced pipelines differ" question for
+  the func_8000969C (-O1) / func_00012818 (-O0) cap family: their
+  residuals live in ugen translate-time choices with far fewer C
+  handles than the -O2 pipeline offers.
 
 ## AS1 BRANCH-DELAY FILL PRIORITY + the `| 0` register-move lever (ugen session, func_00000A9C anatomy)
 
