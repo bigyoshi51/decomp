@@ -13634,3 +13634,14 @@ branches guarded by M2C_ERROR(/* cfc1 */) -- the recognition in graft
 output: '(s32)(X - 2.1474836e9f) | 0x80000000' next to a plain
 (s32) X branch = recompose to a single (u32) X. One-site fix closed
 3 conversion gaps at 1304C (+6.6pp).
+
+## Guard-pair branch shape follows POOL-SYMBOL GRANULARITY (1304C class 4)
+
+Float-constant selector chains: if each pool constant is its own
+symbol (D_00000C54 etc.), every arm needs its own lui = 2-insn arms =
+unfillable branch delay = plain beqz/nop. If the C reads them as
+&D_00000000+offset, IDO CSEs the shared hi16 = 1-insn arms = beqzl
+with filled delay. So beql-vs-plain at constant selectors is decided
+by SYMBOL GRANULARITY, not control flow -- match the unit's
+symbolization (splat's individual pool syms where they exist).
++2.2pp at 1304C from switching 5 reads.
