@@ -1128,7 +1128,10 @@ register whose merge drops the score.
 
 WHERE IT DOES NOT PAY (game_uso_func_000044F4, 4.7KB): the in-tree
 hand body (79.57) already has the target frame (232/232) -- no
-spill-home bloat to reclaim. A fresh SSA graft scores 51.2 (frame
+spill-home bloat to reclaim. [RESOLVED 2026-06-11: 44F4 closed at
+100.0 via the struct-by-value marshalling rewrite -- see
+docs/IDO_CODEGEN.md "STRUCT-BY-VALUE MARSHALLING"; the residual was
+semantic (struct args/sentinels/fail-edges), not spill homes.] A fresh SSA graft scores 51.2 (frame
 544); on it, v0-temp coalescing is score-NEUTRAL (frame 544->368) and
 s-reg phi coalescing (var_s0 stanza pointers, callee-saved,
 call-crossing) CRASHES the score to 39.1. Hand body kept. Rule: the
