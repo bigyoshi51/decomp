@@ -13766,3 +13766,7 @@ uoptlist dump: the "(constrained)" line disappears / re-pools.
 RE-CHECK CANDIDATES: every wrap classified "temp-pool renumber" or
 "v1-vs-t0 cascade" where a helper variable is re-read across blocks
 (NOT spill-reloads -- those are the 525F0/E04 class, still capped).
+CRITERION REFINED (E368 negative): the shared variable must span
+CALLS between its uses -- call-free arm temps with the same RHS are a
+different (still-capped) constrained-pool story. Sweep signature =
+repeated identical assignment AND an intervening jal.
