@@ -13649,4 +13649,7 @@ also moved the FP REGISTER ALLOCATION -- the per-arm lui changes float
 liveness enough that the selector value lands in callee-saved f20+
 (the sdc1 prologue appeared as a side effect). Pool-symbol granularity
 affects branch shape AND allocation; expect frame changes when
-switching.
+switching. YIELD CALIBRATION (bootup sweep, 35 reads): big lifts only
+at SELECTOR CHAINS (branch-shape flips, +2.2pp); straight-line load
+sites move ~+1pp via lui-count diffs. Sweep is still worth it (free,
+monotonic, matches unit symbolization).
