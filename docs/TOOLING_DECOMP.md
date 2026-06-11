@@ -958,3 +958,13 @@ extra s-reg's first def; if it's a `move sN,<other loop reg>` right
 before an inner loop, it's the snapshot artifact. Fix = re-derive the
 nest as clean for-loops (score-volatile; do it in a focused pass, not
 a cadence tick).
+
+Addendum (20A28): (25) `M2C unset $fN` / `M2C unset $vN` markers in
+m2c output = CALLER-SET REGISTER detector -- the fn reads a register
+the caller leaves set (here $f0 multiplied at 4 sites). IDO C cannot
+express it: permanent structural cap (the caller-set-reg class, float
+variant). Do NOT graft such output: m2c renders the read as `* 0`
+placeholders, IDO constant-folds the expressions away, and the result
+goes fuzzy=None (undersized/unalignable). Keep the existing measurable
+body, classify at the wrap. Add `grep "M2C unset"` to the post-m2c
+pre-filter alongside the 2.1474836e9f check.
