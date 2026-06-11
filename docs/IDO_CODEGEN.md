@@ -13733,4 +13733,7 @@ with inline-recompute (remove the addr local, recompute per call arm =
 frame shrink + per-arm addu duplication matching the target), this took
 67084 from 8 diffs to MATCHED. Tell: a commutative-op operand-order
 diff on address arithmetic = try addend regrouping before calling it
-regalloc.
+regalloc. BOUNDARY (timproc 294C/2740): the lever NEEDS a constant
+term to bind ((base+const)+scaled); a pure 2-operand base+scaled sum
+canonicalizes identically from int-ptr, char-cast, and array forms --
+those stay allocator-chosen.
