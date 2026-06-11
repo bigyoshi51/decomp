@@ -1004,4 +1004,13 @@ which copy creates the constraint (the candidate table's isop lines
 referencing {90|x}) and restructure THAT expression. This makes the
 temp-pool renumber class mechanically diagnosable: dump, find the
 contested candidate's "(constrained)" line, trace its constraint
-source.
+source. DEPTH 2 (15F0): live-range IDs in the coloring section are
+SPARSE (14 ids vs finalnumlr=16 -- they are lr ids, not dense
+indices); "(constrained) R" is a CONSTRAINED-POOL pick where v1
+precedes t0 in the preference order for non-call-spanning temps. A
+target coloring t0 where the build picks v1 therefore implies the
+ORIGINAL's lr spanned a constrained point the rebuilt one doesn't --
+the diagnosis question becomes "what made the original lr longer/
+constrained", answerable only with uopt allocator internals
+(preference-order + constrained-point semantics). Open research item;
+candidates: ido-static-recomp uopt RE notes, community uopt source.
