@@ -13653,3 +13653,14 @@ switching. YIELD CALIBRATION (bootup sweep, 35 reads): big lifts only
 at SELECTOR CHAINS (branch-shape flips, +2.2pp); straight-line load
 sites move ~+1pp via lui-count diffs. Sweep is still worth it (free,
 monotonic, matches unit symbolization).
+
+## Register-compare against small consts (bne sN,v0): single-use pre-call locals get refolded (1304C pass 10)
+
+Target shape: mode constants loaded into callee-saved regs BEFORE a
+jal (li s3,2; li s2,3; jal; ...; bne s3,v0 / bne s2,v0 = REGISTER
+compares). The naive forcer -- plain locals assigned before the call
+(const_two = 2; ...; if (v == const_two)) -- gets refolded to
+immediate compares by IDO (score exactly flat). Single-use constants
+do not win s-regs. Open: needs a multi-use or volatile-read liveness
+forcer, or the shape is a -g-level artifact. Recognize the shape by
+li sN,<small const> ahead of a jal with the compare after it.
