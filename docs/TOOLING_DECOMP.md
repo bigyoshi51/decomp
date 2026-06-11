@@ -945,15 +945,17 @@ span, and/or neighbors starting without prologues (bnez first insn =
 fragment). Such regions need a boundary-merge analysis before any
 graft/decode -- the kernel's symbolic .s feeds m2c directly once
 boundaries are right (no raw-word pipeline needed there). METHOD
-(5C50 region, 2026-06-10): derive the TRUE function map straight from
-the byte-exact ROM -- disasm the region (kernel ROM offset = VRAM -
-0x80000400 + 0x1000) and mark every `addiu sp,sp,-N` that follows a
-`jr ra`+delay as a real prologue. The [0x5C50..0x65B0) region is 7
-real functions where splat drew 9+; the map lives at the kernel_010
-wrap. Caveat: validate jumptable attribution against the map before
-trusting it (the E->F dispatch paradox is unresolved -- a dispatch
-whose %lo-resolved table targets another mapped fn means either
-misattributed relocs or a wrong boundary; resolve before decoding).
+(5C50 region, 2026-06-10, CORRECTED): derive the TRUE function map
+from the byte-exact ROM, but take the ROM offset from the .s
+comment's FIRST FIELD (/* ROMOFF VRAM WORD */) -- NEVER from a VRAM
+formula (two wrong bases produced a phantom 7-fn map + a paradox
+before the field-1 check; kernel text is ROM = VRAM - 0x7FFFF000 in
+this ROM, and DATA has a different offset). Outcome: splat's
+boundaries are mostly right; 5C50 = [0x5C50..0x6110) with the
+prologue-less 60F0 folded in; the region is a debugger command
+dispatcher whose jtbl_8000A770 symbol actually points at ASCII
+command names via the TEXT formula -- the true handler table needs
+the DATA-segment mapping from tenshoe.map.
 
 Addendum (1304C pass 7): (24) M2C GOTO-LOOP SNAPSHOT = PHANTOM S-REG.
 When m2c renders a nested loop as goto-loop_N spaghetti, it can
