@@ -8328,4 +8328,9 @@ ori 0x1402-vs-0x1001) can be two different, both-correct statements
 misaligned. Before treating an LCS line as a decode error, grep the C
 for BOTH values: if both exist, it is alignment noise, not an error
 (a swap probe was score-neutral). Trust LCS diffs only in regions
-where the surrounding lines pair cleanly.
+where the surrounding lines pair cleanly. VERIFICATION RECIPE (pass
+14): for an apparent inserted/deleted BLOCK, count occurrences of its
+distinctive instruction signature on BOTH sides (1304C's "+0x85C
+missing record-bump block" -- both binaries hold exactly 27; the
+delete line was pure alignment noise). Signature counting is
+alignment-immune where LCS is not.
