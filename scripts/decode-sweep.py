@@ -416,9 +416,160 @@ def t_global_base_split(body, catalog, unaligned, verbose=False):
     return new_body, changes[0]
 
 
+# a single-word field copy line:
+#   [ws]*(s32 *)((char *)DST + 0xNN) = *(s32 *)((char *)SRC + 0xMM);
+# DST/SRC may be (char *)EXPR or &localname (m2c stack copy form).
+COPY_LINE_RE = re.compile(
+    r"^(?P<ws>\s*)\*\(s32 \*\)\((?P<dst>.+?)\) = "
+    r"\*\(s32 \*\)\((?P<src>.+?)\);\s*$"
+)
+# normalize a side into (kind, base, offset): kind 'off' for (char*)X + 0xNN,
+# 'amp' for &name (offset 0). Returns None if unrecognized.
+SIDE_OFF_RE = re.compile(r"^\(char \*\)(?P<base>.+?) \+ 0x(?P<off>[0-9A-Fa-f]+)$")
+SIDE_AMP_RE = re.compile(r"^&(?P<base>[A-Za-z_]\w*)$")
+
+
+def _side(text):
+    m = SIDE_OFF_RE.match(text)
+    if m:
+        return (m.group("base"), int(m.group("off"), 16))
+    m = SIDE_AMP_RE.match(text)
+    if m:
+        return ("&" + m.group("base"), 0)
+    return None
+
+
+def _emit_copy(ws, dst, src):
+    """Emit a Quad4 (16B) struct-copy line for a 4-word run."""
+    dbase, doff = dst
+    sbase, soff = src
+
+    def side(base, off):
+        if base.startswith("&"):
+            return (
+                ("(Quad4 *)" + base)
+                if off == 0
+                else "(Quad4 *)((char *)%s + 0x%X)" % (base, off)
+            )
+        return (
+            "(Quad4 *)((char *)%s + 0x%X)" % (base, off)
+            if off
+            else "(Quad4 *)((char *)%s)" % base
+        )
+
+    return "%s*%s = *%s;" % (ws, side(dbase, doff), side(sbase, soff))
+
+
 def t_struct_copy_collapse(body, catalog, unaligned, verbose=False):
-    """Stub -- implemented in a later commit."""
-    return body, 0
+    """Collapse runs of >=4 CONTIGUOUS single-word field copies (dst/src
+    offsets both advancing by 4) into 16-byte Quad4 struct copies, matching
+    the target's object-field-init lw/sw quads. Only collapses in EXACT
+    4-word (16B) chunks -- a partial tail (<4 words) is left as singles
+    (whole-struct overshoots; 00004118 lesson). Requires a `Quad4` typedef
+    in the TU (caller ensures it; objdiff gate reverts if absent/no gain)."""
+    lines = body.split("\n")
+    out = []
+    changes = 0
+    i = 0
+    n = len(lines)
+    while i < n:
+        # gather a maximal run of parseable word-copy lines
+        run = []
+        j = i
+        while j < n:
+            m = COPY_LINE_RE.match(lines[j])
+            if not m:
+                break
+            d = _side(m.group("dst").strip())
+            s = _side(m.group("src").strip())
+            if d is None or s is None:
+                break
+            run.append((m.group("ws"), d, s))
+            j += 1
+        if len(run) < 4:
+            out.append(lines[i])
+            i += 1
+            continue
+        # within the run, find contiguous-stride-4 sub-runs
+        k = 0
+        rebuilt = []
+        while k < len(run):
+            # try to extend a contiguous group from k
+            g = 1
+            while (
+                k + g < len(run)
+                and run[k + g][1][0] == run[k][1][0]  # same dst base
+                and run[k + g][2][0] == run[k][2][0]  # same src base
+                and run[k + g][1][1] == run[k][1][1] + 4 * g  # dst +4
+                and run[k + g][2][1] == run[k][2][1] + 4 * g
+            ):  # src +4
+                g += 1
+            # collapse full 4-word chunks of this contiguous group
+            chunks = g // 4
+            if chunks:
+                for c in range(chunks):
+                    base = k + c * 4
+                    ws, d, s = run[base]
+                    rebuilt.append(_emit_copy(ws, d, s))
+                    changes += 1
+                    if verbose:
+                        sys.stderr.write(
+                            "  struct-copy Quad4 dst %s+0x%X <- src %s+0x%X\n"
+                            % (d[0], d[1], s[0], s[1])
+                        )
+                # leftover tail (<4) emitted as singles
+                for t in range(chunks * 4, g):
+                    ws, d, s = run[k + t]
+                    rebuilt.append(_single_copy(ws, d, s))
+            else:
+                for t in range(g):
+                    ws, d, s = run[k + t]
+                    rebuilt.append(_single_copy(ws, d, s))
+            k += g
+        out.extend(rebuilt)
+        i = j
+    return "\n".join(out), changes
+
+
+def _single_copy(ws, dst, src):
+    """Re-emit an un-collapsed single-word copy from the parsed sides."""
+
+    def side(base, off):
+        if base.startswith("&"):
+            return base if off == 0 else "(char *)%s + 0x%X" % (base, off)
+        return "(char *)%s + 0x%X" % (base, off) if off else "(char *)%s" % base
+
+    return "%s*(s32 *)(%s) = *(s32 *)(%s);" % (
+        ws,
+        side(dst[0], dst[1]),
+        side(src[0], src[1]),
+    )
+
+
+QUAD4_DECL = "typedef struct { int a, b, c, d; } Quad4; "
+QUAD4_DECL += "/* decode-sweep */"
+
+
+def has_quad4(lines):
+    return any(re.search(r"\bQuad4\b", ln) and "typedef" in ln for ln in lines)
+
+
+def ensure_quad4(lines):
+    """Insert the Quad4 typedef after the last top-of-file #include (or at
+    line 0 if none). Tagged so remove_quad4 can pull it back out on revert."""
+    ins = 0
+    for i, ln in enumerate(lines[:60]):
+        if ln.lstrip().startswith("#include"):
+            ins = i + 1
+    lines.insert(ins, QUAD4_DECL)
+    return ins
+
+
+def remove_quad4(lines):
+    for i, ln in enumerate(lines):
+        if ln == QUAD4_DECL:
+            del lines[i]
+            return
 
 
 TRANSFORMS = {
@@ -496,6 +647,13 @@ def main():
         if n == 0:
             report.append((name, 0, None, cur, cur))
             continue
+        # structcopy needs a Quad4 typedef in the TU
+        quad_added = False
+        if name == "structcopy" and not has_quad4(lines):
+            ensure_quad4(lines)
+            quad_added = True
+            fstart += 1
+            fend += 1
         if args.no_gate:
             body = new_body
             report.append((name, n, "applied", None, None))
@@ -522,6 +680,10 @@ def main():
             # revert
             lines[fstart : fend + 1] = prev_lines
             fend = fstart + len(prev_lines) - 1
+            if quad_added:
+                remove_quad4(lines)
+                fstart -= 1
+                fend -= 1
             with open(args.file, "w") as f:
                 f.write("\n".join(lines))
             report.append((name, n, "reverted", cur, fn_fuzzy))
