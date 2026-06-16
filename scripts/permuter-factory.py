@@ -549,30 +549,29 @@ class Factory:
             fd = proc.stdout.fileno()
             try:
                 while True:
-                    if proc.poll() is not None:
-                        # drain any remaining buffered output
-                        rest = proc.stdout.read() or b""
-                        if rest:
-                            logf.write(rest)
-                            best, last_iter = self._scan(rest, best, last_iter)
-                        break
                     if time.time() > deadline:
                         self.log(f"    budget reached (iter~{last_iter}) -> stopping")
                         break
-                    # poll the pipe with a 1s timeout so the deadline is enforced
-                    # even when --best-only keeps the permuter silent for minutes
-                    # (a blocking readline would never return -> budget ignored).
+                    # Poll the pipe with a 1s timeout, then read RAW bytes with
+                    # os.read (NOT readline): the permuter's status line ends in
+                    # '\r', not '\n', so readline() would block waiting for a
+                    # newline that may be minutes away, and the deadline check
+                    # (after the read) would never run. select() enforces the
+                    # budget even during long --best-only silences.
                     ready, _, _ = select.select([fd], [], [], 1.0)
                     if not ready:
-                        continue
-                    line = proc.stdout.readline()
-                    if not line:
                         if proc.poll() is not None:
                             break
                         continue
-                    logf.write(line)
+                    try:
+                        buf = os.read(fd, 65536)
+                    except OSError:
+                        buf = b""
+                    if not buf:  # EOF
+                        break
+                    logf.write(buf)
                     logf.flush()
-                    best, last_iter = self._scan(line, best, last_iter)
+                    best, last_iter = self._scan(buf, best, last_iter)
                     if best is not None and best <= 0:
                         # found a score-0 candidate; let stop-on-zero finish
                         time.sleep(2)
