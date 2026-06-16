@@ -2,10 +2,11 @@
 
 > Decompilation tooling: m2c, Ghidra, the permuter, decomp.dev integration.
 
-_9 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_10 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Index
 
+- [decode-sweep.py: automated objdiff-gated m2c-graft decode transforms (2026-06-16)](#decode-sweeppy-automated-objdiff-gated-m2c-graft-decode-transforms-2026-06-16) — _`scripts/decode-sweep.py` automates the three biggest mechanical post-graft %-movers (graft-cleanup items 21/22 + struct-copy collapse): builds a per-(base-register,offset) WIDTH CATALOG from the target's own `.s` (lb/lbu/lh/lhu/lw/lwc1...; handles BOTH raw-.word USO and mnemonic kernel/bootup formats), then (1) retypes mistyped `*(s32*)((char*)BASE+0xOFF)` derefs to the cataloged sub-word type, (2) splits absolute `*(T*)0xADDR` derefs to `&D_00000000+0xADDR` (also strips `(unaligned sN)` artifacts — a COMPILE-ENABLER, not just a %-mover), (3) collapses >=4 contiguous word-copies into Quad4 (16B exact, no whole-struct overshoot). Each transform is OBJDIFF-GATED (rebuild + re-read fuzzy, revert on regression) and idempotent. Validated: retype +2.58pp (gl_func_00021498 28.20->30.79), +3.77pp (gl_func_00064588 48.67->52.44); revert path byte-verified. NO-OP on already-correctly-typed fns (no false gains)._
 - [coloring-solve.py: inverse register-coloring solver from the uopt trace (2026-06-15)](#coloring-solvepy-inverse-register-coloring-solver-from-the-uopt-trace-2026-06-15) — _`scripts/coloring-solve.py` parses a `-Wo,-zdbug:6` coloring trace for one function (decodes LR bitpos -> register, constrained/unconstrained, priority/bitpos color order, spills, splits) and, given target+build `.s`, aligns the two instruction streams to separate REGISTER-RENUMBER residuals (shape-correct, wrong reg) from STRUCTURAL diffs, emitting the target<-build register-pairing histogram + algorithm-derived levers. The generalizable regalloc-cap diagnostic instrument: tells you WHICH LR is mis-colored and WHY before you touch the C._
 - [permuter-factory: unattended permuter queue-runner over the 90-99 long tail (2026-06-15)](#permuter-factory-unattended-permuter-queue-runner-over-the-90-99-long-tail-2026-06-15) — _`scripts/permuter-factory.py` auto-discovers the 90<=fuzzy<100 band from a fresh objdiff report (size-sorted, cap-comment-filtered), runs `import.py` per-fn then a wall-clock-bounded `permuter.py --best-only --stop-on-zero -jN`, splices the best output back, and OBJDIFF-VERIFIES (the permuter score lies). Checkpoints to `.permuter-factory/` for crash-resume; commits verified 100.0 cracks as "<fn> permuter-factory crack to 100.0 (NM body, pending land)" (no land/push). Kills children by PGID, never pkill -f._
 - [references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)](#referencesido-the-decompiled-uopt-source--dump-flag-instrumentation-2026-06-11) — _n64decomp/ido clone = uopt allocator source with original symbol names; -Wo,-zdbug:1/2/5/6, -dowhyuncolor, pass kill-switches, -zmovc. Grep it before theorizing about regalloc caps; derived rules in IDO_CODEGEN._
@@ -28,6 +29,72 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 
 ---
+
+## decode-sweep.py: automated objdiff-gated m2c-graft decode transforms (2026-06-16)
+
+`scripts/decode-sweep.py` front-loads the 40%->70% climb on big struct-heavy
+functions by automating the three deterministic post-graft cleanups that were
+previously done BY HAND on every big function (graft-cleanup items 21 & 22 +
+the 00004118 struct-copy lesson). All three are derivable from the TARGET asm,
+so the tool builds an access catalog once and rewrites the m2c body to match.
+
+**Input contract:** a `.c` file that ALREADY contains a *compilable*
+`#ifdef NON_MATCHING` body for FN (a graft you've run through
+`m2c-graft-clean.py` and fixed any remaining m2c artifacts — `(bitwise f32 *)`,
+`*(f32 *)& rvalue`, pointer-vs-int compares; those are NOT in scope here). The
+function's `.s` must be reachable under `asm/nonmatchings/`.
+
+**The access catalog** is the load-bearing primitive: parse the function's own
+`.s` and bucket every `(base-register, offset)` to a width
+(lbu->u8, lb->s8, lhu->u16, lh->s16, lw/sw->w32, lwc1->f32). It handles BOTH
+the raw-`.word` USO format (objdump the byte blob) AND the mnemonic
+kernel/bootup format (parse decoded ops directly). The m2c var/temp name
+encodes the originating register (`var_s2` -> reg `s2`), which is the join key.
+
+**Transforms (run in order, each objdiff-gated):**
+1. **field-width retype** — retype `*(s32*)((char*)BASE+0xOFF)` to the
+   cataloged sub-word C type. Base-register match (`var_s2`->`s2`) is
+   high-confidence; for arg/sp/expression bases it falls back to an
+   offset-global agreement (every base that touches that offset agrees on one
+   sub-word type). NEVER narrows a `w32` slot, NEVER touches a mixed-family or
+   signed-clash (ambiguous union) slot — the no-blanket-retype rule
+   (578B4-pass-5: blanket s32->X broke pointer arithmetic).
+2. **global-base split** — rewrite absolute `*(T*)0xADDR` (>=0x100) to
+   `*(T*)((char*)&D_00000000 + 0xADDR)` so IDO does the target's lui %hi+lo16
+   split instead of a bare lui+ori immediate; catches the s8/s16/u32/u64/void
+   widths `m2c-graft-clean.py` misses. Also strips `(unaligned sN)` cast
+   artifacts. KEY FINDING: this transform is often a COMPILE-ENABLER, not just
+   a %-mover — a fresh graft with `*(s16 *)0x2048` and `(unaligned s32)` casts
+   won't even parse until split, so run it before measuring a baseline.
+3. **struct-copy collapse** — collapse runs of >=4 contiguous word-copies
+   (dst & src offsets both advancing by 4, same bases) into 16-byte `Quad4`
+   struct copies (auto-injects the typedef). EXACT 4-word chunks only; a
+   partial tail (<4) stays single — whole-struct overshoots (00004118).
+
+**Gating + safety:** `--gate` (default) rebuilds `build/non_matching/<unit>.c.o
+RUN_CC_CHECK=0`, regenerates the objdiff report, and keeps a transform only if
+the function's `fuzzy_match_percent` rises (or `--keep-flat` for ties);
+regressions are reverted byte-identically (verified). Idempotent / re-runnable.
+`--no-gate` applies blindly for a fast preview. `--only retype,global,structcopy`
+selects transforms.
+
+**Validation (agent-w, NM bodies, not landed):**
+- `gl_func_00021498` (game_libs_post): retype 16 changes KEPT, **28.20 -> 30.79
+  (+2.58pp)**.
+- `gl_func_00064588` (game_libs_post1b): retype 11 changes KEPT, **48.67 ->
+  52.44 (+3.77pp)**; re-run idempotent (no further changes).
+- Revert path: forced-regression test (mock measure 48.67->40.0) reverted and
+  restored the file byte-identically.
+- `gl_func_00046050`: 0 sub-word offsets in catalog -> 0 changes (correct
+  no-op; the tool never invents gains on already-correctly-typed code).
+
+**Limitations:** operates only on the canonical `m2c-graft-clean` deref form
+(`*(T*)((char*)BASE+0xOFF)`); heavily hand-refactored bodies (named typed
+locals, FW() macros) are untouched. The retype gain is bounded by how many
+sub-word fields the function has. Does not fix the m2c artifacts that block
+compilation in the first place — graft-clean + manual artifact cleanup is the
+prerequisite. structcopy needs the copy to already be in single-word form
+(m2c usually emits it that way; an already-typed struct field copy is skipped).
 
 ## coloring-solve.py: inverse register-coloring solver from the uopt trace (2026-06-15)
 
