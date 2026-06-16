@@ -8346,3 +8346,20 @@ diffs, all addu operand order). Six functions reached 100 on
 2026-06-10 via the documented levers; what remains in the band needs
 the permuter, uopt internals, or a lever not yet discovered. Do not
 re-run tell scans until new levers exist or new wraps land.
+
+## Permuter-factory false-100 cracks on relocatable units (5C9BC, 2026-06-16)
+
+The permuter-factory's objdiff-verify (its sole gate) can emit a FALSE
+"crack to 100.0" on relocatable game_libs/USO functions: objdiff masks
+relocation ADDEND differences, so a body whose float-pool literal lands
+at a different rodata offset (target %hi0/%lo0x2034 vs build
+%hi1/%lo0x80D0) scores objdiff 100 but DIFFERS in the linked ROM.
+gl_func_0005C9BC was committed by the factory as a 100 crack; the
+harvest pipeline's full-make + cmp ROM gate caught it (2 word diffs at
+a lui/lwc1 %hi/%lo pair), it was reverted to its true 98.40, and
+`sqrtf` (the permuter's invented call name) was confirmed to need a
+real address, not the 0x0 placeholder. RULE: every factory "crack"
+MUST pass the full-link ROM cmp before landing — never trust the
+factory's objdiff-100 for relocatable units. (Same masking class as
+42438's D-symbol inline.) Improves (<100, NM-only) are unaffected —
+they never link, never count as matched.
