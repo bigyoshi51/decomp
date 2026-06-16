@@ -495,7 +495,7 @@ class Factory:
             st["status"] = "cracked"
             self._save_checkpoint()
             if not self.args.no_commit:
-                self._commit(fn)
+                self._commit(fn, c["src"])
             return "cracked"
         elif verified > c["fuzzy"] + 1e-6:
             # genuine improvement but not a match: keep the better NM body, commit
@@ -505,7 +505,7 @@ class Factory:
             st["status"] = "improved"
             self._save_checkpoint()
             if not self.args.no_commit:
-                self._commit(fn, matched=False)
+                self._commit(fn, c["src"], matched=False)
             return "improved"
         else:
             self.log(
@@ -601,13 +601,15 @@ class Factory:
                 except Exception:
                     pass
 
-    def _commit(self, fn, matched=True):
+    def _commit(self, fn, src, matched=True):
         msg = (
             f"{fn} permuter-factory crack to 100.0 (NM body, pending land)"
             if matched
             else f"{fn} permuter-factory improve NM body (pending land)"
         )
-        subprocess.run(["git", "add", "-A"], cwd=self.worktree, check=False)
+        # stage ONLY the edited source file (never the gitignored-or-not state
+        # dir / logs / nonmatchings scratch).
+        subprocess.run(["git", "add", "--", src], cwd=self.worktree, check=False)
         r = subprocess.run(
             [
                 "git",
