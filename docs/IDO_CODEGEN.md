@@ -14536,5 +14536,48 @@ agent-y commit messages 4c4611123..f04879ed6):
   slots (frame snapped to target 1864).
 - Decl-layout + volatile pads finished the frame/slot map (q@0x8C,
   paired ptrs above sp78, pads for the gap).
-Residual at 99.76: ~87 words (LCS 2392/2479), uncharacterized tail --
-re-attack candidate.
+Residual at 99.76 CHARACTERIZED (agent-y 2026-06-15, exact-word LCS
+2417/2479, positional 2413/2479 reloc-filtered; the "~87 words" was an
+objdiff-fuzzy artifact — the true non-reloc word residual is 66). Every
+one of the 66 words maps to exactly THREE classes, ZERO structural/logic
+errors remain:
+- CLASS C (58 words = 29 sw/lw pairs, 88% of residual) — SPILL-HOME
+  SHARING, proven NO-CLEAN-C-HANDLE. Each of the 31 init units spills its
+  alloc-result pointer (`var_a0`) across the inner `func(p,s,sp54,1)`
+  call. The TARGET reuses ONE shared temploc (`sw/lw a0,0x38(sp)`) for
+  every unit; our build gives each unit its own descending named-local
+  home (0xC0..0x90 by 4). ROOT CAUSE = the FRAME-SLOT HOME ASSIGNMENT
+  RULE: the target's pointer is an ANONYMOUS spill temp (goes through
+  `spilltemps`/`gettemp`, which SHARE the lowest same-size slot among
+  non-co-live webs — rule 6), while any C spelling we can write makes it
+  a NAMED M-class local (fixed decl-order home, uopt NEVER repacks/shares
+  named homes — rule 1). The three reachable C forms each fail a
+  different way (all verified in-tree AND with 2-unit minis + `-zdbug:6`):
+    1. DISTINCT names per unit (current state) → distinct descending
+       homes, no sharing (mini: p@0x24, q@0x20).
+    2. SINGLE shared name → IDO COLORS it to a NEW callee-saved reg (adds
+       s3 in-tree; `move s0,v0` in mini) — the spill DISAPPEARS (30 fewer
+       insns), structurally wrong (target HAS the spills).
+    3. SINGLE `volatile`-qualified name → DOES share one slot (mini: both
+       units @0x24) BUT volatile forces a reload on EVERY use
+       (`lw t9,K(sp); sw x,12(t9)` per access) — many extra insns, wrong.
+  There is no C construct that yields a non-colored, normal-access,
+  shared-home spill: that is precisely an anonymous compiler temp live
+  across a call and reused 4x after it, which C cannot express without a
+  named local. This is the canonical "spilltemps region-sharing
+  unreproduced" cap. DO NOT re-grind names/decl-order/pads on this class.
+- CLASS A (6 words) — PROLOGUE SCHEDULE (as1). Target hoists `move s0,a0`
+  (`var_s0=arg0`) ABOVE the reg-saves and fills the `bnez a0` delay slot
+  with `sdc1 $f20`; we keep saves grouped and fill the delay with the
+  move. Compiler-generated-save ordering vs a user assignment — as1
+  no-handle.
+- CLASS B (2 words) — `li at,-8` (the `var_s0 != (void*)-8` sentinel)
+  vs `addiu s2,sp,84` (`&sp54`, hoisted loop-invariant ILDA) emitted in
+  swapped order. First-occurrence/hoist ordering; `&sp54` is invariant
+  across all 31 units so source position doesn't move it — no-handle.
+Verdict: function is at its byte-exact ceiling under the no-instruction-
+forcing policy. Permuter is not applicable (58-word systematic
+slot-sharing diff, not a <=3-word renumber). Leave NON_MATCHING.
+Harness for re-verification: /tmp/score4244.py (reloc-filtered word LCS)
++ /tmp/window.py LO HI (assembles target words, side-by-sides vs obj
+disasm). Mini probes: /tmp/mini/m{,2,3,4}.c.
