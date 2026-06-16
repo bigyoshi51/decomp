@@ -14617,6 +14617,43 @@ errors remain:
   across a call and reused 4x after it, which C cannot express without a
   named local. This is the canonical "spilltemps region-sharing
   unreproduced" cap. DO NOT re-grind names/decl-order/pads on this class.
+  AGENT-Y 2026-06-15 RE-VERIFICATION (loop-hypothesis test, deeper axes,
+  did NOT beat 99.762; all forms restored). The "loop disguise" theory is
+  REJECTED by the .s itself: 32 units, ZERO backward branches, base offset
+  a perfect AP `s0+8+0x24*i` (step 36), parallel const table `cf90+4*i` —
+  the target is fully UNROLLED (IDO -O2 does not 32x-unroll a runtime
+  `for`, so a C loop emits a totally different stream and cannot match).
+  The pointer's slot picture is now exactly characterized: target spills
+  `a0` to slot 0x38(sp)=56 (a low GETTEMP temp slot, just above the
+  saved-reg block) 31 times + once to 0x8C=140 (unit 1); reload is into a0
+  then 4 stores off a0. NEW negative results along the name-count axis,
+  each measured in-tree + `-zdbug:6`:
+    - SINGLE shared name (all 32 units) → IDO coalesces the one web and
+      PROMOTES it to a callee-save (adds s3 to the prologue; target saves
+      ONLY s0/s1/s2 and uses ZERO s3) — spill vanishes. 94.21. `register`
+      qualifier is ignored (still s3, 94.21).
+    - TWO names (alternating OR contiguous-block; both declared LAST so
+      they land low) → DEFEATS the s3 promotion (prologue back to exactly
+      s0/s1/s2) and BOTH webs land in the GETTEMP region: 17 spills @56 +
+      14 @64 (or 14/17). 99.52. So gettemp-slot placement IS reachable —
+      the residual is purely that 2 distinct symbols get 2 adjacent
+      gettemp slots; gettemp reuse (`uopttemp.c findbbtemps`) shares a slot
+      only among ONE symbol's disjoint ranges, never ACROSS symbols, so N
+      names = N gettemp slots, and N=1 re-triggers the s3 promotion.
+    - ADDRESS-TAKEN single name (`sink=&p;`) → forces one fixed memory
+      home, NO s3, ALL units share that one slot (the target shape!) —
+      but address-residency makes EVERY access a fresh `lw`, so post-call
+      is `lw tN,home; sw x,off(tN)` per store (target loads once into a0
+      then 4 stores off a0): +~3 lw/unit, breaks the exact 2479 insn count.
+  Root cause restated precisely: the target pointer is 31 INDEPENDENT
+  short-lived values (each judged not-worth-a-callee-save by IDO's coloring
+  cost model, so each spills) that REUSE one gettemp slot. C cannot express
+  "31 distinct non-coalescing values that all reuse one anonymous slot":
+  distinct C names → distinct M-class homes; one C name → one coalesced web
+  → one s-reg (no spill). The 2-name form proves gettemp placement is
+  reachable but caps at N-names→N-slots. CONFIRMED UNBREAKABLE on the
+  name/decl/register/address axes. Mini probes added: /tmp/mini/m{6..12}.c
+  (m8 = 2-name shares 1 gettemp slot; m12 = address-taken single slot).
 - CLASS A (6 words) — PROLOGUE SCHEDULE (as1). Target hoists `move s0,a0`
   (`var_s0=arg0`) ABOVE the reg-saves and fills the `bnez a0` delay slot
   with `sdc1 $f20`; we keep saves grouped and fill the delay with the
