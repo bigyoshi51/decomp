@@ -27,6 +27,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
+- [LONGEST-SPAN LR LANDS IN AN ARG REGISTER (a0), not v0 — function-tail base-pointer cap + isop-mode-check %-mover (func_0001304C pass 15)](#longest-span-lr-lands-in-an-arg-register-a0-not-v0--the-function-tail-base-pointer-cap-and-the-isop-mode-check-mover-that-survives-it-func_0001304c-pass-15) — _a base ptr loaded once + held across the whole tail = longest LR = lowest save/span priority = colored LAST = lands in a0 (derefs grab v0/v1 first); a build coloring it into v0 rebases the whole tail = arg-register-targeting cap (no pseudo-order lever, permuter floors). BUT inlining `mode == N` deref into the compare (isop → Uneq swap → bne const-first) is a real monotonic %-mover that stacks anyway (92.5→92.61)._
 - [STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (44F4 79.57 -> 100.0)](#feedback-ido-struct-by-value-marshalling-lever) — _`sw a2,8(sp)` in jal delay = struct-by-value arg homed to its own arg slot; `addiu sN,sp,K` held in s-reg = struct local (ILDA web colorable — char* &local never is); store-direct+load-via-pointer pair = struct copy; `bne base,-K` = `if (base+K == NULL)`; iter alloc-fail can skip to NEXT iter, not epi._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
@@ -14135,6 +14136,56 @@ flagged as such) — and for gl_func_000578B4-class bloat the
 INVERSE holds: the build's m2c temp mass creates "-ve save" rejected
 LRs whose homes inflate the frame (PASS 7 entry) — fewer named
 single-use temps, not more.
+
+## LONGEST-SPAN LR LANDS IN AN ARG REGISTER (a0), NOT v0 — the "function-tail base pointer" cap, and the isop-mode-check %-mover that survives it (func_0001304C pass 15)
+
+(2026-06-15, coloring-trace pass on func_0001304C/bootup_uso_tail4.)
+Two reusable findings from the -Wo,-zdbug:6 trace of a giant
+straight-line tail (27 near-identical record-emit blocks reading one
+base pointer):
+
+1. **A base pointer loaded ONCE and held across the entire function
+   tail is the LONGEST live range → LOWEST `compute_save` priority
+   (save/span) → colored LAST → it lands in an ARG register (a0),
+   because the high-priority short per-block derefs grab v0/v1 first.**
+   m2c renders this base as a single named local; IDO-target puts it in
+   `a0` (`lw a0,344(t9)` once, 340 insns of `lw v0,12(a0)`/`lw v1,4(v0)`
+   per block). A build that instead colors the base into **v0** has the
+   whole tail rebased (base a0↔v0, deref v1↔v0, count a0↔v1) plus
+   coupled bnel/bne delay-fill differences. This is the
+   ARG-REGISTER-TARGETING cap (cf. the pseudo-order-family addendum:
+   "none of BB-split / web-inversion / early-pseudo move a value INTO an
+   arg register"). VERIFIED DEAD ENDS here: full web-order-inversion
+   (`#define base` to inline all 58 reads) REGRESSED 92.5→67 (broke the
+   per-block CSE/reload shape); inlining temp_t6 decrement -0.04;
+   if(1){} BB-split before the base load flat (the next-BB load still
+   hoists into the branch delay → bnel). Diagnostic: if the base is
+   `lw _,N(t9)` exactly ONCE and reused for the whole tail, and your
+   build's only diff is base-in-v0 vs target-in-a0, it's this cap —
+   don't grind C variants, queue for permuter (which also floors: no
+   regalloc randomizer, 97k iters flat).
+
+2. **The isop-mode-check operand swap is a genuine %-mover even when the
+   surrounding allocation is capped.** A `mode == 2` / `mode == 3` test
+   where m2c reads the mode into a NAMED local (`temp_v0 = *(p+0x40); if
+   (temp_v0 == 2)`) emits `bne v0,s_const` (var-first), but the target
+   emits `bne s_const,v0` (promoted-const-first). Inlining the deref
+   into the comparison (`if ((*(s32*)(p+0x40)) == 2)`) makes the left
+   operand an **isop** (uilod) at uopt-input time → the Uneq
+   operand-swap fires (see the BEQ/BNE rule) → const-first, matching the
+   target. Applies even when the value is compared multiple times and
+   the target reuses one register — inline EVERY comparison site (mixed
+   named/inline gave a partial gain; all-inline gave the full one).
+   func_0001304C: outer ==2/==3 (one site each) + inner-loop ==2||==3
+   alpha-clamp test, 92.50 → 92.61. Cheap, monotonic, stacks with the
+   capped base cascade.
+
+Companion: the coupled loop var swap (clamp counter vs outer loop IV
+getting t4/t5 in the wrong order) is IV-CONSTRAINED coloring — the
+outer-loop IV is colored in the constrained phase (before
+unconstrained-by-bitpos clamp), so it grabs the lower reg; the target
+colors both unconstrained (earlier-bitpos clamp → lower). No C lever
+found to make the IV unconstrained; same cap family.
 
 ## UGEN OPENED: -Wc,-d is the ugen debug dump (tree phases + per-op register trace + emission trace)
 
