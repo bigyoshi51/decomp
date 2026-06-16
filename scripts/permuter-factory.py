@@ -36,6 +36,7 @@ import argparse
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -545,29 +546,33 @@ class Factory:
             )
             self._active_proc = proc
             last_iter = 0
+            fd = proc.stdout.fileno()
             try:
                 while True:
                     if proc.poll() is not None:
+                        # drain any remaining buffered output
+                        rest = proc.stdout.read() or b""
+                        if rest:
+                            logf.write(rest)
+                            best, last_iter = self._scan(rest, best, last_iter)
                         break
                     if time.time() > deadline:
                         self.log(f"    budget reached (iter~{last_iter}) -> stopping")
                         break
+                    # poll the pipe with a 1s timeout so the deadline is enforced
+                    # even when --best-only keeps the permuter silent for minutes
+                    # (a blocking readline would never return -> budget ignored).
+                    ready, _, _ = select.select([fd], [], [], 1.0)
+                    if not ready:
+                        continue
                     line = proc.stdout.readline()
                     if not line:
                         if proc.poll() is not None:
                             break
                         continue
                     logf.write(line)
-                    txt = line.decode("utf-8", "replace")
-                    for chunk in txt.replace("\r", "\n").split("\n"):
-                        m = SCORE_RE.search(chunk)
-                        if m:
-                            sc = int(m.group(1))
-                            if best is None or sc < best:
-                                best = sc
-                        mi = ITER_RE.search(chunk)
-                        if mi:
-                            last_iter = int(mi.group(1))
+                    logf.flush()
+                    best, last_iter = self._scan(line, best, last_iter)
                     if best is not None and best <= 0:
                         # found a score-0 candidate; let stop-on-zero finish
                         time.sleep(2)
@@ -577,6 +582,20 @@ class Factory:
                 self._kill_proc_tree(proc)
                 self._active_proc = None
         return best
+
+    def _scan(self, raw, best, last_iter):
+        """Update (best, last_iter) from a raw bytes chunk of permuter output."""
+        txt = raw.decode("utf-8", "replace")
+        for chunk in txt.replace("\r", "\n").split("\n"):
+            m = SCORE_RE.search(chunk)
+            if m:
+                sc = int(m.group(1))
+                if best is None or sc < best:
+                    best = sc
+            mi = ITER_RE.search(chunk)
+            if mi:
+                last_iter = int(mi.group(1))
+        return best, last_iter
 
     def _kill_proc_tree(self, proc):
         """Kill the permuter process group by PID. NEVER pkill -f (it would
