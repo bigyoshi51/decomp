@@ -12384,6 +12384,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 
 **Related:**
 - [Inline a cached load-deref local into the loop body](#feedback-ido-inline-cached-local-for-frame-shrink) — sibling lever for the stack-slot-overhead subclass.
+- [LICM hoists per-block `addiu sp,N` stack-temp addresses into saved regs — dominant int-save-count cap on big -O2 geometry grafts; inline/name/if(1)/-O1 all NEGATIVE; needs per-block source RE](#feedback-ido-licm-stack-temp-address-hoist-cap) — _A large geometry graft saves 9 int regs (s0-s8) where the target saves 3 (s0,s1,s2)+3 FP; the 6 excess all hold `addiu sN,sp,K` (stack-Vec3-temp addresses) that IDO LICM-hoists once into callee-saves, while the target re-materializes each into a SCRATCH reg per use. Verified 2026-06-16 on game_uso_func_00007C1C: remove-local-recompute is CSE/LICM-immune (the address is live across each idiom's malloc-fallback jal → forced saved reg regardless of naming), naming the swizzle-scratch as one pointer REGRESSES (target re-addiu's it per block, not a held pointer), if(1)-collapse deletes the dead malloc branch the target keeps, and -O1 under-promotes (1 int save, drops the f20/f22/f24 the target has). Genuine residual = reconstruct the inlined-helper loop body block-by-block so each temp address is computed locally (defeat the LICM hoist); mechanical m2c-graft transforms can't. Recognition: excess saved regs all hold `addiu sN,sp,CONST` for the same sp-offsets the target reaches via v/t/a regs._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -14895,3 +14896,72 @@ means the control structure matches; a missing run of segments (here the
 exactly which duplicated block was collapsed. Don't trust "rephrased form is
 best" notes that predate a frame-size fix — re-test code-motion after the
 frame matches.
+
+## LICM hoists per-block `addiu sp,N` Vec3-temp addresses into saved regs — the dominant int-save-count cap on large -O2 geometry grafts (game_uso_func_00007C1C, 2026-06-16)
+<a name="feedback-ido-licm-stack-temp-address-hoist-cap"></a>
+
+**Symptom:** a large -O2 graft (here 1046 insns, ~85 stack-local Vec3 temps,
+a list-walk `loop_50` that calls an inlined `Vec3*` constructor 5×/iter) saves
+**9 integer callee regs (s0–s8)** + 5 FP doubles, frame too small (-928), while
+the TARGET saves only **3 int (s0,s1,s2)** + 3 FP doubles (f20/f22/f24), frame
+-944. Fuzzy floors ~40%. The 6 excess s-regs (s3–s8) ALL hold
+`addiu sN, sp, K` — i.e. **addresses of stack-local Vec3 temps**, materialized
+ONCE at loop entry and reused across the iteration's calls. The target instead
+re-materializes each `addiu reg, sp, K` into a **scratch register**
+(v0/v1/t0-t9/a0-a2) at every use site, and uses its 3 saved regs only for
+`arg5` (s0), the recurring swizzle-scratch `&sp354` (s1, re-addiu'd per block),
+and `arg2` (s2).
+
+**Root cause:** IDO -O2 loop-invariant code motion (LICM) treats the constant
+`sp+K` address computations as loop-invariant and hoists them out of the loop
+body into callee-saved registers (computed once, reused). The original source's
+structure kept them recomputed-per-block, so IDO never promoted them. This is
+the same mechanism as the global-`&D` LICM-hoist cap
+([[#]] "Repeated lui/addiu for the same global = target was -O1"), but for
+*stack* addresses, where the -O1 split is NOT a fix (see below).
+
+**Levers TRIED, all NEGATIVE (verified 2026-06-16 via the regalloc dump
+`scripts/regalloc-dump.sh` + standalone save-count harness):**
+- Inlining the named `&spXXX` pointers at every use (remove-local-recompute):
+  IDO's CSE/LICM re-collapses the inlined `&spXXX` back to one hoisted value and
+  still promotes it. Save count stayed 8 (only the loop-accumulator's own s8
+  dropped). The address is **live across the malloc-fallback `jal` inside each
+  idiom**, so it must survive a call → IDO picks a saved reg regardless of
+  naming-vs-inlining. Inline-recompute only defeats promotion when the value has
+  ONE consuming use and crosses ZERO calls; here each crosses the idiom's call.
+- Naming the dominant swizzle-scratch `&sp354` (85 uses) as one `char *sw3`
+  local to steer it into s1 like the target: REGRESSED 39.93→38.90. The target's
+  s1 is **re-addiu'd per block** (a saved reg that is re-materialized), NOT a
+  once-computed held pointer; the named pointer computes the address once and
+  holds it, producing a different instruction shape (missing the per-block
+  `addiu`).
+- Collapsing the always-true `(&spXXX != 0) || (malloc…)` idiom condition to
+  `if(1)`: drops one save but DELETES the dead-malloc branch the target keeps →
+  would regress fuzzy.
+- Moving the `var=&spXXX` assignment to just before its `if` (shorten LR): no
+  effect (8 saves).
+
+**Why -O1 split is wrong here:** the function is in a single Yay0-compressed USO
+block (`game_uso.c`, byte-verified by `make verify-blocks`); splitting is
+high-risk. More decisively, plain **-O1 gives only 1 int save (s0) + 0 FP
+doubles** — it under-promotes AND drops the FP callee-saves (f20/f22/f24) the
+target HAS. The target is genuinely -O2 (FP reg promotion present) with a
+source structure that limits int promotion to 3. So the opt level is right; the
+**C structure** is what differs.
+
+**The real residual:** to match, the loop body must be reconstructed so each
+Vec3-temp address is computed **locally within its own block** in a way IDO
+cannot prove loop-invariant (defeating the LICM hoist) — i.e. reconstruct the
+original inlined-helper call pattern by hand, block by block, rather than
+mechanically transforming the m2c graft (m2c's flattened address-of-locals
+present them as loop-invariant). This is the per-function exact-structure RE the
+2026-05-28 cap-analysis memo calls the only fix for regalloc-renumber caps;
+mechanical levers are CSE/LICM-immune here. The permuter (per the cap memo,
+153k iters on this class) does not crack stack-address LICM hoists either.
+
+**Recognition cue:** near-miss saves N int regs where the EXCESS ones
+(beyond the genuine loop-carried accumulator + 1–2 args) all hold
+`addiu sN, sp, CONST` (stack-temp addresses), and the target shows those same
+addresses re-materialized into scratch/temp regs at each use. Diagnostic:
+`grep 'addiu s[3-8],sp,' <build.asm>` vs target — if the target has the same
+sp-offsets via v/t/a regs, it's this LICM-hoist cap, not a fixable hoist.
