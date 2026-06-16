@@ -87,9 +87,20 @@ class Factory:
         self.scoreboard_path = os.path.join(self.state_dir, "scoreboard.json")
         self.checkpoint = self._load_checkpoint()
         self.report_path = os.path.join(self.state_dir, "report.json")
+        self._active_proc = None  # current permuter Popen, for clean shutdown
         for p in (self.import_py, self.permuter_py):
             if not os.path.isfile(p):
                 self.die(f"permuter tool not found: {p}")
+        # On SIGTERM/SIGINT, kill the active permuter process group before exit
+        # (the finally: cleanup doesn't run when the signal kills us mid-readline).
+        signal.signal(signal.SIGTERM, self._on_signal)
+        signal.signal(signal.SIGINT, self._on_signal)
+
+    def _on_signal(self, signum, frame):
+        self.log(f"received signal {signum} -> killing active permuter and exiting")
+        if self._active_proc is not None:
+            self._kill_proc_tree(self._active_proc)
+        sys.exit(143)
 
     def _find_repo_root(self):
         # worktree is .../decomp/projects/<x>; walk up until tools/decomp-permuter
@@ -268,21 +279,73 @@ class Factory:
         i, j, k, lines = loc
         return "".join(lines[i:k])
 
+    def _extract_func_brace_body(self, text, fn):
+        """From C text, return the brace-balanced body INCLUDING the outer { }
+        of the definition of `fn` (the first def, not a prototype). None if not
+        found. Skips prototype lines ending in ';' before the '{'."""
+        m = re.search(r"\b" + re.escape(fn) + r"\s*\(", text)
+        if not m:
+            return None
+        # find the opening brace after the signature (skip ');' prototype)
+        idx = m.end()
+        depth_paren = 1
+        n = len(text)
+        # walk past the arg-list parens
+        while idx < n and depth_paren > 0:
+            ch = text[idx]
+            if ch == "(":
+                depth_paren += 1
+            elif ch == ")":
+                depth_paren -= 1
+            idx += 1
+        # now skip whitespace; if next non-ws is ';' it's a prototype -> search next
+        j2 = idx
+        while j2 < n and text[j2] in " \t\r\n":
+            j2 += 1
+        if j2 < n and text[j2] == ";":
+            # prototype; recurse on the remainder
+            rest = self._extract_func_brace_body(text[idx:], fn)
+            return rest
+        # find the opening brace
+        while idx < n and text[idx] != "{":
+            idx += 1
+        if idx >= n:
+            return None
+        start = idx
+        depth = 0
+        while idx < n:
+            ch = text[idx]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : idx + 1]
+            idx += 1
+        return None
+
     def splice_body(self, src, fn, new_func_c):
-        """Replace the #ifdef NON_MATCHING body for fn with new_func_c.
-        Returns the original full text (for revert), or None on failure."""
+        """Replace ONLY the brace body of fn inside the #ifdef NON_MATCHING block,
+        keeping the original signature line. The permuter's source.c carries a
+        preamble (typedef u32/s32, struct defs, externs) that would collide with
+        the full TU, so we splice only the { ... } body. Returns the original
+        full text (for revert), or None on failure."""
         p = os.path.join(self.worktree, src)
         text = open(p).read()
         loc = self._locate_nm_block(text, fn)
         if not loc:
             return None
-        i, j, k, lines = loc
-        # new body = #ifdef line (lines[i]) + any context lines between ifdef and
-        # def (lines[i+1:j], usually none) replaced by the permuter func, ending
-        # right before #else (lines[k]).
-        new_block = lines[i] + new_func_c.rstrip("\n") + "\n"
-        new_lines = lines[:i] + [new_block] + lines[k:]
-        open(p, "w").write("".join(new_lines))
+        new_body = self._extract_func_brace_body(new_func_c, fn)
+        if not new_body:
+            return None
+        orig_body = self._extract_func_brace_body(text, fn)
+        if not orig_body:
+            return None
+        # replace the first occurrence of the original brace body with the new one
+        new_text = text.replace(orig_body, new_body, 1)
+        if new_text == text:
+            return None
+        open(p, "w").write(new_text)
         return text
 
     def restore(self, src, original_text):
@@ -472,9 +535,9 @@ class Factory:
                 cwd=self.worktree,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                bufsize=1,
                 start_new_session=True,  # own process group for clean kill
             )
+            self._active_proc = proc
             last_iter = 0
             try:
                 while True:
@@ -506,6 +569,7 @@ class Factory:
                             break
             finally:
                 self._kill_proc_tree(proc)
+                self._active_proc = None
         return best
 
     def _kill_proc_tree(self, proc):
