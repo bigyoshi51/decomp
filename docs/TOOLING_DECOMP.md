@@ -162,11 +162,20 @@ the worktree's; `scripts/spin-up-agent.sh 1080` makes one, or reuse a clean
 `agent-<letter>` rebased onto main):
 
 ```bash
-python3 /path/to/decomp/scripts/permuter-factory.py \
+# Launch DETACHED (setsid) so it survives the agent harness reaping its
+# background tasks (~hourly) — otherwise the launcher wrapper's SIGTERM stops it.
+# The script handles SIGTERM cleanly (kills its worker group, reverts the
+# in-flight fn, checkpoints) and a fresh launch RESUMES from the checkpoint,
+# so even if it is killed you just relaunch and it skips everything done.
+setsid nohup python3 /path/to/decomp/scripts/permuter-factory.py \
     --worktree "/path/to/decomp/projects/1080-agent-h" \
-    --jobs 6 --budget-secs 720           # ~250k iters @ -j6
-# optional: --total-budget-secs 28800 (cap whole run), --limit N,
-#           --only fn1,fn2, --min/--max band, --no-commit, --no-rediscover
+    --jobs 6 --budget-secs 1500 --sort fuzzy \
+    > "/path/to/decomp/projects/1080-agent-h/.pf-run.log" 2>&1 &
+# budget-secs 1500 ~= 225k iters at the observed ~150 iter/s on 150-350B fns;
+# 480s (~60-95k iters) is TOO SHORT for a genuine single-diff gate to fall.
+# --sort fuzzy puts the fewest-diff fns first (highest crack yield/min).
+# optional: --total-budget-secs, --limit N, --only fn1,fn2, --min/--max band,
+#           --no-commit, --no-rediscover, --retry-capped.
 ```
 
 Per function the factory:
