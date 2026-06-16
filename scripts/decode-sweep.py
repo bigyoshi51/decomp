@@ -114,14 +114,27 @@ WIDTH_TO_CTYPE = {
 }
 
 
-def load_target_words(name):
-    """Read the function's raw .word list from asm/nonmatchings/."""
+def find_target_s(name):
+    """Path to the function's asm/nonmatchings/.../<name>.s, or None."""
     fs = glob.glob("asm/nonmatchings/**/%s.s" % name, recursive=True)
-    if not fs:
-        return None
-    return [
-        int(m, 16) for m in re.findall(r"\.word 0x([0-9A-Fa-f]{8})", open(fs[0]).read())
-    ]
+    return fs[0] if fs else None
+
+
+def load_target_words(text):
+    """Extract the raw .word list from an .s body (USO raw-word format)."""
+    return [int(m, 16) for m in re.findall(r"\.word 0x([0-9A-Fa-f]{8})", text)]
+
+
+def mnemonic_lines(text):
+    """Extract (addr, 'mnem operands') from a mnemonic-format .s body
+    (kernel/bootup splat output that DOES carry decoded mnemonics)."""
+    body = []
+    for ln in text.splitlines():
+        # /* ROM VADDR BYTES */  mnem  ops...
+        m = re.match(r"\s*/\*[^*]*\*/\s+([a-z][\w.]*)\s+(.*)", ln)
+        if m:
+            body.append((0, (m.group(1) + " " + m.group(2)).strip()))
+    return body
 
 
 def disasm_words(words):
@@ -183,6 +196,23 @@ def build_catalog(body):
     return catalog, unaligned
 
 
+def target_catalog(name):
+    """Build the access catalog for FN from its .s, handling BOTH the USO
+    raw-`.word` format (objdump the byte blob) and the mnemonic format
+    (parse decoded ops directly). Returns (catalog, unaligned) or
+    ({}, set()) if no .s is found."""
+    path = find_target_s(name)
+    if not path:
+        return {}, set()
+    text = open(path).read()
+    words = load_target_words(text)
+    if words:
+        body = disasm_words(words)
+    else:
+        body = mnemonic_lines(text)
+    return build_catalog(body)
+
+
 def dominant_width(widths):
     """Collapse a set of catalog widths to a single unambiguous C type, or
     None if mixed/ambiguous (then leave m2c's type alone)."""
@@ -201,7 +231,8 @@ def dominant_width(widths):
         return None  # mixed family = union/ambiguous
     fam = families[0]
     if len(fam) == 1:
-        return next(iter(fam))
+        # map catalog width -> C type; w32 -> None (never narrow a word slot)
+        return WIDTH_TO_CTYPE.get(next(iter(fam)))
     # same family, signed+unsigned clash (s8+u8): ambiguous, leave alone
     return None
 
@@ -258,9 +289,88 @@ def measure_fuzzy(unit, func, report_path):
 # ---------------------------------------------------------------------------
 
 
+# the canonical m2c-graft-clean deref form:
+#   *(TYPE *)((char *)(BASE_EXPR) + 0xOFF)
+# TYPE is the m2c-assigned width (almost always s32); BASE_EXPR may itself
+# contain a single matched paren group (e.g. another deref). We capture the
+# innermost (char *)(...) + 0xNN so retypes don't reach across nested derefs.
+DEREF_RE = re.compile(
+    r"\*\((?P<typ>[suf](?:8|16|32|64)) \*\)"
+    r"\(\(char \*\)\((?P<base>[^()]*(?:\([^()]*\))?[^()]*)\) \+ "
+    r"(?P<off>0x[0-9A-Fa-f]+)\)"
+)
+
+# m2c var/temp names embed the originating register: var_s2 / temp_s3_4 / etc.
+# Register suffix of an m2c name -- MIPS GPR/FPR register tokens only.
+REG_SUFFIX = re.compile(
+    r"^(?:var|temp)_((?:[savt][0-9])|(?:t[0-9])|(?:s[0-9])|(?:a[0-3])"
+    r"|(?:v[01])|(?:f[0-9]+)|fp|gp|ra|sp)(?:_\d+)?$"
+)
+
+
+def base_register(base_expr):
+    """If base_expr is a bare m2c var/temp whose name encodes a register,
+    return that register; else None. Conservative: only single-token bases."""
+    tok = base_expr.strip()
+    m = REG_SUFFIX.match(tok)
+    if m:
+        return m.group(1)
+    return None
+
+
+def offset_global_width(catalog, off):
+    """If EVERY base that accesses this offset agrees on one unambiguous
+    sub-word C type, return it; else None. Used only when the base register
+    can't be resolved (arg/sp/expression bases)."""
+    seen = set()
+    for base, offs in catalog.items():
+        if off in offs:
+            ctype = dominant_width(offs[off])
+            if ctype is None:
+                return None
+            seen.add(ctype)
+    if len(seen) == 1:
+        ctype = next(iter(seen))
+        # never globally narrow a word; only confidently retype sub-word
+        if ctype in ("s8", "u8", "s16", "u16", "f32"):
+            return ctype
+    return None
+
+
 def t_field_width_retype(body, catalog, unaligned, verbose=False):
-    """Stub -- implemented in a later commit."""
-    return body, 0
+    """Retype mistyped *(s32*)((char*)BASE + 0xOFF) derefs to the width the
+    target asm actually uses at (base-register, offset). Base-register match
+    is high-confidence; an offset-global agreement is the fallback for
+    arg/sp/expression bases. NEVER narrows a 32-bit (w32) slot and NEVER
+    touches an ambiguous (mixed-family / signed-clash) slot -- that is the
+    no-blanket-retype rule (578B4-pass-5 lesson)."""
+    changes = [0]
+
+    def repl(m):
+        typ, base, off = m.group("typ"), m.group("base"), m.group("off")
+        offv = int(off, 16)
+        reg = base_register(base)
+        ctype = None
+        if reg is not None and reg in catalog and offv in catalog[reg]:
+            ctype = dominant_width(catalog[reg][offv])
+            # don't widen/keep w32 here (None means leave alone)
+        elif reg is None:
+            ctype = offset_global_width(catalog, offv)
+        if ctype is None or ctype == typ:
+            return m.group(0)
+        # only retype FROM s32 (m2c's default) -- preserve any width m2c got
+        # right (e.g. an f32 it already inferred), and never up/down-cast a
+        # pointer-typed slot (those aren't [suf]NN in this form anyway).
+        if typ != "s32":
+            return m.group(0)
+        # w32 target -> keep s32 (dominant_width already returns None for w32)
+        changes[0] += 1
+        if verbose:
+            sys.stderr.write("  retype %s+%s  s32 -> %s\n" % (base, off, ctype))
+        return "*(%s *)((char *)(%s) + %s)" % (ctype, base, off)
+
+    new_body = DEREF_RE.sub(repl, body)
+    return new_body, changes[0]
 
 
 def t_global_base_split(body, catalog, unaligned, verbose=False):
@@ -310,15 +420,12 @@ def main():
         lines = f.read().split("\n")
     fstart, fend, body = extract_body(lines, args.func)
 
-    words = load_target_words(args.func)
-    if words is None:
+    catalog, unaligned = target_catalog(args.func)
+    if not catalog:
         sys.stderr.write(
-            "decode-sweep: no target .s for %s; catalog-driven transforms "
-            "(retype/structcopy) will be skipped\n" % args.func
+            "decode-sweep: no usable target .s catalog for %s; catalog-driven "
+            "transforms (retype/structcopy) will be no-ops\n" % args.func
         )
-        catalog, unaligned = {}, set()
-    else:
-        catalog, unaligned = build_catalog(disasm_words(words))
     if args.verbose:
         sys.stderr.write(
             "catalog: %d bases, %d cataloged offsets, %d "
