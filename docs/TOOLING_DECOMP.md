@@ -1097,6 +1097,43 @@ trampolines (3C1A/275A/03400008 = lui k0/addiu k0/jr k0) + sd/ld
 handler family -- same permanent-INCLUDE verdict, one more fingerprint
 the pre-filter catches before m2c runs.
 
+Addendum (2E354 refinement, +20pp 45->65 over a stale m2c graft): (21)
+FIELD-WIDTH RETYPE FROM THE ASM ACCESS CATALOG is the single biggest
+post-graft cleanup class for struct-heavy fns -- m2c types EVERY
+`->field` deref as `s32`, but the target reads many fields as byte
+(lbu/lb/sb), half (lhu/sh), or float (lwc1/swc1). A naive `lw` where
+the target has `lbu` mis-shapes the whole block (a byte field read as a
+32-bit at an unaligned offset emits `lwl/lwr`/`swl/swr` PAIRS -- the
+unaligned-access tell). RECIPE: derive a per-offset width map straight
+from the target asm in one pass --
+`disasm-raw.py FN | grep -E '\b(lb|lbu|sb|lh|lhu|sh|lw|sw|lwc1|swc1)\b.*\(BASEREG\)'`
+then bucket op->{b,h,w,f} per offset -- then regex-rewrite each
+`*(s32 *)((char *)(arg0) + 0xNN)` to the catalog's type (u8/s8 for
+lbu/lb, u16 for lhu, f32 for lwc1). Mixed-width offsets (e.g. a slot
+both lw and lwc1 = int/float union, or both lb and lbu) stay s32 / pick
+the dominant -- only retype the UNAMBIGUOUS ones. This one mechanical
+pass was +17.9pp alone. (22) GLOBAL-BASE TABLE READS: m2c emits
+`*(s32 *)((char *)(reg) + 0xBIGOFF)` (reg = scaled index) and bare
+`*(T *)0xADDR` absolute derefs; both materialize the address with
+`lui+ori` (immediate). The target uses `lui hi + addu index + lwc1/lw
+lo16(at)` (a GLOBAL base, hi/lo split, lo possibly negative). Rewrite
+to `*(T *)((char *)&D_00000000 + 0xBIGOFF + index)` (and bare derefs to
+`((char *)&D_00000000 + 0xADDR)`) so IDO does the hi/lo split; +0.8pp
+each here, and retype the table element to f32 if the target loads it
+with lwc1 (kills an m2c-inserted lw+mtc1+cvt.s.w int->float dance).
+Pointer ADDRESS args passed to callees (`lui a1,0x2; addiu a1,a1,-N` in
+the target = `&D + (0x20000-N)`) likewise need `(s32)((char *)&D + off)`
+not a bare `0xADDR` immediate. CEILING NOTE: after these, measure
+OPCODE-ONLY LCS (registers/operands stripped) vs target -- if the shape
+ratio is still <~60% (2E354: 56.9%), the residual is STRUCTURAL (here:
+the two synthesized approximate jumptables + FP-expression grouping in
+the loader-RE-gated dense-table body), NOT regalloc -- permuter and temp
+coalescing CANNOT move it (coalescing a/v merges even REGRESSED -1pp,
+44F4-class), and the spill-home frame bloat (272 vs 128) is a SYMPTOM of
+the wrong deep-body shape, not a fixable cause. Stop at the
+semantic-cleanup ceiling; the rest waits on true table extraction from
+the USO reloc records.
+
 Addendum (3BE1C): (21) m2c can leak the literal `sp` stack symbol as a
 pointer base (`*(s32 *)((char *)((sp + idx*4)) + 0xBC)`) when the fn
 indexes its own stack frame as an array -- there is no C-expressible
