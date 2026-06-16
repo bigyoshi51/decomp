@@ -14713,6 +14713,58 @@ run BEFORE fighting the allocator):
   base-CSE-busting helps is body-shape-dependent — retest after any
   structural rewrite instead of trusting an old negative.
 
+### Marshalling extensions (timproc_uso_b5_func_00004118, 48.45 -> 72.19, 2026-06-16)
+
+The 6872-byte timproc HUD constructor (31 sub-record init blocks + 11
+float-struct-build blocks) validated three refinements of the
+marshalling/struct-copy levers above. Big lesson: in a body of N
+REPEATED blocks, a partial structural fix applied to only SOME blocks
+REGRESSES objdiff fuzzy (phase-shift — inserting an insn in block k
+mis-aligns blocks k+1..N against the target). Apply each transform to
+ALL N blocks at once, then measure. The single biggest jump here was
+the marshalling lever (the first one applied), which fixed the phase
+alignment so EVERY subsequent per-block transform (address-split,
+quad-copy) then read net-POSITIVE; the same address-split applied
+FIRST (before marshalling) read net-NEGATIVE. Sequence matters.
+
+1. **DOUBLE struct marshalling = an intermediate temp struct.** When
+   the target homes a by-value struct arg AND has a two-step copy into
+   it (`sw ptr,K(sp)` then `addiu rX,sp,K; lw rY,0(rX); sw rY,0(s1)` —
+   pointer goes RoData-load -> temp slot -> the s-reg-held struct local
+   before the call), the C is NOT `marsh.p = ptr; f(...,marsh,1)` (one
+   store) but `tmp.p = ptr; marsh = tmp; f(...,marsh,1)`. The `marsh =
+   tmp` struct ASSIGNMENT is what emits the materialized-pointer copy
+   (`addiu rX,sp,&tmp; lw; sw 0(s1)`) and forces marsh's address into
+   the held s-reg (s1). +9.2pp across 31 records on 00004118.
+2. **Collapse contiguous 4-word field copies to a struct copy — but
+   cast to the EXACT width.** `dst.f0=(s32)src.f0; ...f4; ...f8; ...fC;`
+   (4 separate int copies) -> `*(Quad4 *)&dst = *(Quad4 *)&src;`
+   (Quad4 = {int a,b,c,d}, 16 bytes) emits the canonical
+   materialized-pointer `lw/lw/.../sw` quad in target order. GOTCHA:
+   if the locals are declared as a WIDER struct (here `Q` = 8 ints/32
+   bytes), a whole-struct assign `dst = src` copies 32 bytes and
+   OVERSHOOTS (build len 85 vs target 73 per block); cast both sides to
+   the precise-width struct so the copy is exactly 4 words. +1.9pp at
+   the wrong width, +2.6pp once cast to Quad4. Same for object-field
+   inits: `FW(obj,0x10..0x1C)=(s32)src.unkN` x4 ->
+   `*(Quad4 *)((char*)obj + 0x10) = *(Quad4 *)&src;` (+2.1pp).
+3. **RESIDUAL = frame-slot map (the documented hard class).** After the
+   above, build is EXACTLY target length (1792 insns) and the per-block
+   diffs collapse to single mismatches: spill-slot offsets (`sw a0,168`
+   vs `172(sp)`), the s1/temp slot offsets (sp+164/928 vs sp+344/348).
+   ROOT CAUSE: build frame -1824 vs target -936 — each of the 11
+   float-build records declares its OWN trio of build locals (distinct
+   homes per FRAME-SLOT HOME RULE) where the target REUSES one shared
+   build region across records. Full-merge of all build-trios to one
+   shared trio over-shrinks (-736, past target -936) AND regresses
+   fuzzy: the target's reuse is PARTIAL (early/unique records keep
+   distinct slots, repeated ones share) — exact slot-map reconstruction
+   needed, same intractability as the 44F4 CLASS C spilltemps cap.
+   Stopped at 72.19; rule-4 address-valued FW stores (`FW=0x158/0x188/
+   0x1A0` = `&D+off` descriptor pointers) are correct-shape but
+   REGRESS fuzzy via a function-wide $reg-coloring cascade — left as
+   plain ints pending the frame fix.
+
 ## 4244 ladder levers (agent killed pre-docs; reconstructed from commit messages, 53.60 -> 99.76)
 
 The largest-function full-stack climb validated these (details in the
