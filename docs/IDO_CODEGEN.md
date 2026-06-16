@@ -23,6 +23,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
+- [DIRECTED COLORING SEARCH: mechanize the renumber-cap search (scripts/coloring-search.py)](#directed-coloring-search-mechanize-the-renumber-cap-search-scriptscoloring-searchpy) — _GENERATIVE companion to the coloring-solve/split-solve DIAGNOSTICS: enumerates bounded source transforms aimed at one contested LR (register-kw, web-split, interference-injection, span ±, stmt-reorder, inline-don't-name), compiles each with -Wo,-zdbug:6, scores instruction-exact vs target + reads the LR's resulting reg, keeps movers / proves the space EMPTY. Either CRACKS the function or proves the cap with a tool. C28C (t8/t9) + 35834 (v1/a2): both space-exhausted — the interferer that would forbid the low reg is never emission-neutral. Use for the spilltemps big-function class where there's room to maneuver._
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
 - [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
 - [PACK-CLASS via mixed +/| spine + identical-chain CSE steals the callee-save const reg](#uopt-or-chain-rotation-written-xyz-evaluates-z-subtree-first--fix-statement-shapes-per-statement-by-spelling-permutation-not-by-chasing-downstream-register-noise) — _Pack class (simple-leading, mid-chain complex) IS reachable: bracket each complex operand's `|` joins with `+` (escapes or-canon, source order) at addu-vs-or cost; apply to ALL switch arms AT ONCE or the downstream ugen-phase cascade looks like a regression (578B4 +2.36pp). Separately: two TEXTUALLY-IDENTICAL computed stores get CSE'd into one long callee-save web that evicts a spanning OR-const from `ra`; inline one chain's named-temp load to break the CSE → const claims `ra`, hi-half const remats per-use (matches target). NOT a blunt const hoist (that craters all regions)._
@@ -14085,6 +14086,92 @@ tools/ido-static-recomp libc_impl, see TOOLING_DECOMP). Map (from
   compute_save/firstUseCost). Diagnostic only — flipping it confirms
   "this diff is a coloring-margin artifact" but is not a matching
   tool (project flags are fixed).
+
+## DIRECTED COLORING SEARCH: mechanize the renumber-cap search (scripts/coloring-search.py)
+
+`scripts/coloring-solve.py` and `scripts/split-solve.py` are **diagnostic**:
+given a `-Wo,-zdbug:6` trace they tell you *which* live range (LR) is
+mis-colored and *what lever* the algorithm implies. They cannot, by hand, find
+the **emission-neutral** edit that moves that LR without also shifting
+statement emission — the obstacle every prior renumber-cap session hit.
+`scripts/coloring-search.py` is the **generative** companion: it MECHANIZES
+that last step. Given a standalone C body + the target `.s`, it ENUMERATES a
+bounded family of source transforms aimed at one contested LR, compiles each
+with the patched IDO `cc -Wo,-zdbug:6`, disassembles the `.o`, scores it
+instruction-exact against the target (objdiff aliases folded: `move`/`or`,
+`li`/`addiu`, `nop`/`sll zero`, branch targets + relocs wildcarded), AND reads
+the coloring trace to report the contested LR's resulting register. It KEEPS
+candidates that move toward target without regressing, or reports the space
+EXHAUSTED. **Both outcomes are wins** — a CRACK (apply it) or a tool-proven
+empty candidate space (cap is real, not hand-waved).
+
+Run (game_libs is RELOCATABLE — a tool-claimed 100% still needs full `make` +
+ROM `cmp` to land; the tool's instruction-exact fuzzy is the *gate*, not the
+final proof):
+
+    python3 scripts/coloring-search.py \
+      --base BODY.c --func gl_func_XXXX \
+      --target-s asm/nonmatchings/.../gl_func_XXXX.s \
+      --cc "$PWD/tools/ido-static-recomp/build/7.1/out/cc"
+
+`BODY.c` is a single-function standalone C file (the current NM body + the
+externs it needs). Add `// @cs:lr NAME` to name the contested C variable so the
+LR-targeted generators (register-kw, web-split, interference-injection,
+extra-use, inline) engage on it; without it the structural generators
+(stmt-reorder, interference-injection) still run blindly. Generators (each
+bounded by `--max-per-gen`, default 20; **a progress line is logged before
+every compile** — no silent loops):
+  * **register-kw** — add `register` to the LR's decl (raises adjsave bias).
+  * **unsigned-cast** — cast the LR's def (may change the ucode op/class).
+  * **web-split** — copy the LR into a fresh var at its last use (two LRs).
+  * **extra-use** — add a no-call sink use (span-contract / raise priority).
+  * **interference-injection** (`dead-local`) — declare a SECOND value seeded
+    from an arg, live across the contested LR's span, to FORBID the low reg it
+    grabs. This is the "near-impossible in C" lever the solvers wanted; the
+    tool tries it across seed sources × storage classes and lets the scorer
+    reject the (usual) count-changing ones.
+  * **stmt-reorder** — swap adjacent independent statements (bitpos lever for
+    unconstrained LRs).
+  * **inline-don't-name** — fold a single-use LR's def into its use (remove it
+    from the coloring contest).
+
+**Results (2026-06-16, validated on agent-y):**
+  * `gl_func_0000C28C` (99.83% objdiff; cleanest 1-temp case). The sole diff is
+    one anonymous reload temp: target `t9`, build `t8` (`lw/sw` of `arg1->a`).
+    Instruction-exact baseline = 96.61% (2 insns of 59), `count_match=True`
+    (pure renumber, 0 structural). **SPACE EXHAUSTED.** Naming the temp
+    (`// @cs:lr av`) REGRESSES to 84.75% (the named M-local colors to v0 then
+    ugen renames to t9 with 7 struct diffs) — the unnamed baseline is already
+    optimal. No structural reorder or interferer moves the t8→t9 sub-numbering
+    without breaking emission. This is the predicted outcome for a tiny
+    function with no other value to perturb: the candidate space is genuinely
+    empty, now *proven* by the tool rather than asserted.
+  * `gl_func_00035834` (99.38% objdiff; v1/a2). LR7 = `r` (the call return,
+    spilled across the conditional `func()` call) colors to **v1** (reg 2);
+    target wants **a2** (reg 5). a2 IS free at r's coloring — v1 simply wins as
+    the lowest-free caller-saved reg (confirmed by the trace: `7=v1`).
+    Instruction-exact baseline = 86.96%, `count_match=True` (3 register-only
+    diffs). **SPACE EXHAUSTED.** Every interference-injection variant keeps
+    `r` at v1 (the injected interferer colors to spill/other regs, never to v1
+    to forbid it) AND adds 13–16 structural insns — confirming mechanically
+    that to forbid v1 for `r` you must emit a value that occupies v1 across r's
+    reload, which no emission-neutral C construct produces.
+
+**Verdict on the renumber-cap class:** for tiny functions whose contested LR is
+the *only* register-wanting value (C28C: one scratch reload; 35834: one
+spilled return), the tool confirms the cap is **emission-coupled and the
+candidate space is empty** — the interference-injection needed to forbid the
+low register cannot be made byte-neutral in C. This is the honest NM verdict,
+now backed by a mechanical exhaustion rather than hand-waving. **Where the tool
+is expected to earn cracks:** the spilltemps / big-function class with many
+simultaneously-live values, where an interferer that must exist anyway can be
+*re-ordered* to forbid the contested reg without adding code (more room to
+maneuver than a 1-value function). Point `--base` at those bodies, name the
+contested LR, and let the bounded search run — the progress log + coloring
+summary per candidate make a found mover unambiguous (fuzzy↑ AND the trace
+shows the LR's reg actually changed, distinguishing a real fix from alignment
+noise). The tool reuses the exact register-color table + trace parser as the
+solver scripts, so it stays in sync with `references/ido/src/uopt/uoptreg2.c`.
 
 ## INNER-SCOPE DECL: named-var coloring without the frame cost (gl_func_0004ACD4 CRACKED)
 
