@@ -23,7 +23,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
-- [DIRECTED COLORING SEARCH: mechanize the renumber-cap search (scripts/coloring-search.py)](#directed-coloring-search-mechanize-the-renumber-cap-search-scriptscoloring-searchpy) — _GENERATIVE companion to the coloring-solve/split-solve DIAGNOSTICS: enumerates bounded source transforms aimed at one contested LR (register-kw, web-split, interference-injection, span ±, stmt-reorder, inline-don't-name), compiles each with -Wo,-zdbug:6, scores instruction-exact vs target + reads the LR's resulting reg, keeps movers / proves the space EMPTY. Either CRACKS the function or proves the cap with a tool. C28C (t8/t9) + 35834 (v1/a2): both space-exhausted — the interferer that would forbid the low reg is never emission-neutral. Use for the spilltemps big-function class where there's room to maneuver._
+- [DIRECTED COLORING SEARCH: mechanize the renumber-cap search (scripts/coloring-search.py)](#directed-coloring-search-mechanize-the-renumber-cap-search-scriptscoloring-searchpy) — _GENERATIVE companion to the coloring-solve/split-solve DIAGNOSTICS: enumerates bounded source transforms aimed at one contested LR (register-kw, web-split, interference-injection, span ±, stmt-reorder, inline-don't-name), compiles each with -Wo,-zdbug:6, scores instruction-exact vs target + reads the LR's resulting reg, keeps movers / proves the space EMPTY. Either CRACKS the function or proves the cap with a tool. C28C (t8/t9) + 35834 (v1/a2): both space-exhausted — the interferer that would forbid the low reg is never emission-neutral. **2026-06-16 UPGRADE: parallel multiprocessing.Pool + --depth 2|3 combination + --beam K --rounds N (trace-steered) + --opt/--include-dir. Gotchas: -zdbug coloring dump is -O2-ONLY (beam steer inert at -O1); injected interference is DCE'd without real spill pressure. Validation: depth-2/3 ALSO exhaust on func_800000B0/func_80004B10 — stronger negative, no crack.** Use for the spilltemps big-function class where there's room to maneuver._
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
 - [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
 - [PACK-CLASS via mixed +/| spine + identical-chain CSE steals the callee-save const reg](#uopt-or-chain-rotation-written-xyz-evaluates-z-subtree-first--fix-statement-shapes-per-statement-by-spelling-permutation-not-by-chasing-downstream-register-noise) — _Pack class (simple-leading, mid-chain complex) IS reachable: bracket each complex operand's `|` joins with `+` (escapes or-canon, source order) at addu-vs-or cost; apply to ALL switch arms AT ONCE or the downstream ugen-phase cascade looks like a regression (578B4 +2.36pp). Separately: two TEXTUALLY-IDENTICAL computed stores get CSE'd into one long callee-save web that evicts a spanning OR-const from `ra`; inline one chain's named-temp load to break the CSE → const claims `ra`, hi-half const remats per-use (matches target). NOT a blunt const hoist (that craters all regions)._
@@ -14172,6 +14172,56 @@ summary per candidate make a found mover unambiguous (fuzzy↑ AND the trace
 shows the LR's reg actually changed, distinguishing a real fix from alignment
 noise). The tool reuses the exact register-color table + trace parser as the
 solver scripts, so it stays in sync with `references/ido/src/uopt/uoptreg2.c`.
+
+### PARALLEL + DEPTH-N + BEAM upgrade (2026-06-16)
+
+The single-LR exhauster was upgraded into a parallel multi-LR beam-search
+cracker for the big-function class (each increment committed to the monorepo
+root):
+
+  * **`multiprocessing.Pool`** over the candidate list, workers
+    `min(cpu-2,16)`. Each worker gets its OWN cwd — the IDO `cc` writes its
+    `uoptlist` trace **relative to cwd**, so concurrent compiles in a shared
+    cwd clobber each other's trace. Measured ~265 candidates in ~1 s on 8
+    cores. WATCHDOG: `evaluate_pool` logs a running best-so-far line every N
+    completions; every layer/round is announced.
+  * **`--depth 2|3`** — compose transforms across multiple LRs in one
+    candidate (each layer expands every prior-layer source one transform
+    deeper; de-dups by source text; bounded by `--max-per-gen`).
+  * **`--beam K --rounds N`** — keep the top-K partials per round ranked by
+    `(fuzzy, count_match, did-a-contested-LR-move-toward-a-wanted-target-reg)`
+    and expand them one deeper. The wanted-reg set is read from the scorer's
+    renumber map (the `target_reg` of each diff); the move bonus is read from
+    the coloring trace.
+  * **`--opt N`** (kernel mixes -O1/-O2 files) and **`--include-dir D`** (so a
+    `#include "common.h"` base compiles with the REAL struct/typedef sizes —
+    without this the standalone reg-allocation diverges from in-tree; e.g.
+    func_800000B0 scored 52% standalone vs 91% in-tree).
+
+**Two gotchas the upgrade surfaced:**
+  1. **The `-Wo,-zdbug:6` coloring dump is -O2-only.** At -O1 the cc emits NO
+     `uoptlist`, so the beam's trace-steer is *inert* for -O1 functions. Most
+     kernel near-misses are -O1 (kernel_002/014/...); trace-steer earns its
+     keep on the -O2 class (game_libs / bootup_uso / game_uso).
+  2. **Injected interference is DCE'd without real pressure.** A `dead-local`
+     interferer only changes -O2 emission when there are enough
+     simultaneously-live values (>~10 across a call) to force spills; with
+     pressure it bites hard (verified 40→44 insns, frame 40→72). This is the
+     mechanical reason the tiny 1-value caps (C28C/35834) are empty.
+
+**Validation (2026-06-16, agent-y):** on the real renumber/spill near-misses
+`func_800000B0` (-O2, 91% +1-insn preemptive-set cap) and `func_80004B10`
+(-O1, 96% loop-accumulator spill, faithful 52/52 count-match base), depth-1 AND
+depth-2 AND depth-3 ALL exhaust — **combination does not crack what single-LR
+couldn't.** The upgrade's main proven value on these is a *stronger negative*:
+it proves the COMBINATION space empty, not just single-LR, in parallel at
+scale. The generators DO find movers when their family reaches the target
+(interference under pressure), but the injected-`cs_iv` shape is narrow and
+won't match an arbitrary target spill layout. No function was cracked to 100%;
+nothing landed. **Next** to make it crack big functions: widen the generators
+(multiple distinct interferers, spill-slot/decl-order perms) so depth-2 has
+real composition, and compile candidates IN-TREE (real TU) to close the
+standalone-faithfulness gap.
 
 ## INNER-SCOPE DECL: named-var coloring without the frame cost (gl_func_0004ACD4 CRACKED)
 
