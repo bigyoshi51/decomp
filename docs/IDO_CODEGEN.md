@@ -12,6 +12,10 @@
 
 _121 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
+
+### large-body matching
+
+- [Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)](#frame-size-correctness-unblocks-regressing-code-motion-rewrites-2026-06-16) — _Fix stack-frame size byte-exact FIRST (sweep pad local to match `addiu sp,sp,-N`); then m2c-faithful code-motion that "regressed" with a wrong frame now gains. Diagnose via jal-segment counts (equal jal count + matching per-segment sizes = control structure matches). game_uso 591C +3.66pp._
 ## Quick reference by sub-topic
 
 ### uopt internals (allocator opened, 2026-06-11)
@@ -14811,3 +14815,31 @@ slot-sharing diff, not a <=3-word renumber). Leave NON_MATCHING.
 Harness for re-verification: /tmp/score4244.py (reloc-filtered word LCS)
 + /tmp/window.py LO HI (assembles target words, side-by-sides vs obj
 disasm). Mini probes: /tmp/mini/m{,2,3,4}.c.
+
+### Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)
+
+On large NM-wrap bodies (game_uso_func_0000591C, 1061 insns), prior agents
+repeatedly found that rewriting the C to the m2c-faithful nested structure
+("semantic-direct" form) *regressed* objdiff fuzzy vs a flattened/rephrased
+body, and concluded the rephrased form was "best." That conclusion was an
+artifact of a **wrong stack-frame size**: the body used `char pad[0xB0]`
+giving a 0x1E0 frame while the target frame is 0x1D0. With the frame 0x10
+too big, every sp-relative slot is shifted and *any* structural change
+shuffles allocation chaotically, so fuzzy moves look like noise/regressions.
+
+Fix order matters: (1) get the frame size byte-exact FIRST — sweep the pad
+local until `addiu sp,sp,-N` matches the target (pad 0xA0 -> -464 = 0x1D0
+here). Fuzzy may not move on the pad change alone (slots still misassigned).
+(2) THEN restore the m2c-faithful control structure. With the frame correct,
+the previously-"regressing" code-motion (moving the 4-alloc effect-emit
+triple back *inside* the `unk6C & 1` switch arm where m2c puts it, instead
+of a flattened post-call block) gained +3.66pp (55.10 -> 58.76) in one edit
+and brought the jal-segment count from 26 to the target's 30.
+
+Diagnostic that found it: count instructions between `jal` anchors in target
+vs build (`segs()` one-liner) — equal jal count + matching per-segment sizes
+means the control structure matches; a missing run of segments (here the
+`14,82,18,36,17` group appearing once in build but twice in target) localizes
+exactly which duplicated block was collapsed. Don't trust "rephrased form is
+best" notes that predate a frame-size fix — re-test code-motion after the
+frame matches.
