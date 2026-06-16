@@ -13951,6 +13951,103 @@ recompute); to move it IN, lengthen the span or add uses; to change
 WHICH temp gets the lower register, change first-occurrence order of
 the competing exprs (statement order, nesting), not decl order.
 
+## UOPT SPLIT-REJECTION PHASE: the adjsave sign test that decides whether a split piece is colorable (compute_save formula, source-cited)
+
+Step 5 above ("LR is SPLIT instead of colored") has its OWN sub-decision
+that the priority model doesn't expose: **whether the split piece that
+falls out is itself colorable, or gets rejected (-ve save) and ends up
+bound by ugen at translate-time to "first available v-reg".** This is the
+phase that decides the `$v1`-vs-`$a2` carrier-register class of caps
+(gl_func_00035834, _525F0, _0C28C). It runs ENTIRELY inside `globalcolor`
+(`uoptreg2.c`), not in a separate pass — the zdbug:6 `split out` and
+`not colored (-ve save)` lines for the SAME LR are this phase.
+
+**The split trigger** (`globalcolor`, uoptreg2.c:2144):
+```
+if (liverange->adjsave * liverange->unk1C <= best)  split(...);  else color directly;
+```
+`best` = the cheapest non-forbidden register's `cupcosts` (call-crossing
+penalty + firstUseCost for a fresh callee-saved reg). So a LR is split
+when its own value (adjsave×span) is no greater than the cost of the
+cheapest register it could occupy — i.e. it's not worth a whole register
+for its whole span; carve off the hot sub-range instead.
+
+**compute_save / adjsave** (uoptreg2.c:1400, the SIGN being tested):
+```
+adjsave = totalsave / unk1C        (×2.0 if ichain->dtype == Qdt, i.e. a double)
+unk23   = (adjsave > 0) ? 1 : 2     ; 2 = REJECT "not colored (-ve save)"
+totalsave = Σ_liveunits netsave
+netsave   = (lu->load_count + lu->store_count) * lu->node->frequency        // SAVINGS
+          − movcostused*freq  if  lu->needreglod && (loopfirst || !canmoverlod)   // reload penalty
+          − movcostused*freq  if  lr->hasstore && !lu->deadout && lu->needregsave // store-back penalty
+                                  && (lu->store_count != 0 || !lu->needreglod)
+unk1C  = (#liveunits) + bvectcard(reachingbbs);  if (unk1C>2) unk1C = ((unk1C−2)>>2)+2   // SPAN
+```
+Sign rule: **adjsave>0 ⇔ the frequency-weighted use count of the piece
+exceeds the move (reload+store-back) penalties it incurs.** A split piece
+that has uses but ALSO crosses a call (needregsave/needreglod set on its
+live units) loses `movcostused*freq` per crossing; if the piece is short
+(few uses) and crosses a call, the penalties dominate → adjsave≤0 → reject.
+
+**Why the target colors `r`'s no-call piece and the build rejects both.**
+For gl_func_00035834 the value `r` (call result, tested `<0`, possibly
+re-spilled across a 2nd call, then returned) is one LR that gets split
+into a *pre/no-call piece* and a *call-crossing piece*. The decision is
+per-piece adjsave sign:
+- TARGET: the no-call-path piece (compute r → test → return, NEVER live
+  across `func()`) has `needregsave/needreglod = false` (no call in its
+  live units) → no movcost penalty → `netsave = uses*freq > 0` → adjsave>0
+  → COLORED, and since the cheap regs v0/a0/a1 are redefined by the call
+  marshalling and v1 happens to be passed over, the lowest free one is a2
+  (reg code 5). r lives in a2; the spill/reload reuse a2.
+- BUILD: the SAME logical value is split such that BOTH pieces still touch
+  the call region (the piece boundary lands wrong), so both carry the
+  store-back/reload penalty, both net ≤0, both rejected → r is NEVER
+  colored → ugen binds it at translate to the first available v-reg = v1.
+
+So the lever is **change WHERE the split boundary falls so that the hot
+(no-call) sub-range is a clean, call-free live unit** with positive
+netsave. The split BFS (`split`, uoptreg2.c:1672-1681) grows the new piece
+from a definition live-unit (`firstisstr`) outward, STOPPING at call
+nodes (`is_cup_affecting_regs`, arg3=true on the first-tier call). The
+piece that ends up "no-call" is whichever the BFS seeds on. The seed is
+the first liveunit whose first appearance is a STORE (`firstisstr`) into a
+BB with a free register (uoptreg2.c:1613-1624). Source handles that move
+the seed / clean the no-call piece:
+1. **Make the no-call path's def the dominant store.** If r is written on
+   a path that doesn't cross the call (e.g. `r = call(); if (r<0) {...}`
+   already does this) but the build's split seeds on the cross-call store,
+   force a SECOND store on the no-call path: a redundant `r = r;` / early
+   `return r;` shape that gives the no-call BB its own `firstisstr` def.
+2. **Shorten the call-crossing piece** so the no-call piece carries the
+   uses: don't keep r live across the 2nd call. The 2nd call doesn't use r
+   — but the RETURN does, after the call. If r is reloaded AFTER the call
+   only to return it, that reload is the call-crossing liveunit. Compute
+   the return value on a path that doesn't force r through the call's
+   live-out (e.g. structure so the post-call reload is a fresh short LR).
+3. **Raise adjsave above the split threshold** so r is colored WITHOUT
+   splitting at all (then it takes one register everywhere = a2 if that's
+   lowest-free): add a no-call USE of r (frequency-weighted) so
+   `adjsave*span > best`. A second read of r on the no-call path
+   (`(void)r;` won't — needs a real use that emits a load).
+
+**Diagnosis recipe (function-agnostic).** Run the build's zdbug:6 →
+`uoptlist`. For the contested value's LR bitpos B:
+- `live range B: B split out S` present → the value is being SPLIT. Then
+  look for `B: B ... ` and `B: S ...` outcome lines.
+- BOTH say `not colored (-ve save)` → split-rejection class: the piece
+  that SHOULD be the hot no-call carrier has adjsave≤0. The fix is a
+  source change that gives the no-call sub-range positive netsave (levers
+  1–3 above), NOT a coloring-order change.
+- ONE says `assigned (constrained/unconstrained) R` → the split worked;
+  R is the carrier. If R≠target, that's an ordinary lowest-free-reg /
+  bitpos problem (use the priority model, not this phase).
+- `numsplitlu=` / `finalnumlr > numlr` in the trailer confirms a split
+  happened; `numcalloverheadlr` (with -dowhyuncolor) counts pieces that
+  collapsed back ("took all the liveunits" no_split path).
+
+`scripts/split-solve.py` automates this read.
+
 ## UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends
 
 All write to `./uoptlist` (needs the ecvt patch in
