@@ -6,6 +6,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 ## Index
 
+- [permuter-factory: unattended permuter queue-runner over the 90-99 long tail (2026-06-15)](#permuter-factory-unattended-permuter-queue-runner-over-the-90-99-long-tail-2026-06-15) — _`scripts/permuter-factory.py` auto-discovers the 90<=fuzzy<100 band from a fresh objdiff report (size-sorted, cap-comment-filtered), runs `import.py` per-fn then a wall-clock-bounded `permuter.py --best-only --stop-on-zero -jN`, splices the best output back, and OBJDIFF-VERIFIES (the permuter score lies). Checkpoints to `.permuter-factory/` for crash-resume; commits verified 100.0 cracks as "<fn> permuter-factory crack to 100.0 (NM body, pending land)" (no land/push). Kills children by PGID, never pkill -f._
 - [references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)](#referencesido-the-decompiled-uopt-source--dump-flag-instrumentation-2026-06-11) — _n64decomp/ido clone = uopt allocator source with original symbol names; -Wo,-zdbug:1/2/5/6, -dowhyuncolor, pass kill-switches, -zmovc. Grep it before theorizing about regalloc caps; derived rules in IDO_CODEGEN._
 - [578B4 pass 8: slot-map closed via decl-order relayout + per-arm web splits (81.52)](#578b4-pass-8-slot-map-closed-via-decl-order-relayout--per-arm-web-splits-8152-2026-06-11) — _Recipe: target slot map from m2c spXXX names -> decl reorder (addr = offset-frame); split shared webs by renaming arm temps to the spXXX vars; volatile locals for selector-CSE temploc + dead stores; drop m2c phantom call args. NEGATIVES: temp_t1_3 per-arm split cascades scratch rotation -300 LCS; goto-dispatch collapses; fuzzy underweights sp-offset fixes ~25:1 (track exact-word LCS + offset histogram)._
 - [Hybrid emit (m2c temp coalescing): the spill-home frame-bloat fix for big SSA grafts](#hybrid-emit-m2c-temp-coalescing-the-spill-home-frame-bloat-fix-for-big-ssa-grafts-578b4-pass-7-2026-06-11) — _Big SSA graft frame bloat = spill homes for "not colored (-ve save)" webs (142 on 578B4), NOT temp pressure. `scripts/m2c-hybrid-emit.py` coalesces same-(reg,type) disjoint-textual-range temps: 578B4 75.07->81.22, frame 1280->496 exact. Tune per class (a/v win, t0/ra hurt); useless vs structural drift (44F4 negative: s-reg phi merges crash 51->39)._
@@ -26,6 +27,63 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 
 ---
+
+## permuter-factory: unattended permuter queue-runner over the 90-99 long tail (2026-06-15)
+
+`scripts/permuter-factory.py` (monorepo root) wraps the decomp-permuter into an
+unattended queue-runner so the whole 90<=fuzzy<100 near-miss band can be ground
+on all cores without babysitting. It encodes the 2026-06-11 permuter calibration
+(see IDO_CODEGEN.md): import.py per-fn scratch is what unlocked the allocator
+gates; the permuter's own score LIES vs objdiff fuzzy, so EVERYTHING is
+objdiff-verified; single-diff gates fall ~250k iters while multi-diff structural
+residuals descend fast then plateau and don't fall (the per-fn wall-clock budget
+concedes those automatically).
+
+**Run it from a fresh/clean worktree** (the build dirs and src tree it edits are
+the worktree's; `scripts/spin-up-agent.sh 1080` makes one, or reuse a clean
+`agent-<letter>` rebased onto main):
+
+```bash
+python3 /path/to/decomp/scripts/permuter-factory.py \
+    --worktree "/path/to/decomp/projects/1080-agent-h" \
+    --jobs 6 --budget-secs 720           # ~250k iters @ -j6
+# optional: --total-budget-secs 28800 (cap whole run), --limit N,
+#           --only fn1,fn2, --min/--max band, --no-commit, --no-rediscover
+```
+
+Per function the factory:
+1. **discovers** the band from a fresh `objdiff-cli report generate` (after
+   `make non_matching_objects`), size-sorted desc, EXCLUDING functions whose
+   `#ifdef NON_MATCHING` wrap comment carries a cap concession ("cap stands",
+   "permuter-class", "allocator-internal", "genuine cap", … — see `CAP_MARKERS`)
+   and EXCLUDING functions with no `#ifdef NON_MATCHING` C body (import.py can't
+   see a bare `INCLUDE_ASM`).
+2. **imports** a fresh scratch: `import.py <src.c> <fn>.s 'CPPFLAGS=-I include -I src -DNON_MATCHING'`
+   (the `.s` may keep its `nonmatching`/`endlabel` lines — import.py tolerates them).
+3. **permutes** with a wall-clock cap, parsing `score = N` / `iteration N` from
+   stdout, stopping early on a score-0 candidate.
+4. **splices** the best `output-<score>-*/source.c` into the function's
+   `#ifdef NON_MATCHING` body, rebuilds, and reads the function's fuzzy from a
+   FRESH objdiff report. Keeps it only if objdiff improved; reverts otherwise
+   (and rebuilds clean). A verified 100.0 is committed
+   `<fn> permuter-factory crack to 100.0 (NM body, pending land)` — it does NOT
+   land or push (that's the main session's job, with the full-ROM cmp gate from
+   the 2026-06-11 notes: D_/extern (&D+const) inlines can objdiff-100 but
+   link to the wrong address).
+
+State lives in `<worktree>/.permuter-factory/`: `progress.log` (timeline),
+`checkpoint.json` (per-fn status, so a re-run resumes / skips done), and
+`scoreboard.json` (running tally attempted/cracked/improved/capped/errored).
+Crash-robust: per-fn try/except, atomic checkpoint writes. Children are killed by
+process-group PID (`start_new_session=True` + `killpg`), NEVER `pkill -f` — that
+would match the factory's own argv (see the pkill memo).
+
+GOTCHAS baked in: the splice targets the `#ifdef NON_MATCHING` … `#else` region
+only (regex-locates the def after the ifdef, replaces up to `#else`); if the
+permuter's pruned source.c references symbols the full TU lacks, the verify build
+fails and the function is reverted+counted errored (not silently left broken).
+Functions where objdiff doesn't improve are tallied as "new caps" — but trust
+that only as a permuter verdict per the staleness rule, not a permanent cap.
 
 <a id="feedback-discover-has-source-misleading"></a>
 ## `discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates
