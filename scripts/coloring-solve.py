@@ -255,12 +255,79 @@ SREG_RE = re.compile(
 # that follows the mnemonic). The address column is stripped first.
 _ADDR_RE = re.compile(r"^\s*[0-9a-f]+:\s*")
 
+# Some target .s (USO / game_libs raw-word format) are NOT disassembled
+# mnemonics -- they are `.word 0xXXXXXXXX` lines (splat emits these when it
+# can't relocate a section, e.g. relocatable USO modules). The histogram /
+# diff need mnemonics, so detect a raw-word file and objdump it as a blob
+# (same technique as scripts/disasm-raw.py).
+_WORD_RE = re.compile(r"\.word\s+0x([0-9A-Fa-f]{8})")
+
+
+def _read_s_lines(path):
+    """Return the .s as instruction text lines. If the file is raw-`.word`
+    (no mnemonics), disassemble the words to objdump text so the rest of the
+    tool sees the same format as a build .s. Returns [] on missing path."""
+    if not path:
+        return []
+    txt = open(path, errors="replace").read()
+    words = _WORD_RE.findall(txt)
+    # A raw-word target has .word lines but no real mnemonic lines.
+    if words and not _has_real_mnemonics(txt):
+        import os
+        import struct
+        import subprocess
+        import tempfile
+
+        blob = b"".join(struct.pack(">I", int(w, 16)) for w in words)
+        fd, p = tempfile.mkstemp(suffix=".bin")
+        os.write(fd, blob)
+        os.close(fd)
+        try:
+            out = subprocess.run(
+                [
+                    "mips-linux-gnu-objdump",
+                    "-D",
+                    "-b",
+                    "binary",
+                    "-m",
+                    "mips:4300",
+                    "-EB",
+                    "--no-show-raw-insn",
+                    p,
+                ],
+                capture_output=True,
+                text=True,
+            ).stdout
+        finally:
+            os.unlink(p)
+        return [ln for ln in out.splitlines() if _ADDR_RE.match(ln)]
+    return txt.splitlines()
+
+
+def _has_real_mnemonics(txt):
+    """True if the .s contains disassembled mnemonic lines (splat or objdump),
+    as opposed to being purely a `.word` raw-byte listing."""
+    SKIP = ("glabel", "endlabel", "nonmatching", "matching", "jlabel", "dlabel")
+    for ln in txt.splitlines():
+        code = re.sub(r"/\*.*?\*/", "", ln)
+        code = _ADDR_RE.sub("", code).strip()
+        if not code or code.startswith((".", "#")) or code.startswith(SKIP):
+            continue
+        if code.endswith(":"):  # a bare label line
+            continue
+        # A real mnemonic line is an alpha opcode followed by operands that
+        # contain a register, an immediate, or a memory ref -- not a lone word
+        # (which would be a stray label/symbol).
+        if re.match(r"[a-z][a-z0-9.]*\s+\$?[a-z0-9\-(]", code):
+            return True
+    return False
+
 
 def parse_s_regs(path):
     hist = collections.Counter()
     if not path:
         return hist
-    for ln in open(path, errors="replace"):
+    for ln in _read_s_lines(path):
         # strip comment block /* ... */  (splat puts /* ADDR HEX */ here)
         code = re.sub(r"/\*.*?\*/", "", ln)
         # strip objdump address column "   2dc:\t"
@@ -368,11 +435,11 @@ def diff_streams(target_s, build_s):
 
     t_raw = [
         ln
-        for ln in (re.sub(r"/\*.*?\*/", "", ln) for ln in open(target_s))
+        for ln in (re.sub(r"/\*.*?\*/", "", ln) for ln in _read_s_lines(target_s))
         if ln.strip()
         and not ln.strip().startswith(("glabel", "nonmatching", ".", "/*"))
     ]
-    b_raw = [ln for ln in open(build_s) if ln.strip()]
+    b_raw = [ln for ln in _read_s_lines(build_s) if ln.strip()]
     t = [x for x in (_norm_insn(ln) for ln in t_raw) if x]
     b = [x for x in (_norm_insn(ln) for ln in b_raw) if x]
     tw = [x for x in (_norm_insn(ln, keep_regs=False) for ln in t_raw) if x]
@@ -384,6 +451,16 @@ def diff_streams(target_s, build_s):
         "\n--- INSTRUCTION-STREAM DIFF (target=%d build=%d insns) ---"
         % (len(t), len(b))
     )
+    if len(t) != len(b):
+        print(
+            "  !! SIZE MISMATCH (%+d insns): the build is structurally "
+            "different,\n     not a pure register renumber. The renumber "
+            "pairs below are\n     PARTLY diff-alignment noise -- fix the "
+            "insn-count delta FIRST\n     (extra reload/spill, a missing or "
+            "duplicated block, an alias\n     the differ didn't fold). Only "
+            "trust the renumber map once\n     target and build insn counts "
+            "are EQUAL." % (len(b) - len(t))
+        )
     print(
         "  exact-aligned (incl. reg names): %d  (%.1f%%)"
         % (exact, 100.0 * exact / max(1, len(t)))
