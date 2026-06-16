@@ -94,6 +94,57 @@ reload of the chain (each reload is a fresh SHORT LR -> grabs v0, and adds
 a cost-model sweet spot no tested C spelling hits. This is a genuine
 arg-register-targeting cap; the solver proves it's ONE permutation so the
 permuter is the only remaining tool (and it floors — no regalloc randomizer).
+ADDITIONAL DEAD END (2026-06-15): hoisting the base-ptr compute to BEFORE the
+0x20×0x20 integrator loop (max span extension) REGRESSED 92.61->89.49 — the
+extended span crosses the high-pressure loop and perturbs the loop-body
+coloring instead of demoting the base ptr. "Span extension" only lowers
+priority usefully when the extra span lands in LOW-pressure region; here every
+direction is occupied. Confirms the cost-model-sweet-spot verdict.
+
+SOLVER FIXES SHIPPED 2026-06-15 (two real rough edges found while wielding it):
+1. The register histogram only matched `$reg` (splat) tokens, so a build `.s`
+   from `objdump --no-show-raw-insn` (BARE regs, no `$`) read as all-zero —
+   every delta was bogus (target +N, build 0). `SREG_RE` now matches `$?reg`
+   and strips the objdump address column. ALWAYS sanity-check the histogram
+   has nonzero BUILD counts before trusting the delta.
+2. game_libs / relocatable-USO targets are raw `.word 0xXXXXXXXX` (splat can't
+   disassemble them), so the target parsed as 1 "instruction". `_read_s_lines`
+   now auto-detects a word-only `.s` and objdumps it as a big-endian blob — no
+   manual `scripts/disasm-raw.py` step. Step 2/3 above now work with the raw
+   `asm/nonmatchings/.../FUNC.s` directly for game_libs.
+3. Added a `!! SIZE MISMATCH` banner: when target/build insn counts differ the
+   renumber map is PARTLY diff-alignment noise — fix the count delta (extra
+   spill/reload, missing block) before trusting the pairing histogram.
+
+COHORT RESULTS (2026-06-15, solver applied to the "allocator-internal" near-100s):
+- gl_func_0000C28C (99.83): streams are byte-IDENTICAL except ONE temp —
+  `arg1->a` reload colors `$t8` (build) vs `$t9` (target). No emission-neutral
+  C knob moves a single UNCOUPLED temp's register when the surrounding code is
+  already identical: reordering the store before the struct copy (the only
+  first-occurrence lever) reorders the EMITTED store too -> 95.6 regress. The
+  build picks t8 because it's the lowest free reg post-copy; the target holds
+  something extra in t8. Genuine tie-break cap.
+- gl_func_00035834 (99.38): `r` (dispatch return, spilled across the 2nd call)
+  colors `$v1` (build) vs `$a2` (target). Solver trace shows TWO constrained
+  LRs: a param-home LR grabs a2 FIRST (higher priority), so r's reload LR gets
+  v1 second. This is BELOW the global-coloring phase the solver models — it is
+  the uopt split/needsplit adjsave-SIGN decision (target's no-call-path piece
+  of r is COLORED into a2; ours is rejected -ve-save so ugen binds v1 at
+  translate). Removing `(void)a0` (new solver hypothesis: drop the param LR's
+  priority) was FLAT — the param home isn't driven by the cast. Solver-
+  refinement signal: decode the pre-coloring split-rejection trace, not just
+  the color order.
+- gl_func_000578B4 (~94): huge (2419 insns), 92% shape-aligned but a massive
+  coupled t6/t7/t8/t9 rotation (137+97+58+55+… renumber pairs) — same CLASS as
+  1304C (one global coloring permutation across a div-hazard spill region), not
+  a single swap. Permuter-class.
+The pattern: the solver is excellent at LOCATING the mis-colored LR and proving
+single-permutation vs structural, but for the residual near-100 cohort the
+prescribed levers (priority/bitpos/span) are not emission-neutral — any C edit
+that changes color order also changes emission order. The unsolved gap is a
+lever that perturbs the interference/priority graph WITHOUT moving statements;
+the trace's pre-coloring split phase (35834) is the most promising place to
+extend the solver next.
 
 ## permuter-factory: unattended permuter queue-runner over the 90-99 long tail (2026-06-15)
 
