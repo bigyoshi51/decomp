@@ -686,6 +686,16 @@ class Factory:
                 self.log(f"--- {fn}: already done ({prev['status']}), skipping")
                 tally["skipped-done"] += 1
                 continue
+            # On resume, skip functions a prior pass already conceded (no
+            # objdiff gain) unless --retry-capped: their best permuter score was
+            # a multi-diff residual that more iterations won't move (calibration).
+            if not self.args.retry_capped and prev.get("status") in (
+                "capped",
+                "no-improvement",
+            ):
+                self.log(f"--- {fn}: prior pass conceded ({prev['status']}), skipping")
+                tally["skipped-done"] += 1
+                continue
             if overall_deadline and time.time() > overall_deadline:
                 self.log("=== total budget exhausted, stopping queue ===")
                 break
@@ -771,6 +781,12 @@ def main():
         "--no-rediscover",
         action="store_true",
         help="reuse existing report.json instead of rebuilding",
+    )
+    ap.add_argument(
+        "--retry-capped",
+        action="store_true",
+        help="re-attempt functions a prior pass conceded (default: skip them on "
+        "resume; their residual won't move with more iterations)",
     )
     args = ap.parse_args()
     Factory(args).run()
