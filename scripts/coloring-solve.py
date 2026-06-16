@@ -240,11 +240,20 @@ def parse_trace(path, func):
 # ---------------------------------------------------------------------------
 # .s parsing : physical register usage histogram
 # ---------------------------------------------------------------------------
+# Match registers in BOTH splat ($reg) and objdump (bare reg) .s formats.
+# The $ is optional; a leading word-boundary keeps us off substrings like the
+# "at" inside "fat". GAS-disasm float regs appear as $f24 (splat) or $f24
+# (objdump no_aliases) -- both have the f-prefix so are unambiguous bare.
 SREG_RE = re.compile(
-    r"\$(v0|v1|a0|a1|a2|a3|t0|t1|t2|t3|t4|t5|t6|t7|t8|t9|"
+    r"(?:\$|\b)(v0|v1|a0|a1|a2|a3|t0|t1|t2|t3|t4|t5|t6|t7|t8|t9|"
     r"s0|s1|s2|s3|s4|s5|s6|s7|ra|gp|sp|fp|zero|at|k0|k1|"
     r"f\d+)\b"
 )
+# When the .s has NO $-prefix (objdump), the bare-word match can falsely hit
+# register-named tokens inside symbols/mnemonics (e.g. the "at" in a symbol).
+# Restrict bare matches to the OPERAND field (after the first whitespace run
+# that follows the mnemonic). The address column is stripped first.
+_ADDR_RE = re.compile(r"^\s*[0-9a-f]+:\s*")
 
 
 def parse_s_regs(path):
@@ -252,8 +261,10 @@ def parse_s_regs(path):
     if not path:
         return hist
     for ln in open(path, errors="replace"):
-        # strip comment block /* ... */
+        # strip comment block /* ... */  (splat puts /* ADDR HEX */ here)
         code = re.sub(r"/\*.*?\*/", "", ln)
+        # strip objdump address column "   2dc:\t"
+        code = _ADDR_RE.sub("", code)
         # take the instruction operands (after the mnemonic)
         for r in SREG_RE.findall(code):
             hist[r] += 1
