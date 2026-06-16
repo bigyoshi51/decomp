@@ -373,9 +373,47 @@ def t_field_width_retype(body, catalog, unaligned, verbose=False):
     return new_body, changes[0]
 
 
+# a bare absolute deref m2c emits for a global/table access materialized with
+# lui+ori: *(T *)0xADDR  (T any scalar, ADDR >= 0x100 to avoid catching small
+# struct-offset literals that are really null-base errors handled elsewhere).
+ABS_DEREF_RE = re.compile(
+    r"\*\((?P<typ>(?:[suf](?:8|16|32|64))|void) \*\)"
+    r"0x(?P<addr>[0-9A-Fa-f]{3,})"
+)
+# the m2c "unaligned" cast artifact that ALWAYS accompanies a field m2c typed
+# too wide -- strip it (the width fix is transform 1's job).
+UNALIGNED_CAST_RE = re.compile(r"\(unaligned (?:[suf](?:8|16|32|64))\)\s*")
+
+
 def t_global_base_split(body, catalog, unaligned, verbose=False):
-    """Stub -- implemented in a later commit."""
-    return body, 0
+    """Rewrite absolute global/table derefs *(T*)0xADDR into the &D_00000000
+    base form so IDO materializes the address as lui %hi + lo16 (the target's
+    GLOBAL hi/lo split) instead of lui+ori of a bare immediate. Also strips
+    m2c's `(unaligned sN)` cast artifacts (the width itself is fixed by the
+    retype pass). m2c-graft-clean already converts the f32/s32/u8/u16 forms;
+    this pass catches the widths it misses (s8/s16/u32/u64/void and the bare
+    `*(s16 *)0xADDR` halfword form) so the graft compiles + hi/lo-splits."""
+    changes = [0]
+
+    def repl_abs(m):
+        typ, addr = m.group("typ"), m.group("addr")
+        # leave already-split forms and tiny literals alone; require >= 0x100
+        if int(addr, 16) < 0x100:
+            return m.group(0)
+        t = "s32" if typ == "void" else typ
+        changes[0] += 1
+        if verbose:
+            sys.stderr.write(
+                "  global-base *(%s *)0x%s -> &D_0+0x%s\n" % (typ, addr, addr)
+            )
+        return "*(%s *)((char *)&D_00000000 + 0x%s)" % (t, addr)
+
+    new_body, nc = UNALIGNED_CAST_RE.subn("", body)
+    if nc and verbose:
+        sys.stderr.write("  stripped %d (unaligned sN) cast artifacts\n" % nc)
+    changes[0] += nc
+    new_body = ABS_DEREF_RE.sub(repl_abs, new_body)
+    return new_body, changes[0]
 
 
 def t_struct_copy_collapse(body, catalog, unaligned, verbose=False):
