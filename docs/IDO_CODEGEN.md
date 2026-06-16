@@ -14965,3 +14965,62 @@ mechanical levers are CSE/LICM-immune here. The permuter (per the cap memo,
 addresses re-materialized into scratch/temp regs at each use. Diagnostic:
 `grep 'addiu s[3-8],sp,' <build.asm>` vs target — if the target has the same
 sp-offsets via v/t/a regs, it's this LICM-hoist cap, not a fixable hoist.
+
+**DEEP-RE UPDATE 2026-06-16 (game_uso_func_00007C1C, second pass):** the root
+cause above is refined and a new mechanism-confirming experiment is recorded.
+
+1. *The promotion driver is m2c's `*((s32 *)&spX + N)` base+offset COPY idiom,
+   not "LICM hoist of loop-invariant addresses" per se.* The m2c graft expresses
+   every Vec3 struct-copy as a base+offset triple (`*((s32*)&dst + 0/1/2) =
+   *((s32*)&src + 0/1/2)`), which forces IDO to hold the base address `&dst`/`&src`
+   in a register. When the same temp's address is referenced in a *second*
+   separated place in the loop (e.g. the constructor writes `&sp170` then a later
+   stmt reads `sp170`/`sp178`), IDO keeps that base live across the intervening
+   constructor `jal` → promotes it to a callee-saved reg. The target instead reads
+   those same temps via **direct `lwc1 fN, OFF(sp)`** (sp+const scalar access, no
+   base reg) and writes them via a **fresh `addiu reg, sp, OFF` into a SCRATCH reg
+   per block**. Same logic, different addressing → 3 saves vs 9.
+
+2. *DECISIVE EXPERIMENT — converting every Vec3 temp to a real `Vec3 {float
+   x,y,z}` struct and rewriting the triples as struct-member / struct assignment
+   DROPS the int saves 9→2 and FP doubles 5→2 (frame still wrong).* This proves
+   the cap is purely the held-base addressing, NOT an inherent allocator limit.
+   Recipe that worked mechanically (one Python pass over the fn body): (a)
+   `*((s32 *)&spX + N)` → `vX.{x,y,z}` for every triple base; (b) declare one
+   `Vec3 vX;` per base (59 of them) — guarantees the 3 members are contiguous so
+   IDO uses sp+const, no base reg; (c) leftover non-Vec3 scalars stay as-is;
+   (d) `temp_tN` that carry copied float bits must be retyped `s32→f32`.
+
+3. *Recovering the 3rd FP double (f24):* the target hoists the constant `0.0f`
+   (the `.y = 0.0f` written in every inlined Vec3 constructor) into a callee-saved
+   FP reg (`mtc1 zero,$f24` once, then `swc1 $f24, 4(ptr)` everywhere). The m2c
+   graft writes `*(s32 *)(ptr+0x4) = 0.0f` → IDO sees `(s32)0` and emits `sw
+   zero`, never promoting. Convert the constructor `.x`/`.y` stores from `*(s32*)`
+   to `*(f32*)` (float store of `0.0f` / float copy) and IDO hoists `0.0f`→f24:
+   FP doubles 2→3. (f20=250.0f, f22=0.5f are the *250 / *0.5 loop constants.)
+
+4. *Why the struct rewrite still does NOT match (the genuine residual):* the
+   struct version is **662 insns vs the target's 1071** — IDO copy-propagates the
+   `tmp=src; dst=tmp` round-trips and uses compact sp+const addressing, so it is
+   *cleaner than the target*. The target deliberately keeps the verbose shape:
+   it round-trips every swizzle through `s1=&sp354` / `s2=&sp21C` (two held scratch
+   bases, established once and reused loop-wide) and re-materializes every *other*
+   temp address `addiu reg,sp,OFF` into a scratch reg **just-in-time before each
+   use** (incl. the 3 args of `func(&a,&b,&c)` calls, computed in the call's own
+   delay-slot region, never hoisted). To match you must reproduce BOTH: (i) the
+   held-scratch round-trip through sp354/sp21C — so those two struct copies must
+   NOT be propagated (their addresses must stay live/aliased), AND (ii) the
+   just-in-time addiu of every other temp — so those copies must use base+offset
+   but with a base whose live range is one block. Making sp354/sp21C `volatile`
+   or a held `Vec3*` restores the round-trip but regresses FP grouping (pushes FP
+   back to 5); a clean struct propagates them away. No single mechanical transform
+   gives both classes simultaneously. The win is a HYBRID per-block reconstruction
+   (struct copies only for the propagation-OK temps; pointer/aliased form for
+   sp354/sp21C; just-in-time `&temp` materialization driven by IDO's scheduler) —
+   and IDO's scheduler decides hoist-vs-just-in-time by heuristics that the
+   documented levers (inline-`&`, name-the-pointer, decl-order, move-assign-down,
+   if(1), volatile-pad) do not reliably steer across ~60 sites. Left at 39.93% NM.
+   Save-count trajectory this session: 9→2 (struct), FP 5→3 (float-store fix);
+   fuzzy regressed (21–25%) because the struct shape diverges structurally from
+   the 1071-insn target. Baseline (m2c graft, correct offsets+structure, wrong
+   register class) is the highest-fuzzy NM body and was restored.
