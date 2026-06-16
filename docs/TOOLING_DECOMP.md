@@ -6,6 +6,7 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 ## Index
 
+- [coloring-solve.py: inverse register-coloring solver from the uopt trace (2026-06-15)](#coloring-solvepy-inverse-register-coloring-solver-from-the-uopt-trace-2026-06-15) — _`scripts/coloring-solve.py` parses a `-Wo,-zdbug:6` coloring trace for one function (decodes LR bitpos -> register, constrained/unconstrained, priority/bitpos color order, spills, splits) and, given target+build `.s`, aligns the two instruction streams to separate REGISTER-RENUMBER residuals (shape-correct, wrong reg) from STRUCTURAL diffs, emitting the target<-build register-pairing histogram + algorithm-derived levers. The generalizable regalloc-cap diagnostic instrument: tells you WHICH LR is mis-colored and WHY before you touch the C._
 - [permuter-factory: unattended permuter queue-runner over the 90-99 long tail (2026-06-15)](#permuter-factory-unattended-permuter-queue-runner-over-the-90-99-long-tail-2026-06-15) — _`scripts/permuter-factory.py` auto-discovers the 90<=fuzzy<100 band from a fresh objdiff report (size-sorted, cap-comment-filtered), runs `import.py` per-fn then a wall-clock-bounded `permuter.py --best-only --stop-on-zero -jN`, splices the best output back, and OBJDIFF-VERIFIES (the permuter score lies). Checkpoints to `.permuter-factory/` for crash-resume; commits verified 100.0 cracks as "<fn> permuter-factory crack to 100.0 (NM body, pending land)" (no land/push). Kills children by PGID, never pkill -f._
 - [references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)](#referencesido-the-decompiled-uopt-source--dump-flag-instrumentation-2026-06-11) — _n64decomp/ido clone = uopt allocator source with original symbol names; -Wo,-zdbug:1/2/5/6, -dowhyuncolor, pass kill-switches, -zmovc. Grep it before theorizing about regalloc caps; derived rules in IDO_CODEGEN._
 - [578B4 pass 8: slot-map closed via decl-order relayout + per-arm web splits (81.52)](#578b4-pass-8-slot-map-closed-via-decl-order-relayout--per-arm-web-splits-8152-2026-06-11) — _Recipe: target slot map from m2c spXXX names -> decl reorder (addr = offset-frame); split shared webs by renaming arm temps to the spXXX vars; volatile locals for selector-CSE temploc + dead stores; drop m2c phantom call args. NEGATIVES: temp_t1_3 per-arm split cascades scratch rotation -300 LCS; goto-dispatch collapses; fuzzy underweights sp-offset fixes ~25:1 (track exact-word LCS + offset histogram)._
@@ -27,6 +28,72 @@ _9 entries. Auto-generated from per-memo notes; content may be rough on first pa
 
 
 ---
+
+## coloring-solve.py: inverse register-coloring solver from the uopt trace (2026-06-15)
+
+`scripts/coloring-solve.py` (monorepo root) inverts IDO 7.1's register
+allocator. The allocator is Chow-Hennessy priority-based coloring
+(references/ido, src/uopt/uoptreg2.c `globalcolor`) and is fully
+deterministic given its ucode input; `-Wo,-zdbug:6` emits a complete
+per-decision trace. This tool reads that trace + the target/build `.s` and
+tells you exactly which live range is mis-colored and what source change the
+algorithm says would fix it.
+
+Usage:
+
+```
+# 1. get a coloring trace (strip // first; needs -DNON_MATCHING for #ifdef bodies):
+sed 's://.*$::' src/<seg>/<file>.c > /tmp/nocmt.c
+tools/ido-static-recomp/build/7.1/out/cc -c -G 0 -non_shared -Xcpluscomm \
+  -Wab,-r4300_mul -O2 -mips2 -32 -DNON_MATCHING -Wo,-zdbug:6 -I include \
+  /tmp/nocmt.c -o /tmp/x.o          # writes ./uoptlist (needs the ecvt patch)
+# 2. dump the build's .s for the function:
+mips-linux-gnu-objdump -d --no-show-raw-insn build/non_matching/src/<seg>/<file>.c.o \
+  | awk '/<FUNC>:/{f=1;next} f&&/^[0-9a-f]+ </{exit} f&&/:\t/{print}' > /tmp/build.s
+# 3. solve:
+python3 scripts/coloring-solve.py --trace uoptlist --func FUNC \
+  --target-s asm/nonmatchings/<seg>/FUNC.s --build-s /tmp/build.s
+```
+
+What it decodes (register color codes from `enum RegisterColor`,
+uoptdata.h: 1..13 = v0 v1 a0..a3 t0..t5 ra; 14..23 = s0..s7 fp ra;
+24..35 = f0 f2 f12..f30):
+
+- The full coloring trace: each LR's bitpos -> register, whether it was
+  colored in the **constrained** phase (max-priority order; earlier = higher
+  priority = grabs the lower register) or the **unconstrained** phase (plain
+  bitpos / first-occurrence order), plus spills ("not colored (-ve save)" =
+  a frame home) and live-range splits.
+- The itab cross-reference (ichain id, op, M/P class, frame offset) for each
+  LR, so you can map a trace LR back to a source value.
+- **The key output for cracking a cap:** it re-aligns the target and build
+  instruction streams TWICE — once keeping register names, once wildcarding
+  them — so it can report how many instructions are SHAPE-CORRECT but
+  REGISTER-RENUMBERED (the coloring residual) vs genuinely STRUCTURAL, and
+  prints the `target_reg <- build_reg` pairing histogram. A dominant pair
+  like `$a0 <- $v0 x61` means one value is colored one class too low across
+  61 sites — a single coupled coloring permutation, not 61 bugs.
+
+The levers it names map to the algorithm: to push a value to a HIGHER
+register (v0->a0), color it LATER by LOWERING its priority (longer span /
+fewer uses); to a LOWER register, color it EARLIER (higher priority, or
+earlier bitpos if unconstrained); to flip two equal LRs, change their
+relative first-occurrence order; to spill, kill priority (inline recompute).
+
+CALIBRATION NOTE (func_0001304C, where this was built): the diff mode showed
+the entire 92.61->100 residual is `$a0 <- $v0 x61` + the coupled
+`$v0 <- $v1` / `$v1 <- $a0` deref cascade — the function-tail base pointer
+`*(*(func_0000023C+0x18)+0x158)` colors into v0 in the build but a0 in the
+target. The base also wants the SYMBOL spelling `&func_0000023C + 0x18`
+(`lui/lw %hi/%lo`, a reloc) not the raw `*(void**)0x254` (`lw N(zero)`, no
+reloc). VERIFIED DEAD ENDS for the a0 targeting: holding the full chain in
+one local (build CSEs it into v0, longest-span but still v0); per-block
+reload of the chain (each reload is a fresh SHORT LR -> grabs v0, and adds
+~51 insns -> 81.3); full web-inline (67). The base wants a MEDIUM span
+(held within each block across its 2 head-derefs, reloaded between blocks) —
+a cost-model sweet spot no tested C spelling hits. This is a genuine
+arg-register-targeting cap; the solver proves it's ONE permutation so the
+permuter is the only remaining tool (and it floors — no regalloc randomizer).
 
 ## permuter-factory: unattended permuter queue-runner over the 90-99 long tail (2026-06-15)
 
