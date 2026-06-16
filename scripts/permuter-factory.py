@@ -199,8 +199,14 @@ class Factory:
                         "src": src,
                     }
                 )
-        # size-sorted desc (most code to gain first)
-        cands.sort(key=lambda c: -c["size"])
+        # ordering: "size" desc (most code to gain first, default/spec) or
+        # "fuzzy" desc (closest-to-100 first = fewest diffs = highest crack
+        # yield per minute; the permuter cracks single-diff gates, not the big
+        # multi-diff structural ones).
+        if self.args.sort == "fuzzy":
+            cands.sort(key=lambda c: (-c["fuzzy"], -c["size"]))
+        else:
+            cands.sort(key=lambda c: -c["size"])
         # resolve asm path + cap-filter
         out = []
         for c in cands:
@@ -728,6 +734,13 @@ def main():
         help="overall wall-clock cap for the whole queue (0=unbounded)",
     )
     ap.add_argument("--limit", type=int, default=0, help="max functions to attempt")
+    ap.add_argument(
+        "--sort",
+        choices=["size", "fuzzy"],
+        default="size",
+        help="queue order: 'size' desc (default/spec) or 'fuzzy' desc "
+        "(closest-to-100 first = fewest diffs = highest crack yield/min)",
+    )
     ap.add_argument("--min", type=float, default=90.0, help="band lower bound")
     ap.add_argument(
         "--max", type=float, default=100.0, help="band upper bound (exclusive)"
