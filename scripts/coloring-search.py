@@ -129,18 +129,28 @@ REGNAMES = {
 }
 
 DEFAULT_CC = "tools/ido-static-recomp/build/7.1/out/cc"
-CC_FLAGS = [
+# Opt level is the one per-function-variable flag (kernel mixes -O1/-O2 files,
+# and the spilltemps cap class spans both). Everything else is fixed.
+CC_FLAGS_BASE = [
     "-c",
     "-G",
     "0",
     "-non_shared",
     "-Xcpluscomm",
     "-Wab,-r4300_mul",
-    "-O2",
     "-mips2",
     "-32",
     "-Wo,-zdbug:6",
 ]
+# Backward-compatible default (the original hardcoded -O2 flag list).
+CC_FLAGS = CC_FLAGS_BASE + ["-O2"]
+
+
+def cc_flags(opt, include_dirs=None):
+    f = list(CC_FLAGS_BASE) + ["-O%s" % opt]
+    for d in include_dirs or []:
+        f += ["-I", d]
+    return f
 
 
 def log(msg):
@@ -607,7 +617,7 @@ GENERATORS = collections.OrderedDict(
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
-def compile_variant(cc, src, func, workdir):
+def compile_variant(cc, src, func, workdir, flags=None):
     """Compile a variant; return (insns_or_None, coloring, err).
 
     NOTE: the IDO cc writes its coloring trace to ./uoptlist relative to cwd, so
@@ -621,7 +631,7 @@ def compile_variant(cc, src, func, workdir):
     if os.path.exists(trace):
         os.unlink(trace)
     r = subprocess.run(
-        [cc] + CC_FLAGS + [cpath, "-o", opath],
+        [cc] + (flags or CC_FLAGS) + [cpath, "-o", opath],
         capture_output=True,
         text=True,
         cwd=workdir,
@@ -670,10 +680,11 @@ class Candidate:
 _W = {}
 
 
-def _worker_init(cc, func, target, parent_dir):
+def _worker_init(cc, func, target, parent_dir, flags):
     _W["cc"] = cc
     _W["func"] = func
     _W["target"] = target
+    _W["flags"] = flags
     d = os.path.join(parent_dir, "w%d" % os.getpid())
     os.makedirs(d, exist_ok=True)
     _W["dir"] = d
@@ -682,7 +693,9 @@ def _worker_init(cc, func, target, parent_dir):
 def _worker_eval(task):
     """task = (idx, src, chain). Returns a dict of results (picklable)."""
     idx, src, chain = task
-    insns, color, err = compile_variant(_W["cc"], src, _W["func"], _W["dir"])
+    insns, color, err = compile_variant(
+        _W["cc"], src, _W["func"], _W["dir"], _W["flags"]
+    )
     if insns is None:
         return {"idx": idx, "ok": False, "err": err, "chain": chain}
     pct, count_ok, renum, nstruct = score(_W["target"], insns)
@@ -835,6 +848,20 @@ def main():
         help="parallel compile workers; 0=auto min(cpu-2,16).",
     )
     ap.add_argument(
+        "--opt",
+        default="2",
+        help="IDO -O optimization level (kernel mixes -O1/-O2 files; the "
+        "spilltemps cap class spans both). Match the function's build flag.",
+    )
+    ap.add_argument(
+        "--include-dir",
+        action="append",
+        default=[],
+        help="extra -I include dir (repeatable). Point at the project's "
+        'include/ so a `#include "common.h"` base compiles with the REAL '
+        "types -- otherwise standalone reg-allocation diverges from in-tree.",
+    )
+    ap.add_argument(
         "--keep-dir", default=None, help="dir to write improving variants to"
     )
     ap.add_argument(
@@ -862,13 +889,17 @@ def main():
         if args.beam
         else "DEPTH-%d flat" % args.depth
     )
-    log("mode: %s | workers: %d | max_per_gen: %d" % (mode, nw, args.max_per_gen))
+    flags = cc_flags(args.opt, args.include_dir)
+    log(
+        "mode: %s | workers: %d | max_per_gen: %d | -O%s"
+        % (mode, nw, args.max_per_gen, args.opt)
+    )
 
     parent = tempfile.mkdtemp(prefix="csearch_")
     t0 = time.time()
 
     pool = multiprocessing.Pool(
-        nw, initializer=_worker_init, initargs=(cc, args.func, target, parent)
+        nw, initializer=_worker_init, initargs=(cc, args.func, target, parent, flags)
     )
     try:
         # --- baseline ---
