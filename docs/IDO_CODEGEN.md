@@ -21,6 +21,7 @@ _121 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
 - [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
+- [PACK-CLASS via mixed +/| spine + identical-chain CSE steals the callee-save const reg](#uopt-or-chain-rotation-written-xyz-evaluates-z-subtree-first--fix-statement-shapes-per-statement-by-spelling-permutation-not-by-chasing-downstream-register-noise) — _Pack class (simple-leading, mid-chain complex) IS reachable: bracket each complex operand's `|` joins with `+` (escapes or-canon, source order) at addu-vs-or cost; apply to ALL switch arms AT ONCE or the downstream ugen-phase cascade looks like a regression (578B4 +2.36pp). Separately: two TEXTUALLY-IDENTICAL computed stores get CSE'd into one long callee-save web that evicts a spanning OR-const from `ra`; inline one chain's named-temp load to break the CSE → const claims `ra`, hi-half const remats per-use (matches target). NOT a blunt const hoist (that craters all regions)._
 - [UOPT OR-CHAIN ROTATION: written (X|Y)|Z evaluates Z first](#uopt-or-chain-rotation-written-xyz-evaluates-z-subtree-first--fix-statement-shapes-per-statement-by-spelling-permutation-not-by-chasing-downstream-register-noise) — _|-chain of complex subtrees emits LAST operand's subtree first; brute 6 spellings per statement w/ register-blind alignment + positional windows (global LCS see-saws until a whole arm is consistent). Also: (x-1)*4 distributes to x*4-4 (spell (x-1)<<2); +-operand order picks load order; store-stmt pairs keep source order. 578B4 875→1435._ — _free list order t6,t7,t8,t9,t0..t5; head-take/tail-append = rotation; advanced by every uncolored materialization (expr temps, spill reloads); calls/BBs don't reset. A t8↔t9 diff = ±1 scratch consumption earlier; fix the PHASE via -Wc,-d trace alignment._
 - [REDUCED PIPELINES: -O0/-O1 run NO uopt — ugen is the whole optimizer](#reduced-pipelines--o0-o1-run-no-uopt--ugen-is-the-whole-optimizer-phase-map-verified) — _-O0/-O1 pipeline = cfe→ugen→as1 (no uopt). ugen at -O0 = Build+Translate only (unfilled delays, all-vars-via-home); -O1 adds localopt+label phases. No webs/coloring/copy-prop at ≤O1 — uopt levers inapplicable; use -Wc,-d + decl order + register kw + as1 rules._
 - [AS1 BRANCH-DELAY FILL PRIORITY + the `| 0` register-move lever](#as1-branch-delay-fill-priority--the--0-register-move-lever-ugen-session-func_00000a9c-anatomy) — _as1 fill order: from-before > steal-exclusive-target > LIKELY-copy-shared-target (the beql cap mechanism) > nop; jr-fill moves the label; as1 deletes/renames ugen moves. `x | 0` survives to a literal `or rd,rs,zero` (`+0` folds) = C-level register-move materializer._
@@ -14284,6 +14285,50 @@ position (the pull grabs exactly it): `[G,A,B]` emitted from spelling
 with (x-1)<<2 shapes this closed 11 statement sites in one pass
 (578B4 LCS 1519→1661). Only simple-FIRST target orders with a
 mid-chain complex stay unreachable (the pack class).
+
+PACK-CLASS REACHED VIA MIXED +/| SPINE — APPLY WHOLE-FUNCTION, NOT
+PER-ARM (2026-06-15, 578B4 pass 11, fuzzy 93.82→96.18). The pack class
+(simple-leading chain with a mid-chain complex operand, e.g. target
+`t2|0x0700|t3|(0x2E)<<0xA|t4|t5|(0x2C)`) IS reachable: replace the two
+`|` joins that bracket each complex operand with `+` so those nodes
+escape or-canonicalization and emit in source order — spell
+`((t2|0x0700|t3) + ((0x2E)<<0xA) | t4 | t5) + ((0x2C)&0xF)`. Cost is
+exactly the `+`-node count in `addu`-vs-`or` words (2 per chain here);
+everything else (registers, the andi/sll/lh order) lands byte-exact.
+THE KEY DISCIPLINE: pass 10 tried this on ONE arm, saw global EX DROP
+(a no-chain arm regressed 100→66 from the ugen-rotation phase shift the
+two extra `+` materializations cause downstream), and wrongly declared
+a "cap." Applying the SAME spine to ALL N arms of the switch
+SIMULTANEOUSLY converts the cascade into a net gain (578B4: all 5
+switch-2 arms at once, per-region EX 1734→1755, fuzzy +2.36pp) — the
+downstream phase is consistent once every arm has the same shape. When
+a local or-shape fix cascades, the fix is right; the response is to
+make the rest of the function consistent, not to revert. Gate on
+per-region EX (anchored, position-locked), NOT global SequenceMatcher
+LCS — the latter mis-aligns repeated switch arms and see-saws.
+
+IDENTICAL COMPUTED CHAINS GET CSE'd INTO ONE CALLEE-SAVE WEB THAT
+STEALS THE HI-CONST'S register — break the CSE to free it (2026-06-15,
+578B4 pass 11, fuzzy 96.18→96.25, per-region EX 1755→1775 across all
+switch-1 arms). Symptom: target colors a standalone OR-operand const
+(`0x07000000`, used 2× per arm, spanning) into a callee-save (`ra`) and
+remats a HI-HALF-ONLY const (`0xF5180000`, the `lui at,0xf518;or`
+addressing-temp form) per use; the build does the OPPOSITE (unifies
+F518→ra, remats 0700). Cause: the two stores that carry the F518 value
+were written as the *textually identical* expression
+`(((w + X) - w)*2+7)>>3 | 0xF5180000` (named temp reused), so uopt CSE
+unifies the WHOLE computed value into one long-lived web that wins the
+single callee-save slot, evicting 0700. FIX: make the second store's
+expression NON-CSE-equivalent — inline the named temp's load
+(`temp_a0_6` → `FW(sp1DC, 0x4)`) so the two chains aren't unified; each
+F518 then stays a short per-use at-remat (the target's shape) and the
+spanning 0700 web claims `ra`. This is the precise, surgical form of
+the "const callee-save coloring" lever — NOT a blunt pre-dispatch hoist
+of the const into a named local (that forces a global live range and
+CRATERS every region's EX, 1734→944; pass 9/10 negative). Diagnose with
+`-Wo,-zdbug:6` → `./uoptlist` (or run cc from /tmp; it writes `uoptlist`
+in CWD) and read the `lui ra,…`/`lui at,…` placement, but the C handle
+is CSE-breaking the duplicated chain, not the dump.
 
 ## UGEN TEMP ROTATION MECHANISM: a 10-register circular scratch queue t6→t7→t8→t9→t0→…→t5→t6, advanced per uncolored-value materialization, never reset within a function
 
