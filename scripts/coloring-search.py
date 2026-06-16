@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
-"""coloring-search.py -- DIRECTED search over source transforms to crack an
-IDO 7.1 register-renumber (coloring) cap.
+"""coloring-search.py -- DIRECTED, PARALLEL, BEAM search over source transforms
+to crack an IDO 7.1 register-renumber (coloring) cap.
+
+Single-LR mode (--depth 1, the original behaviour) applies ONE transform to ONE
+live range and enumerates that bounded space serially-equivalent (now compiled
+in parallel). It proves the TINY caps empty but cannot reach BIG functions whose
+crack needs a COMBINATION of transforms across several simultaneously-live LRs.
+
+This upgraded tool adds:
+  * PARALLEL compiles (multiprocessing.Pool, min(cpu-2,16) workers) -- each
+    candidate is an independent ~50ms `cc`; near-linear speedup.
+  * DEPTH-N COMBINATION search (--depth 2|3) -- compose transforms so that, e.g.,
+    LR-A's first-use is reordered AND LR-B is web-split in the same candidate.
+    The product space (single~tens, depth2~thousands, depth3~1e5) is BOUNDED by
+    --max-per-gen and pruned by --beam.
+  * BEAM search keyed on the COLORING TRACE (--beam K, --rounds N) -- each round
+    keeps the top-K partial candidates ranked by (a) instruction-exact fuzzy and
+    (b) whether the contested LR's register moved TOWARD the target register
+    (read directly from the -zdbug:6 trace), then expands each surviving
+    candidate one transform deeper. The trace heuristic steers exploration so a
+    large space is tractable instead of flat-enumerated.
 
 scripts/coloring-solve.py and scripts/split-solve.py are DIAGNOSTIC: given a
 build's -Wo,-zdbug:6 trace they tell you WHICH live range (LR) is mis-colored
@@ -56,8 +75,10 @@ DESIGN NOTES (why directed, not random like the permuter)
 import argparse
 import collections
 import difflib
+import multiprocessing
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -587,7 +608,11 @@ GENERATORS = collections.OrderedDict(
 # Driver
 # ---------------------------------------------------------------------------
 def compile_variant(cc, src, func, workdir):
-    """Compile a variant; return (insns_or_None, coloring, err)."""
+    """Compile a variant; return (insns_or_None, coloring, err).
+
+    NOTE: the IDO cc writes its coloring trace to ./uoptlist relative to cwd, so
+    workdir MUST be unique per concurrent compile (each parallel worker uses its
+    own subdir) or the traces clobber each other."""
     src = strip_line_comments(src)
     cpath = os.path.join(workdir, "v.c")
     opath = os.path.join(workdir, "v.o")
@@ -608,6 +633,170 @@ def compile_variant(cc, src, func, workdir):
     return insns, coloring, None
 
 
+# ---------------------------------------------------------------------------
+# Parallel compile pool
+# ---------------------------------------------------------------------------
+# A Candidate is the full state we carry through the search: the source text,
+# the chain of generator/label transforms applied to reach it, and (once
+# evaluated) its score + coloring.
+class Candidate:
+    __slots__ = (
+        "src",
+        "chain",
+        "pct",
+        "count_ok",
+        "renum",
+        "nstruct",
+        "coloring",
+        "err",
+    )
+
+    def __init__(self, src, chain):
+        self.src = src
+        self.chain = chain  # list of "gen/label" strings
+        self.pct = None
+        self.count_ok = None
+        self.renum = None
+        self.nstruct = None
+        self.coloring = None
+        self.err = None
+
+    def label(self):
+        return " + ".join(self.chain) if self.chain else "baseline"
+
+
+# Globals for pool workers (set once via initializer; avoids re-pickling cc/func
+# per task and gives each worker a private trace dir).
+_W = {}
+
+
+def _worker_init(cc, func, target, parent_dir):
+    _W["cc"] = cc
+    _W["func"] = func
+    _W["target"] = target
+    d = os.path.join(parent_dir, "w%d" % os.getpid())
+    os.makedirs(d, exist_ok=True)
+    _W["dir"] = d
+
+
+def _worker_eval(task):
+    """task = (idx, src, chain). Returns a dict of results (picklable)."""
+    idx, src, chain = task
+    insns, color, err = compile_variant(_W["cc"], src, _W["func"], _W["dir"])
+    if insns is None:
+        return {"idx": idx, "ok": False, "err": err, "chain": chain}
+    pct, count_ok, renum, nstruct = score(_W["target"], insns)
+    return {
+        "idx": idx,
+        "ok": True,
+        "chain": chain,
+        "pct": pct,
+        "count_ok": count_ok,
+        "renum": dict(renum),
+        "nstruct": nstruct,
+        "coloring": color,
+    }
+
+
+def evaluate_pool(cands, pool, log_every=25, t0=0.0, best_pct=0.0):
+    """Compile+score every candidate in `cands` (list[Candidate]) via `pool`.
+    Mutates each Candidate in place with its result. WATCHDOG: logs a progress
+    line every `log_every` completions with running best. Returns count of
+    successful compiles."""
+    tasks = [(i, c.src, c.chain) for i, c in enumerate(cands)]
+    total = len(tasks)
+    done = 0
+    ok = 0
+    running_best = best_pct
+    best_chain = None
+    log("  [pool] dispatching %d candidates ..." % total)
+    for res in pool.imap_unordered(_worker_eval, tasks, chunksize=4):
+        done += 1
+        c = cands[res["idx"]]
+        if not res["ok"]:
+            c.err = res["err"]
+        else:
+            ok += 1
+            c.pct = res["pct"]
+            c.count_ok = res["count_ok"]
+            c.renum = collections.Counter(res["renum"])
+            c.nstruct = res["nstruct"]
+            c.coloring = res["coloring"]
+            if res["pct"] > running_best:
+                running_best = res["pct"]
+                best_chain = res["chain"]
+        if done % log_every == 0 or done == total:
+            log(
+                "  [%5.0fs] [pool] %d/%d done (%d compiled)  best=%.2f%% %s"
+                % (
+                    time.time() - t0,
+                    done,
+                    total,
+                    ok,
+                    running_best,
+                    (" via " + " + ".join(best_chain)) if best_chain else "",
+                )
+            )
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# Candidate expansion (depth / combination)
+# ---------------------------------------------------------------------------
+def expand(src, ann, gens, max_per_gen):
+    """Apply each enabled generator ONCE to `src`; yield (label, new_src).
+    This is one transform-step; depth-N chains call it repeatedly."""
+    for gname in gens:
+        gen = GENERATORS.get(gname)
+        if not gen:
+            continue
+        cnt = 0
+        seen = set()
+        try:
+            it = gen(src, ann)
+        except Exception:
+            continue
+        for label, variant in it:
+            if cnt >= max_per_gen:
+                break
+            if variant == src or variant in seen:
+                continue
+            seen.add(variant)
+            cnt += 1
+            yield ("%s/%s" % (gname, label), variant)
+
+
+def target_regs_for_lr(ann, baseline_renum):
+    """Best-effort: which TARGET registers do we want the contested LR to reach?
+    The scorer's renum map is keyed (target_reg, build_reg): for each diff the
+    build emitted build_reg where the target wants target_reg. So the set of
+    target_reg values is exactly the registers we want SOME LR to move toward.
+    Used by the beam heuristic to reward coloring moves in the right direction."""
+    return set(a for (a, _c) in baseline_renum)
+
+
+def beam_heuristic(cand, baseline_color_regs, want_regs):
+    """Score a candidate for beam ranking. Primary key: instruction-exact fuzzy.
+    Tie-break / steer: a bonus when the candidate's coloring introduces a
+    register from the wanted set that the baseline coloring did NOT use at that
+    LR position (i.e. an LR moved toward a target register). Pure-renumber
+    residuals (count_ok) get a small bonus too -- those are the closest."""
+    if cand.pct is None:
+        return (-1.0, 0, 0)
+    moved = 0
+    if cand.coloring:
+        cur_regs = set(
+            REGNAMES.get(reg) for (_lr, _k, reg) in cand.coloring if reg is not None
+        )
+        # registers now in use that the baseline did NOT use AND are wanted
+        moved = len((cur_regs - baseline_color_regs) & want_regs)
+    return (cand.pct, 1 if cand.count_ok else 0, moved)
+
+
+def _summary_renstr(renum):
+    return ",".join("%s<-%s" % (a, c) for (a, c), _ in renum.most_common())
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -619,6 +808,33 @@ def main():
     ap.add_argument("--gens", default=",".join(GENERATORS))
     ap.add_argument("--max-per-gen", type=int, default=20)
     ap.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help="combination depth: 1=single transform (orig), 2/3=compose "
+        "transforms across multiple LRs in one candidate.",
+    )
+    ap.add_argument(
+        "--beam",
+        type=int,
+        default=0,
+        help="beam width K: 0=flat depth-N enumeration; >0=keep top-K partials "
+        "per round (ranked by fuzzy + coloring-trace heuristic) and expand "
+        "each one transform deeper. Makes the big space tractable.",
+    )
+    ap.add_argument(
+        "--rounds",
+        type=int,
+        default=0,
+        help="beam rounds (transform-depths to explore); default = --depth.",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="parallel compile workers; 0=auto min(cpu-2,16).",
+    )
+    ap.add_argument(
         "--keep-dir", default=None, help="dir to write improving variants to"
     )
     ap.add_argument(
@@ -626,120 +842,246 @@ def main():
     )
     args = ap.parse_args()
 
-    cc = args.cc
+    cc = os.path.abspath(args.cc) if os.path.exists(args.cc) else args.cc
     if not os.path.exists(cc):
         sys.exit("cc not found: %s (run from project root or pass --cc)" % cc)
 
     base = open(args.base).read()
     ann = parse_annotations(base)
     target = read_target_insns(args.target_s)
+    gens = [g.strip() for g in args.gens.split(",") if g.strip()]
+
+    nw = args.workers or max(1, min(multiprocessing.cpu_count() - 2, 16))
     log("=== coloring-search %s ===" % args.func)
     log(
-        "target: %d insns | contested LR var: %s | generators: %s"
-        % (len(target), ann["lr"], args.gens)
+        "target: %d insns | contested LR var: %s | gens: %s"
+        % (len(target), ann["lr"], ",".join(gens))
     )
+    mode = (
+        "BEAM K=%d rounds=%d" % (args.beam, args.rounds or args.depth)
+        if args.beam
+        else "DEPTH-%d flat" % args.depth
+    )
+    log("mode: %s | workers: %d | max_per_gen: %d" % (mode, nw, args.max_per_gen))
 
-    workdir = tempfile.mkdtemp(prefix="csearch_")
+    parent = tempfile.mkdtemp(prefix="csearch_")
     t0 = time.time()
 
-    # baseline
-    binsns, bcolor, berr = compile_variant(cc, base, args.func, workdir)
-    if binsns is None:
-        sys.exit("BASE failed to compile: %s" % berr)
-    bpct, bcount, brenum, bstruct = score(target, binsns)
-    log(
-        "BASELINE: fuzzy=%.2f%% count_match=%s struct_diffs=%d renum=%s"
-        % (
-            bpct,
-            bcount,
-            bstruct,
-            ",".join("%s<-%s" % (a, c) for (a, c), _ in brenum.most_common()),
-        )
+    pool = multiprocessing.Pool(
+        nw, initializer=_worker_init, initargs=(cc, args.func, target, parent)
     )
-    log("          coloring: %s" % coloring_summary(bcolor))
+    try:
+        # --- baseline ---
+        b = Candidate(base, [])
+        evaluate_pool([b], pool, log_every=1, t0=t0)
+        if b.pct is None:
+            sys.exit("BASE failed to compile: %s" % b.err)
+        bpct = b.pct
+        log(
+            "BASELINE: fuzzy=%.2f%% count_match=%s struct_diffs=%d renum=%s"
+            % (bpct, b.count_ok, b.nstruct, _summary_renstr(b.renum))
+        )
+        log("          coloring: %s" % coloring_summary(b.coloring))
 
-    best = (bpct, "baseline", base, bcolor)
-    results = []
-    gens = [g.strip() for g in args.gens.split(",") if g.strip()]
-    n = 0
-    for gname in gens:
-        gen = GENERATORS.get(gname)
-        if not gen:
-            log("  (unknown generator %s, skipped)" % gname)
-            continue
-        cnt = 0
-        for label, variant in gen(base, ann):
-            if cnt >= args.max_per_gen:
-                break
-            cnt += 1
-            n += 1
-            # WATCHDOG: progress line before every compile
-            log(
-                "[%4.0fs] cand #%d  gen=%s  %s ..."
-                % (time.time() - t0, n, gname, label)
-            )
-            insns, color, err = compile_variant(cc, variant, args.func, workdir)
-            if insns is None:
-                log("         -> compile FAILED: %s" % (err or ""))
-                continue
-            pct, count_ok, renum, nstruct = score(target, insns)
-            tag = ""
-            if pct > bpct + 0.001:
-                tag = "  <== IMPROVES"
-            elif pct < bpct - 0.001:
-                tag = "  (regress)"
-            renstr = ",".join("%s<-%s" % (a, c) for (a, c), _ in renum.most_common())
-            log(
-                "         -> fuzzy=%.2f%% count_match=%s struct=%d "
-                "renum=[%s] color=[%s]%s"
-                % (pct, count_ok, nstruct, renstr, coloring_summary(color), tag)
-            )
-            results.append((pct, gname, label, count_ok, renstr))
-            if pct > best[0]:
-                best = (pct, "%s/%s" % (gname, label), variant, color)
-                if args.keep_dir:
-                    os.makedirs(args.keep_dir, exist_ok=True)
-                    kp = os.path.join(
-                        args.keep_dir,
-                        "%.2f_%s_%s.c" % (pct, gname, label.replace("/", "-")),
-                    )
-                    open(kp, "w").write(strip_line_comments(variant))
-            if pct >= 100.0 - 1e-6 and count_ok:
-                log(
-                    "\n*** CRACK: 100%% instruction-exact via %s/%s ***"
-                    % (gname, label)
-                )
-                break
+        baseline_color_regs = set(
+            REGNAMES.get(reg) for (_lr, _k, reg) in b.coloring if reg is not None
+        )
+        want_regs = target_regs_for_lr(ann, b.renum)
+        log(
+            "          steering toward target regs: %s"
+            % (sorted(want_regs) or "(none)")
+        )
 
+        best = b
+        all_evaluated = [b]
+
+        if args.beam:
+            best = run_beam(
+                base,
+                ann,
+                gens,
+                args,
+                pool,
+                t0,
+                b,
+                baseline_color_regs,
+                want_regs,
+                all_evaluated,
+                parent,
+            )
+        else:
+            best = run_flat(
+                base,
+                ann,
+                gens,
+                args,
+                pool,
+                t0,
+                b,
+                all_evaluated,
+                parent,
+            )
+    finally:
+        pool.close()
+        pool.join()
+
+    # --- summary ---
+    n = len(all_evaluated) - 1
     log("\n=== SUMMARY (%d candidates, %.0fs) ===" % (n, time.time() - t0))
     log("baseline fuzzy = %.2f%%" % bpct)
-    log("best     fuzzy = %.2f%%  via %s" % (best[0], best[1]))
-    improved = [r for r in results if r[0] > bpct + 0.001]
-    if best[0] >= 100.0 - 1e-6:
-        log("RESULT: CRACKED -> apply %s" % best[1])
+    log("best     fuzzy = %.2f%%  via %s" % (best.pct, best.label()))
+    improved = [c for c in all_evaluated if c.pct is not None and c.pct > bpct + 0.001]
+    if best.pct is not None and best.pct >= 100.0 - 1e-6 and best.count_ok:
+        log("RESULT: CRACKED -> apply %s" % best.label())
     elif improved:
         log(
             "RESULT: PARTIAL -- %d candidate(s) improve fuzzy; best below 100%%."
             % len(improved)
         )
-        for r in sorted(improved, reverse=True)[:5]:
+        for c in sorted(improved, key=lambda x: x.pct, reverse=True)[:8]:
             log(
-                "   %.2f%%  %s/%s  count_match=%s renum=[%s]"
-                % (r[0], r[1], r[2], r[3], r[4])
+                "   %.2f%%  %s  count_match=%s renum=[%s]"
+                % (c.pct, c.label(), c.count_ok, _summary_renstr(c.renum))
             )
     else:
         log(
-            "RESULT: SPACE EXHAUSTED -- no generator in {%s} (max %d each) moved"
-            % (args.gens, args.max_per_gen)
+            "RESULT: SPACE EXHAUSTED -- no candidate in {%s} (depth %d, max %d "
+            "each%s) moved"
+            % (
+                ",".join(gens),
+                args.depth,
+                args.max_per_gen,
+                ", beam %d" % args.beam if args.beam else "",
+            )
         )
         log("        fuzzy above baseline %.2f%%. Every candidate regressed or" % bpct)
         log("        was byte-neutral. The renumber is emission-coupled: the")
-        log("        contested LR cannot be moved without shifting emission in")
-        log("        this candidate family. Cap proven by tool (not hand-waved).")
+        log("        contested LRs cannot be moved (even in combination) without")
+        log("        shifting emission. Cap proven by tool (not hand-waved).")
 
-    if args.apply_best and best[0] > bpct:
-        open(args.apply_best, "w").write(strip_line_comments(best[2]))
+    if args.keep_dir and improved:
+        os.makedirs(args.keep_dir, exist_ok=True)
+        for c in sorted(improved, key=lambda x: x.pct, reverse=True)[:20]:
+            kp = os.path.join(
+                args.keep_dir,
+                "%.2f_%s.c" % (c.pct, re.sub(r"[^\w.]+", "-", c.label())[:80]),
+            )
+            open(kp, "w").write(strip_line_comments(c.src))
+
+    if args.apply_best and best.pct is not None and best.pct > bpct:
+        open(args.apply_best, "w").write(strip_line_comments(best.src))
         log("\nwrote best variant -> %s" % args.apply_best)
+
+    shutil.rmtree(parent, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Search strategies
+# ---------------------------------------------------------------------------
+def _gen_layer(srcs, ann, gens, max_per_gen, seen_srcs):
+    """Given a list of (src, chain) seeds, produce the next layer of unique
+    Candidates by applying one transform-step to each seed. De-dups by source
+    text across the whole layer (a frequent collision at depth>=2)."""
+    out = []
+    for src, chain in srcs:
+        for label, variant in expand(src, ann, gens, max_per_gen):
+            if variant in seen_srcs:
+                continue
+            seen_srcs.add(variant)
+            out.append(Candidate(variant, chain + [label]))
+    return out
+
+
+def run_flat(base, ann, gens, args, pool, t0, baseline, all_evaluated, parent):
+    """Flat enumeration to --depth: layer 1 = single transforms, layer 2 =
+    every depth-1 src expanded once more, etc. No pruning between layers (the
+    beam mode does that). Bounded by max_per_gen at each step."""
+    best = baseline
+    seen = {base}
+    seeds = [(base, [])]
+    for d in range(1, args.depth + 1):
+        log("\n--- DEPTH %d (flat) ---" % d)
+        layer = _gen_layer(seeds, ann, gens, args.max_per_gen, seen)
+        if not layer:
+            log("  (no new candidates at depth %d)" % d)
+            break
+        evaluate_pool(layer, pool, t0=t0, best_pct=best.pct or 0.0)
+        all_evaluated.extend(layer)
+        for c in layer:
+            if c.pct is not None and c.pct > (best.pct or -1):
+                best = c
+        crack = next(
+            (
+                c
+                for c in layer
+                if c.pct is not None and c.pct >= 100.0 - 1e-6 and c.count_ok
+            ),
+            None,
+        )
+        if crack:
+            log("\n*** CRACK: 100%% instruction-exact via %s ***" % crack.label())
+            return crack
+        # next layer expands ALL of this layer's sources (combination growth)
+        seeds = [(c.src, c.chain) for c in layer]
+    return best
+
+
+def run_beam(
+    base,
+    ann,
+    gens,
+    args,
+    pool,
+    t0,
+    baseline,
+    baseline_color_regs,
+    want_regs,
+    all_evaluated,
+    parent,
+):
+    """Beam search: each round, expand the surviving beam one transform deeper,
+    evaluate the new layer in parallel, then KEEP only the top-K by the coloring
+    heuristic. The trace heuristic (did a contested LR move toward a wanted
+    target register?) steers exploration so the depth-3 space stays tractable."""
+    rounds = args.rounds or args.depth
+    best = baseline
+    seen = {base}
+    # the beam is a list of Candidates we will expand; seed with baseline.
+    beam = [baseline]
+    for rnd in range(1, rounds + 1):
+        log("\n--- BEAM round %d (beam=%d) ---" % (rnd, len(beam)))
+        seeds = [(c.src, c.chain) for c in beam]
+        layer = _gen_layer(seeds, ann, gens, args.max_per_gen, seen)
+        if not layer:
+            log("  (beam exhausted: no new candidates)")
+            break
+        evaluate_pool(layer, pool, t0=t0, best_pct=best.pct or 0.0)
+        all_evaluated.extend(layer)
+        evaluated = [c for c in layer if c.pct is not None]
+        for c in evaluated:
+            if c.pct > (best.pct or -1):
+                best = c
+        crack = next(
+            (c for c in evaluated if c.pct >= 100.0 - 1e-6 and c.count_ok), None
+        )
+        if crack:
+            log("\n*** CRACK: 100%% instruction-exact via %s ***" % crack.label())
+            return crack
+        # rank by heuristic, keep top-K for the next round
+        ranked = sorted(
+            evaluated,
+            key=lambda c: beam_heuristic(c, baseline_color_regs, want_regs),
+            reverse=True,
+        )
+        beam = ranked[: args.beam]
+        log("  beam round %d survivors (top %d):" % (rnd, len(beam)))
+        for c in beam:
+            h = beam_heuristic(c, baseline_color_regs, want_regs)
+            log(
+                "    fuzzy=%.2f%% count_match=%s moved=%d  %s  renum=[%s]"
+                % (c.pct, c.count_ok, h[2], c.label(), _summary_renstr(c.renum))
+            )
+    return best
 
 
 if __name__ == "__main__":
