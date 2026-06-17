@@ -1503,3 +1503,19 @@ see the regalloc-dump memo). The repo also ships `udb.py`, an
 interactive ncurses debugger over the decompiled uopt (32-bit build
 required) — not needed so far; the dump flags cover slot/coloring
 forensics.
+
+## Jumptable-resolved decode: m2c lost-base array derefs need &D_00000000 patch (func_00010FEC)
+
+The jumptable vein workflow: `extract-uso-jumptable.py <fn> --module 0xD9FE28
+--vaddr 0xV --size 0xS` (shim 0x1466C for game_libs-in-bootup, 0x0 for
+bootup_uso direct) -> `uso-jumptable-to-m2c.py <expected.c.o> <fn> 0x<ooff>
+--vaddr --size` (ooff = fn offset in objdump -d of the matching .o) -> emits a
+jtbl-labeled .s -> `m2c` resolves the computed `jr` into a switch.
+GOTCHA: m2c often emits lost-base array accesses as `*(arg1 * 4)` (the table
+base resolved to 0). These won't compile ("Dereferenced a non-pointer"). Patch
+each to the &D_00000000 placeholder form: `*(s32 *)((char *)&D_00000000 + arg1
+* 4)`; for NESTED forms `*(*(arg1*4)*4)` replace the inner first, then the
+outer (ordered). This made func_00010FEC compile + score 30.8->36.2 (the switch
+resolution itself is the gain; the &D base derefs are approximate, not exact).
+DELAY-SLOT CAVEAT (from the tool docstring): m2c rejects a label in a branch
+delay slot — skip or hand-patch those functions.
