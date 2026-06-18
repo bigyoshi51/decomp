@@ -10,7 +10,7 @@
 
 > IDO 7.1 codegen quirks: how the compiler emits specific patterns, and what C-source shapes do or don't match a given asm.
 
-_121 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+lambda Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 
 ### large-body matching
@@ -15161,3 +15161,31 @@ cause above is refined and a new mechanism-confirming experiment is recorded.
    fuzzy regressed (21–25%) because the struct shape diverges structurally from
    the 1071-insn target. Baseline (m2c graft, correct offsets+structure, wrong
    register class) is the highest-fuzzy NM body and was restored.
+
+## No-op `if (!uninit) {}` reorders an uninitialized-var preload (scheduler-swap lever, titproc_uso_func_00000418 93.94->100, 2026-06-18)
+
+When the residual is a 2-insn SCHEDULE SWAP between the preload of an
+uninitialized local (`lw rX, slot(sp)` reading a not-yet-assigned var the
+target deliberately reads early) and a nearby independent insn (here `index=0`
+= `or $2,$0,$0`), inserting a NO-OP read of that uninitialized var at the top
+of the body forces IDO to schedule the preload first, matching the target:
+
+    int selected;          // never assigned before the loop (target reads it uninit)
+    if (!selected) {       // <- no-op; makes IDO emit the `lw selected` preload EARLY
+    }
+    do { ... selected = ... ; } while (...);
+
+The permuter (perm_ins_block / perm_condition) discovered this; a prior 97k-iter
+run on the *cached-mask* shape couldn't move it, but the *inlined-mask + early
+no-op read* shape cracked at best=0. Reading an uninitialized local is UB in
+standard C but the target genuinely does it (the value is don't-care until the
+loop sets it), so this is a faithful match, not a hack.
+
+CRITICAL VERIFY STEP (this is what separated the real crack from a false-100
+the same session): the permuter compiles an ISOLATED scratch with
+`-DNON_MATCHING`; the ROM uses the full-file MATCHING build. A scheduler-swap
+"crack" can hold in the isolated build but NOT in-tree (gl_func_00048354 did
+exactly that — objdiff VERIFIED 100.0 isolated, but `sw`-before-`addu` wrong
+in the matching build, every variant). ALWAYS promote + rebuild the matching
+obj (`make build/src/<unit>.c.o`) and byte-check there (or full make + ROM cmp)
+before landing. See docs/MATCHING_WORKFLOW.md "permuter false-100 #2".
