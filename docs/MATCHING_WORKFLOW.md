@@ -8383,3 +8383,34 @@ For a read-modify-write of one slot the target reads and writes the SAME
 location: the fix is just `*p = *p & ~4` (or `*(int*)((char*)base + off)` with
 char arithmetic). Tell: a lone `lw tN, BIGOFF(reg)` whose offset is exactly 4x
 the intended struct offset. This was the sole diff taking 11024 99.97 -> 100.
+
+## Size-mismatch scan = the crackable vein; same-size near-100 = caps (2026-06-18)
+
+When hunting a landable 100% on this (mature) project, DON'T pick by objdiff
+fuzzy % — it gives near-zero weight to immediate/offset diffs AND generous
+alignment credit to a body with a spurious extra instruction (gl_func_00056580
+scored 99.32% WITH a bogus `addiu a0,a0,0`; removing it DROPPED fuzzy to 98.35%
+even though it's strictly closer to byte-exact). Instead triage by
+**build-insn-count vs target-word-count mismatch**: build each `non_matching`
+obj, read its function size from `objdump -t`, compare to the target `.s` word
+count (jal-form aware). A size MISMATCH = a structural/C-fixable residual
+(missing/extra instruction, wrong frame); a size MATCH at <100% fuzzy in the
+near-100 band = a pure register/schedule cap (verified across 8A40/4244/B58/
+800062F0 — all reg-renumber or spill/schedule renumbers, not C-reachable).
+272 size-mismatch near-misses exist (70-99.99%, >=40w).
+
+CAUTION even in the size-mismatch vein: the residual is often an IDO
+FRAME-SIZE bloat from the m2c body declaring every value as an M-class named
+local. Per the frame-slot-home rule (IDO_CODEGEN "FRAME-SLOT HOME ASSIGNMENT
+RULE"), register-colored named locals STILL reserve dead home slots → frame
+too big → every sp-relative arg/local offset shifts (cascade of "diffs" that
+are all one root cause). gl_func_00056580: m2c gave 9 named locals (frame
+-144); collapsing SSA temps (temp_v0_N->temp_v0, var_v1_N->var_v1) cut it to
+-88, but the target is -64 because its working pointers are COMPILER TEMPS
+(from inlined node-init helpers), not C locals — and C can't express a
+register-only no-home temp that's also stored. So this size-mismatch was
+NOT landable by collapse/reorder; it needs full inlined-helper source
+reconstruction. Removing the spurious `addiu a0,a0,0` (from m2c `arg0++;
+arg0--;`) is the one safe partial win. Pick size-mismatch candidates whose
+residual is a genuine missing/extra INSTRUCTION (logic/decode), not a frame
+cascade.
