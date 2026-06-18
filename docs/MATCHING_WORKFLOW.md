@@ -8363,3 +8363,23 @@ MUST pass the full-link ROM cmp before landing — never trust the
 factory's objdiff-100 for relocatable units. (Same masking class as
 42438's D-symbol inline.) Improves (<100, NM-only) are unaffected —
 they never link, never count as matched.
+
+## Near-miss hand-finish: extract USO jal-form words or you chase phantom diffs (game_uso_func_00011024)
+
+When hand-diffing a USO near-miss to find its residual, the target-word
+extractor MUST handle the jal trailing-comment form `jal name /* ADDR WORD ->
+target */` (2 hex groups + `->`), not just `/* ROMOFF VRAM WORD */` (3 groups)
+and `.word 0x`. Miss it and you undercount the target (e.g. 112B vs the true
+128B), so a positional diff shows a phantom 4-insn SHIFT with ~21 bogus diffs —
+when objdiff already says 99.97% (1 real diff). Symptom: your raw diff and
+objdiff fuzzy wildly disagree, and target size < build size by a multiple of 4.
+Fix the extractor's jal regex first; then the true single residual appears.
+
+## m2c int-pointer-arith in read-modify-write (game_uso_func_00011024)
+
+m2c emits `*((int *)(p + 0xA58))` where `p` is already an `int *` — that's
+int-pointer arithmetic, byte offset 0xA58*4 (wrong, lands at +0x33B8/13240).
+For a read-modify-write of one slot the target reads and writes the SAME
+location: the fix is just `*p = *p & ~4` (or `*(int*)((char*)base + off)` with
+char arithmetic). Tell: a lone `lw tN, BIGOFF(reg)` whose offset is exactly 4x
+the intended struct offset. This was the sole diff taking 11024 99.97 -> 100.
