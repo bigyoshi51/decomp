@@ -279,6 +279,28 @@ fails and the function is reverted+counted errored (not silently left broken).
 Functions where objdiff doesn't improve are tallied as "new caps" — but trust
 that only as a permuter verdict per the staleness rule, not a permanent cap.
 
+### Band-yield calibration (2026-06-18, ~10-batch run over the sub-90 tail)
+
+Empirical yield by starting-fuzzy band (`--min`/`--max`, sub-90 = the never-run
+zone below the original `--min 90` factory pass; budget ~130s/fn, jobs 6):
+- **86–90%**: BEST yield. ~2-3 NM improvements per 8-fn batch (e.g. +3-13pp,
+  several reaching 96-98%). Most fixable diffs are few and the permuter lands
+  big jumps. Focus here.
+- **80–86%**: marginal. ~1 improvement per batch, rising verify-fail rate.
+- **<84%**: UNPRODUCTIVE — mostly `verify build/objdiff FAILED -> reverting`
+  (the permuter's pruned-source mutations don't even pass isolated verify;
+  these functions are too multi-diff). One 84-86 batch returned 0 improved /
+  3 errored. Don't spend batches below ~84.
+WORKFLOW WASTE: with `--no-commit`, verify-FAILED functions are NOT checkpointed
+as done, so they RE-RUN every batch (gl_func_000355A0 / 0002A904 / 0003F7A8 each
+burned ~2min/batch across 3+ batches). Either pass an explicit `--only` fresh
+list, or add a cap-comment to chronic verify-failers so the cap-filter skips them.
+LAND YIELD: of the isolated "VERIFIED 100.0" cracks this run, ~1/3 held in the
+matching in-tree build (titproc_uso_func_00000418 landed; gl_func_00048354 +
+func_00002088 were isolated false-100s, see MATCHING_WORKFLOW "permuter false-100
+#2"). ALWAYS matching-build-verify before landing. NM improvements (<100) are
+pure decode-progress — they add 0 to decomp.dev matched_code (binary metric).
+
 <a id="feedback-discover-has-source-misleading"></a>
 ## `discover --sort-by size` marks every INCLUDE_ASM placeholder as `[has source]` — write a sub-filter for genuinely-unstarted candidates
 
