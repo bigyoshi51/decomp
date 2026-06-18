@@ -8364,6 +8364,31 @@ factory's objdiff-100 for relocatable units. (Same masking class as
 42438's D-symbol inline.) Improves (<100, NM-only) are unaffected —
 they never link, never count as matched.
 
+### Second false-100 mechanism: isolated-scratch schedule ≠ in-tree schedule (gl_func_00048354, 2026-06-18)
+
+A DISTINCT and more insidious factory false-100: the permuter compiles an
+ISOLATED scratch (import.py extracts just the one function) with plain
+`cc … -DNON_MATCHING`, but the ROM uses the FULL-FILE in-tree matching build
+(`asm_processor.py` over the whole .c, then `cc …` WITHOUT `-DNON_MATCHING`).
+IDO's instruction SCHEDULER can order two independent insns differently
+between the isolated TU and the full TU. gl_func_00048354 (a counter-bump +
+array-store: `idx=(*p)++; arr[idx]=a1`): the target schedules the array-address
+`addu` BEFORE the counter `sw`; the permuter found `int new_var=8;` (hoist the
+literal 8) makes the ISOLATED build emit that order → objdiff verified 100.0,
+factory reported "*** VERIFIED 100.0 — crack ***". But the in-tree MATCHING
+build emits `sw`-then-`addu` (wrong) for the SAME source — every C variant
+tried (new_var hoist, explicit slot pointer, `register`) stayed wrong in-tree.
+Per-function byte-check vs baserom at the fn's ROM offset (or
+`build/src/<unit>.o` vs `build/non_matching/<unit>.o` — they DIFFERED at the
+swapped pair) exposes it; objdiff alone does NOT.
+RULE (reinforced): the factory's objdiff-100 on the isolated scratch is NOT a
+ROM match. Before landing ANY factory/permuter crack: rebuild the **matching**
+obj (`make build/src/<unit>.c.o`) and compare the function's bytes there (or
+full-link + per-fn cmp vs baserom), NOT just the non_matching/scratch obj.
+This is the [[feedback_standalone_compile_false_cap_verify_in_tree]] gotcha
+applied to permuter cracks: isolated ≠ full-TU for the scheduler, so a
+scheduling-swap "crack" that needs isolation is not landable in-tree.
+
 ## Near-miss hand-finish: extract USO jal-form words or you chase phantom diffs (game_uso_func_00011024)
 
 When hand-diffing a USO near-miss to find its residual, the target-word
