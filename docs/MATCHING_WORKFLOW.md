@@ -8534,3 +8534,36 @@ DUMP (uoptlist) — understand ugen's exact coloring decision and find C that
 steers it (slow, per-fn, uncertain) — OR recovering the literal original source
 (papermario had it for libultra; 1080 game code does not). The C-shape caps were
 real and got cracked (4 lands this session); this hard core is the true plateau.
+
+## Regalloc-dump (coloring-search) sweep of the near-100 band CONCLUDED (2026-06-19): only 2 fns were landable-via-regalloc, BOTH proven empty — the real lever is RECONSTRUCTION, not regalloc
+
+Drove `scripts/coloring-search.py` (directed -Wo,-zdbug:6 search) to completion on
+every LANDABLE register-renumber cap, after first scoping the whole near-100
+[98,100) band (67 fns). The scoping is the headline result:
+- **Only 2-3 of 67 near-100 fns are landable via a regalloc crack at all.** The
+  binding constraint on the other ~24 is NOT register allocation — it's
+  **placeholder callees** (`*_func_00000000` / `&D_00000000`). A perfect regalloc
+  match still emits wrong jal relocs, so coloring-search can never land them.
+  Those need SYMBOL RECONSTRUCTION first (resolve real callees from the .s
+  relocs, the titproc_uso_func_00001840 recipe) — THAT is the needle-mover, not
+  regalloc tricks. (Bucket breakdown: ~2 regalloc-landable, ~24 reconstruction-
+  blocked, ~4 are -O0 / no-uopt so coloring-search is inapplicable, ~5 are
+  already-matching with stale report.json.)
+- **Both landable targets proven EMPTY by the tool:**
+  - `func_8000969C` (-O1, real callees): 3 word-diffs (prologue s0/s1 store-order
+    + jal-0 delay-slot `lw s0` vs `lw a0`). 765 candidates (depth-2/3, 7 generator
+    families) exhausted. The -zdbug trace shows the LR is ALREADY colored s0 — the
+    residue is pure as1 SCHEDULING (delay-slot fill) + the allocno-id store-order
+    tiebreaker, both BELOW the coloring layer source transforms reach.
+  - `func_80000D2C` (-O2, real callees): frame 0xA0 vs target 0x90 + continue-flag
+    v1 vs t3. 1032 candidates exhausted. Frame and renumber are NOT separable —
+    both come from LR-26, which -zdbug:6 reports as "not colored, not splittable"
+    (negative-save stack home, IDO refuses t3). Corrects the stale 0x98 doc note.
+TAKEAWAY: the coloring-search tool now has its landable space fully swept and
+empty — don't re-run it on the near-100 band. The productive pivot is
+reconstruction of the ~24 placeholder-callee fns (real symbols → potentially
+byte-exact, then any residual regalloc is a SEPARATE smaller question).
+TOOLING NOTE: `-Wo,-zdbug:6` → `uoptlist` works in agent-a/agent-e cc but was
+NOT compiled into agent-b's cc (worktree toolchain symlink/build drift) — the
+fuzzy scorer is authoritative for CRACK/EMPTY regardless, but verify the dump is
+live (`cc -Wo,-zdbug:6 ... ; ls uoptlist`) before relying on trace-steering.
