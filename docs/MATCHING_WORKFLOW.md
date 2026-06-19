@@ -8510,3 +8510,27 @@ per-function ugen/uopt register-binding RE via the -Wo,-zdbug:6 regalloc dump
 the reloc-blind objdiff under-counts). Not a quick-C-fix problem anymore;
 4 structural cracks this session (titproc 418/15F4, game_libs 20DF4, gl 5FCC4)
 took the accessible C-shape wins.
+
+## Reconstruction + long-permuter fan-out on the HARD near-100 caps (6 fns, 2026-06-19): 0 cracks — confirms a genuine sub-C cap core
+
+Followed papermario's recipe (exact-source RECONSTRUCTION from the asm, then a
+long tuned permuter) on the 6 hardest remaining near-100 functions, fanned out
+3 ways. Result: **0 cracks** — rigorously confirming these are NOT C-shape caps
+but genuine compiler-internal ones:
+- **ugen register-renumber** (identical logic+insn-sequence, only the dest/scratch
+  REGISTER differs): gl_func_00042144 (srl a1 vs a3, call-arg-marshal-reuse),
+  gl_func_000525F0 (v0 vs v1, ~430k cumulative permuter iters resistant),
+  gl_func_0000C28C (t9 vs t8, scratch-queue pop), func_8000969C (s0/s1 + reload).
+- **as1 list-scheduler ties** (byte-identical except ONE adjacent-pair swap):
+  gl_func_0000871C (mtc1 vs lwc1), gl_func_0000BDE8 (sw ra vs cursor-init),
+  func_00000A9C (select-staging+block-placement), titproc_uso_func_00001840
+  (prologue delay-fill + 1-word spill-home).
+WHY the permuter can't touch these (proven 56k-430k iters, 0 gain): random AST
+perturbation acts on the C; these decisions are deterministic in ugen's
+allocator / as1's post-codegen scheduler operating on the SAME C. Reconstruction
+gets to the 1-3-diff floor; the last diff is below C-level control.
+The ONLY remaining lever for this core is the `-Wo,-zdbug:6` regalloc/schedule
+DUMP (uoptlist) — understand ugen's exact coloring decision and find C that
+steers it (slow, per-fn, uncertain) — OR recovering the literal original source
+(papermario had it for libultra; 1080 game code does not). The C-shape caps were
+real and got cracked (4 lands this session); this hard core is the true plateau.
