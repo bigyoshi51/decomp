@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
 
 - [Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)](#frame-size-correctness-unblocks-regressing-code-motion-rewrites-2026-06-16) — _Fix stack-frame size byte-exact FIRST (sweep pad local to match `addiu sp,sp,-N`); then m2c-faithful code-motion that "regressed" with a wrong frame now gains. Diagnose via jal-segment counts (equal jal count + matching per-segment sizes = control structure matches). game_uso 591C +3.66pp._
 ## Quick reference by sub-topic
@@ -15189,3 +15190,36 @@ exactly that — objdiff VERIFIED 100.0 isolated, but `sw`-before-`addu` wrong
 in the matching build, every variant). ALWAYS promote + rebuild the matching
 obj (`make build/src/<unit>.c.o`) and byte-check there (or full make + ROM cmp)
 before landing. See docs/MATCHING_WORKFLOW.md "permuter false-100 #2".
+
+## Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (kills the "frame +8 bloat cap", gl_func_0005FCC4, 2026-06-19)
+
+**This was mis-classified as a frame-padding CAP for many functions; it is NOT.**
+For a pointer-passthrough/constructor `T *f(T *a0)` where `a0` is conditionally
+reassigned (`if (!a0) a0 = alloc();`) and then held across calls, the
+SEPARATE-LOCAL form m2c/permuter emit —
+```c
+T *p = a0;
+if (!p) { p = alloc(...); if (!p) return 0; }
+... use p ...; return p;
+```
+gives IDO a FRESH in-frame spill slot for `p` (frame grows 8 bytes). Operating
+on the PARAMETER directly —
+```c
+if (!a0) { a0 = alloc(...); if (!a0) return 0; }
+... use a0 ...; return a0;
+```
+makes IDO spill `a0` to **its own incoming-argument home slot** (`sp+framesize+0`,
+the caller-reserved a-reg home) instead of allocating a new slot — frame stays
+at the natural size. gl_func_0005FCC4: separate-local `int *p=a0` → frame 0x20,
+99.91% (8-byte frame the only diff); param-direct → frame 0x18, **100.0**
+(matching in-tree build + ROM byte-identical).
+
+WHY: a spilled parameter reuses the home the caller already reserved for it; a
+spilled NON-parameter local needs a new frame slot. So whenever the "residual"
+is purely an 8-byte (or N-arg×4) frame-size diff with everything else matching,
+DON'T call it a cap — rewrite to thread the PARAMETER through instead of copying
+it into a fresh local. Reach for this on the whole "M-class named-local frame
+bloat" family (e.g. the alloc-or-offset constructor functions): collapse the
+working local back onto the incoming param where the dataflow allows.
+Permuter can't find this (it mutates the existing local; it won't delete it and
+re-thread the param), so it's a HAND lever the permuter misses.
