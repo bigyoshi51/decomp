@@ -8439,3 +8439,37 @@ reconstruction. Removing the spurious `addiu a0,a0,0` (from m2c `arg0++;
 arg0--;`) is the one safe partial win. Pick size-mismatch candidates whose
 residual is a genuine missing/extra INSTRUCTION (logic/decode), not a frame
 cascade.
+
+## "Caps" are usually wrong C SHAPE, not true limits — two proven levers + the root cause (2026-06-19)
+
+After labeling dozens of near-100 functions "regalloc/scheduling/frame caps", a
+user push ("they MUST have solutions; look at oot/papermario") + studying the
+references proved most are NOT caps. Findings:
+
+1. **PROVEN lever — param-direct spill-home** (gl_func_0005FCC4 99.91->100,
+   landed): a pointer-passthrough fn whose only residual is an N*4-byte frame
+   diff isn't capped — thread the PARAMETER through instead of copying it to a
+   fresh local (`int *p=a0`), so IDO spills the param to its own incoming-arg
+   home rather than a new slot. See IDO_CODEGEN "Param-direct beats
+   separate-local". The permuter can't find this (won't delete the local).
+
+2. **ROOT CAUSE of the regalloc/CSE cap class — un-typed `&D_00000000+offset`.**
+   papermario (IDO 7.1, same compiler) references ALL data as TYPED STRUCT
+   FIELDS (`npc->pos.x`, `script->fn[0]`) and NAMED data symbols — never the
+   giant-base `*(T*)((char*)&D_00000000 + 0xNNNN)` pointer math 1080's m2c-derived
+   code uses everywhere. The giant single base symbol makes IDO's CSE/regalloc
+   materialize `&D` bases into different registers than the original (e.g.
+   game_libs_func_00026B40: target `addiu a0,t6,0x53D0` vs build `addiu a0,a0,..`
+   — the base lands in a different reg because one mega-symbol is CSE'd as a
+   unit). The mature fix is what papermario does and what the 4244 ladder's
+   DEPOOL already demonstrated locally: give IDO the original's view — TYPE the
+   structs (per the project strategy memo "type structs just-in-time") and/or
+   split `&D_00000000+off` into per-symbol named externs so each materializes
+   independently. This is the systematic unlock for the "register-renumber"
+   band, not a per-function permuter grind.
+
+TAKEAWAY: before calling a near-100 residual a cap, classify it: (a) frame-size
+only -> param-direct / decl-order / brace-scope; (b) `&D`-base in wrong reg ->
+named-symbol/DEPOOL or struct-typing; (c) genuine instruction-schedule swap of
+two independent ops -> permuter or accept. (a) and (b) are C-solvable and were
+being wrongly conceded.
