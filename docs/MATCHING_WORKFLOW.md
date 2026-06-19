@@ -8473,3 +8473,40 @@ only -> param-direct / decl-order / brace-scope; (b) `&D`-base in wrong reg ->
 named-symbol/DEPOOL or struct-typing; (c) genuine instruction-schedule swap of
 two independent ops -> permuter or accept. (a) and (b) are C-solvable and were
 being wrongly conceded.
+
+## Fan-out audit of the near-100 band (3 agents, game_libs + USO/kernel + DEPOOL, 2026-06-19)
+
+A 3-subagent parallel sweep tested whether the near-100 "caps" are C-solvable.
+Verdict: the STRUCTURAL-fix sub-classes are real but now HARVESTED; the rest is
+register-allocation-bound. Concrete validated results (each verified vs the
+MATCHING in-tree build, reloc-filtered):
+
+- **param-direct / frame-only sweep (game_libs AND USO/kernel): 0 new cracks.**
+  Of ~164 functions at 95-100%, only a handful are pure frame-class and all are
+  genuine caps (alloc-and-return constructors where the returned ptr ISN'T the
+  param so param-direct can't apply, e.g. gl_func_000088B4; -O0 frame-pack holes
+  gl_func_00008A40/func_0000F2EC; phantom-slot gl_func_000685C0). gl_func_0005FCC4
+  (landed) was essentially the last param-direct win.
+- **DEPOOL is PROVEN for offset-reassociation** (gl_func_0003829C: `&gl_ref_0001EA30`
+  extern + `gl_ref_0001EA30 = 0x1EA30` in undefined_syms_auto.txt turned
+  `lw t0,0x6A30(v0)` into `lw …,0(t0)` matching target). But it does NOT help
+  base-register-coloring ties (game_libs_func_00026B40: the 0x53D0 must stay in
+  the addiu immediate, so the addend form is required; the a0-vs-t6 base is a
+  pure coloring tie). And every depool-foldable fn also has frame/coloring
+  residuals depool can't touch -> 0 functions zero out from depool alone.
+- **dead-`if`-removal frame lever** (timproc_uso_b1_func_00002A8C): deleting
+  m2c's `if(!vt){}`/`if(vt){}` blocks that read an uninitialized var fixed the
+  frame 0x40->0x20 (real lever); residual then = v0/v1 obj-coloring cap.
+- **objdiff false near-miss**: gui_func_0000161C shows 95.45% but is byte-exact
+  in the matching build (reloc-display artifact) — don't chase these.
+- **latent bug** game_libs_func_0005FE14: `(&D_00000000)+0x21C40` with `D` typed
+  `int` scales x4 (wrong addr); fix `(char*)&D_00000000 + 0x21C40` (3->1 diff;
+  fn is INCLUDE_ASM so NM-body fix doesn't reach ROM — fix if ever promoted).
+
+BOTTOM LINE: the near-100 plateau is now genuinely register-allocation /
+instruction-scheduling / -O0-frame-pack bound. The remaining levers are (a)
+per-function ugen/uopt register-binding RE via the -Wo,-zdbug:6 regalloc dump
+(slow, ~0-1/hr), or (b) the multi-day spimdisasm USO-reloc migration (unlocks
+the reloc-blind objdiff under-counts). Not a quick-C-fix problem anymore;
+4 structural cracks this session (titproc 418/15F4, game_libs 20DF4, gl 5FCC4)
+took the accessible C-shape wins.
