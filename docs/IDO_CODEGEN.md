@@ -15312,3 +15312,39 @@ find these). Word-compare against the build `.o` filtering reloc placeholders; v
 match in the LINKED ELF (`objdump -d build/<rom>.elf` at the function VRAM) so real `jal` targets
 and extern `%hi/%lo` symbols are resolved — an unlinked `.o` shows `jal 0`/`lui 0x0` placeholders
 that look like diffs but aren't. Verified 2026-06-20, kernel/kernel_014.c.
+
+## FP `(int)(f32 * (float)icount)` mul: spell the GLOBAL-LOADED operand FIRST to fix fp-reg coloring across ALL blocks at once (bootup func_00014228, 2026-06-20)
+
+For the idiom `n = (int)((f32_global) * (float)int_count)` repeated in several blocks
+(`lwc1` global; `mtc1`+`cvt.s.w` the int; `mul.s`; `trunc.w.s`; `mfc1`): the C
+operand ORDER flips the entire fp-register coloring, and the right order is
+**global-load first** even though the int-count is the "left" semantic operand.
+
+- `(float)*(int*)(s0+0xDC) * *(float*)&D` (count-first) → IDO loads the global into
+  the LOW fp temp ($f4) and the cvt(count) into a higher reg, emitting
+  `mul global, count` — and it picks DIFFERENTLY per block (some blocks count-first,
+  some global-first) → many diffs.
+- `*(float*)&D * (float)*(int*)(s0+0xDC)` (global-first) → IDO consistently gives the
+  cvt(count) the low reg and the global the higher reg, emitting `mul cvt(count), global`
+  in EVERY block, matching the target. On func_00014228 this single re-spelling dropped
+  23→10 non-reloc diffs (3 blocks fixed at once). Counter-intuitive: the global-first
+  source spelling produces count-first machine operands.
+
+Pair levers used on the same fn (twin of func_000140C4, 3-element draw dispatcher):
+- frame 0x68 / col[4]@0x58: `float col[4]; volatile int pad[12];` — col declared first
+  homes at the frame top (frame-slot rule), pad fills the low slots to size the frame.
+- `a + b` field add where target loads the SECOND C operand first: write the addends in
+  reverse (`*(s0+0xHI) + *(s0+0x44)`); IDO reverses again → 0x44 loaded first.
+- keep the if-condition a DIRECT deref `if (*(int*)(s0+0xN))` to preserve `beql`
+  branch-likely; any held-temp (`int h = *(s0+0xN); if(h)…`) downgrades it to `beq`
+  AND spills the temp (frame grows) — strictly worse.
+
+RESIDUAL CAP (as1 prologue save-order tie): when block-1's condition value is also the
+first call's only arg, the target may save `$s0@0x18` BEFORE `$ra@0x1C` with `or s0,a0`
+scheduled into the inter-save gap, then read the handle straight into `$a0`
+(`lw a0,0x104(a0)`, jal delay = nop). A build that saves `$ra` first (adjacent saves,
+no gap) reads the handle into `$a1`, moves `or s0,a0` after, and fills the jal delay with
+`or a0,a1` — a fixed ~10-word cluster. If blocks 2+ use the identical C shape and match
+exactly while only block-1's prologue diverges, it's this as1 scheduling tie, NOT
+C-reachable (held-temp/array-index/int-param/float-temp all fail to move it). Wrap NM
+and stop. func_00014228 capped here at 10 non-reloc diffs (from 24).
