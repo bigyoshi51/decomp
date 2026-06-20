@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
+- ["8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad](#8-byte-dead-slot-below-a-stack-buffer-cap-is-often-a-bufn-array-index-offset-not-a-pad-problem) — _Target passes scratch buf at sp+K+8, build at sp+K, dead 8 bytes below it, frame same? Don't add volatile pad — the buffer is over-sized and the code passes `&local_buf[2]` (a pointer into the middle). Declare buf frame-correct, pass `&local_buf[N]`. Cracked gl_func_0005FE7C (the "needs INSN_PATCH on 6 sp-offset insns" cap)._
 
 - [Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)](#frame-size-correctness-unblocks-regressing-code-motion-rewrites-2026-06-16) — _Fix stack-frame size byte-exact FIRST (sweep pad local to match `addiu sp,sp,-N`); then m2c-faithful code-motion that "regressed" with a wrong frame now gains. Diagnose via jal-segment counts (equal jal count + matching per-segment sizes = control structure matches). game_uso 591C +3.66pp._
 ## Quick reference by sub-topic
@@ -913,6 +914,15 @@ has a fixed 2-word residual: the **target computes the array address (`addu base
 This is a **cap class**, not a one-off — confirmed identical on `timproc_uso_b5_func_0000A95C` (0x3C/0x40), `bootup_uso func_00002088` (0x104/0x108), `func_000020AC` (0xC0/0xC4/0xC8). Recognize the shape and leave NM (~75-90%); don't burn ticks reordering or trusting a standalone zero. (Permuter is the only lever that might reach it — A95C floored, untried on the others.)
 
 <a id="feedback-ido-array-index-vs-charptr-spill-packing"></a>
+## "8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad problem
+
+When a near-miss's only residual is that the target passes a scratch buffer at `sp+K+8` while your build emits `sp+K` (same frame size, an 8-byte dead hole below the buffer in the target that nothing references), **don't reach for `volatile pad`** — IDO eliminates unused pads and `volatile int pad[2]` only helps when the gap is at the frame TOP / forces an arg-spill slot. Here the buffer's *start address* is the diff.
+
+The real source: the buffer is over-sized and the code passes a **pointer into the middle of it**. Target `addiu a1, sp, 0x2C` with buffer base at `sp+0x24` means the C is `helper(&local_buf[2])` (8 bytes = 2 ints into the array), leaving `local_buf[0..1]` (sp+0x24..0x2B) as the dead slot. Declaring `int local_buf[26]` (frame-correct) and passing `&local_buf[2]` reproduces both the buffer address AND the dead hole below it — no pad, no frame growth.
+
+**Cracked gl_func_0005FE7C (2026-06-20):** documented as "8-byte hole at sp+0x24, IDO won't honor volatile pad — needs INSN_PATCH on 6 sp-offset insns." Actually `gl_func_00000000(a1, &local_buf[2])` (was `&local_buf[0]`) fixed the 2 sp-offset diffs to byte-exact. (Paired with a tail-store reorder: moving `s0[0x8]=0` to just before `helper6()` made IDO fill helper6's jal delay slot with it, matching the target's helper7-delay=nop schedule.) **Check the buffer-index offset before conceding a "dead frame slot" cap.**
+
+<a id="feedback-ido-array-index-spill-packing"></a>
 ## Array-index addressing packs stack spills tighter than char*-pointer-arith (fixes frame-size / spill-offset residuals)
 
 When a function's only residual is a **frame-size / spill-slot-offset** difference off by a constant — the target uses a smaller frame and your build leaves a gap between spill slots — and the addressed base is a parameter scaled by another parameter, the **way you write the address computation** changes IDO's spill-slot packing.
