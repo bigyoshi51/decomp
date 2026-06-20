@@ -53,6 +53,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [bnel-likely with shared store-in-delay = `if (!cond) helper(); shared_store;`](#feedback-ido-bnel-shared-store-after-helper) — When asm shows `bnel ptr,zero,+N; sw <val>,off(reg) [delay-likely]; jal helper; ...; sw <val>,off(reg)` (same store on both paths), the C source is `if (cond == 0) helper(); store;` — the store happens both as…
 - [IDO bnel tail-merging routes the false-path epilogue through the true-path's register-restore tail (cosmetic, ~99 % cap)](#feedback-ido-bnel-tail-merge-register-restore) — When the function body is `if (cond) { several jal calls }` and the true path ends with reload-args-then-jal patterns like `lw a0,0x18(sp); jal; lw a1,0x1C(sp)`, IDO sets the bnel branch target to the MIDDLE of those…
 - [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
+- [A "branch-likely cap" can be a wrong CALL ARGUMENT in disguise — verify which value each jal actually passes before conceding `bnez`-vs-`bnezl`](#feedback-branch-likely-is-wrong-call-arg) — _gl_func_00031898 (game_libs) sat at a documented 95.86% "branch-likely cap" (build `bnez`+move-in-delay vs target `bnezl`+lw-ra-in-delay). The real bug: the conditional-skip call passed `ret_val` (held in a1) when the target passes the **struct pointer a0**. Target spills/reloads a1 across the call and emits `bnezl` with the epilogue `lw ra` hoisted into the annulled delay. Fixing the arg (`gl_ref_00045EA8(a0)` not `(ret_val)`) made IDO emit the `bnezl` naturally — 29/29 exact. Lesson: when a call-skip block shows `bnezl`+epilogue-load-in-delay and your build has `bnez`+arg-move-in-delay, the arg-move is the tell — IDO had to set up a call arg, the target didn't. Decode the jal's actual a0/a1 inputs from the asm before blaming the branch flavor._
 - [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
 - [Circular-list do-while walk emits BOTH branch-likelies naturally (conditional-skip `bnel` + loop-back `bnezl`) — don't fear bnel here, write the obvious do-while](#feedback-ido-circular-list-do-while-natural-bnel) — _A circular-list iteration `node=head; if(node){ do { if(key==node->K) call(self,node); node=node->NEXT; if(node==head) node=0; } while(node!=0); }` compiles BYTE-EXACT including the two target branch-likelies: the `if(key==node->K) call(...)` skip becomes `bnel key,t,skip` (the `node=node->NEXT` advance fills the annulled delay), and the `while(node!=0)` loop becomes `bnezl node,loop` (the next iter's first load fills the delay). No coaxing — the obvious do-while IS the match. Loop state (self/key/node) lands in s0-s2 across the call. Verified 2026-05-24 gl_func_00060ED0 (29/29 first try) and gl_func_0005B568 (sibling, single bnel-free variant). Counter to the usual "bnel is hard" instinct._
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
@@ -151,6 +152,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces andi-pre-jal pattern](#feedback-ido-o1-andi-pre-jal-via-register-u32-mask) — _When target has `andi tN,X,MASK; jal; or argReg,tN,zero` (3-insn mask-pre-jal vs natural delay-slot fold), use `register u32 v = expr & MASK; func(..., v);` block-local. The `& MASK` on the initializer (not the use) commits IDO to emitting the and pre-jal._
 - [Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot](#lift-unconditional-loop-counter-init-out-of-the-if-body-to-claim-the-branchs-delay-slot--leaves-the-result-init-before-the-branch) — _When target has `or v1, a0, 0` (result=sum) BEFORE `beq len, 0` and `or v0, 0, 0` (i=0) IN the delay slot, but built emits `result=sum` in delay slot, lift `unsigned int i = 0;` OUT of the if-body. Both inits become unconditional and IDO picks i=0 for the slot. Generalizes the cap-class previously labeled "no C-level lever"._
 - [When the target is 1 insn LARGER than IDO's natural emit — preemptive `or v0, v1, 0` + NOP-delay branch is unreachable from C](#feedback-ido-target-larger-preemptive-set-nop-delay) — _Diagnostic for the inverse-of-bloat cap: when built `.o` is SHORTER than target by exactly 1 insn (a preemptive `or v0, v1, 0` BEFORE a sltu/bnez that the natural emit folds INTO the branch's delay slot), suspect this scheduling cap. IDO never picks the longer "preemptive + nop" form. Tested early-exit, goto-out, and early-set-clear variants all produce the same shorter natural emit. NM-wrap. Verified 2026-05-08 on kernel/func_800000B0 (91.15% fuzzy)._
+- [Returns-0-or-1 flag in $v1 + beql + trailing `or v0,v1`? Rewrite to the POSITIVE two-return form (cap was misdiagnosed)](#feedback-ido-flag-return-two-return-form-flips-v1-to-v0) — _A conditional "do work; return 1; else return 0" fn building with the flag in $v1 (beqzl early-exit + trailing `or v0,v1`) is NOT an unflippable $v0/$v1 cap. The `int result=0; ...; result=1; return result;` single-return shape spans `result` to the tail → IDO colors it $v1 + branch-likely. Fix: drop the `result` local, use `if(COND){...; return 1;} return 0;` (POSITIVE, not inverted) → preinits $v0=0, plain `beq+nop` fallthrough, `b end; li v0,1` tail, $v0 throughout. Also frees a stack slot so a real spilled local lands at the target offset. Byte-exact game_uso_func_0000D74C 2026-06-20 (prior "v0/v1 + beql/beq" comment was wrong)._
 - [Leaf load-hoist-above-aliasing-store: don't cache the first deref in a named local](#feedback-ido-leaf-load-hoist-no-named-temp) — _When a no-frame leaf's target hoists `lw t6, off(aN)` ABOVE a preceding `sw aM, 0(a0)` (aliasing store) AND uses transient `$t6/$t7` for two un-CSE'd derefs of the same `aN[k]`, write the load-bearing statement FIRST in source with NO named temp. A named `int t = aN[k];` both mis-allocates the value ($v0 instead of $t6) and CSEs the second deref to one load. Verified byte-exact 2026-05-18 on `game_libs_func_000664D4` (7-insn doubly-linked-list splice)._
 - [A no-dependency constant store (`field = 0`) gets hoisted into an earlier load-delay gap — write it LAST in source order to pin it at the end](#feedback-ido-zero-store-write-last-to-prevent-hoist) — _When a function copies several loaded fields into the object AND also writes a constant (e.g. `obj->K = 0`), IDO's scheduler hoists the zero-store (no value dependency) up to fill a load-delay gap, landing it earlier than the target. Writing the constant store as the LAST statement keeps it after the dependent loads, matching the target's late placement (typically just before the jr-delay store). Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (3 global-table field copies + one `a0->0x3C=0`): zero-store written 3rd → emitted at pos 8 (hoisted); written last → pos 11 (matches)._
 - [Split a local's declaration from its initializer to hoist intervening stores together (`int n; ...; store; store; n=0;`)](#feedback-ido-split-decl-init-hoists-stores) — _When the target emits two (or more) prologue byte/word stores back-to-back at the top but your `int n=0; char *d=a0; char *s=a3;` + `a0[0]=a1; a0[1]=a2;` form interleaves the second store among the setup moves, split the decls from their inits: declare `int n; char *d; char *s;` first, then the stores `a0[0]=a1; a0[1]=a2;`, then `n=0; d=a0; s=a3;`. IDO then schedules both stores adjacently at the top (the inits become later moves with no reason to slot between the stores). Verified game_libs_func_000099DC 80%→90% (2026-05-31). Residual there was an orthogonal const-scheduling tie._
@@ -1646,6 +1648,21 @@ Vs:
 - `feedback_ido_swap_stores_for_jal_delay_fill.md` — sibling principle: source order/structure controls IDO's emission shape
 
 ---
+
+---
+
+<a id="feedback-branch-likely-is-wrong-call-arg"></a>
+## A "branch-likely cap" can be a wrong CALL ARGUMENT in disguise
+
+_Before conceding a `bnez`-vs-`bnezl` (branch-likely) diff as an unflippable scheduler cap, verify which value each `jal` actually passes. A mismatched call arg can be the entire cause of the wrong branch flavor._
+
+**Verified 2026-06-20 on `gl_func_00031898` (game_libs, -O2).** The function carried a documented "NATURAL CEILING 95.86% / branch-likely cap": build emitted `bnez v1,+4` + `move a0,a1` in the delay where the target had `bnezl v1,exit` + `lw ra,20(sp)` (epilogue) in the annulled delay slot.
+
+The actual cause: the third conditional `if (a0[18]==0) call();` was written `gl_ref_00045EA8(ret_val)` where `ret_val` lives in `a1`. That forced IDO to set up the call arg with `move a0,a1` — which had to sit in the (non-annulled) plain `bnez` delay slot. The **target passes the struct pointer `a0`** (already live, reloaded earlier), so it needs NO arg setup, frees the delay slot, spills/reloads `a1` (ret_val) across the call, and lets IDO emit `bnezl` with the epilogue `lw ra` hoisted into the annulled slot.
+
+Fix: `gl_ref_00045EA8(a0)` not `(ret_val)` → 29/29 words exact, 0 non-reloc diffs.
+
+**Diagnostic tell:** when a call-skip block shows target `bnezl`/`beqzl` + an epilogue/merge load in the delay, and your build shows plain `bnez`/`beqz` + an **arg-`move` in the delay** — the arg-move is the smoking gun. IDO had to materialize a call argument; the target didn't. Decode the jal's real `a0/a1` inputs from the surrounding asm (what's reloaded just before the jal? does the target do a `move aN,...` anywhere near the call, or not?) before blaming the branch-likely scheduler. Branch flavor often follows from delay-slot availability, which follows from whether arg setup is needed.
 
 ---
 
@@ -6340,6 +6357,39 @@ Target's use of $v1 + move appears to be a minor scheduling variation inside IDO
 **Don't confuse with:** `feedback_ido_v0_reuse_via_locals.md` — that's about $v0 vs $t-reg for intermediate values, not $v0 vs $v1 for return-flowing values. The techniques in that memo (name/don't-name local) don't apply here.
 
 **Origin:** 2026-04-20, agent-a, `bootup_uso func_00000A9C` (char-to-bitmask map function, 0x78 bytes). 97.8 % match on the goto-chain form; 6 additional variants attempted without flipping the $v0/$v1 choice.
+
+**CONTRAST — a returns-0-or-1 flag IS flippable (positive two-return form), see below.** The unflippable class above is for a value pre-loaded into a branch DELAY SLOT that flows to a SHARED return. A plain "return 0 / return 1" flag is different.
+
+---
+
+<a id="feedback-ido-flag-return-two-return-form-flips-v1-to-v0"></a>
+## Returns-0-or-1 flag in $v1 + beql + trailing `or v0,v1`? Rewrite to the POSITIVE two-return form to put it in $v0 (cap was misdiagnosed)
+
+_When a conditional "do work, return 1, else return 0" function builds with the flag in **$v1** (a branch-LIKELY `beqzl` early-exit + a trailing `or v0,v1,zero` move), the cause is the `int result = 0; ...; result = 1; return result;` single-return shape: `result` spans the whole body to one tail return, so IDO colors it $v1 and merges the early-exit into a branch-likely that reloads $v0 at the end. This is NOT an unflippable $v0/$v1 cap. The fix: drop the `result` local and use the **positive two-return** form:_
+
+```c
+int f(char *a0) {
+    int arg;
+    if (COND) {            /* positive test, NOT `if (!COND) goto end;` */
+        ...body...; return 1;
+    }
+    return 0;
+}
+```
+
+IDO then preinits `$v0 = 0` BEFORE the test, emits a plain `beq t,zero,end; nop` (unfilled-delay fallthrough — yes, IDO DOES emit this here), and a `b end; addiu v0,zero,1` tail — `$v0` throughout, no trailing move. Same word count as target.
+
+**Why the variants matter (all tried, only the last lands):**
+- `int result=0; if(COND){...; result=1;} return result;` → $v1, `beqzl`, trailing `or v0,v1` (the misdiagnosed "cap").
+- `int result=0; if(!COND) goto end; ...; result=1; end: return result;` → identical to above (the `result` span is what does it, not the branch form).
+- `if(!COND) return 0; ...; return 1;` (INVERTED two-return) → $v0 correct, but inverts the branch to `bnez+b` and hoists `or a0,s0` early — structurally off at the top.
+- `if(COND){...; return 1;} return 0;` (POSITIVE two-return, NO `result` local) → **byte-exact.**
+
+Also: dropping the spurious `result` local frees a stack slot, so a real spilled local (`arg`) lands at the target's offset (here 0x24, not 0x20). Two-birds: removing the local fixes BOTH the v1 coloring AND the spill-slot offset.
+
+**Recognition:** near-miss whose only diffs are (a) result reg $v1 vs $v0, (b) early branch `beqzl` vs `beq`+nop, (c) a trailing `or v0,v1,zero`, and (d) maybe one spill offset off by 4 — all downstream of one root cause. Before NM-wrapping ANY "v0/v1 regalloc / beql vs beq" cap on a 0/1-flag function, try the positive two-return form first.
+
+**Origin:** 2026-06-20, agent-i, `game_uso_func_0000D74C` (conditional 3-call state update, 0xA8/42 words). Prior committed comment declared a permanent "v0/v1 regalloc swap + beql/beq" cap with the historical INSN_PATCH/SUFFIX_BYTES fakes removed; re-derivation showed the cap was an artifact of the single-return `result` local. Byte-exact (0 non-reloc diffs) on the positive two-return form.
 
 ---
 
