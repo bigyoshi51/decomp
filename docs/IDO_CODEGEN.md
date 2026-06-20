@@ -307,6 +307,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 - [Asm epilogue with no `move v0, ...` before `jr ra` indicates void return — match the C signature](#feedback-ido-epilogue-no-move-v0-implies-void-return) — _When the target's epilogue is `lw ra, X(sp); addiu sp, sp, +N; jr ra; nop` with NO `move v0, ...` (or `or v0, ..., zero`) immediately before `jr ra`, the function returns `void`. C bodies declared as `T *fn(...)` with `return X;` will emit a spurious `move v0, X` that doesn't appear in target. Fix: declare as `void fn(...)`, drop the `return X;`. Verified 2026-05-07 on `game_uso_func_00001DDC`: 19.64% → 19.90% just from the signature change._
 - [`(char*)&D_00000000 + 0xK` constant-folds field offsets into per-access absolute `lui;lw` — use a distinct relocated symbol for a held base register](#feedback-ido-generic-reloc-base-folds-vs-distinct-symbol) — _When the target keeps a single reloc base in a reg/stack and uses base+offset for many fields of one object, the generic `(char*)&D_00000000 + 0xK` makes IDO -O2 fold each `obj+fieldoff` into a separate ABSOLUTE `lui;lw` (no held base; shorter, wrong frame). A distinct `extern T D_000K;` + `&D_000K` keeps the symbol address in one reg (its own HI/LO reloc; offsets stay immediates). The distinct symbol must be in the segment symbol table (undefined_syms_auto.txt / splat) or it's a link error. Seen 2026-05-18 on `gl_func_0006A304` (USO pointer-fixup driver, NM-wrapped pending symbol plumbing)._
+- [Reloc-symbol GATE/global read: `int *sym` (held-ptr deref) vs `*(int*)((char*)&SYM+K)` (base-direct) — pick by whether the target double-derefs](#feedback-ido-reloc-base-direct-vs-ptr-deref) — _When a global/cross-USO read uses `lui v0; addiu v0,&SYM; lw t,K(v0)` (address materialized as a held BASE, then K-offset load) the C must read `*(int*)((char*)&SYM + K)`. A committed NM body declaring `extern int *sym;` and reading `sym[K/4]` instead emits a DOUBLE deref (`lw v0,%lo(SYM)(v0); lw t,K(v0)` = load the pointer THEN load through it) — semantically different and 1 word longer. Cracked gl_func_00030598 (game_libs, 2026-06-20): a fn flagged as needing removed SUFFIX_BYTES/PROLOGUE_STEALS was actually just this extra-deref bug; base-direct read gave 16/16 words. Bonus: two consecutive `if (X) goto end;` arms over such reads emit `bnezl ...,end` likely-branches that hoist the epilogue `lw ra` into the delay slot — the documented "IDO won't emit bnel from if-return" note is wrong for the goto-shared-epilogue shape._
 - [IDO `addu` operand order depends on whether expression is split into a named local](#feedback-ido-addu-operand-order) — For `v1 = A + B` in C, IDO picks `addu $rd, $rs, $rt` with `$rs = first-computed operand` and `$rt = second-computed operand`.
 - [IDO doesn't share `lui $at` across stores to adjacent externs — struct retype DOESN'T fix it at -O1](#feedback-ido-adjacent-extern-shared-at) — _IDO -O1 (and possibly -O2) emits a fresh `lui $at` before EACH store to an external symbol, even when the symbols are adjacent bytes AND are declared as fields of a single struct.
 - [Two adjacent-offset global stores — split into per-store extern symbols to force `lui $at` per store](#feedback-ido-adjacent-store-extern-split) — _When target emits `lui $at, HI; sw X, 0($at); lui $at, HI; sw Y, 4($at)` (two independent `lui $at` per store, no cached base pointer), writing the obvious C `*(int*)&SYM = X; *((int*)&SYM + 1) = Y;` makes IDO cache…
@@ -11370,6 +11371,43 @@ the target holds ONE base across many field accesses (spilled or in an
 $s reg), switch to a distinct symbol — the generic form structurally
 cannot produce a held base. Seen 2026-05-18 on `gl_func_0006A304`
 (1080 game_libs USO pointer-relocation fixup driver).
+
+## Reloc-symbol read: base-direct `*(int*)((char*)&SYM+K)` vs `int *sym` held-ptr deref — pick by whether the target double-derefs
+<a name="feedback-ido-reloc-base-direct-vs-ptr-deref"></a>
+
+**Symptom.** A global / cross-USO read in the target is:
+```
+lui   v0, %hi(SYM)
+addiu v0, v0, %lo(SYM)   ; v0 = &SYM  (address as a held base)
+lw    t6, 8(v0)          ; read *(int*)(&SYM + 8)
+```
+i.e. the symbol's ADDRESS is materialized, then a K-offset load reads
+the value at `&SYM + K`. There is exactly ONE memory load per field.
+
+**Trap.** A committed NM body that declares `extern int *sym;` (a
+pointer) and reads `sym[K/4]` emits a DOUBLE deref:
+```
+lui v0,%hi(SYM); lw v0,%lo(SYM)(v0)   ; load the POINTER value at SYM
+lw  t6, K(v0)                          ; load through it
+```
+That's semantically different (`*(*(&SYM)+K)` vs `*(&SYM+K)`), one word
+longer, and never matches. Fix: read base-direct
+`*(int*)((char*)&SYM + K)`.
+
+**Bonus (likely-branch gate).** Two consecutive `if (X) goto end;` arms
+over such reads, where `end:` is the epilogue, emit `bnezl ...,end`
+branch-likely with the epilogue's `lw ra` hoisted into each delay slot
+(`55C00007 / 8FBF0014`). So the often-cited "IDO -O2 won't emit bnel
+from `if (cond) return;`" note does NOT hold for the goto-shared-epilogue
+shape — `goto end` over a restore-ra epilogue produces the bnel.
+
+**Verified.** `gl_func_00030598` (game_libs, 2026-06-20): a 2-arm gate
+(`call only if D[2]==0 && D[3]==0`) flagged in-tree as needing a removed
+SUFFIX_BYTES/PROLOGUE_STEALS stolen-prologue recipe was actually just the
+extra-deref bug. Switching `gl_d_30598_v0[2]/[3]` → `*(int*)((char*)&D_00000000+8)`
+/ `+0xC` gave 16/16 words exact (reloc-filtered), ROM byte-identical.
+Lesson: re-derive the asm before trusting a committed "needs removed
+match-faking infra" cap note.
 
 ## IDO -O2 2x-unrolls a known-small-trip loop — non-unrolled target with li-constant bound is likely an un-suppressible-from-C cap
 <a name="feedback-ido-unrolls-known-small-trip-loop"></a>
