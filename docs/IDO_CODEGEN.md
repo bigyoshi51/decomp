@@ -14796,6 +14796,21 @@ diffs in sw/lw, so fixing dozens of slot offsets barely moves the
 score — but it IS byte-progress; verify with an offset histogram
 (decode sw/lw base=sp imm) instead of the fuzzy %.
 
+VALIDATED COROLLARY — "spilled var too LOW, target wants it HIGH" (bootup_uso
+func_0000EE8C, LANDED byte-exact 2026-06-20): when the ONLY residual is a
+named local's caller-save spill homed at a LOWER slot than the target (here
+`ret`/$v1 spilled to 0x18(sp), target 0x24(sp) in a 0x28 frame, all other
+spills at 0x1C/0x20 matching), the fix is the two-ended decl-order lever:
+(a) declare the wanted-HIGH var FIRST so it claims the top named-local slot
+(0x24), and (b) put a `volatile char pad[N]` reserve LAST so it occupies the
+low unused slot (0x18) the target leaves reserved. (`volatile char pad[4]`
+with only `(void)pad` reserves bytes and emits ZERO stores; `volatile int
+pad` does NOT — it gets written, growing/shifting the frame, so use the
+volatile ARRAY form.) Just moving the var first WITHOUT the trailing pad
+shifted the other temp spills instead (5 diffs) — you need BOTH ends. 36/36
+words byte-exact. This is point-1 + point-4 applied together: decl order sets
+the named slot, the trailing volatile-array pad parks the low reserve.
+
 ## STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (game_uso_func_000044F4 79.57 -> 100.0, 2026-06-11) <a name="feedback-ido-struct-by-value-marshalling-lever"></a>
 
 A constellation of four asm tells that all come from ONE source fact —
