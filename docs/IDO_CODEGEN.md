@@ -39,6 +39,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
 - [REUSE an already-homed local to hold a value across a branch instead of a fresh named temp (avoids +8 frame); but `volatile`-required-for-loop blocks the inline-CSE that yields a homeless register temp (func_80007698 95.9→99.5%, 1-insn cap)](#reuse-an-already-homed-local-to-hold-a-value-across-a-branch-not-a-fresh-named-temp--avoids-8-frame-func_80007698) — _A short-lived value reused across one branch: don't `u16 t = HW(p); if(t)…use t` (3rd M-class home → frame +8); reuse a local already homed for an unrelated later value (`sp1C`) so the value rides in a register matching the target's reuse. Cost: a dead `sw t,home(sp)` in the branch delay slot (target=nop), because any homed local writes its home. A register-ONLY subexpr temp (no home) needs inline-CSE, which is blocked when the same pointer is `volatile` (needed to force the loop's per-statement reload at -O1). Loop-reload-via-volatile vs tail-CSE-via-nonvolatile is a true conflict → 1-insn cap._
+- [A second-check "re-read into a fresh register" (target reloads the SAME field twice across a branch) is reproduced by an UNCONDITIONAL reload before the second check — NOT inline-deref CSE (gl_func_0000E5D0, 15→8 diffs)](#feedback-ido-unconditional-reload-defeats-cse-bnezl-reread) — _Two sequential `if(field>=K){...}` checks where the target re-reads the same field into a FRESH register for the second check (t9 then t2) + hoists the re-read into the first bnezl's annulled delay slot. Inline-deref or a cached local lets IDO CSE the field into ONE register (structurally off, ~15 diffs). FIX: (1) type the pointer as a struct for clean field derefs; (2) reload the pointer UNCONDITIONALLY before the second check (a bare reload statement OUTSIDE the first if — inside it doesn't work). The reload defeats CSE → check2 re-reads fresh, matching the bnezl-delay re-read. Inverse of loop-reload/tail-reuse caps: here you FORCE a reload; plain reload statement = cleanest CSE-breaker, no volatile needed. Residual cap caveat: when zdbug:6 shows the target coloring but emission diverges, it's a spilltemp-reload assignment the source levers can't reach._
 
 ### branch likely / bnel
 
@@ -15478,3 +15479,50 @@ GENERAL: for "+8 frame from a fresh temp held across a branch", first try reusin
 local already homed for a later disjoint value — it removes the frame growth for free.
 If the only residual is then a single dead home-store in the delay slot AND the target
 uses a register-only temp that your `volatile` (or any CSE-blocker) prevents, it's a cap.
+
+<a id="feedback-ido-unconditional-reload-defeats-cse-bnezl-reread"></a>
+## A second-check "re-read into a fresh register" (target reloads the SAME field twice across a branch) is reproduced by an UNCONDITIONAL reload before the second check — NOT an inline-deref CSE (gl_func_0000E5D0, 15->8 diffs 2026-06-20)
+
+Shape: a fn reloads a pointer + reads a field, runs an `if (field >= K1) {...}`, then
+runs `if (field >= K2) {...}` — and the TARGET re-reads the field into a **fresh
+register** for the second check (`lw t9,0(v0)` for check1, `lw t2,0(v0)` for check2),
+hoisting the re-read into the FIRST `bnezl`'s annulled delay slot (the skip-path copy):
+```
+lw v1,32(sp)        # self
+lw v0,96(v1)        # factory = self->0x60
+lw t9,0(v0)         # first = factory->n  (check1 reg)
+slti at,t9,K1
+bnezl at, skip1     # branch-likely
+ lw t2,0(v0)        #   delay: re-read first -> t2 (skip path)
+... tier-1 body ...
+lw v0,96(v1)        # RELOAD factory
+lw t2,0(v0)         # re-read first -> t2  (check2 reg, taken path)
+slti at,t2,K2
+```
+The naive NM (inline `((T*)self[0x60/4])[0]` at every site, or a cached `first` local)
+lets IDO **CSE the field into ONE register** used for both checks — structurally off
+(no bnezl-delay re-read, branch offsets shifted), ~15 diffs.
+
+FIX (two parts, both needed):
+1. **Type the pointer as a struct** so the field derefs are clean (`factory->n`,
+   `factory->sub[..]`) — the int**-cast soup blocks the codegen.
+2. **Reload the pointer UNCONDITIONALLY before the second check** (a bare
+   `factory = (S*)self[0x60/4];` statement OUTSIDE/after the first `if`, not inside it).
+   This is the lever: the unconditional reload between the two checks defeats IDO's CSE,
+   so check2 re-reads the field fresh — reproducing the `lw v0,96(v1); lw t2,0(v0)`
+   pair AND the bnezl-delay-slot re-read. Reloading INSIDE the first `if` does NOT work
+   (CSE survives on the not-taken path). Verified: 39=39 insns, every opcode/offset
+   exact, residual = pure register renumber only.
+
+This is the inverse framing of the loop-reload/tail-reuse caps: there you want to
+PREVENT a reload (CSE); here you want to FORCE one. An unconditional plain reload
+statement is the cleanest CSE-breaker — no `volatile` needed.
+
+RESIDUAL CAVEAT (why E5D0 still didn't land): after the structure matched, the only
+diffs were a 2-register cyclic renumber (target self=$v1/factory=$v0; build
+self=$a0/factory=$v1). The `-Wo,-zdbug:6` coloring TRACE assigned the target coloring
+(factory->reg2/$v0, self->reg3/$v1) yet REEMISSION still landed the self spilltemp
+reload in $a0. decl-order, register kw, named-vs-inline, stmt-reorder all left it.
+When the zdbug trace shows the right coloring but emission diverges, the divergence is
+in the spilltemp-reload assignment (a separate temp from the colored home LR), which
+the source-level levers don't reach — treat as a genuine spilltemp-reload coloring cap.
