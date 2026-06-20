@@ -178,6 +178,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Relayout fn-level events CLOSED: dropped SUFFIX-orphans, a wrong-word orphan merge, and the truncate-deficit signature](#relayout-fn-level-events-closed) — _All 4 fn-level shift events were self-inflicted; no false matches. Two were 2026-05-23 SUFFIX-purge orphan drops (restore as raw-.word INCLUDE_ASM + TRUNCATE bump); one was a size-neutral WRONG WORD from a botched orphan-merge (shift walker can't see it — always finish with a full word-diff under the known shift schedule); two were TRUNCATE_TEXT mis-measurements chopping the PREDECESSOR unit's last-fn tail, which the walker mis-anchors at the NEXT unit's carve head ("carve head short" is the red herring — check the predecessor's endlabel words vs map .text size first). TRUNCATE must equal ROM span + current in-unit alignment bloat._
 - [KERNEL RELAYOUT CLOSED: small shift-ledgers can be artifacts of a wholesale unit-order scramble; the truth-tiling + piece-TRUNCATE playbook](#kernel-relayout-closed-2026-06-10) — _Histogram walker worddiffs per KB first: ~100% density = the ld object order is wrong, not local events. Recover truth from name-encoded VRAM + objdump symtabs + content verify; split units at truth transitions (TRUNCATE_TEXT both trims and align-lowers); ld zero-fill covers pads before 16-aligned starts. New levers: IDO 32-aligns unreachable-epilogue blocks (TU-offset-mod-32 constraint => TU merge); post-prologue alt entries via undefined_syms absolutes + def rename; K&R no-arg call sinks $a0 home into jal delay; (T*)(void*)p double-cast flips a t-reg pair; (t=x) pins addu rs. 9 false/divergent matches found by tiling, 1 retracted (58C0)._
 - [GLOBAL_ASM .s gotchas: multi-line /* */ comments break asm-processor; lone %hi symbolization breaks bake-data-relocs; stale half-built .o after post-process failure](#global-asm-s-gotchas-2026-06-10) — _Single-line comments only in .s (multi-line blocks throw "without an initial glabel" or "incorrectly computed size"). Symbolizing a lui to %hi(sym) while its addiu partner stays a raw .word leaves a lone trailing R_MIPS_HI16 that bake-data-relocs rejects. A failed asm-processor post-process leaves a cc-only .o full of _asmpp_* placeholder fillers that make won't rebuild (.s files aren't deps) — rm the .o._
+- [jr-via-EXTERNAL-rodata-table dispatch is UNMATCHABLE by C switch — structural diagnostic + 12-fn class is a permanent INCLUDE_ASM cap (2026-06-20)](#jr-external-rodata-table-unmatchable-2026-06-20) — _IDO's C switch ALWAYS lowers to `lui %hi(.rodata); addu; lw 0(at); jr` with an HI16+LO16 pair against a SELF-LOCAL .rodata label and ZERO displacement (verified standalone). The cap targets (game_uso_func_00000940 etc.) emit HI16-ONLY against a NAMED EXTERNAL symbol (game_uso_D_807FFxxx) with the table offset FOLDED into the lw displacement (+4/+0x20/+0x38) — the signature of indexing a pre-existing external/cross-TU data table, which no C switch produces. The table data lives in a SEPARATE Yay0 data block (RAM 0x807FFxxx = past block1's 0x11B30 .text end), unreachable by the `--only-section=.text` build; symbols are stubbed `=0`; bake-data-relocs can't even express an HI16-only data reloc. Forcing the reference (computed-goto vs &external) would be match-faking (banned). NOT solvable by any "make IDO's switch reference the external table" infra. Class = 12 fns (game_uso x6: 940/B3C/8CD8/ECEC/EDD4/1189C; timproc_uso_b5 x6: 4118/5FC0/87A0/8FC8/D884/DF14). Disposition: permanent INCLUDE_ASM for the dispatch; NM-wrap the CASE BODIES for partial-credit % (per the 6900 stub-vein entry)._
 
 
 ---
@@ -8612,3 +8613,90 @@ band — it's correctness-only except where a frame/structural lever hides under
 mislabeled cap. The land-bearing reconstruction vein is the LOWER bands
 (oversimplified stubs where build-insns << target), per
 project_1080_bootup_stub_rewrite_vein + ghidra_reconstruction_vein.
+
+
+## jr-via-EXTERNAL-rodata-table dispatch is UNMATCHABLE by C switch — structural diagnostic + the 12-fn class is a permanent INCLUDE_ASM cap (2026-06-20) {#jr-external-rodata-table-unmatchable-2026-06-20}
+
+**Investigated as a high-leverage class blocker** (would a single infra change unblock a
+whole cohort of switch-heavy USO functions?). Test case: `game_uso_func_00000940`
+(104/107 .text words exact; the 3 residual words are the `lw t,N(at)` of three
+contiguous jr-dispatches). VERDICT: **not solvable — permanent INCLUDE_ASM for the
+dispatch instruction.** Not a tractable infra fix; the only "solve" would be
+match-faking (banned).
+
+### The decisive structural difference (why no C `switch` matches)
+
+IDO 7.1 `-O2 -G0`'s C `switch` lowering, confirmed by standalone compile of a dense
+7-case switch:
+
+```
+sltiu at, a0, 7
+beqz  at, default
+sll   t6, a0, 2
+lui   at, %hi(.rodata)     <- HI16 against the SELF-LOCAL .rodata SECTION
+addu  at, at, t6
+lw    t6, %lo(.rodata)(at) <- HI16+LO16 PAIR, displacement folded into %lo, base 0(at)
+jr    t6
+```
+
+So IDO always: (a) references its **own** `.rodata` via an **HI16+LO16 pair**, and
+(b) puts the table offset in the `%lo`, i.e. effectively `0(at)` for a table that
+starts at the symbol.
+
+The cap targets emit a structurally **different** dispatch:
+
+```
+sll   t7, t7, 2
+lui   at, %hi(game_uso_D_807FF924)  <- HI16-ONLY, against a NAMED EXTERNAL symbol
+addu  at, at, t7
+lw    t7, 4(at)                     <- NO %lo reloc; offset (+4) folded into the lw DISPLACEMENT
+jr    t7
+```
+
+Two irreconcilable differences: **HI16-only** (no LO16 reloc at all) against a
+**named external** jumptable symbol, with the table offset **folded into the `lw`
+displacement** (the three tables in 940 are at `D_807FF924+4`, `D_807FF940+0x20`,
+`D_807FF958+0x38`). That is the signature of indexing a **pre-existing external /
+cross-TU data table** (a hand-written computed-goto pattern, or a table defined in a
+separate `.rodata` object), NOT a compiler-generated `switch`. No C `switch` produces
+HI16-only-against-external + folded-displacement — IDO's lowering is fixed.
+(Relates to N64_FORENSICS "Biased-index jumptable" + "Jumptable in .data = NOT
+compiler output" and PATTERNS "jr-rodata switch reproduces for SINGLE-symbol USO
+functions" — the explicit carve-out there is exactly this: when the table is a
+SEPARATE external symbol/section, the dispatch is genuinely unmatchable.)
+
+### Three independent reasons the external table can't be wired up
+
+1. **Instruction shape (above):** IDO's `switch` can't emit HI16-only-external +
+   folded displacement. Period.
+2. **Data location:** the table symbols resolve to RAM `0x807FFxxx`, which is
+   `0x12e84` from the code block base — **past block1's `0x11B30` .text end**, living
+   in a SEPARATE Yay0-compressed data block (`game_uso_block2_yay0`). The build does
+   `objcopy --only-section=.text game_uso.c.o`, so it has no path to emit data at that
+   address. The symbols are stubbed `= 0` in `undefined_syms_auto.txt`.
+3. **Reloc machinery:** `scripts/bake-data-relocs.py` only bakes **HI16/LO16 pairs**;
+   a lone HI16 raises `HI16 reloc without a matching LO16`. It cannot express the
+   target's HI16-only data reference even if (1) and (2) were somehow fixed.
+
+### Class size
+
+12 functions across two USOs use this jr-via-external-`D_807FFxxx`-table dispatch
+(scan: `lui %hi(MODULE_D_…)` within 5 lines of an `addu` (`…0821`) and a
+`jr $reg` (`…0008`, rs!=31)):
+
+- **game_uso (6):** func_00000940, 00000B3C, 00008CD8, 0000ECEC, 0000EDD4, 0001189C
+- **timproc_uso_b5 (6):** func_00004118, 00005FC0, 000087A0, 00008FC8, 0000D884, 0000DF14
+
+All reference the contiguous `0x807FFxxx` data region in their module's separate
+Yay0 data block — same structure, same blocker.
+
+### Disposition (the productive move, not a land)
+
+The dispatch `lui/addu/lw/jr` (~4 insns) is a **permanent INCLUDE_ASM cap**. But it's
+only ~4 of N instructions — the switch CASE BODIES and surrounding flow match via
+objdiff partial-credit (the 6900 stub-vein recipe). 940 already proves this:
+104/107 .text words exact (97.24%) by writing the case bodies as a C `switch`; IDO
+re-emits its own (non-matching) inline jumptable, the 3 `lw t,N(at)` dispatch words
+stay divergent, but everything else scores. So the per-function play is: NM-wrap the
+bodies for %, never expect byte-exact on the jr-dispatch. Do NOT spend infra effort
+trying to make the external table match — it cannot, short of faking it.
