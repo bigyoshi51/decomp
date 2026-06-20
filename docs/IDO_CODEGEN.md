@@ -149,6 +149,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO `-g3` disables delay-slot filling while keeping -O2 optimization — unfilled-`sw; jr; nop` IS matchable](#feedback-ido-g3-disables-delay-slot-fill) — _Compiling with `-O2 -g3` produces unfilled-delay-slot epilogues (`sw; jr ra; nop` instead of `sw; jr ra; sw(delay)`).
 - [IDO -g does NOT suppress delay-slot fill (unlike KMC GCC -g2) — don't borrow the Glover technique](#feedback-ido-g-flag-does-not-suppress-delay-slot-fill) — _KMC GCC -g2 disables delay-slot reordering (per project_compiler_findings.md).
 - [IDO -O1 target `lw $sN, spill(sp)` in jal delay slot — can't force via explicit C assignment](#feedback-ido-o1-delay-slot-s-reload) — rmon-style -O1 funcs spill arg `a0` to caller slot, then fill the first jal's delay slot with `lw $s0, SPILL(sp)` to promote msg into a callee-saved reg for later use.
+- [Chained assignment `var = *p = call();` forces store-BEFORE-call-arg-setup (cracks a falsely-"permuter-floored" 2-insn `sw X`/`move aN,X` swap)](#feedback-ido-swap-stores-for-jal-delay-fill) — _A call result that is BOTH stored to memory AND passed as the next call's arg: target emits `sw v0,OFF(base); move a0,v0` but your build emits the reverse. The two consumers are dataflow-independent so the scheduler picks an order and permuter floors (base 70). FIX: collapse store + named-var into one chained assignment `v1 = *(int*)(p+4) = call();` so the store is the value's defining expression → store-before-use → byte-exact. Verified gl_func_000665B4 2026-06-20 (the committed "scheduler tie / not crackable" cap was wrong). Try before conceding any 2-insn sw/move-arg swap._
 - [Swap source order of two stores to let IDO's scheduler fill a jal delay slot with the SECOND-listed store](#feedback-ido-swap-stores-for-jal-delay-fill) — _When target asm has `sw $tA, OFFSET_X(a0); jal func; sw $tB, OFFSET_Y(a0)` (two consecutive stores with the second in the delay slot), write the C with the OTHER order: put the X-offset store SECOND in source.
 - [IDO -O1: `register u32 v = expr & MASK; func(..., v);` produces andi-pre-jal pattern](#feedback-ido-o1-andi-pre-jal-via-register-u32-mask) — _When target has `andi tN,X,MASK; jal; or argReg,tN,zero` (3-insn mask-pre-jal vs natural delay-slot fold), use `register u32 v = expr & MASK; func(..., v);` block-local. The `& MASK` on the initializer (not the use) commits IDO to emitting the and pre-jal._
 - [Lift unconditional loop-counter init OUT of the if-body to claim the branch's delay slot](#lift-unconditional-loop-counter-init-out-of-the-if-body-to-claim-the-branchs-delay-slot--leaves-the-result-init-before-the-branch) — _When target has `or v1, a0, 0` (result=sum) BEFORE `beq len, 0` and `or v0, 0, 0` (i=0) IN the delay slot, but built emits `result=sum` in delay slot, lift `unsigned int i = 0;` OUT of the if-body. Both inits become unconditional and IDO picks i=0 for the slot. Generalizes the cap-class previously labeled "no C-level lever"._
@@ -7457,6 +7458,24 @@ gl_func(other_arg, v * formula);    // jal — IDO folds the store into delay sl
 ```
 
 Result: `jal gl_func; sw v0, 0x6B4(a2)` (delay-slot store), no spill, exact match. The dramatic %-jump (67 → 100) is the spill-elimination cascading: removing the spill drops 2 insns AND shrinks the frame by 8, which avoids further mismatches downstream.
+
+**Variant: chained assignment forces store-BEFORE-call-arg-setup** (verified 2026-06-20 on `gl_func_000665B4`, was a falsely-documented "permuter-floored scheduler tie"). When a call result is BOTH stored to memory AND passed as the next call's arg, and the target emits `sw v0, OFF(base); move a0, v0` (store first, then arg-move) but your build emits the reverse (`move a0, v0; sw v0, OFF`):
+
+```c
+v1 = gl_func_00000000(0, *(int*)a0);
+*(int*)(a0 + 4) = v1;          // store
+*(int*)(a0 + 8) += 1;
+v0 = gl_func_00000000(v1);     // v1 is the move-a0 arg
+```
+The two consumers of the result (`sw` and `move a0`) are dataflow-independent, so the as1 scheduler picks an order — your build floors at a 2-word swap and the permuter can't break the tie (its base score was 70).
+
+**Fix:** collapse the store and the named-var assignment into ONE chained assignment so the store is the value's defining expression, pinning store-before-use:
+```c
+v1 = *(int*)(a0 + 4) = gl_func_00000000(0, *(int*)a0);   // store IS the def
+*(int*)(a0 + 8) += 1;
+v0 = gl_func_00000000(v1);
+```
+IDO now emits `sw v0, 4(s0); move a0, v0` (target order) → byte-exact. TAKEAWAY: a 2-insn `sw X / move aN, X` schedule-swap on a value feeding both a store and a following call arg is NOT a permuter-immune scheduler tie — try the chained-assignment form (`var = *p = call();`) before conceding. The chained assignment makes the memory store the value's source-level definition, which the scheduler emits before any downstream use.
 
 ---
 
