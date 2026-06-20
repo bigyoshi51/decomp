@@ -12386,6 +12386,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 
 **Related:**
 - [Inline a cached load-deref local into the loop body](#feedback-ido-inline-cached-local-for-frame-shrink) — sibling lever for the stack-slot-overhead subclass.
+- [-O1 STATEMENT-REORDER coloring levers: flag-set-LAST + increment-before-decrement collapse a whole-body t-register cascade (kernel func_800062F0 97.6%→byte-exact)](#feedback-ido-o1-statement-reorder-coloring-levers) — _At -O1 (cfe→ugen, no uopt) a "pure register-coloring" near-miss whose diffs are all same-offset same-opcode register RENAMES is often a first-use-order PHASE rotation, fixable by reordering trailing statements in a block — no register kw, no spill. THREE levers, applied to a ring-buffer packer with 39 such diffs: (1) write a pointer+int address as a FLAT add `*(char*)(idx + base)` not `*((char*)base + idx)` → loads the int index first (matches target load order in copy loops); (2) move a `flag = 1;` const-store to AFTER the value-using statements in the same block (`arg1-=sp2C; sp18=sp2C; flag=1;`) so the loaded values color into lower temps before the constant materializes (36→9 diffs — the single biggest mover); (3) move `globalCtr += 1;` BEFORE `arg1 -= sp2C;` in the loop tail so the global is loaded into the low temp ahead of the subtract (9→0). Recognition: diffs cluster at the TAIL of if/loop blocks, every reg shifted by a consistent amount (the free-list phase), offsets+opcodes identical. Try trailing-statement permutation of const-stores and increments FIRST — cheaper than register kw / live-range split, and permuter-blind (it won't reorder whole statements). Verified byte-exact in the LINKED ELF (real jal targets + extern symbols resolved), 2026-06-20._
 - [LICM hoists per-block `addiu sp,N` stack-temp addresses into saved regs — dominant int-save-count cap on big -O2 geometry grafts; inline/name/if(1)/-O1 all NEGATIVE; needs per-block source RE](#feedback-ido-licm-stack-temp-address-hoist-cap) — _A large geometry graft saves 9 int regs (s0-s8) where the target saves 3 (s0,s1,s2)+3 FP; the 6 excess all hold `addiu sN,sp,K` (stack-Vec3-temp addresses) that IDO LICM-hoists once into callee-saves, while the target re-materializes each into a SCRATCH reg per use. Verified 2026-06-16 on game_uso_func_00007C1C: remove-local-recompute is CSE/LICM-immune (the address is live across each idiom's malloc-fallback jal → forced saved reg regardless of naming), naming the swizzle-scratch as one pointer REGRESSES (target re-addiu's it per block, not a held pointer), if(1)-collapse deletes the dead malloc branch the target keeps, and -O1 under-promotes (1 int save, drops the f20/f22/f24 the target has). Genuine residual = reconstruct the inlined-helper loop body block-by-block so each temp address is computed locally (defeat the LICM hoist); mechanical m2c-graft transforms can't. Recognition: excess saved regs all hold `addiu sN,sp,CONST` for the same sp-offsets the target reaches via v/t/a regs._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -15265,3 +15266,49 @@ sensitive surrounding (a branch picks the trio's base reg) AND an IV-stride
 choice, those two levers can be mutually exclusive — pick the form with the fewest
 BYTE diffs (count words, not fuzzy %: offset-only frame words have near-zero fuzzy
 weight so the higher-% form can be the more-wrong-bytes one).
+
+<a id="feedback-ido-o1-statement-reorder-coloring-levers"></a>
+## -O1 STATEMENT-REORDER coloring levers: flag-set-LAST + increment-before-decrement collapse a whole-body t-register cascade
+
+**Context:** `-O1` runs the reduced pipeline cfe→ugen (no uopt — see "REDUCED PIPELINES"). The
+uopt webs/coloring levers (register kw, `-zdbug:6` dump, live-range split) are inapplicable,
+and the `-zdbug` regalloc dump is `-O2`-only. But many `-O1` near-misses present as a "pure
+register-coloring cap": the reconstructed C is logically exact, instruction count matches, and
+every residual diff is a SAME-OFFSET, SAME-OPCODE register RENAME. These are usually a
+**first-use-order PHASE rotation** in ugen's temp allocation, and several are C-reachable by
+reordering trailing statements within a block — no register keyword, no spill.
+
+**Recognition:**
+- Diffs cluster at the TAIL of an `if`/loop block (the statements after the inner work).
+- Every register is shifted by a consistent amount (the ugen free-list phase advanced by ±1).
+- Offsets and opcodes are identical between build and target; only rs/rt/rd registers differ.
+
+**The three levers (all verified on kernel `func_800062F0`, an `__osRdb` ring-buffer packer,
+39 coloring diffs → byte-exact):**
+
+1. **Flat pointer+int add controls load order.** `*((char *) base + idx)` loads `base` first;
+   `*((char *) (idx + base))` loads the INTEGER `idx` first. Pick the spelling whose first-loaded
+   operand matches the target's first `lw`. (Same family as the `addu` operand-order entries, but
+   for the address computation inside a deref.) Fixed the load order in both copy loops.
+
+2. **Move a `flag = 1;` const-store to the END of its block.** Original C order
+   `flag = 1; arg1 -= sp2C; sp18 = sp2C;` made ugen color the constant `1` into the LOW temp
+   (first use) and the loaded values into higher temps. Reordering to
+   `arg1 -= sp2C; sp18 = sp2C; flag = 1;` lets the loaded values claim the low temps first and
+   the constant lands in the high temp — matching the target. **This single reorder went 36→9
+   diffs (the biggest mover).** General rule: a write-only flag/const set inside a block colors
+   by source position; put it AFTER the value-consuming statements if the target keeps the values
+   in lower registers.
+
+3. **Move `globalCtr += 1;` BEFORE the `var -= x;` in a loop tail.** Original
+   `arg1 -= sp2C; __osRdb_IP6_Ct += 1; sp18 += sp2C;`; target loads `__osRdb_IP6_Ct` into the low
+   temp *before* the subtract. Reordering to `__osRdb_IP6_Ct += 1; arg1 -= sp2C; sp18 += sp2C;`
+   loaded the global first → low temp, fixing the last 9 diffs to 0.
+
+**Workflow:** for an `-O1` all-register-rename near-miss, try trailing-statement permutation of
+const-stores, flag sets, and global increments FIRST — it's cheaper than any allocator lever and
+**permuter-blind** (the permuter reorders within expressions, not whole statements, so it won't
+find these). Word-compare against the build `.o` filtering reloc placeholders; verify the final
+match in the LINKED ELF (`objdump -d build/<rom>.elf` at the function VRAM) so real `jal` targets
+and extern `%hi/%lo` symbols are resolved — an unlinked `.o` shows `jal 0`/`lui 0x0` placeholders
+that look like diffs but aren't. Verified 2026-06-20, kernel/kernel_014.c.
