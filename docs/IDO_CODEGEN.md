@@ -15246,3 +15246,22 @@ Only when the differing word changes the actual register NAME (`$f2` vs `$f12`,
 conflated the two and burned the function as a permuter cap for ~3 weeks.
 Generalizes: re-audit any near-100 NM whose comment concedes "coloring" but whose
 residual is actually offset-only — especially reconstructed FP-geometry helpers.
+
+ADDENDUM (2026-06-20, gl_func_0005E190 8 word diffs -> 3): the "+8-byte frame is
+allocator-driven, a `char _pad[8]` doesn't take" claim is a FALSE cap. A
+`volatile int pad[2]` declared FIRST in the decl list grows the frame by 8 and
+homes per the FRAME-SLOT HOME ASSIGNMENT RULE — here it fixed the frame 0x20->0x28
+plus all the cascaded a1/v0 sp-home offsets (5 frame-layout words) byte-exact. The
+distinction vs a `char _pad[8]`: a `char` array can be packed/colored away; a
+`volatile int[N]` at the decl head reserves a real M-class slot with zero insns.
+TRY THIS before conceding any "frame N-bytes too big/small, not paddable" cap.
+NOTE the diagnostic also DISTINGUISHES sub-caps cleanly: for 0005E190 the 8 diffs
+split 5 frame (offset-only, cracked) + 3 IV-counter (li 16/+4 vs li 4/+1 — the
+5BDC0 by-element-vs-by-trip cap). The flat `m[t]` do-while keeps the target's
+loop-trio coloring (v0/v1/a0) with only the 3 immediate-only IV diffs; the nested
+do-while (the 5BDC0 IV crack) flips the counter to by-1 but shifts the trio up one
+register (26 diffs, first-need-order change). When a loop has BOTH a coloring-
+sensitive surrounding (a branch picks the trio's base reg) AND an IV-stride
+choice, those two levers can be mutually exclusive — pick the form with the fewest
+BYTE diffs (count words, not fuzzy %: offset-only frame words have near-zero fuzzy
+weight so the higher-% form can be the more-wrong-bytes one).
