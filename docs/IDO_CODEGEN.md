@@ -107,6 +107,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
 - [Reuse the PARAMETER as the object (not a fresh local) → IDO arg-saves to the caller slot (small frame) instead of an in-frame spill slot (+8 frame)](#feedback-ido-reuse-param-as-object-caller-slot-spill) — _In an alloc-or-given constructor `obj = a0 ? a0 : alloc(N)` whose object must survive ≥1 jal, a fresh `int obj;` local spills to an IN-FRAME slot (frame grows +8, all spill offsets shift). Assigning back into the PARAMETER instead (`if (a0==0){ a0=alloc(N); … } … use a0 … return a0;`) makes IDO spill via the ARG-SAVE-to-caller-slot convention (`sw a0, framesize(sp)`), keeping the minimal frame and matching the target's spill offsets. Erased the final 6 frame-size diffs on gl_func_00041524 (→ byte-exact 32/32, pure C). Try this whenever the only residual is `addiu sp,-N` / spill-offset off by a constant and the object is param-derived. **EXT 2026-06-20 (titproc_uso_func_00001D7C): also fixes a `$v1`-vs-`$a2` arg-reg COLORING CASCADE (not just frame size) — fresh local = 18 diffs, param-reuse = 2; reach for it whenever a param-derived call-surviving object is colored into the wrong reg, even if the frame already matches. Caveat: USO NM bodies often have placeholder gl_func_00000000/&D_00000000 callees that score ~97% name-blind but are byte-WRONG; restore real R_MIPS_26 callees first.**_
+- [A "frame-size cap" on a format/print wrapper is often a MISDIAGNOSED VARIADIC function — make the signature `(..., ...)` and the frame grows for free](#feedback-ido-frame-size-cap-is-misdiagnosed-variadic) — _When a small wrapper homes ALL incoming arg regs in the prologue (`sw a0,0x20; sw a1,0x24; sw a2,0x28; sw a3,0x2c` — a contiguous a0..a3 block at the TOP of the frame) and then builds a pointer into that block (`addiu aN, sp, 0xNN`) to pass to an inner call, it is a VARARGS function, not a fixed-arity one with a phantom pad. A fixed `f(char*,int,int,int)` signature only homes the args whose address is taken, giving a smaller frame (e.g. 0x18) — no C-level pad/`volatile int pad[]` can grow it back (IDO -O2 elides them). The fix is the signature: `int f(char *out, int a1, ...)` homes ALL named+unnamed arg regs → frame grows to match (0x20), and the va-pointer is `&a1 + 1` (address of the next homed slot = sp+0x28). Byte-exact gl_func_0006EF08 2026-06-20 (sprintf wrapper: `rv = vfmt(fmt, out, a1, &a1+1); if(rv>=0) out[rv]=0; return rv;`), whose prior note claimed a "natural-ceiling frame-size cap, pad locals elided". Reach for this whenever the residual is a frame-size/arg-home shift on a function that passes a stack pointer into a printf/sprintf/format-family callee. (The trailing jr-ra delay-slot nop the C body emits absorbs a separate `_pad.s` GLOBAL_ASM — gate that pad to the INCLUDE_ASM `#else` branch or drop it.)_
 - [Drop the extra "working register" param — IDO routes the spill to the SOURCE param's home slot, not the working register's home slot](#feedback-ido-drop-working-reg-param-spill-follows-source-pseudo) — _When `obj = a0 ? a0 : alloc(N)`-shaped code is written with TWO params (`f(int a0, int a1)` + `a1 = a0;` to force the working pseudo into $a1), IDO -O2 spills $a1 across the second jal to **a1's own home slot 0x1C**. The same logic written with ONE param (`f(int a0)` + `a0 = alloc(N);` reusing the param) compiles to the SAME registers (working pseudo still in $a1 via the `or a1,a0,$0` copy) but the spill lands at **a0's home 0x18** — because IDO tracks the spill against the SOURCE pseudo (the param-named `a0`), not against the working register $a1. This is finer-grained than [arg-reuse-keeps-small-frame](#feedback-ido-reuse-param-as-object-caller-slot-spill): even with the same -0x18 frame and the same working register, the offset of the single spill flips by 4 bytes depending on which param the working pseudo descends from. Keep the goto-to-shared-epilogue (`goto L_end;` not `return 0;`) — `return 0;` adds 2 insns of `or v0,$0,$0` + jump to epilogue. Counter-trap: a fresh-local 1-arg form (`int r = a0;`) does NOT crack the spill — it bumps the frame to -0x20 with the working pseudo in $v1 (different registers entirely). The full lever is: 1-arg + reuse the param + goto-to-epilogue. Byte-exact gl_func_00037FAC 2026-05-27 (24 insns, prior 99.92%); generalizes to gl_func_00066514 (same shape, working in $a2 → spill flips 0x20 → 0x18)._
 - [Goto-loop + reuse-param-as-counter for count-limited list walks — defeats isolated-vs-full-TU IDO divergence](#feedback-ido-goto-loop-reuse-param-counter) — _For count-limited linked-list walks (`int *node = list[off]; for (i=0; i!=key; i++) { node = node->next; if (!node) break; } return node;`), the natural `int i = 0; while/for` form picks $v0 for the counter and produces 17 insns in full-TU build (3.75% fuzzy) due to branch-likely loop rotation — even though isolated standalone-cc emit is 12-insn near-target. **Lever**: convert the function param to take the list-base as plain `int a0`, dereference into local `v1` FIRST, then reassign `a0 = 0` and use it as the counter via goto-loop: `int *v1 = *(int**)(a0+0x34); a0 = 0; if (v1==0) goto end; loop: if (a0==a1) goto end; v1 = (int*)v1[off/4]; a0++; if (v1 != 0) goto loop; end: return v1;`. Two effects combine: (1) reusing `a0` as the counter (not `int i`) forces IDO to allocate the counter to $a0 (recycling the dead param register) instead of $v0; (2) the goto-end form prevents IDO from emitting the branch-likely loop rotation (`bnel`+delay-likely-load) AND from optimizing `a0 == a1` into `beqz a1` (since a0's value-flow is opaque through the labels). Byte-exact game_libs_func_0003D9E4 2026-05-27 (12 insns, prior documented "isolated-vs-full-TU divergence" cap). Generalizes for any count-limited walk where the dead param can be recycled as the loop counter._
 - [Array-index addressing (`int** a0; a0[a1 + K]`) packs stack spills tighter than char*-pointer-arith (`a0 + a1*4`) — fixes frame-size/spill-slot-offset residuals](#feedback-ido-array-index-vs-charptr-spill-packing) — _When the only diff is frame size / spill-slot offsets off by a constant (e.g. -0x28 with a 4-byte gap vs target -0x20), and the base is a param indexed by another param: express the access as typed array indexing (`int** a0; obj = a0[a1 + 0x14]`, 0x14 = byteoff/4) rather than char* arithmetic (`(char*)a0 + a1*4` then `[0x50/4]`). The array-index form makes IDO pack the pointer spills with no gap. Byte-exact gl_func_0002A50C 2026-05-24._
@@ -11452,6 +11453,46 @@ fast way to distinguish "loop unroll" from "regalloc/scheduling"
 (the latter has the right insn count, wrong registers/order).
 Verified 2026-05-18 on `game_libs_func_00054144` (game_libs
 triangle-centroid; 3-trip ×2-unroll → 76 vs target 51).
+
+## A "frame-size cap" on a format/print wrapper is often a misdiagnosed VARIADIC function
+<a name="feedback-ido-frame-size-cap-is-misdiagnosed-variadic"></a>
+
+**Symptom.** A small wrapper near a printf/sprintf-family callee builds to a
+SMALLER frame than the target (e.g. 0x18 vs 0x20), and the residual is purely
+the `addiu sp,-N` + the arg-home stores. C-level `char pad[8]` / `volatile int
+pad[2]` don't help (IDO -O2 elides unused pads), so it gets wrapped NM as a
+"natural frame-size ceiling".
+
+**Tell.** Look at the prologue. If it homes **all four** arg regs in a
+contiguous block at the TOP of the frame —
+```
+sw a0,0x20(sp); sw a1,0x24(sp); sw a2,0x28(sp); sw a3,0x2c(sp)
+```
+— and then materializes a pointer INTO that block (`addiu aN, sp, 0xNN`, e.g.
+`addiu a3, sp, 0x28`) to pass to an inner call, the function is **variadic**.
+A fixed-arity `f(char*,int,int,int)` only homes the args whose address is
+taken (just a2/a3), giving the smaller frame — that's the "cap". The full a0..a3
+home block is IDO's varargs save-area prologue.
+
+**Fix — change the SIGNATURE, not add a pad:**
+```c
+int gl_func_0006EF08(char *out, int a1, ...) {
+    int rv = vfmt((char*)&D_00000000 + 0x83550, out, a1, &a1 + 1);
+    if (rv >= 0) out[rv] = 0;   /* null-terminate at returned length */
+    return rv;
+}
+```
+The `...` makes IDO home all named+unnamed arg regs → frame grows to 0x20 for
+free. The va-pointer is `&a1 + 1` (address of the next homed slot = sp+0x28).
+Byte-exact on gl_func_0006EF08 2026-06-20 (22 words incl. the trailing jr-ra
+delay-slot nop). The C body emits that delay nop itself, so a separate
+`gl_func_0006EF08_pad.s` GLOBAL_ASM (a splat-boundary stopgap) becomes
+redundant — gate it to the `#else`/INCLUDE_ASM branch or drop it.
+
+**When to reach for it.** Residual is a frame-size / arg-home shift on a
+function that passes a *stack pointer* into a format/sprintf/vararg-style
+callee. Don't trust a prior "pad-elided frame-size cap" note on such a function
+without first trying the `(..., ...)` signature.
 
 ## Reuse the parameter as the object (not a fresh local) — IDO arg-saves to the caller slot, keeping the minimal frame
 <a name="feedback-ido-reuse-param-as-object-caller-slot-spill"></a>
