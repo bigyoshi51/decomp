@@ -57,6 +57,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
 - [A "branch-likely cap" can be a wrong CALL ARGUMENT in disguise — verify which value each jal actually passes before conceding `bnez`-vs-`bnezl`](#feedback-branch-likely-is-wrong-call-arg) — _gl_func_00031898 (game_libs) sat at a documented 95.86% "branch-likely cap" (build `bnez`+move-in-delay vs target `bnezl`+lw-ra-in-delay). The real bug: the conditional-skip call passed `ret_val` (held in a1) when the target passes the **struct pointer a0**. Target spills/reloads a1 across the call and emits `bnezl` with the epilogue `lw ra` hoisted into the annulled delay. Fixing the arg (`gl_ref_00045EA8(a0)` not `(ret_val)`) made IDO emit the `bnezl` naturally — 29/29 exact. Lesson: when a call-skip block shows `bnezl`+epilogue-load-in-delay and your build has `bnez`+arg-move-in-delay, the arg-move is the tell — IDO had to set up a call arg, the target didn't. Decode the jal's actual a0/a1 inputs from the asm before blaming the branch flavor._
 - [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
+- [Wrap the final RMW in `do {…} while(0)` to keep the reloaded pointer in `$v0` and defer the `return CONST` into the jr-ra delay slot](#feedback-ido-dowhile-rmw-tail-v0-delay-return) — _Tail `*a0 |= 1; return 1;` where `a0` is reloaded from its home: plain C reloads into `$v1`, precomputes `li v0,1` early (constant is cheap), leaving the delay slot a nop. Target reloads into `$v0`, does the RMW, then `li v0,1` in the jr-ra delay slot. Wrapping JUST the RMW statement in a trivial `do { *a0 |= 1; } while(0);` (or `if(1){…}`) BB-lever forces IDO to keep the pointer live in `$v0` through the block and emit the return constant last → delay-slot fill + v0/v1 swap, both fixed. Cracked gl_func_0003EDBC 2026-06-20 (the "13-insn INSN_PATCH for delay-fill + v0/v1 + slot-offset" cap; frame half was a `volatile int pad[3]` below the flag local + buf 168→156)._
 - [Circular-list do-while walk emits BOTH branch-likelies naturally (conditional-skip `bnel` + loop-back `bnezl`) — don't fear bnel here, write the obvious do-while](#feedback-ido-circular-list-do-while-natural-bnel) — _A circular-list iteration `node=head; if(node){ do { if(key==node->K) call(self,node); node=node->NEXT; if(node==head) node=0; } while(node!=0); }` compiles BYTE-EXACT including the two target branch-likelies: the `if(key==node->K) call(...)` skip becomes `bnel key,t,skip` (the `node=node->NEXT` advance fills the annulled delay), and the `while(node!=0)` loop becomes `bnezl node,loop` (the next iter's first load fills the delay). No coaxing — the obvious do-while IS the match. Loop state (self/key/node) lands in s0-s2 across the call. Verified 2026-05-24 gl_func_00060ED0 (29/29 first try) and gl_func_0005B568 (sibling, single bnel-free variant). Counter to the usual "bnel is hard" instinct._
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
 - [Counter-loop tail with reloaded loop-header pointer: IDO prefers `bnezl` + delay-slot-hoist of next-iter `lw` over target's `bne` + addiu-in-delay — counter-loop "addiu wins the delay" variant is unreachable from C when a hoistable load exists](#feedback-ido-counter-loop-vs-load-hoist-tail) — _Target `do { items=v0->[K]; i++; ...; v0=a0->[J]; n=v0->[L]; off+=0xC; } while ((u32)i < n)` emits `sltu/bne/addiu-in-delay`. The "obvious" do-while form (verified across 6 variants: vanilla, goto+label, for-loop, broader-scope, narrower-scope, separate-decl) emits `sltu/bnezl/lw-in-delay` — IDO chooses the hoistable next-iter loop-header `lw $X, off($vN)` as more valuable than the increment for delay-slot fill (latency hiding). The choice is cost-model driven and not flippable by C restructuring — distinct from `feedback-ido-circular-list-do-while-natural-bnel` (which is for list-walk-emit; this is counter-emit on a reloaded-base). Standalone-cc caps at ~71% on this shape. Path forward = permuter. Verified 2026-05-27 game_libs_func_0003C7A4 (28-insn loop body)._
@@ -15555,3 +15556,58 @@ reload in $a0. decl-order, register kw, named-vs-inline, stmt-reorder all left i
 When the zdbug trace shows the right coloring but emission diverges, the divergence is
 in the spilltemp-reload assignment (a separate temp from the colored home LR), which
 the source-level levers don't reach — treat as a genuine spilltemp-reload coloring cap.
+
+<a id="feedback-ido-dowhile-rmw-tail-v0-delay-return"></a>
+## Wrap the final RMW in `do {…} while(0)` to keep the reloaded pointer in `$v0` and defer the `return CONST` into the jr-ra delay slot
+
+A function whose tail does a read-modify-write through a reloaded pointer and then
+returns a constant:
+
+```c
+*a0 |= 1;     /* a0 was clobbered by earlier calls, reloaded from its home slot */
+return 1;
+```
+
+Plain -O2 C emits:
+
+```
+lw   v1, HOME(sp)   ; reload a0 into v1
+li   v0, 1          ; precompute return constant EARLY (it's free, v0 is idle)
+lw   t7, 0(v1)
+ori  t8, t7, 1
+sw   t8, 0(v1)
+... epilogue ...
+jr   ra
+nop                 ; delay slot wasted
+```
+
+The target instead keeps the pointer in `$v0` and defers the constant into the
+delay slot:
+
+```
+lw   v0, HOME(sp)   ; reload a0 into v0
+lw   t7, 0(v0)
+ori  t8, t7, 1
+sw   t8, 0(v0)
+... epilogue ...
+jr   ra
+li   v0, 1          ; return constant in the delay slot
+```
+
+**Lever:** wrap JUST the RMW statement in a trivial basic-block — `do { *a0 |= 1; }
+while(0);` (or `if (1) { *a0 |= 1; }`). The extra BB boundary makes IDO keep the
+reloaded pointer live in `$v0` across the block and schedule the return constant
+last, which the reorg pass then sinks into the jr-ra delay slot. Both diffs (the
+`$v0`/`$v1` register choice AND the wasted delay slot) close together — they are the
+same underlying decision (is `$v0` busy until the end?).
+
+Verified byte-exact 2026-06-20 on `gl_func_0003EDBC` (24 insns). The prior note
+called this a "13-insn INSN_PATCH" cap covering delay-slot fill + v0/v1 + a slot
+offset. Two of those were this single BB-lever; the third (slot offset, flag local
+at sp+0x28 not sp+0x1C) was a `volatile int pad[3]` declared after the flag local
+with `buf` shrunk 168→156 to hold the frame at 0xC8 — the 16-byte gap below the
+local is the outgoing-arg reservation IDO leaves there.
+
+Try the do-while/if(1) BB-lever on ANY tail-RMW-then-`return CONST` near-miss whose
+residual is "pointer in wrong v-reg + return constant computed too early / nop in
+the jr delay slot" before conceding a scheduling cap.
