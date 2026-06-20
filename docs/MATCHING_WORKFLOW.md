@@ -8567,3 +8567,48 @@ TOOLING NOTE: `-Wo,-zdbug:6` → `uoptlist` works in agent-a/agent-e cc but was
 NOT compiled into agent-b's cc (worktree toolchain symlink/build drift) — the
 fuzzy scorer is authoritative for CRACK/EMPTY regardless, but verify the dump is
 live (`cc -Wo,-zdbug:6 ... ; ls uoptlist`) before relying on trace-steering.
+
+## Reconstruction fan-out RESULTS + the raw-word-placeholder reality (2026-06-20): 1 land, and why most near-100 reconstruction is correctness-only
+
+Fanned out reconstruction (placeholder body → real symbols from the resolved .s)
+on the 3 near-100 functions whose .s is RESOLVED. Outcome:
+- **game_uso_func_00003ED4 LANDED** (byte-exact) — but the win was a frame-layout
+  decl-order fix exposed DURING reconstruction, not the symbol swap (see
+  docs/IDO_CODEGEN "coloring cap is often a frame-layout diff").
+- **timproc_uso_b5_func_0000C8AC**: reconstructed callee to real
+  timproc_uso_b5_func_00003F58; residual = genuine first-pseudo $a1-vs-$v1
+  coloring (4 words). NM-improved, not landable.
+- **func_00007C74** (bootup): `func_00000000` is the REAL segment-base allocator
+  (not a placeholder); residual = genuine spill-slot/frame cap (frame 0x20 vs
+  0x28). NM, already optimal.
+
+THE KEY STRUCTURAL FACT (why raw-word reconstruction has ZERO %-value):
+In a relocatable USO, an intra-module `jal` disk-encodes as `0C000000` (jal 0) in
+.text; the real target is in the module's R_MIPS_26 reloc table, applied at LOAD.
+So a placeholder callee (=0x0) and the real symbol emit the SAME `.text` byte
+(`0C000000`) — and **objdiff is reloc-aware**, scoring the build's reloc-form
+against the ROM's baked literal as equivalent. Consequence:
+- Raw-word USO functions (game_libs gl_func_*, h2hproc_uso, timproc_uso_b1/b3)
+  with placeholder bodies ALREADY produce correct .text bytes. Reconstruction to
+  real symbols does NOT move the reloc-filtered % — it only fixes call-graph
+  readability + correctness. It does NOT turn a near-100 into a land.
+- Near-100 (reloc-filtered) means the residual is NON-reloc by definition =
+  genuine regalloc/scheduler/frame cap. Reconstruction alone never clears it;
+  it only helps when reconstruction also exposes a structural/frame C lever (the
+  game_uso_func_00003ED4 case).
+
+SYMBOL-RECOVERY TOOLING (exists, in projects/1080-agent-a/scripts/emu-symdump/):
+`uso-emu-dump.py` (RDRAM dump under the game mode that loads the USO) →
+`uso-correlate.py` (correlate dump vs ROM reloc table → <uso>.symnames.json) →
+`scripts/uso-reloc-symbolize.py <seg> <rom_off> --symnames <json> --apply`
+(rewrites .s with real names; .text bytes unchanged). symnames JSON already exist
+for bootup_uso(+game_libs, via +0x1466C shim), game_uso, titproc_uso, mgrproc_uso,
+timproc_uso_b5. NOT yet recovered: timproc_uso_b1/b3 (need Time-Attack race),
+h2hproc_uso (need 2P VS). See scripts/emu-symdump/README.md +
+RELOC_BLIND_FLIP_PLAN.md.
+
+STRATEGIC UPSHOT: don't run a "reconstruction fan-out for lands" on the near-100
+band — it's correctness-only except where a frame/structural lever hides under a
+mislabeled cap. The land-bearing reconstruction vein is the LOWER bands
+(oversimplified stubs where build-insns << target), per
+project_1080_bootup_stub_rewrite_vein + ghidra_reconstruction_vein.
