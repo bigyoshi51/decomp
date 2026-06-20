@@ -15223,3 +15223,26 @@ bloat" family (e.g. the alloc-or-offset constructor functions): collapse the
 working local back onto the incoming param where the dataflow allows.
 Permuter can't find this (it mutates the existing local; it won't delete it and
 re-thread the param), so it's a HAND lever the permuter misses.
+
+## A documented "FP/register coloring cap" is often a FRAME-LAYOUT diff in disguise — check sp-offsets before conceding (game_uso_func_00003ED4 LANDED 2026-06-20)
+
+`game_uso_func_00003ED4` carried an elaborate 99.44% NM comment conceding a
+"permuter-immune 4-insn FP register-coloring cap" ($f12/$f2 swap on div.s/mov.s/
+neg.s/mov.s, "12 variants tried, not C-reachable, uoptlist queue"). It was WRONG.
+After real-symbol reconstruction the FP registers already matched target; the only
+diffs were **5 sp-relative offsets all shifted by exactly 4** — a pure stack-slot
+LAYOUT diff. Fix: declare the two `Vec3` locals (`va`, `vb`) ADJACENT in decl
+order (va immediately after vb, before the other locals) so IDO packs their slots
+contiguous (va@sp+0x2C, vb@sp+0x38) matching the target. 0 diffs, full ROM
+byte-identical. (See FRAME-SLOT HOME ASSIGNMENT RULE — decl order IS the slot map.)
+
+DIAGNOSTIC before accepting any "register coloring" cap: dump the diff words and
+classify each. If the differing words are `sw/lw rX, N(sp)` / `addiu sp,sp,-N`
+where the REGISTER is identical and only the **N offset** differs (or the whole
+body is shifted by a constant), it is a FRAME-LAYOUT cap, NOT coloring — attack it
+with decl-order / local-adjacency (frame-slot levers), which ARE C-reachable.
+Only when the differing word changes the actual register NAME (`$f2` vs `$f12`,
+`$a1` vs `$v1`) with the same offset is it a true coloring cap. Earlier notes
+conflated the two and burned the function as a permuter cap for ~3 weeks.
+Generalizes: re-audit any near-100 NM whose comment concedes "coloring" but whose
+residual is actually offset-only — especially reconstructed FP-geometry helpers.
