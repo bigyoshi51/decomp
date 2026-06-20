@@ -8700,3 +8700,23 @@ re-emits its own (non-matching) inline jumptable, the 3 `lw t,N(at)` dispatch wo
 stay divergent, but everything else scores. So the per-function play is: NM-wrap the
 bodies for %, never expect byte-exact on the jr-dispatch. Do NOT spend infra effort
 trying to make the external table match — it cannot, short of faking it.
+
+## Subagent per-function "lands" MUST be re-verified with the full-ROM build in the integration worktree (2026-06-20)
+
+In the fan-out batch workflow, subagent worktrees (agent-b/e/i) have a PLACEHOLDER
+baserom (38-byte stub) and sometimes a stale expected/ baseline, so they CANNOT run
+the authoritative whole-ROM gate. A subagent's reloc-filtered per-function word-compare
+can report "byte-exact / 148/148 bytes" while the function actually emits a DIFFERENT
+SIZE in the real -O2 build — shifting every following byte. Caught live: func_0000EE8C
+claimed byte-exact in agent-i (its `volatile char pad[4]` frame lever) but the full-ROM
+build in agent-a was 4 bytes SHORT (the pad was DCE'd / frame differed under the real
+build), `cmp` diverged at 0xDDF988. game_uso_func_00000724 + mgrproc_uso_func_00001B58
+from the same batch verified clean and landed.
+
+RULE: when integrating batch lands, apply ALL candidate patches in agent-a, run
+`make RUN_CC_CHECK=0` → require "ROM OK (byte-identical to baserom)". If it mismatches,
+isolate by applying one patch at a time + rebuild (the diverging `cmp` offset + a
+total-length change = a size-shift culprit). Land ONLY the patches that keep the ROM
+byte-identical; drop the rest (re-wrap NM). Never trust a subagent's per-function claim
+as the land gate — the agent-a full-ROM cmp is the only authoritative gate for these
+relocatable-USO / size-sensitive matches.
