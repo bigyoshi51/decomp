@@ -38,6 +38,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (44F4 79.57 -> 100.0)](#feedback-ido-struct-by-value-marshalling-lever) — _`sw a2,8(sp)` in jal delay = struct-by-value arg homed to its own arg slot; `addiu sN,sp,K` held in s-reg = struct local (ILDA web colorable — char* &local never is); store-direct+load-via-pointer pair = struct copy; `bne base,-K` = `if (base+K == NULL)`; iter alloc-fail can skip to NEXT iter, not epi._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
+- [REUSE an already-homed local to hold a value across a branch instead of a fresh named temp (avoids +8 frame); but `volatile`-required-for-loop blocks the inline-CSE that yields a homeless register temp (func_80007698 95.9→99.5%, 1-insn cap)](#reuse-an-already-homed-local-to-hold-a-value-across-a-branch-not-a-fresh-named-temp--avoids-8-frame-func_80007698) — _A short-lived value reused across one branch: don't `u16 t = HW(p); if(t)…use t` (3rd M-class home → frame +8); reuse a local already homed for an unrelated later value (`sp1C`) so the value rides in a register matching the target's reuse. Cost: a dead `sw t,home(sp)` in the branch delay slot (target=nop), because any homed local writes its home. A register-ONLY subexpr temp (no home) needs inline-CSE, which is blocked when the same pointer is `volatile` (needed to force the loop's per-statement reload at -O1). Loop-reload-via-volatile vs tail-CSE-via-nonvolatile is a true conflict → 1-insn cap._
 
 ### branch likely / bnel
 
@@ -15348,3 +15349,45 @@ no gap) reads the handle into `$a1`, moves `or s0,a0` after, and fills the jal d
 exactly while only block-1's prologue diverges, it's this as1 scheduling tie, NOT
 C-reachable (held-temp/array-index/int-param/float-temp all fail to move it). Wrap NM
 and stop. func_00014228 capped here at 10 non-reloc diffs (from 24).
+
+## REUSE an already-homed local to hold a value across a branch (not a fresh named temp) — avoids +8 frame (func_80007698)
+
+When a near-miss needs a short-lived value held in a register across one branch
+(target: `lhu $t0; beqz $t0; …; sw $t0` — single load reused, NO stack home), and
+the obvious `T t = expr; if (t) … use t …` makes IDO add a 3rd M-class home and the
+frame grows +8 (all spill offsets cascade): **reuse a named local that is ALREADY
+homed for an unrelated later value** rather than declaring a fresh one. The reused
+local's existing home means no new frame slot, and the value still rides in a register
+across the branch — matching the target's register reuse.
+
+Concrete (kernel func_80007698, rmon register-query, -O1): the value is
+`HW(sp18,0x10)`, reused at `if (v) FW(arg2,0xC)=v; else FW(arg2,0xC)=1`. `sp1C` is a
+local already homed at 0x1C for a LATER value (`*(s32*)FW(sp18,0x11C)`, target genuinely
+spills it there). Writing the HW value into `sp1C` first (its live range ends before the
+0x11C reassignment) keeps frame 0x20 and reproduces the body byte-for-byte EXCEPT one
+insn. A fresh `u16 temp_t0` / block-scoped temp / `register` temp ALL add a home →
+frame 0x28 (+8, ~120 cascade diffs).
+
+RESIDUAL CAP (1 insn): reusing a HOMED local forces a dead `sw $t0,0x1C(sp)` into the
+branch's delay slot (target = `nop`) — IDO writes a homed variable's home on assignment.
+The target's value is a register-ONLY subexpression temp (no home at all). That homeless
+temp is unreachable from C here because:
+- named locals ALWAYS get an M-class home (per the frame-slot rule) → a store;
+- a register-only temp would need IDO to CSE an inline `HW(sp18,0x10)` (used in both the
+  `if` and the store) into one register — but `sp18` is `void *volatile`, REQUIRED to
+  force the loop's per-statement pointer reload (at -O1 IDO otherwise CSEs the chain
+  pointer across the loop's branch BB and collapses `sp18 = sp18->0xC`, emitting the loop
+  2 insns short). `volatile` blocks all CSE, so the inline form re-reads (re-loads sp18 +
+  re-lhu, +2 insns) instead of reusing.
+
+So **loop-reload-needs-volatile vs tail-value-reuse-needs-CSE is a genuine conflict** on a
+single pointer local — you can satisfy one but not both. 12+ variants confirmed
+(named/block/register temp, ternary, dead-param reuse, full inline, u16* pointer snapshot,
+store-to-dest-then-fixup, `*(void* volatile*)&sp18` per-access — which costs 2 insns/access
+emitting `addiu rX,sp,K; lw 0(rX)` vs volatile-on-the-var's direct `lw K(sp)`, and a
+non-volatile do-while which collapses the loop). Wrap NM at 1 non-reloc diff.
+
+GENERAL: for "+8 frame from a fresh temp held across a branch", first try reusing a
+local already homed for a later disjoint value — it removes the frame growth for free.
+If the only residual is then a single dead home-store in the delay slot AND the target
+uses a register-only temp that your `volatile` (or any CSE-blocker) prevents, it's a cap.
