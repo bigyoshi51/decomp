@@ -1541,3 +1541,28 @@ outer (ordered). This made func_00010FEC compile + score 30.8->36.2 (the switch
 resolution itself is the gain; the &D base derefs are approximate, not exact).
 DELAY-SLOT CAVEAT (from the tool docstring): m2c rejects a label in a branch
 delay slot — skip or hand-patch those functions.
+
+## objdiff fuzzy_match_percent OVERSTATES exact-byte progress on big functions — use it to rank, not to estimate remaining work (2026-06-20)
+
+objdiff's `fuzzy_match_percent` (the report.json/decomp.dev per-function number) is a
+BLOCK-ALIGNED fuzzy score: it credits structurally-similar chunks even when they're
+positionally displaced. For large functions this badly overstates how close you are
+to a byte-exact match. Measured this batch: `gl_func_0001E134` showed **57.2% fuzzy
+but only 1.65% exact-byte** (7.6% of mnemonics aligned in order) — the 57% was
+entirely block-level credit for displaced chunks. A m2c graft with the wrong frame
+size + wrong caller-arg→saved-reg coloring routinely scores 50-65% fuzzy while being
+nowhere near landable.
+
+CONSEQUENCES for the mid-band decomp marathon:
+- The 40-90% fuzzy band is the bulk of unmatched code, but a function's fuzzy% is NOT
+  a reliable "how much work is left" gauge. A 57% function may need a near-total
+  rewrite; an 88% function may be 2 frame words away.
+- To gauge REAL closeness, measure exact-byte: build the matching path + word-compare
+  vs target .s (or count in-order mnemonic alignment), not the fuzzy field.
+- matched_code / the headline 18% IS honest — it counts only whole-function exact
+  matches (episodes). Only the per-function fuzzy% is inflated.
+- Picking: use fuzzy% to RANK candidates within a segment (higher = generally closer),
+  but expect big mid-band functions to need MULTIPLE passes + permuter, and expect a
+  meaningful fraction (caller-arg coloring class, per caller_set_int_reg_cap memo) to
+  floor below 100% no matter the structure. Budget accordingly — this is a marathon of
+  hundreds of multi-pass functions, not a near-miss mop-up.
