@@ -14670,6 +14670,16 @@ fn-ptr call with the m2c artifact `[(0x90^0)/(new_var=4)]`) emits
 base-first WITHOUT the array type — a non-constant outer subscript
 with an embedded assignment also flips evaluation; keep that artifact
 verbatim when porting such bodies.
+2026-06-21: a THIRD twin, `timproc_uso_b1_func_00001130` (vtable-entry
+dispatcher), cracked 99.75→100.0 + ROM byte-identical by the SAME
+artifact pair — `self[(0x48/4) ^ 0]` (identity XOR on the base
+subscript) + `(new_var = 0x90)` (embedded assignment parking the
+fn-ptr offset). The single residual was again the terminal address
+`addu rd,base,prod` (target) vs `addu rd,prod,base` (inline $t9 web).
+decomp-permuter REDISCOVERED the artifact in ~72k iters (-j6, ~500s)
+where the same permuter floored on the 2740/294C twins — so when a
+sibling in this family is already cracked, try the `^0`/`(t=off)`
+artifact BY HAND first; only fall back to the permuter to re-find it.
 
 ## CALL-RESULT SPILL ANATOMY: cfe allocates the spill homes; nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)
 
