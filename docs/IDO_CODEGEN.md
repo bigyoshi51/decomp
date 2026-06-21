@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [timproc_uso_b5 master-tick sub-handlers 7E34 / 7078 / C8AC: residual is a whole-function first-temp coloring cascade (v0/v1↔a1/tN, $f0↔$f8) — permuter-floored, C-lever-immune; leave NM](#timproc_uso_b5-master-tick-sub-handlers-residual-first-temp-coloring-cascade-permuter-floored-2026-06-21) — _The count-exact reconstructions of 7E34 (99.1%, 23 diffs), 7078 (97.9%, FP-renumber), C8AC (99.6%, 4 diffs) are structurally byte-exact; the ONLY residual is a systematic register-NUMBER offset originating at the first short-lived temp (EXP colors a pointer/product to a v/t/$f8 temp, base picks the next free arg reg a1 / return reg $f0, and the choice cascades). C8AC isolates it to ONE load (`lw v1,696(a0)` vs `lw a1,696(a0)`). NEGATIVE on ALL documented levers: inline-the-temp, named-temp, const-first FP, source-reversed FP, pointer-cast vs `[i]` array spelling, decl-order swap — every variant reproduces base's coloring (0 change). Permuter HARD-CAPPED 600s/j4: 7E34 330→265 (61k iters), 7078 440→350 (66k iters), C8AC 40→40 ZERO improvement (81k iters) — none reach 0. This is the pure uopt first-temp coloring tie (a1/$f0 preference), a true cap. 7B2C is WORSE (extra frame: -64 vs -40 = real spill divergence, not pure coloring). Don't re-grind; the FP-reduction operand-order and 2B74 per-slot-local levers do NOT apply (no FP reduction; not a record-builder)._
 - [DISTINCT per-slot locals (not one reused temp) make IDO spill-around-call instead of promoting to a saved reg — fixes whole-prologue $s0/$s1 shift in record-builder loops](#distinct-per-slot-locals-vs-one-reused-temp-controls-spill-vs-saved-reg-promotion-fixes-prologue-coloring-in-unrolled-record-builders-timproc_uso_b5_func_00002b74-2026-06-21) — _Unrolled constructor where each record does `c=alloc(); init(c,...)`? Reusing ONE `c` var across all records makes IDO see it long-lived → promotes to callee-saved $s0, pushing the real persistent var (`self`) to $s1 and shifting the whole prologue. Give each record its OWN scalar (`c0..cN`): each lives only across its own call → IDO spills to stack (matching target's `sw/lw` around the jal) and `self` lands in $s0. Prologue went byte-exact on timproc 2B74. Complement of "remove-local-to-force-spill". Also: USO HI16-only globals → C `&D_807Fxxxx + literal_low` reproduces the lui/%hi + literal-addiu pair (the unit has 0 LO16 relocs; .text bytes match regardless of the extra C-side LO16 reloc)._
 - [Base-pin cap is C-FIXABLE: held-base-pointer + `s32`-typed-base $s-coloring lever + `for`-comma-init as1-schedule lever](#base-pin-cap-game_libs-d_0--off-held-s32-not-char-flips-s-coloring-for-comma-init-flips-as1-prologue-schedule) — _game_libs &D_0+off "base-pin cap": held `char *g=&D` reproduces structure+base materializations. To land 0: (1) declare a VALUE-ONLY held base as `s32` (its int value) not `char *` → colors it into the LOWER saved reg ahead of a co-live const (char* form mis-colors; complement of the UCODE-reorder lever); (2) rewrite the loop as `for(a=0,b=arg; cond; a+=k,b+=k)` — comma-init flips the as1 prologue tie (base-addiu scheduled ahead of the zero-cost init moves). gl_func_0002A6C0 byte-exact (9→3→0). STILL BLOCKED: single-symbol collapse (N distinct globals all at D_0+0; needs data-symbol split) + FP multi-divide coloring. Diagnose by histogramming `lui rN,0x0` + `or aN,sN,zero`; require placeholder jals (0x0C000000) only._
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
@@ -434,6 +435,38 @@ expression, try splitting the shift before reaching for the permuter. Verified
 2026-05-24.
 
 ---
+
+<a id="timproc_uso_b5-master-tick-sub-handlers-residual-first-temp-coloring-cascade-permuter-floored-2026-06-21"></a>
+## timproc_uso_b5 master-tick sub-handlers: residual = first-temp coloring cascade (permuter-floored, 2026-06-21)
+
+The count-exact reconstructions of the timproc_uso_b5 master-tick phase handlers are
+structurally byte-exact (correct callees, globals, control flow, frame size) but carry a
+**whole-function register-NUMBER offset** that no C-level rewrite touches. Confirmed cap.
+
+- **`timproc_uso_b5_func_00007E34`** (99.1%, 184=184 words, 23 residual diffs): every "natural
+  v0" slot in the target is bumped one register (`lw v0,964(s0)` target vs `lw v1,964(s0)` build);
+  the `arg0 + idx*4` addu is `addu rd,s0,v0` (target, base-first) vs `addu rd,v1,s0` (build,
+  index-first) — coupled to the v0/v1 choice. Also a `0x4B8 | 0x4B4` two-load ordering tie
+  (v0-based load first in target, s0-based first in build) = as1 scheduler tie.
+- **`timproc_uso_b5_func_00007078`** (97.9%): same int cascade PLUS FP-register renumber — the
+  `value * 2.0f` product lands in `$f8` (target) vs `$f0` (build), cascading every following
+  FP temp. Not an FP *reduction* (no chained dot-product add), so the documented
+  right-nested-last-term-first FP lever does not apply.
+- **`timproc_uso_b5_func_0000C8AC`** (99.6%, 4 diffs): the cleanest isolate — ONE load
+  `lw v1,696(a0)` (target) vs `lw a1,696(a0)` (build). The allocator picks a1 (next free arg
+  reg) for a short-lived pointer; target picks v1. Four diffs all flow from this single choice.
+
+**Levers tried, ALL no-change (build still emits base coloring):** inline-the-temp,
+named-temp, const-first FP (`two * x`), fully-inlined FP (no named float), pointer-cast
+`*(int*)((char*)a0+K)` vs `a0[K/4]` array spelling, decl-order swap. **Permuter HARD-CAPPED
+600s/-j4 --best-only --stop-on-zero:** 7E34 base 330 → best 265 (61405 iters), 7078 base 440
+→ best 350 (65967 iters), C8AC base 40 → **40, zero improvement** (81053 iters). None reach 0.
+
+This is the pure **uopt first-temp coloring tie** (a1/$f0 "next-free" preference vs target's
+v1/$f8) — the documented permuter-immune coloring class. Leave NM. Note **`timproc_uso_b5_func_00007B2C`**
+is NOT in this class: its build frame is `-64` vs target `-40` (24 extra bytes of spill slots) —
+a real register-pressure / spill divergence, harder than coloring; the FP/int operand-order diffs
+there are symptoms of the frame mismatch, not standalone ties.
 
 <a id="feedback-ido-3save-vs-2save-arg-preserve"></a>
 ## A caller-saved value spilled-and-reloaded AROUND a jal is often a genuine ARG to that call — pass it (don't grind reg-alloc)
