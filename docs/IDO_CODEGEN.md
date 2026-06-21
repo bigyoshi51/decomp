@@ -4724,6 +4724,25 @@ opposite-direction `feedback_ido_inline_deref_v0.md`).
 order) is a separate cap that decl-order can't flip — IDO assigns
 declaration-order to f0/f2/f12/f14 and it's not C-controllable.
 
+**Re-confirmed 2026-06-21 (new-lever re-test, agent-i) on the BB88/C1B4/CC74/CE6C
+4-float-copy family — still a GENUINE cap; the in-place-RMW / line-join /
+one-line-store / char*→int*-array levers do NOT crack it:**
+IDO assigns the f-register by **first-reference (first-assignment) order**, NOT
+declaration order — `float a,b,c,d; d=...; c=...;` gives `d→f0` (d referenced
+first). And the load *instruction* order also follows first-reference order.
+So register-numbering and load-order are **coupled to the same axis** and reverse
+together: you can get the target's descending regs ($f14,$f12,$f2,$f0) OR the
+target's forward load order (660,612,608,604), never both from straight C.
+The target wants forward-load + descending-regs simultaneously — unreachable.
+- CE6C special case: its committed body reaches the *right* reg order
+  ($f14,$f12,$f2,$f0) via dead scaffolding (`d++; d--;` on an uninitialized
+  float + dead `if` blocks), but that scaffolding spills `d` to a stack home and
+  **grows the frame 0x18→0x30** — so the only remaining diff is the frame size
+  (`addiu sp,sp,-48` vs `-24`). Strip the scaffold → frame correct but regs go
+  ascending. Net: still capped (reg-order trades against frame). Floor 99.875%.
+- BB88/C1B4/CC74 floor at 98.75% (single FP-renumber word). Whole family
+  permuter-immune (FP register picks are deterministic on IDO's allocator).
+
 **Related:**
 - `feedback_ido_inline_deref_v0.md` — opposite direction for int derefs
 - `feedback_ido_no_gcc_register_asm.md` — `register T x asm("$fN")` rejected
