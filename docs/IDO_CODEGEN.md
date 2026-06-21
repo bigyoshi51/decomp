@@ -208,6 +208,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO -O2 globally CSE's `&D_00000000` (and other large-extern bases) into a single $sN, breaking per-iter lui reloads in unrolled-loop matches](#feedback-ido-global-cse-extern-base-caps-unrolled-loops) — _When a function references the same large-extern symbol (`&D_00000000`, `&func_00000000`, etc.) at MANY sites, IDO -O2 caches the high half (lui+addiu) into a single saved register ($s3 typical) and reuses it across…
 - [IDO load-CSE swap to flip $v0/$v1 regalloc](#feedback-ido-load-cse-swap-v0-v1) — Decl-order trick that flips IDO's $v0/$v1 assignment for a chained pointer-deref pair via CSE
 - [Inlining `(*a0)` 3+ times instead of caching `p = *a0` flips IDO from $tN to $v1 for the int** spill-load](#feedback-ido-inline-deref-vs-cache-flips-vN-tN) — _When target keeps a `int**` arg in $v1 across post-call uses (multiple `lw tN, 0(v1)` reloads), explicit caching `p = *a0;` lets IDO pick a $t-reg instead. Inlining `(*a0)` at every use forces 3 separate reloads which IDO assigns via $v1._
+- [Naming the deref intermediate (`mid = base[OFF]`) keeps a pointer-chain flag-test TIGHT at v0/v1 — but the named web ALWAYS claims $v0, so it can't flip a base↔mid v0/v1 pair](#feedback-ido-named-deref-web-claims-v0) — _A flag test `(base->A->B & MASK)` where `base = arg->0xB4` is reloaded multiple times across the function: inlining the whole chain makes the deref temps CLIMB (`lw $24; lw $25; andi $8` — 4 high regs, D-base pushed to $9, everything off-by-one vs the target). Naming the MIDDLE pointer (`mid = (int*)base[0x800/4];` then `if (mid[0x18/4] & MASK)`, base still inlined) collapses the chain back to the target's tight $v0/$v1/$t8/$t9 shape AND pulls the co-live D-base address to $8 — fixed 30 of 36 register diffs on game_uso_func_00010128 (79%→94.29% raw-word, count-exact). RESIDUAL CAP: the named `mid` web claims $v0; the target wants `base` (the inline reload) in $v0 and `mid` in $v1. The named pointer web's $v0 claim is UNFLIPPABLE from C — 14 variants floored (name base instead → chain re-climbs; name both → mid lands in a scratch reg; register-kw inert; inner-scope/embedded-assign/leaf-field-name no change; held-base spills +1 frame). This is the spilltemp-web coloring tie; permuter inapplicable on raw-.word USO asm. Complements [feedback-ido-inline-deref-vs-cache-flips-vN-tN] (zero-deref `**` case) — here the lever is for an OFFSET-deref chain and only gets you to the v0/v1-pair boundary._
 - [Type-different unique externs (`int X` + `char Y`, both at addr 0) break IDO CSE between sibling lui+addiu in the same call](#feedback-ido-type-split-unique-extern-breaks-cse) — _When `func(p, *(int*)&D_X, &D_Y)` should emit TWO separate `lui+addiu` (target shape) but built emits ONE shared lui via CSE, declaring the externs with DIFFERENT types (one `int`, one `char`) prevents IDO from CSE-folding even when both link-resolve to address 0._
 - [Break `&X` ↔ `*(int*)&X = 0` CSE by expressing the second use as pointer-arithmetic from a NEAR symbol](#feedback-ido-cse-bust-via-near-symbol-pointer-arith) — _When target emits `*(int*)&X = 0` (naked store, single `lui at; sw 0(at)`) but separately needs `end = &X` for a pointer bound, IDO CSEs the address load → wrong shape (`lui v?; addiu v?; sw 0(v?)`, 3 insns). Use `end = &Y + N` where `Y + N` resolves to the same final address as `&X`. Pointer arithmetic on a near symbol post-links to the same VRAM but is syntactically distinct → no CSE. Verified 2026-05-13 on `func_80001184` (kernel zero-init): 72.10% → 81.58% (+9.48pp) by writing `end = D_80012D3C + 8` instead of `end = &D_80012D5C` (both resolve to 0x80012D5C)._
 - [Replace literal `0.0f * 0.0f` with `local[N] * local[N]` (where local[N] holds 0.0f) to force IDO to emit the redundant mul/add insn pair](#feedback-ido-zero-term-via-memory-load-not-literal) — _When target asm has an explicit middle 0-term in a sum (e.g. `sqrlen = a*a + 0 + c*c` with a literal mul.s on the zero), C `0.0f * 0.0f` gets constant-folded out of the expression by IDO -O2. Reference a memory-stored 0.0f local (`local_xz[1]`) instead — the lwc1 + mul.s + add.s chain emits as expected. Verified 2026-05-08 on game_uso_func_00001DDC (+0.73pp from this single line change)._
@@ -4325,6 +4326,31 @@ int *p = (int*)a0[1];
 **Use count is the discriminator** — the multi-site rule above goes the OTHER direction (inline → $v1, cache → $tN). Single-use prefers inline for $t-reg; multi-site prefers cache for $t-reg. They look inverted but both are "minimize the named-pseudo footprint at the right phase of liveness analysis."
 
 **Companion to** `feedback-ido-load-cse-swap-v0-v1` (above) — both are about controlling which register IDO assigns to a deref intermediate. That entry is for `$v0` vs `$v1` swap on chained derefs (different values); this entry is for `$v1` vs `$tN` choice on repeated derefs (same value, multiple sites).
+
+---
+
+---
+
+<a id="feedback-ido-named-deref-web-claims-v0"></a>
+## Naming the deref intermediate keeps a pointer-chain flag-test tight at v0/v1 — but the named web always claims $v0
+
+_For a flag test `(base->A->B & MASK)` where `base = arg->0xB4` is reloaded several times across the function, HOW you spell the intermediate deref decides whether the whole register file is shifted off-by-one vs the target._
+
+**The problem shape (game_uso_func_00010128, 2026-06-21):** target colors the flag-test chain `outer(v0) → mid(v1) → val($t8) → andi($t9)` and the co-live `&D+OFF` address into `$t0`. Fully inlining the chain (`(((int*)((int*)a0[0xB4/4])[0x800/4])[0x18/4] & 0x400)`) makes IDO allocate the deref temps CLIMBING (`lw $24; lw $25; andi $8`), the inline `outer` reload into `$v1`, and pushes `&D` to `$t1` — **every register one slot too high, 36 diffs**, which reads like a hard regalloc cap but is a spelling artifact.
+
+**The lever:** name JUST the middle pointer; leave `base` inlined:
+
+```c
+int *mid;
+mid = (int*)((int*)a0[0xB4 / 4])[0x800 / 4];   /* base inlined, mid named */
+if ((mid[0x18 / 4] & 0x400) != 0) { ... }
+```
+
+The named `mid` web collapses the chain back to the tight `$v0/$v1/$t8/$t9` shape and pulls `&D` to `$t0`. **30 of 36 diffs fixed (79%→94.29% raw-word, count-exact 105=105).**
+
+**The residual cap:** the named `mid` web claims `$v0`; the target wants `base` (the inline reload) in `$v0` and `mid` in `$v1`. The named pointer web's `$v0` claim is **unflippable from C**. Floored across 14 variants: name `base` instead → chain re-climbs (back to 36); name both → `mid` lands in a scratch reg (`$a1`/`$t1`); `register` keyword inert; inner-scope decl / embedded-assign (`mid = (outer = ...)[..]`) / leaf-field-name / second-base-reload — no change; holding `base` across the body spills it (+1 frame word). This is the spilltemp-web coloring tie ("the source levers can't reach" subclass); permuter is inapplicable here (raw-`.word` USO asm has no mnemonic/reloc form to import).
+
+**Rule:** when a multi-reload `base->A->B` flag test is off-by-one across the whole function, name the MIDDLE deref (not the base, not the leaf) first — it usually fixes everything except the final base↔mid `$v0`/`$v1` pair. If only that pair remains, it's a genuine cap; keep `NON_MATCHING`. Complements [the zero-deref `**` inline-vs-cache lever](#feedback-ido-inline-deref-vs-cache-flips-vN-tN): that one is for `*(int**)a` reloads; this one is for an OFFSET-deref chain and only reaches the v0/v1-pair boundary.
 
 ---
 
