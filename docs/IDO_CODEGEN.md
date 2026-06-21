@@ -175,6 +175,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Leaf load-hoist-above-aliasing-store: don't cache the first deref in a named local](#feedback-ido-leaf-load-hoist-no-named-temp) — _When a no-frame leaf's target hoists `lw t6, off(aN)` ABOVE a preceding `sw aM, 0(a0)` (aliasing store) AND uses transient `$t6/$t7` for two un-CSE'd derefs of the same `aN[k]`, write the load-bearing statement FIRST in source with NO named temp. A named `int t = aN[k];` both mis-allocates the value ($v0 instead of $t6) and CSEs the second deref to one load. Verified byte-exact 2026-05-18 on `game_libs_func_000664D4` (7-insn doubly-linked-list splice)._
 - [A no-dependency constant store (`field = 0`) gets hoisted into an earlier load-delay gap — write it LAST in source order to pin it at the end](#feedback-ido-zero-store-write-last-to-prevent-hoist) — _When a function copies several loaded fields into the object AND also writes a constant (e.g. `obj->K = 0`), IDO's scheduler hoists the zero-store (no value dependency) up to fill a load-delay gap, landing it earlier than the target. Writing the constant store as the LAST statement keeps it after the dependent loads, matching the target's late placement (typically just before the jr-delay store). Verified byte-exact 2026-05-22 on `timproc_uso_b5_func_0000A928` (3 global-table field copies + one `a0->0x3C=0`): zero-store written 3rd → emitted at pos 8 (hoisted); written last → pos 11 (matches)._
 - [Split a local's declaration from its initializer to hoist intervening stores together (`int n; ...; store; store; n=0;`)](#feedback-ido-split-decl-init-hoists-stores) — _When the target emits two (or more) prologue byte/word stores back-to-back at the top but your `int n=0; char *d=a0; char *s=a3;` + `a0[0]=a1; a0[1]=a2;` form interleaves the second store among the setup moves, split the decls from their inits: declare `int n; char *d; char *s;` first, then the stores `a0[0]=a1; a0[1]=a2;`, then `n=0; d=a0; s=a3;`. IDO then schedules both stores adjacently at the top (the inits become later moves with no reason to slot between the stores). Verified game_libs_func_000099DC 80%→90% (2026-05-31). Residual there was an orthogonal const-scheduling tie._
+- [Make the value-dependent (sp-loaded) stores SOURCE-ADJACENT to crack a "scheduler floated the cheap store ahead of the expensive one" tie](#feedback-ido-sp-loaded-stores-adjacent-schedule) — _A struct-init where the target emits two sp-loaded (param/spill-reloaded) stores together, then a block of `sw zero` / `sw <const>` stores — but your C orders the second sp-loaded store LAST (after the zero/const block). IDO's list scheduler floats the cheap zero-stores up and DEFERS the second sp-loaded store, cascading const-reg renumbers. Misdiagnosed as a "two independent instructions' ordering not reachable from C" cap. FIX: move the second sp-loaded store UP so both sp-loaded stores are statement-ADJACENT, ahead of the zero/const block — IDO keeps source-adjacent value-dependent stores together. Byte-exact func_00002420 (1080 bootup_uso) 2026-06-21, prior NM-wrap at 93.8%. Distinct from [split-decl-init](#feedback-ido-split-decl-init-hoists-stores) (that hoists stores above SETUP MOVES; this reorders stores relative to OTHER stores). Try adjacency before conceding any struct-init store-schedule swap; the prior note had only tried named-local hoist (const-prop ate it) + operand-read reorders, not statement adjacency. (Reloc note: bootup_uso `*(p+off)=(int)&D_00000000` → `lui 0; addiu 0` post-link, D at USO addr 0; the C build's R_MIPS_HI16/LO16 D_00000000 pair resolves to the same bytes as the reloc-stripped raw `.s` — reloc-COUNT mismatch vs expected/.o is a representation artifact; gate on full `make` ROM = baserom.)_
 - [jr-epilogue double-store: delay-pick + emit-order + temp-reg# all couple to source order, so some target combos are unreachable (cap)](#feedback-ido-jr-epilogue-double-store-coupling-cap) — _A 5-insn `compute;compute;sw;jr;sw` leaf with two independent stores of differently-computed values: the delay-slot store (always the FIRST source store), the emit order, and the temp-reg numbering (first-computed value → lower temp) are all locked to source order. If the target's delay store uses the second-computed value while the first-computed value lands in the lower temp, no source order produces both — NM-wrap/defer. jr analogue of the jal swap-stores recipe, but the jr case couples reg# too so the swap that fixes the delay store breaks the reg. Verified 2026-05-23 game_libs_func_000478D8._
 - [Commutative compare (beq/bne) operand order: don't cast the parameter — casting flips which operand becomes rs](#feedback-ido-beq-operand-order-param-cast) — _`while(p!=a0)`/`if(p!=a0)` against a param: no cast → loaded value p ($v0) is rs (`beq $v0,$a0`); casting the param (`p!=(int*)a0`, or `int**a0`+cast) makes the param rs (`beq $a0,$v0`) — reversed bytes. Source operand order (a0!=p vs p!=a0) does NOT change it; only the cast does. Declare the param at the type that avoids the cast to match a target whose freshly-loaded value is rs. Verified byte-exact 2026-05-23 game_libs_func_0005B73C._
 - [getc-style post-increment: deref `**a0` (not a named pointer local) keeps the pointer in $a1 and forces lbu-before-addiu](#feedback-ido-getc-deref-form-keeps-a1) — _For `c = *(*pp)++` (read byte, post-increment caller's pointer), write `unsigned char v = **a0; *a0 = *a0 + 1; return v;`. The double-deref keeps the loaded pointer in $a1 and emits `lbu` before the `addiu`/`sw`-in-delay. A named `p = *a0; v = *p; *a0 = p+1;` mis-allocates to $v1 and reorders to increment-first/lbu-in-delay. Verified byte-exact 2026-05-23 game_libs_func_0002A9A4._
@@ -12178,6 +12179,52 @@ writing `a0->0x3C=0` third emitted it at insn 8 (hoisted into the gap after a
 `lw`); writing it last emitted it at insn 11, matching the target.
 
 ## jr-epilogue double-store: delay-pick + emit-order + temp-reg# all couple to source order (some target combos unreachable)
+<a name="feedback-ido-sp-loaded-stores-adjacent-schedule"></a>
+## Make value-dependent (sp-loaded) stores SOURCE-ADJACENT to crack a store-schedule "tie"
+
+A struct-init constructor where the target emits two **sp-loaded** stores
+(params spilled to the incoming-arg area, or values reloaded from the stack)
+together, followed by a block of cheap `sw zero` / `sw <const>` stores. If your
+C orders the second sp-loaded store LAST (after the zero/const block), IDO's
+list scheduler floats the zero-stores up (they have no pending load dependency)
+and **defers the sp-loaded store** past them — and the freed scheduling slot
+cascades a const-register renumber. This reads exactly like a "two independent
+instructions whose order isn't C-reachable" allocator tie, and was misdiagnosed
+as one.
+
+```c
+/* WRONG (build): IDO defers the s5 store past the zero/const block */
+o->f30 = s4;        /* sp-loaded */
+o->f3C = 0; o->f44 = 0; o->f48 = 0x2710; o->f4C = 0;
+o->f34 = s5;        /* sp-loaded, but ordered LAST -> scheduler floats it down */
+
+/* RIGHT (target): both sp-loaded stores adjacent, ahead of the zero/const block */
+o->f30 = s4;        /* sp-loaded */
+o->f34 = s5;        /* sp-loaded, now adjacent -> kept together */
+o->f3C = 0; o->f44 = 0; o->f48 = 0x2710; o->f4C = 0;
+```
+
+IDO keeps source-ADJACENT value-dependent stores together; the zero/const
+stores then schedule after them. Byte-exact `func_00002420` (1080 bootup_uso)
+2026-06-21 (prior NM-wrap 93.8% → 0 non-reloc diffs). Distinct from
+[split-decl-init-hoists-stores](#feedback-ido-split-decl-init-hoists-stores)
+(which hoists stores above SETUP MOVES); here you reorder stores relative to
+OTHER stores. Try statement adjacency before conceding a struct-init
+store-schedule swap. The prior note had tried only a named-local hoist
+(const-prop folded it away) and operand-read reorders — not statement adjacency.
+
+**Reloc gotcha for this match (bootup_uso & other USOs with D at addr 0):**
+`*(p + off) = (int)&D_00000000` compiles to `lui rX,%hi(D); addiu rX,%lo(D); sw`
+= `lui rX,0; addiu rX,0; sw` once D resolves to 0. The `expected/.o` (built from
+the reloc-stripped raw `.s` via INCLUDE_ASM) shows that as `lui (0x0>>16); addiu
+0x0` with NO reloc, while the real-C build carries an `R_MIPS_HI16/LO16
+D_00000000` pair. The post-link bytes are identical; the reloc-COUNT mismatch in
+a reloc-filtered word-compare is a representation artifact, not a real diff. Gate
+the match on the full `make` ROM being byte-identical to baserom (and the
+non-reloc word diff being 0), not on the reloc count.
+
+---
+
 <a name="feedback-ido-jr-epilogue-double-store-coupling-cap"></a>
 
 **Shape.** A no-frame leaf does exactly two *independent* stores of
