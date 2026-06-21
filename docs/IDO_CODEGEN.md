@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [INLINE the `(s16)`/`(char)` cast (don't reassign the var) to keep the raw load live across a branch](#inline-the-s16char-cast-dont-reassign-the-var-to-keep-the-raw-load-live-across-a-branch--splits-the-sign-extension-and-re-colors-the-temp-game_uso_func_0000e2d0-landed-2026-06-21) — _Redundant `sll/sra` sign-extend in wrong reg/position? Don't reassign the narrow var (`frame=(s16)frame`) — spell `(s16)frame` INLINE at each use. Keeps the lh result live across the branch → fresh reg (v1) + delay-slot-split. game_uso E2D0 7→0. Plus: USO disp-0 external read emits HI16+LO16 vs target lone-HI16, but `.text` bytes identical → byte_verify passes._
+- [Base-pin cap is C-FIXABLE: held-base-pointer + `s32`-typed-base $s-coloring lever + `for`-comma-init as1-schedule lever](#base-pin-cap-game_libs-d_0--off-held-s32-not-char-flips-s-coloring-for-comma-init-flips-as1-prologue-schedule) — _game_libs &D_0+off "base-pin cap": held `char *g=&D` reproduces structure+base materializations. To land 0: (1) declare a VALUE-ONLY held base as `s32` (its int value) not `char *` → colors it into the LOWER saved reg ahead of a co-live const (char* form mis-colors; complement of the UCODE-reorder lever); (2) rewrite the loop as `for(a=0,b=arg; cond; a+=k,b+=k)` — comma-init flips the as1 prologue tie (base-addiu scheduled ahead of the zero-cost init moves). gl_func_0002A6C0 byte-exact (9→3→0). STILL BLOCKED: single-symbol collapse (N distinct globals all at D_0+0; needs data-symbol split) + FP multi-divide coloring. Diagnose by histogramming `lui rN,0x0` + `or aN,sN,zero`; require placeholder jals (0x0C000000) only._
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
 - ["8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad](#8-byte-dead-slot-below-a-stack-buffer-cap-is-often-a-bufn-array-index-offset-not-a-pad-problem) — _Target passes scratch buf at sp+K+8, build at sp+K, dead 8 bytes below it, frame same? Don't add volatile pad — the buffer is over-sized and the code passes `&local_buf[2]` (a pointer into the middle). Declare buf frame-correct, pass `&local_buf[N]`. Cracked gl_func_0005FE7C (the "needs INSN_PATCH on 6 sp-offset insns" cap)._
 
@@ -16085,3 +16086,53 @@ byte-identical. `byte_verify` (land script) compares `.text` only, so it PASSES;
 the lone-vs-paired-HI16 reloc difference is NOT a match blocker for USO externals
 accessed at displacement 0. (Confirmed: game_uso_func_0000C3F8's BC0 access has
 the same divergence and still produces a byte-identical ROM.)
+
+## Base-pin cap (game_libs &D_0 + off): held `s32` (not `char*`) flips $s-coloring; `for`-comma-init flips as1 prologue schedule
+
+The "base-pin cap" — a fn that references the module data base `&D_00000000 + off`
+where the target pins those bases in saved regs but the NM body passes int
+literals or writes `*(T*)(&D+off)` inline — is C-FIXABLE with a held base pointer
+(`char *g = (char*)&D_00000000; ... g+off / *(T*)(g+off)`). That reproduces the
+STRUCTURE and all base materializations, but landing to 0 diffs needs two extra
+codegen levers that I found cracking gl_func_0002A6C0 (2026-06-21, byte-exact):
+
+1. **Held base typed `s32` (integer value), not `char *`, flips a $s-reg coloring
+   tie.** When a held base is used ONLY BY VALUE (stored, passed as an arg,
+   compared) and is NOT dereferenced, declare it as its integer value
+   (`s32 dflt = (s32)((char*)&D_00000000 + off);`) instead of `char *`. A
+   pointer-typed held local biases IDO's allocno order so a co-live constant wins
+   the lower saved reg; the `s32` form colors the base FIRST → lower reg, matching
+   the target. gl_func_0002A6C0: `char *dflt` → dflt=s3 / const-1=s2 (9 diffs);
+   `s32 dflt` → dflt=s2 / const-1=s3 EXACTLY like target (3 diffs). (Bases that ARE
+   dereferenced/incremented must stay `char *` — but the same trick still works for
+   a sibling value-only base: gl_func_0002A904's `anchor` is only stored + passed,
+   so `s32 anchor` flipped its s4→s3 coloring to match target while the deref'd
+   loop pointers stayed `char *`.) This is the COMPLEMENT of the UCODE-encounter
+   reorder lever above: when reference-reordering won't flip the tie, the C TYPE of
+   the held value will.
+
+2. **`for`-loop with comma-init flips a 3-word as1 prologue SCHEDULE tie.** After
+   coloring is right, the residual was the relative order of the prologue setup
+   {`addiu sN,sN,off` (base lo-half), the two zero-cost `or`-moves of the loop
+   inits}. Target emits the base-addiu first; a `do {...} while` body with the
+   inits as separate statements before it makes as1 schedule the zero-cost moves
+   first (3 diffs, all 6 statement/decl/assignment orderings tried — as1 reorders
+   identically). Rewriting the loop as `for (a=0, b=arg; cond; a+=k, b+=k) {...}`
+   (comma-init in the for-header) changed as1's scheduling to emit the base-addiu
+   ahead of the moves → 0 diffs. The for-comma-init is a real schedule lever for
+   "prologue base-materialize scheduled after the loop-var inits" residuals, not
+   just cosmetic.
+
+WHAT STAYS BLOCKED (not these levers): (a) **single-symbol collapse** — when the
+target references several DISTINCT module globals that ALL disassemble as `D_0+0`
+(splat exposes only one `D_00000000` extern), IDO CSEs/dead-store-eliminates them
+into one base, so two distinct stores or a separate temp-base-vs-saved-base split
+can't be reproduced (gl_func_00030A20: 4 distinct globals at D_0+0; gl_func_0002A904's
+top-store temp v0 merges with the loop base s0). Needs the USO data symbols split
+out (infra), then the held-pointer lever lands it. (b) **FP register coloring** in
+multi-divide blocks ($f8/$f0, $f10/$f6 swaps, same insns) — gl_func_0003061C's 26
+residual after the held-base body matched the full control flow + all int base
+materializations. Diagnose base-pin caps by histogramming `lui rN,0x0` (HI16 of D_0)
++ `or aN,sN,zero` held-pointer arg-passes in the target; prefer fns with placeholder
+jals only (`0x0C000000`) — REAL same-object jals (`0x0C00FCxx`) store resolved
+absolute bytes our extern-call can't reproduce (hardcoded-jal cap).
