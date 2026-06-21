@@ -12704,6 +12704,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Inline a cached load-deref local into the loop body](#feedback-ido-inline-cached-local-for-frame-shrink) — sibling lever for the stack-slot-overhead subclass.
 - [-O1 STATEMENT-REORDER coloring levers: flag-set-LAST + increment-before-decrement collapse a whole-body t-register cascade (kernel func_800062F0 97.6%→byte-exact)](#feedback-ido-o1-statement-reorder-coloring-levers) — _At -O1 (cfe→ugen, no uopt) a "pure register-coloring" near-miss whose diffs are all same-offset same-opcode register RENAMES is often a first-use-order PHASE rotation, fixable by reordering trailing statements in a block — no register kw, no spill. THREE levers, applied to a ring-buffer packer with 39 such diffs: (1) write a pointer+int address as a FLAT add `*(char*)(idx + base)` not `*((char*)base + idx)` → loads the int index first (matches target load order in copy loops); (2) move a `flag = 1;` const-store to AFTER the value-using statements in the same block (`arg1-=sp2C; sp18=sp2C; flag=1;`) so the loaded values color into lower temps before the constant materializes (36→9 diffs — the single biggest mover); (3) move `globalCtr += 1;` BEFORE `arg1 -= sp2C;` in the loop tail so the global is loaded into the low temp ahead of the subtract (9→0). Recognition: diffs cluster at the TAIL of if/loop blocks, every reg shifted by a consistent amount (the free-list phase), offsets+opcodes identical. Try trailing-statement permutation of const-stores and increments FIRST — cheaper than register kw / live-range split, and permuter-blind (it won't reorder whole statements). Verified byte-exact in the LINKED ELF (real jal targets + extern symbols resolved), 2026-06-20._
 - [LICM hoists per-block `addiu sp,N` stack-temp addresses into saved regs — dominant int-save-count cap on big -O2 geometry grafts; inline/name/if(1)/-O1 all NEGATIVE; needs per-block source RE](#feedback-ido-licm-stack-temp-address-hoist-cap) — _A large geometry graft saves 9 int regs (s0-s8) where the target saves 3 (s0,s1,s2)+3 FP; the 6 excess all hold `addiu sN,sp,K` (stack-Vec3-temp addresses) that IDO LICM-hoists once into callee-saves, while the target re-materializes each into a SCRATCH reg per use. Verified 2026-06-16 on game_uso_func_00007C1C: remove-local-recompute is CSE/LICM-immune (the address is live across each idiom's malloc-fallback jal → forced saved reg regardless of naming), naming the swizzle-scratch as one pointer REGRESSES (target re-addiu's it per block, not a held pointer), if(1)-collapse deletes the dead malloc branch the target keeps, and -O1 under-promotes (1 int save, drops the f20/f22/f24 the target has). Genuine residual = reconstruct the inlined-helper loop body block-by-block so each temp address is computed locally (defeat the LICM hoist); mechanical m2c-graft transforms can't. Recognition: excess saved regs all hold `addiu sN,sp,CONST` for the same sp-offsets the target reaches via v/t/a regs._
+- [Confirm a GENUINE stolen-prologue cap (C-unreproducible) with 3 checks: setup-insns-before-`addiu sp`, UND caller symbol, orphan gap in expected.o](#feedback-ido-genuine-stolen-prologue-diagnostic) — _A near-miss whose target function begins with register-setup instructions (`or a2,a0,0`; `lui/addiu a0=&base`; `lw v1,off(a0)`) placed AHEAD of the frame `addiu sp,sp,-N` is a stolen-prologue split, NOT a regalloc cap, and is unmatchable from C: IDO always emits the stack-frame prologue FIRST, so it cannot put the setup insns before `addiu sp`. Three-part confirmation: (1) the `.s` body reads a register (e.g. $v1) that is never set inside the symbol; (2) the real caller `jal`s an ADDRESS 0x10ish BEFORE the symbol's glabel (e.g. `jal func_00001BD4` for symbol `func_00001BE4`); (3) `objdump -t expected/<unit>.c.o` shows that earlier address as a `*UND*` symbol with a 4-word unnamed gap (the orphan `.s`) between the predecessor's end and this symbol's start. When all three hold it's permanent NM — merging the orphan into the symbol does NOT help (the setup-before-prologue ordering is still unreachable). SUFFIX/PROLOGUE_STEALS forcing banned. Verified 2026-06-21 mgrproc_uso_func_00001BE4 (real entry 0x1BD4, reads caller-set $v1, tables import_802649C0/CC)._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -15895,3 +15896,45 @@ makes IDO EITHER inline the epilogue into the predecessor (one oversized symbol)
 OR emit a duplicate epilogue — never the beql-crosses-boundary layout. Such a
 function's BODY can be made byte-exact but the symbol-table layout (and thus a
 per-symbol byte_verify land) stays blocked → keep INCLUDE_ASM, no episode.
+
+<a id="feedback-ido-genuine-stolen-prologue-diagnostic"></a>
+## Confirm a GENUINE stolen-prologue cap with three checks (setup-insns-before-prologue / UND caller symbol / orphan gap in expected.o)
+
+A near-miss can look like a regalloc/coloring cap when it is actually a
+**stolen-prologue split** that no C source can reproduce. The signature is that
+the target function begins with register-setup instructions BEFORE the stack
+frame is established:
+
+```
+or    a2, a0, $0          # a2 = state ptr (the incoming arg)
+lui   a0, %hi(D); addiu a0, a0, %lo(D)
+lw    v1, 0x64(a0)        # v1 = D[0x64]
+addiu sp, sp, -24         # <-- the FRAME prologue appears AFTER the setup
+sw    ra, 20(sp)
+addiu v1, v1, -5          # body uses v1 (caller/prologue-set)
+```
+
+IDO -O2 **always** emits the stack-frame prologue (`addiu sp,sp,-N; sw ra,..`)
+as the first thing in a function. It cannot place the `or/lui/addiu/lw` setup
+ahead of `addiu sp`. So this ordering is structurally unreachable from C, even
+if you merge the leading setup into the function's symbol.
+
+Three-part confirmation (do all three before conceding):
+1. The `.s` body reads a register (commonly `$v1`) that is never assigned inside
+   the symbol's own range — i.e. it is live-in.
+2. The real caller `jal`s an address ~0x10 BEFORE the symbol's `glabel`. E.g.
+   the symbol is `mgrproc_uso_func_00001BE4` but the caller does
+   `jal mgrproc_uso_func_00001BD4` — the true entry is 0x1BD4.
+3. `objdump -t expected/<unit>.c.o | grep <earlier_addr>` shows that earlier
+   address as a `*UND*` symbol, with a small unnamed gap (the orphan `.s`, e.g.
+   4 words = 0x10) sitting between the predecessor's end and this symbol's start.
+
+When all three hold, it is a permanent NON_MATCHING cap — not a coloring
+renumber, not a frame-size pad. SUFFIX_BYTES / PROLOGUE_STEALS forcing to fake
+it is banned (2026-05-23). Keep INCLUDE_ASM (the orphan `.s` already emits the
+bytes exactly via a standalone >=2-word GLOBAL_ASM block); no episode.
+
+Verified 2026-06-21 on `mgrproc_uso_func_00001BE4` (true entry 0x1BD4; reads
+caller/prologue-set `$v1`; two distinct table bases `import_802649C0`+0x5F0 and
+`import_802649CC`+0x5FC drive the `v1*4`-indexed loads — a prior NM body wrongly
+used `&D_00000000` for both).
