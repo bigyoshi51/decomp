@@ -36,6 +36,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1._
 - [LONGEST-SPAN LR LANDS IN AN ARG REGISTER (a0), not v0 — function-tail base-pointer cap + isop-mode-check %-mover (func_0001304C pass 15)](#longest-span-lr-lands-in-an-arg-register-a0-not-v0--the-function-tail-base-pointer-cap-and-the-isop-mode-check-mover-that-survives-it-func_0001304c-pass-15) — _a base ptr loaded once + held across the whole tail = longest LR = lowest save/span priority = colored LAST = lands in a0 (derefs grab v0/v1 first); a build coloring it into v0 rebases the whole tail = arg-register-targeting cap (no pseudo-order lever, permuter floors). BUT inlining `mode == N` deref into the compare (isop → Uneq swap → bne const-first) is a real monotonic %-mover that stacks anyway (92.5→92.61)._
+- [Value-returning lookup with -1 default: if-return (not ternary) frees v0 → base lands in v1; + array-index + split-pointer levers (game_libs_func_00027300)](#value-returning-lookup-with--1-default-use-ifcondreturn-x-return--1-not-a-ternary-to-free-v0-for-the-return-pushing-the-held-base-into-v1--plus-array-index--split-pointer-levers-game_libs_func_00027300-body-byte-exact) — _`return cond ? load : -1` near-misses with the body shifted one v-reg (base in v0, result moved). Three levers (27300 12→0 body diffs): (1) `if(cond){return load;} return -1;` reserves v0 for the return so the held strided base colors into v1, byte loads straight to v0; (2) array-index `((int*)(p+OFF))[i]` gives addu base-first; (3) split chained inner deref into a named local → IDO reuses the dead arg reg for the load. CAVEAT: cross-fn tail-merge (-1 path beql-branches into the NEXT symbol's jr) is NOT C-reproducible — body can be byte-exact but the two-symbol split blocks a per-symbol byte_verify land; keep INCLUDE_ASM._
 - [STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (44F4 79.57 -> 100.0)](#feedback-ido-struct-by-value-marshalling-lever) — _`sw a2,8(sp)` in jal delay = struct-by-value arg homed to its own arg slot; `addiu sN,sp,K` held in s-reg = struct local (ILDA web colorable — char* &local never is); store-direct+load-via-pointer pair = struct copy; `bne base,-K` = `if (base+K == NULL)`; iter alloc-fail can skip to NEXT iter, not epi._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
@@ -15701,3 +15702,41 @@ local is the outgoing-arg reservation IDO leaves there.
 Try the do-while/if(1) BB-lever on ANY tail-RMW-then-`return CONST` near-miss whose
 residual is "pointer in wrong v-reg + return constant computed too early / nop in
 the jr delay slot" before conceding a scheduling cap.
+
+## Value-returning lookup with `-1` default: use `if(cond){return X;} return -1;` (NOT a ternary) to free $v0 for the return, pushing the held base into $v1 — plus array-index + split-pointer levers (game_libs_func_00027300 body byte-exact)
+
+A `*N-strided` lookup that returns either a loaded value or a `-1` sentinel
+(`return cond ? load : -1;`) often near-misses with the WHOLE body shifted one
+v-register: the strided base lands in `$v0`, the loaded result has to `move`
+into `$v0` for the return, and the `-1` epilogue routes through `$v1` then
+`move v0,v1`. Target instead holds the base in `$v1`, loads straight into `$v0`,
+and the `-1` is a bare `li v0,-1`.
+
+Three independent levers close it (verified 2026-06-20 on game_libs_func_00027300,
+18 own-words 12-diff → 0-diff):
+
+1. **`if (cond) { return LOAD; } return -1;` instead of the ternary.** The
+   if-return form lets IDO reserve `$v0` for the return value across the whole
+   function, so the long-lived strided base is colored into `$v1`
+   (`addu v1,t6,t7`) and the byte load goes directly to `$v0`. The ternary kept
+   the base in `$v0` and forced a `move`. (A `void`-return sibling with the
+   identical body — e.g. game_libs_func_00026AF8 — correctly uses `$v0` for the
+   base, confirming the return value is what evicts it.)
+2. **Array-index `((int*)(p+OFF))[i]` for the inner indexed load**, not
+   `*(int*)(p + i*4 + OFF)`. Gives the target's `addu t1, base, scaled` operand
+   order (base-first); the flat-pointer form emits `addu t1, scaled, base`.
+   (Same ucode-shape rule as the timproc-twins / array-IXA entry above.)
+3. **Split a chained inner-pointer deref into a named local** (`char *q = ...[i];
+   return *(signed char*)(q + a2 + K);`). The store-to-separate-statement makes
+   IDO reuse the now-dead incoming arg register (`$a0`) for the loaded pointer
+   (`lw a0,...(t1); addu t2,a0,a2`) instead of allocating a fresh temp.
+
+CAVEAT — cross-function tail-merge is NOT C-reproducible. If the target's `-1`
+path is a `beql`/`beqzl` that branches PAST the function's own end into the
+`jr ra` of the NEXT adjacent symbol (an IDO shared-epilogue tail-merge, e.g.
+27300's `-1` shares 27348's 3-word `li v0,-1; jr; nop`), C cannot recreate the
+two-symbol byte split: defining the successor as a real `return -1` function
+makes IDO EITHER inline the epilogue into the predecessor (one oversized symbol)
+OR emit a duplicate epilogue — never the beql-crosses-boundary layout. Such a
+function's BODY can be made byte-exact but the symbol-table layout (and thus a
+per-symbol byte_verify land) stays blocked → keep INCLUDE_ASM, no episode.
