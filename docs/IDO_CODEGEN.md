@@ -534,6 +534,10 @@ Naming `offset` changes the scheduling: `$v0` (the call result `r`) is held as f
 
 **Origin:** 2026-04-19 game_libs gl_func_00023B08. Inline `r + a1 * 16` → 99.33 % (only `addu` operand order off). Split `int offset = a1 << 4; r + offset` → 100 %.
 
+## FP-setup tie (`lwc1` field-load vs `mtc1` constant-materialize) flips by inlining the load into the comparison condition
+
+_A function that compares a struct float field against a float literal — `f = a0->field; if (f < 4.0f)` — sets up two independent things at entry: the field load (`lwc1 $f0,OFF(a0)`) and the constant materialize (`lui at,0x4080; mtc1 at,$f4`). When your build emits the field-load FIRST but the target materializes the CONSTANT first (adjacent 2-word swap, ~99.96%), DON'T pre-load the field into a separate statement. Inline the load into the comparison: `if ((f = a0->field) < four)`. Making the field-load the value-defining expression of the condition re-anchors the as1 schedule so the co-live constant (`four`) materializes ahead of it — flipping the pair to match. Cracked gl_func_0000871C 2026-06-21 (agent-d): 2→0 word diffs, byte-exact (sole residue is benign &D_00000000+0xE60 HI16/LO16). Try this before conceding any `lwc1`/`mtc1` (or load/move-const) adjacent swap at function entry; it's the FP-comparison analogue of the chained-assignment store-before-call lever._
+
 ## Two independent register-inits at entry: C source order controls which IDO emits first
 
 _When a function opens with two independent setup assignments to saved/temp regs
