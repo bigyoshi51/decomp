@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [INLINE the `(s16)`/`(char)` cast (don't reassign the var) to keep the raw load live across a branch](#inline-the-s16char-cast-dont-reassign-the-var-to-keep-the-raw-load-live-across-a-branch--splits-the-sign-extension-and-re-colors-the-temp-game_uso_func_0000e2d0-landed-2026-06-21) — _Redundant `sll/sra` sign-extend in wrong reg/position? Don't reassign the narrow var (`frame=(s16)frame`) — spell `(s16)frame` INLINE at each use. Keeps the lh result live across the branch → fresh reg (v1) + delay-slot-split. game_uso E2D0 7→0. Plus: USO disp-0 external read emits HI16+LO16 vs target lone-HI16, but `.text` bytes identical → byte_verify passes._
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
 - ["8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad](#8-byte-dead-slot-below-a-stack-buffer-cap-is-often-a-bufn-array-index-offset-not-a-pad-problem) — _Target passes scratch buf at sp+K+8, build at sp+K, dead 8 bytes below it, frame same? Don't add volatile pad — the buffer is over-sized and the code passes `&local_buf[2]` (a pointer into the middle). Declare buf frame-correct, pass `&local_buf[N]`. Cracked gl_func_0005FE7C (the "needs INSN_PATCH on 6 sp-offset insns" cap)._
 
@@ -15958,3 +15959,40 @@ Verified 2026-06-21 on `mgrproc_uso_func_00001BE4` (true entry 0x1BD4; reads
 caller/prologue-set `$v1`; two distinct table bases `import_802649C0`+0x5F0 and
 `import_802649CC`+0x5FC drive the `v1*4`-indexed loads — a prior NM body wrongly
 used `&D_00000000` for both).
+
+## INLINE the `(s16)`/`(char)` cast (don't reassign the var) to keep the raw load live across a branch — splits the sign-extension and re-colors the temp (game_uso_func_0000E2D0 LANDED 2026-06-21)
+
+A `(s16)`-counter advance had a 7-word residual that looked like a pure v0-vs-v1
+coloring + scheduler-tie cap. Target:
+```
+lh   v0,0xE4(a0)          # frame, sign-extended into v0
+...
+sll  v1,v0,0x10           # (deferred — placed AFTER the block-flag load,
+sra  v1,v1,0x10           #  SPLIT across the beql) re-extend into v1
+addiu t0,v1,1 ; slt at,v1,t1
+```
+The C `frame = (s16)frame;` (REASSIGNING the same local) compiled to `sll v0;
+sra v0` adjacent and early, coloring the temp into v0 (frame's own reg) — 7 diffs.
+
+FIX: don't reassign. Keep `int frame = *(s16*)(a0+0xE4);` as the raw live value
+and write the cast INLINE at each use: `*(s16*)(a0+0xE4) = (s16)frame + 1;` and
+`if ((s16)frame < limit)`. Because `frame` (the lh result) must now stay live
+across the branch, IDO (a) re-extends into a FRESH register (v1, not v0) and
+(b) SPLITS the `sll`/`sra` to fill the beql delay slot. 0 diffs.
+
+GENERAL LEVER: when the diff is "redundant `sll/sra` (or `andi`) sign/zero-extend
+in the wrong register / wrong position", check whether your C reassigns the
+narrow var. Reassigning ties the extended value to the source register's web and
+schedules it eagerly. Spelling the cast inline at the point(s) of use keeps the
+raw load live, which is what forces IDO's fresh-register + delay-slot-split shape.
+Pairs with the if/else-not-early-return rule (that one produces the `beql` +
+dead store-tail). See also WEB-ORDER INVERSION and INNER-SCOPE DECL.
+
+RELOC-SHAPE NOTE (relocatable USO): the gate read `*(int*)&game_uso_D_807FF684`
+emits HI16+LO16 from the C build, but expected has a LONE HI16 (the USO
+external-data convention). This is a `.rel.text`-metadata-only divergence — the
+`.text` instruction BYTES (`lui;lw 0(reg)`) are identical and the linked ROM is
+byte-identical. `byte_verify` (land script) compares `.text` only, so it PASSES;
+the lone-vs-paired-HI16 reloc difference is NOT a match blocker for USO externals
+accessed at displacement 0. (Confirmed: game_uso_func_0000C3F8's BC0 access has
+the same divergence and still produces a byte-identical ROM.)
