@@ -14,7 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
-- [INLINE the `(s16)`/`(char)` cast (don't reassign the var) to keep the raw load live across a branch](#inline-the-s16char-cast-dont-reassign-the-var-to-keep-the-raw-load-live-across-a-branch--splits-the-sign-extension-and-re-colors-the-temp-game_uso_func_0000e2d0-landed-2026-06-21) — _Redundant `sll/sra` sign-extend in wrong reg/position? Don't reassign the narrow var (`frame=(s16)frame`) — spell `(s16)frame` INLINE at each use. Keeps the lh result live across the branch → fresh reg (v1) + delay-slot-split. game_uso E2D0 7→0. Plus: USO disp-0 external read emits HI16+LO16 vs target lone-HI16, but `.text` bytes identical → byte_verify passes._
+- [DISTINCT per-slot locals (not one reused temp) make IDO spill-around-call instead of promoting to a saved reg — fixes whole-prologue $s0/$s1 shift in record-builder loops](#distinct-per-slot-locals-vs-one-reused-temp-controls-spill-vs-saved-reg-promotion-fixes-prologue-coloring-in-unrolled-record-builders-timproc_uso_b5_func_00002b74-2026-06-21) — _Unrolled constructor where each record does `c=alloc(); init(c,...)`? Reusing ONE `c` var across all records makes IDO see it long-lived → promotes to callee-saved $s0, pushing the real persistent var (`self`) to $s1 and shifting the whole prologue. Give each record its OWN scalar (`c0..cN`): each lives only across its own call → IDO spills to stack (matching target's `sw/lw` around the jal) and `self` lands in $s0. Prologue went byte-exact on timproc 2B74. Complement of "remove-local-to-force-spill". Also: USO HI16-only globals → C `&D_807Fxxxx + literal_low` reproduces the lui/%hi + literal-addiu pair (the unit has 0 LO16 relocs; .text bytes match regardless of the extra C-side LO16 reloc)._
 - [Base-pin cap is C-FIXABLE: held-base-pointer + `s32`-typed-base $s-coloring lever + `for`-comma-init as1-schedule lever](#base-pin-cap-game_libs-d_0--off-held-s32-not-char-flips-s-coloring-for-comma-init-flips-as1-prologue-schedule) — _game_libs &D_0+off "base-pin cap": held `char *g=&D` reproduces structure+base materializations. To land 0: (1) declare a VALUE-ONLY held base as `s32` (its int value) not `char *` → colors it into the LOWER saved reg ahead of a co-live const (char* form mis-colors; complement of the UCODE-reorder lever); (2) rewrite the loop as `for(a=0,b=arg; cond; a+=k,b+=k)` — comma-init flips the as1 prologue tie (base-addiu scheduled ahead of the zero-cost init moves). gl_func_0002A6C0 byte-exact (9→3→0). STILL BLOCKED: single-symbol collapse (N distinct globals all at D_0+0; needs data-symbol split) + FP multi-divide coloring. Diagnose by histogramming `lui rN,0x0` + `or aN,sN,zero`; require placeholder jals (0x0C000000) only._
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
 - ["8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad](#8-byte-dead-slot-below-a-stack-buffer-cap-is-often-a-bufn-array-index-offset-not-a-pad-problem) — _Target passes scratch buf at sp+K+8, build at sp+K, dead 8 bytes below it, frame same? Don't add volatile pad — the buffer is over-sized and the code passes `&local_buf[2]` (a pointer into the middle). Declare buf frame-correct, pass `&local_buf[N]`. Cracked gl_func_0005FE7C (the "needs INSN_PATCH on 6 sp-offset insns" cap)._
@@ -16192,3 +16192,42 @@ materializations. Diagnose base-pin caps by histogramming `lui rN,0x0` (HI16 of 
 + `or aN,sN,zero` held-pointer arg-passes in the target; prefer fns with placeholder
 jals only (`0x0C000000`) — REAL same-object jals (`0x0C00FCxx`) store resolved
 absolute bytes our extern-call can't reproduce (hardcoded-jal cap).
+
+## DISTINCT per-slot locals vs one reused temp controls spill-vs-saved-reg promotion; fixes prologue coloring in unrolled record-builders (timproc_uso_b5_func_00002B74, 2026-06-21)
+
+**Symptom.** An unrolled object/record constructor — N nearly-identical blocks each
+of the form `c = alloc(sz); init(c, parent, name, ...); c->f = ...;` — reconstructed
+faithfully but the WHOLE prologue is shifted: the target saves only `$s0` (the one
+persistent var, e.g. `self`) and spills each transient child pointer to a stack slot
+around its alloc call (`sw a0,176(sp)` / `lw a0,176(sp)`), while the build saves
+`$s0` AND `$s1`, puts `self` in `$s1`, and keeps the child in callee-saved `$s0`
+across the call. Everything after the prologue then misaligns.
+
+**Cause.** If the C reuses ONE child variable `c` across all N blocks, IDO's
+liveness sees a single long-lived value spanning many calls → it promotes `c` to a
+callee-saved register ($s0). That steals the saved reg the persistent var wanted, so
+the persistent var spills up to $s1, and an extra `sw $s1` appears.
+
+**Fix.** Give each record its OWN scalar (`c0, c1, ... cN`). Now each child pointer
+lives only across its own single call → IDO has no incentive to promote it; it spills
+to a stack home around that one call (exactly the target's `sw/lw`-around-jal shape),
+and the genuinely-persistent var keeps $s0. On timproc_uso_b5_func_00002B74 this took
+the prologue byte-exact (`addiu sp; sw s0; sw ra; or s0,a0`) and added the missing
+`lui/%hi` insns (build 339→396 words). This is the **complement** of the
+"remove-the-local, inline-the-recompute to FORCE a spill" lever
+(feedback_remove_local_recompute_inline_lever): there you collapse a var to force a
+spill home; here you SPLIT a var to AVOID a saved-reg promotion.
+
+**Adjacent USO global idiom (same fn).** The USO `.s`/expected `.o` carry HI16-only
+relocs (this unit: 731 HI16, 0 LO16) — the low half is baked as a literal in `.text`.
+Reproduce in C with `(char *)&D_807Fxxxx + literal_low` (e.g. `&D_807FDA10 + 0x1A0`):
+IDO emits `lui %hi(sym); addiu r, literal_low`. The C build also emits a LO16 reloc
+(extra vs expected) but the land-script byte_verify compares `.text` bytes only, and
+the addiu/lw immediate field matches — so it passes. The splat HI16 anchor symbol's
+own low digits need NOT equal `literal_low`; treat them as independent.
+
+**Residual that remained a cap here.** The target keeps DEAD per-slot name stashes
+(spills of the name arg to descending sp slots, never reloaded) that IDO elides for
+single-use locals — could not be induced by either distinct scalars or a name array.
+Plus tail Vec3 records' FP scratch-copy scheduling. Logic was complete; the gap was
+pure allocation/schedule shape. Verify per-fn with `scripts/relcmp.py <seg>/<unit> <fn>`.
