@@ -40,6 +40,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (44F4 79.57 -> 100.0)](#feedback-ido-struct-by-value-marshalling-lever) — _`sw a2,8(sp)` in jal delay = struct-by-value arg homed to its own arg slot; `addiu sN,sp,K` held in s-reg = struct local (ILDA web colorable — char* &local never is); store-direct+load-via-pointer pair = struct copy; `bne base,-K` = `if (base+K == NULL)`; iter alloc-fail can skip to NEXT iter, not epi._
 - [CALL-RESULT SPILL ANATOMY: nested calls spill at CUP-time, assignments at statement-time (gl_func_00042144 verdict)](#call-result-spill-anatomy-cfe-allocates-the-spill-homes-nested-calls-spill-at-cup-time-assignments-at-statement-time-gl_func_00042144-verdict) — _sw-in-jal-delay = nested source; sw-before-marshal = named var. cfe temps M3 slots right-to-left; named decls first. 42144's true shape = fully-nested 3-arg (kills the srl a1/a3 diff); residue = 2-word slot offset, cfe-invariant._
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
+- [STAGE-THEN-STORE struct init: INTEGER struct-copy to a temp gives alternating lw/sw; FLOAT store out; pad locals fix frame; component-zero ORDER matches swc1-$f0 scheduling (game_uso_func_000003F8 61.6→100)](#stage-then-store-struct-init-integer-temp-copy-float-store-out-pad-frame-component-order-game_uso_func_000003f8) — _A Vec3/struct init that stages each result on the stack then writes it to the output: (1) src→temp copy via `*(IntStruct*)&tmp = *(IntStruct*)&staging` emits IDO's alternating `lw/sw` with a REUSED reg (explicit per-element `((int*)&tmp)[i]=...` emits GROUPED loads = wrong); (2) temp→out store is FLOAT `lwc1/swc1` even though the in-copy is int; (3) distinct staging slot per result (reusing one slot regresses) + dead pad locals to hit the target frame size & slot offsets; (4) the per-result component-zero assignment ORDER must match IDO's `swc1 $f0` scheduling (here fwd: y,x; up: z,x,y; zero2: z,y,x) — reorder the `.x/.y/.z=0` statements to flip adjacent zero stores; (5) `mtc1 zero,$f0` at entry is just IDO hoisting the shared 0.0f constant — no caller-arrangement needed (the old "$f0 must be caller-set" note was WRONG)._
 - [REUSE an already-homed local to hold a value across a branch instead of a fresh named temp (avoids +8 frame); but `volatile`-required-for-loop blocks the inline-CSE that yields a homeless register temp (func_80007698 95.9→99.5%, 1-insn cap)](#reuse-an-already-homed-local-to-hold-a-value-across-a-branch-not-a-fresh-named-temp--avoids-8-frame-func_80007698) — _A short-lived value reused across one branch: don't `u16 t = HW(p); if(t)…use t` (3rd M-class home → frame +8); reuse a local already homed for an unrelated later value (`sp1C`) so the value rides in a register matching the target's reuse. Cost: a dead `sw t,home(sp)` in the branch delay slot (target=nop), because any homed local writes its home. A register-ONLY subexpr temp (no home) needs inline-CSE, which is blocked when the same pointer is `volatile` (needed to force the loop's per-statement reload at -O1). Loop-reload-via-volatile vs tail-CSE-via-nonvolatile is a true conflict → 1-insn cap._
 - [A second-check "re-read into a fresh register" (target reloads the SAME field twice across a branch) is reproduced by an UNCONDITIONAL reload before the second check — NOT inline-deref CSE (gl_func_0000E5D0, 15→8 diffs)](#feedback-ido-unconditional-reload-defeats-cse-bnezl-reread) — _Two sequential `if(field>=K){...}` checks where the target re-reads the same field into a FRESH register for the second check (t9 then t2) + hoists the re-read into the first bnezl's annulled delay slot. Inline-deref or a cached local lets IDO CSE the field into ONE register (structurally off, ~15 diffs). FIX: (1) type the pointer as a struct for clean field derefs; (2) reload the pointer UNCONDITIONALLY before the second check (a bare reload statement OUTSIDE the first if — inside it doesn't work). The reload defeats CSE → check2 re-reads fresh, matching the bnezl-delay re-read. Inverse of loop-reload/tail-reuse caps: here you FORCE a reload; plain reload statement = cleanest CSE-breaker, no volatile needed. Residual cap caveat: when zdbug:6 shows the target coloring but emission diverges, it's a spilltemp-reload assignment the source levers can't reach._
 
@@ -15646,6 +15647,40 @@ no gap) reads the handle into `$a1`, moves `or s0,a0` after, and fills the jal d
 exactly while only block-1's prologue diverges, it's this as1 scheduling tie, NOT
 C-reachable (held-temp/array-index/int-param/float-temp all fail to move it). Wrap NM
 and stop. func_00014228 capped here at 10 non-reloc diffs (from 24).
+
+## STAGE-THEN-STORE struct init: integer temp-copy, float store out, pad frame, component order (game_uso_func_000003F8)
+
+A common -O2 struct/Vec3 initializer pattern: for each output field, build the
+value on a stack staging slot, copy it through a common temp, then write it to
+the output struct. game_uso_func_000003F8 (camera/view init, 78 words, no jal)
+went 61.6%→byte-exact via five composable levers:
+
+1. **src→temp copy = INTEGER STRUCT copy.** `*(Tri3i*)&tmp = *(Tri3i*)&staging`
+   (a 3-int struct) emits IDO's alternating `lw t,K(base); sw t,K(v0)` with a
+   REUSED register. The explicit per-element form `((int*)&tmp)[i] =
+   ((int*)&staging)[i]` instead emits GROUPED loads (`lw,lw,lw; sw,sw,sw`) with
+   3 separate regs — structurally wrong. This single change took the diff from
+   49→6 (fixed both the scheduling AND the register allocation at once).
+2. **temp→out store = FLOAT** (`lwc1/swc1`) even though the in-copy was integer.
+   Mixed direction is correct: int copy in, float copy out.
+3. **Distinct staging slot per result.** Reusing one staging slot regressed
+   hard. Declare the staging structs first (highest addresses), the common temp
+   last (lowest), in the order they're consumed.
+4. **Pad locals to hit the target frame & slot offsets.** Target frame was 0x60,
+   the minimal-locals form gave 0x40. Adding dead `Vec3 pad0, pad1;` between the
+   staging structs and the temp, plus an `int padbot[2];` below the temp, shifted
+   every sp+K slot offset to match (see also FRAME-SIZE GAPS section). Unused
+   pad Vec3s survive -O2 here (the address-taken staging pattern keeps the frame).
+5. **Per-result component-zero ORDER matches IDO's `swc1 $f0` scheduling.** The
+   last 6 diffs were pairs of adjacent `swc1 $f0,K(sp)` stores in swapped order.
+   Dump the target's zero stores per result and reorder the `.x/.y/.z = 0.0f`
+   assignment statements to match (here: zero=x,y,z; fwd=y,x; up=z,x,y;
+   zero2=z,y,x). Pure statement reorder, permuter-blind class.
+
+BONUS myth-bust: `mtc1 zero,$f0` at the very entry is just IDO hoisting the
+shared `0.0f` constant into $f0 and reusing it for every zero component. The old
+note claiming "$f0 must be caller-arranged / needs a float return" was WRONG —
+plain `0.0f` literals across many stores produce exactly this hoist.
 
 ## REUSE an already-homed local to hold a value across a branch (not a fresh named temp) — avoids +8 frame (func_80007698)
 
