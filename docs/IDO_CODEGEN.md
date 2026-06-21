@@ -4513,6 +4513,25 @@ with a named base pointer keeps them split. Verified on
 game_uso_func_0000D6E4 (93.73% → 100%, the missing addiu was the only
 size delta).
 
+**2026-06-21 extension (the in-place RMW also fixes VALUE-register COLORING —
+cracks a "free-list coloring cap"):** when the addiu split is ALREADY correct
+but the loaded/masked VALUE colors one free-list slot too low (e.g. target
+`lw t2,N(base); and t3,t2,at; sw t3` but you emit `lw v1; and t2,v1; sw t2`),
+the culprit is a SEPARATE temp for the read: `raw = p[N/4]; val = raw & ~M;
+p = p+N; *p = val;` gives the value its own LR that the global free-list colors
+low (v1/t2). Collapse it to a true in-place RMW through the advanced pointer:
+`p = (int*)((char*)p + N); *p = *p & ~M;`. With no separate value LR, the
+load result and masked result share the address pointer's coloring window and
+land in t2/t3 (target). This was previously logged as a documented "v1/t2
+free-list coloring cap, space-exhausted after 10+ variants (decl/stmt reorder,
+inline-vs-name, named mask, separate-pointer)" — but none of those tried the
+ZERO-named-temp in-place form. Cracked the twins game_uso_func_00011258 +
+000112E0 (byte-exact, ROM-identical). Found via decomp-permuter, which produced
+the advance-first shape (with a corrupted double-offset); restoring the offset
+to the in-place RMW landed it. Lesson: a "coloring cap" claim that lists
+"separate-pointer" among tried variants has NOT necessarily tried the
+no-intermediate-temp `*p = *p OP k` form — try it before conceding.
+
 **2026-05-06 NEGATIVE-RESULT counter-case** (gl_func_0002D710): the
 named-pointer trick does NOT apply when the cap is **lui PLACEMENT**, not
 sw immediate folding. Symptom: target has the `lui rN, %hi(SYM)` sitting
