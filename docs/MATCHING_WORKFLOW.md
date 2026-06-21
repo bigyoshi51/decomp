@@ -24,6 +24,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Partial NM-wrap with empty/stub inner arms can score 0% — IDO over-optimizes a loop body that has no observable side effects](#feedback-nm-partial-body-empty-arms-zero-percent) — _When a first-pass NM-wrap stubs out conditional arms with `(void)var;` instead of writing real call sequences, IDO -O2 sees the loop body as side-effect-free and unrolls/folds it into a much smaller emit (e.g. 95 insns vs target's 150). objdiff reports 0% match. Fill stub arms with at least one `gl_func_00000000(...)` per arm — the call's opaque side-effect prevents the unroll._
 - [Cross-segment placeholder calls — extern must be `func_00000000`, NOT `gl_func_00000000`, to byte-match expected/.o reloc](#feedback-cross-segment-extern-naming-unprefixed) — _For USO-segment functions whose .s disasm shows `jal func_00000000` (the unresolved cross-segment placeholder), `extern int func_00000000();` in the C body produces the matching R_MIPS_26 reloc against `func_00000000`. Using the prefixed `extern int gl_func_00000000();` (which most game_libs internal-call sites use) makes the reloc symbol `gl_func_00000000` — different reloc table entry → objdiff DIFF_ARG_MISMATCH despite identical .text bytes. Verified 2026-05-14 on gl_func_00047F48: bare C with unprefixed extern matched 100% in report.json (per-symbol objdiff still shows DIFF_ARG_MISMATCH cosmetically but the report's fuzzy_match_percent is 100). Use prefixed names ONLY for in-segment references; unprefixed for cross-segment placeholders._
 - [Fixing PLACEHOLDER-callee NM bodies: zip the body's source-order call sequence against the .s R_MIPS_26 jal sequence](#placeholder-callee-jal-zip-2026-06-21) — _A body scaffolded with `gl_func_00000000(...)` at every site: IDO preserves source call order, so the Nth source-order placeholder maps to the Nth `jal` (address order) in the resolved .s. Zip + cross-check arg shapes; trust head+unique-callee tail runs, leave ambiguous middle. Add forward decls (correct return types) before the fn in its NM block. 591C 57.51%→58.21% decode progress (not a land). CAVEAT: deeper raw-m2c grafts (8CD8/B3C) DROP all calls because m2c aborts on a `jr` jumptable whose base is a runtime-data D_807FFxxx module global — needs emu-jumptable infra, not a symbol swap. disasm-func.py: pass `--obj expected/...` for a TARGET draft (default searches build/non_matching first = the broken body)._
+- [The PLAIN-C variant of the placeholder-callee lever LANDS exactly — and byte_verify alone is a FALSE-POSITIVE gate (use reloc-symbol-set match)](#placeholder-callee-jal-zip-2026-06-21) — _Plain-C (ROM-path, non-INCLUDE_ASM, non-NM) fns calling `gl_func_00000000`/`&D_00000000` are byte-100% (stubs all `=0`) but reloc-WRONG: the USO load-time reloc table resolves the placeholder names to wrong addresses. Swap names→resolved `.s` symbols = exact LAND (gets an episode). Gate on reloc-symbol-set match vs `.s` (scripts/fam-verify.py), NOT land-script byte_verify (reloc-blind). PREREQUISITE: the module's `.s` must carry resolved `-> SYM` annotations — `grep -l '\->' asm/nonmatchings/<mod>/<mod>/*.s | wc -l`; mgrproc_uso=48/66 (landed 14), eddproc=0/16, arcproc=0/61 (nothing to reconstruct). Gotchas: prototyped 0-arg callee → forward the wrapper's param (NOT `((int(*)())g)()` which emits jalr); dup extern with different type errors; ROM stays byte-identical pre/post-swap so `make` is not the gate. 2026-06-21 agent-e._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [A forward branch PAST a function's end is NOT always a tail-merge cap — if the target epilogue is UNSHARED, merge it back for a clean match](#feedback-branch-past-end-unshared-epilogue-merge) — _When a function's `b`/`beqz`/etc. targets an address ≥ its own end (a split-off epilogue), count how many functions branch there. If only ONE (unshared) AND the epilogue is bare-INCLUDE_ASM with a real body (NOT an already-decompiled `void f(void){}` that might be `jal`'d), it's a splat MIS-SPLIT, not an -O1 tail-merge cap: merge the epilogue back and the whole function matches under -O2. Scan: base=first `/* addr */`; for each branch insn at index i (signed off), target=base+(i+1+off)*4; count callers per target across all `.s`; mergeable iff count==1 and target==parent_end. Merge manually: grow parent `.s` size, append child `.word`s before `endlabel`, `rm` child `.s` + its INCLUDE_ASM, write parent C, `refresh-expected-baseline.py`. Verified 2026-05-23 byte-exact: game_libs_func_00060FFC (+00061018, flag set/clear, 13/13) & 0001FDF4 (+0001FE34, arena alloc, merged—needs branch-likely grind). SHARED epilogues (≥2 callers) ARE genuine tail-merge caps (need -O1 split). ~13 clean candidates remain._
 - [A {leaf-branch-past-end cap} immediately followed by a {caller-set-$vN cap} is OFTEN a single mis-split function — RECHECK such adjacent cap pairs](#feedback-adjacent-branchpastend-callerset-cap-pair-is-misplit) — _Splat's jr-ra heuristic over-splits a function at an EARLY-RETURN `jr ra` (mid-body `if(x)return 0;`) when a `bnel`/`beq` branches OVER that early return into the rest of the body. The two halves then look like two unrelated caps in isolation: the predecessor is a "leaf-branch-past-end" (its branch targets past its truncated end) and the successor is a "caller-set $vN cap" (it reads $vN uninitialized — but $vN was set in the predecessor, e.g. `lw v1,0(a0)`). Neither is a real cap. RECHECK heuristic: any NM-wrap/comment labeled caller-set-$v0/$v1/$tN whose IMMEDIATE PREDECESSOR is labeled leaf-branch-past-end (or vice-versa) — check if the predecessor's branch lands inside the successor and sets that very register; if so, merge (per [[feedback-branch-past-end-unshared-epilogue-merge]] mechanics) and decompile as ONE function. Verified 2026-05-28 byte-exact: game_libs_func_0002A8C4 (+0002A8D8, dlist node-detach, 16/16) — both were documented caps. Tail subtlety: the detach decremented `a0->count` but returned `v1->count` (different objects) — the cross-object access is what forces IDO's trailing store-then-reload (no volatile needed; same-object would CSE)._
@@ -8787,6 +8788,53 @@ state machine). objdiff fuzzy 57.51% → 58.21%. This is DECODE PROGRESS (correc
 relocs), not a land — the residual is the documented coloring/frame-layout cap. The 2
 unmapped calls were body-structure divergences (synthesized calls with no matching jal),
 not symbol bugs. NO episode (not exact); commit the improved NM body as decode progress.
+
+### The PLAIN-C variant of the same lever LANDS exactly — and exposes a byte-100%-but-reloc-WRONG false positive (mgrproc_uso ×14, 2026-06-21, agent-e)
+
+The 591C case above is an NM-WRAPPED body (decode-progress only). The high-yield
+variant is the PLAIN-C (ROM-path: not `INCLUDE_ASM`, not `#ifdef NON_MATCHING`)
+functions that still call `gl_func_00000000` / load `&D_00000000` / `D_mgr_*`.
+These COMPILE INTO THE ROM. Because every placeholder symbol is stubbed `=0` in
+`undefined_syms_auto.txt`, the `.text` bytes are ALREADY byte-identical to target
+(`lui 0` / `jal 0` / `lw literal-offset`) — so the land-script `byte_verify`
+(pure `.text` compare, reloc-blind) PASSES them and old episodes were logged at
+"100%" WITH placeholders. But the load-time USO reloc table resolves those names
+to the WRONG addresses: the function is byte-100% and reloc-WRONG. The real fix
+is swapping the placeholder NAMES to the resolved symbols; this is an exact LAND
+(byte + reloc), and it gets a real episode.
+
+**THE AUTHORITATIVE GATE is reloc-symbol-set match vs the resolved `.s`, NOT
+byte_verify.** Built `scripts/fam-verify.py` (lives in the worktree): extracts the
+default `build/src/<unit>.c.o` text+relocs, simulates `bake-data-relocs.py` (bakes
+HI16/LO16 from the `=0` syms → no-op), then checks vs the `.s`: (1) reloc-filtered
+word compare (non-reloc words byte-equal), AND (2) every jal/HI16/LO16 offset names
+the SAME symbol as the `.s` `-> SYM` annotation. PASS = both. Companion
+`scripts/fam-rank.py` ranks NM.o-vs-expected.o by reloc-filtered closeness; the
+prize signature is `raw_diff=0 OFFSETS-DIFFER SIZE-OK` (bytes already right, only
+reloc names wrong). NOTE: fam-verify is tautological for INCLUDE_ASM fns (default
+build = the .s) — only run it on PLAIN-C bodies.
+
+**MODULE PREREQUISITE — the lever only transfers where the `.s` has RESOLVED
+`-> SYM` reloc annotations.** Check first:
+`grep -l '\->' asm/nonmatchings/<mod>/<mod>/*.s | wc -l`. On the relocatable USOs:
+mgrproc_uso = 48/66 resolved → LEVER WORKS (landed 14: AE0/B20/12AC/1304/CC4/D00/
+D3C/D94/179C/1AD0/1B58/2294/2AFC/3240); eddproc_uso = 0/16 and arcproc_uso = 0/61
+resolved → the `.s` ground truth IS raw-0 placeholders, so there is nothing to
+reconstruct against (the placeholder C is faithful) and you'd need the linked ROM /
+a reloc table (absent under a placeholder baserom) to recover real names. mgrproc
+was productive only because someone had previously run the USO reloc-symbolize pass
+on its `.s`. So: if a module's resolved-`.s` count is 0, skip it for this lever.
+
+**Plain-C swap gotchas (beyond the NM forward-decl rule):** (a) a PROTOTYPED callee
+called with 0 args (the `.s` does `jal; nop`, no arg setup) errors "number of
+arguments doesn't agree" — give the WRAPPER fn the matching param and forward it
+(`void f(char*a0){ g(a0); }` → a0→a0 identity, delay slot stays `nop`); do NOT use
+the `((int(*)())g)()` cast — that emits `lui;addiu;jalr` (function-pointer call) not
+the target's `jal`. (b) re-`extern` of an already-declared import with a DIFFERENT
+type (e.g. existing `extern int import_X;` vs your `extern char import_X;`) is a hard
+IDO error — drop your dup; `(char*)&import_X+off` works against either type. (c) full
+`make` ROM stays byte-identical before AND after the swap (only reloc names change),
+so the ROM build is NOT a discriminating gate here — fam-verify is.
 
 CAVEAT for the deeper raw-m2c-graft bodies in the same band (8CD8 @ 20%, 00000B3C @ 29%):
 these are NOT just placeholder-callee swaps — they are broken m2c grafts riddled with
