@@ -23,6 +23,7 @@ _73 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [NM-wrap bodies can harbor silent CPP errors that don't fail the default build](#feedback-nm-body-cpp-errors-silent) — _Code/comments inside #ifdef NON_MATCHING wraps is stripped by CPP in the default build, so syntax errors (nested /* */ comments, undefined NULL, stray apostrophes) compile fine by default but break the moment anyone…
 - [Partial NM-wrap with empty/stub inner arms can score 0% — IDO over-optimizes a loop body that has no observable side effects](#feedback-nm-partial-body-empty-arms-zero-percent) — _When a first-pass NM-wrap stubs out conditional arms with `(void)var;` instead of writing real call sequences, IDO -O2 sees the loop body as side-effect-free and unrolls/folds it into a much smaller emit (e.g. 95 insns vs target's 150). objdiff reports 0% match. Fill stub arms with at least one `gl_func_00000000(...)` per arm — the call's opaque side-effect prevents the unroll._
 - [Cross-segment placeholder calls — extern must be `func_00000000`, NOT `gl_func_00000000`, to byte-match expected/.o reloc](#feedback-cross-segment-extern-naming-unprefixed) — _For USO-segment functions whose .s disasm shows `jal func_00000000` (the unresolved cross-segment placeholder), `extern int func_00000000();` in the C body produces the matching R_MIPS_26 reloc against `func_00000000`. Using the prefixed `extern int gl_func_00000000();` (which most game_libs internal-call sites use) makes the reloc symbol `gl_func_00000000` — different reloc table entry → objdiff DIFF_ARG_MISMATCH despite identical .text bytes. Verified 2026-05-14 on gl_func_00047F48: bare C with unprefixed extern matched 100% in report.json (per-symbol objdiff still shows DIFF_ARG_MISMATCH cosmetically but the report's fuzzy_match_percent is 100). Use prefixed names ONLY for in-segment references; unprefixed for cross-segment placeholders._
+- [Fixing PLACEHOLDER-callee NM bodies: zip the body's source-order call sequence against the .s R_MIPS_26 jal sequence](#placeholder-callee-jal-zip-2026-06-21) — _A body scaffolded with `gl_func_00000000(...)` at every site: IDO preserves source call order, so the Nth source-order placeholder maps to the Nth `jal` (address order) in the resolved .s. Zip + cross-check arg shapes; trust head+unique-callee tail runs, leave ambiguous middle. Add forward decls (correct return types) before the fn in its NM block. 591C 57.51%→58.21% decode progress (not a land). CAVEAT: deeper raw-m2c grafts (8CD8/B3C) DROP all calls because m2c aborts on a `jr` jumptable whose base is a runtime-data D_807FFxxx module global — needs emu-jumptable infra, not a symbol swap. disasm-func.py: pass `--obj expected/...` for a TARGET draft (default searches build/non_matching first = the broken body)._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [A forward branch PAST a function's end is NOT always a tail-merge cap — if the target epilogue is UNSHARED, merge it back for a clean match](#feedback-branch-past-end-unshared-epilogue-merge) — _When a function's `b`/`beqz`/etc. targets an address ≥ its own end (a split-off epilogue), count how many functions branch there. If only ONE (unshared) AND the epilogue is bare-INCLUDE_ASM with a real body (NOT an already-decompiled `void f(void){}` that might be `jal`'d), it's a splat MIS-SPLIT, not an -O1 tail-merge cap: merge the epilogue back and the whole function matches under -O2. Scan: base=first `/* addr */`; for each branch insn at index i (signed off), target=base+(i+1+off)*4; count callers per target across all `.s`; mergeable iff count==1 and target==parent_end. Merge manually: grow parent `.s` size, append child `.word`s before `endlabel`, `rm` child `.s` + its INCLUDE_ASM, write parent C, `refresh-expected-baseline.py`. Verified 2026-05-23 byte-exact: game_libs_func_00060FFC (+00061018, flag set/clear, 13/13) & 0001FDF4 (+0001FE34, arena alloc, merged—needs branch-likely grind). SHARED epilogues (≥2 callers) ARE genuine tail-merge caps (need -O1 split). ~13 clean candidates remain._
 - [A {leaf-branch-past-end cap} immediately followed by a {caller-set-$vN cap} is OFTEN a single mis-split function — RECHECK such adjacent cap pairs](#feedback-adjacent-branchpastend-callerset-cap-pair-is-misplit) — _Splat's jr-ra heuristic over-splits a function at an EARLY-RETURN `jr ra` (mid-body `if(x)return 0;`) when a `bnel`/`beq` branches OVER that early return into the rest of the body. The two halves then look like two unrelated caps in isolation: the predecessor is a "leaf-branch-past-end" (its branch targets past its truncated end) and the successor is a "caller-set $vN cap" (it reads $vN uninitialized — but $vN was set in the predecessor, e.g. `lw v1,0(a0)`). Neither is a real cap. RECHECK heuristic: any NM-wrap/comment labeled caller-set-$v0/$v1/$tN whose IMMEDIATE PREDECESSOR is labeled leaf-branch-past-end (or vice-versa) — check if the predecessor's branch lands inside the successor and sets that very register; if so, merge (per [[feedback-branch-past-end-unshared-epilogue-merge]] mechanics) and decompile as ONE function. Verified 2026-05-28 byte-exact: game_libs_func_0002A8C4 (+0002A8D8, dlist node-detach, 16/16) — both were documented caps. Tail subtlety: the detach decremented `a0->count` but returned `v1->count` (different objects) — the cross-object access is what forces IDO's trailing store-then-reload (no volatile needed; same-object would CSE)._
@@ -8756,3 +8757,47 @@ total-length change = a size-shift culprit). Land ONLY the patches that keep the
 byte-identical; drop the rest (re-wrap NM). Never trust a subagent's per-function claim
 as the land gate — the agent-a full-ROM cmp is the only authoritative gate for these
 relocatable-USO / size-sensitive matches.
+
+## Fixing PLACEHOLDER-callee NM bodies: zip the body's source-order call sequence against the .s R_MIPS_26 jal sequence (game_uso_func_0000591C, 2026-06-21) {#placeholder-callee-jal-zip-2026-06-21}
+
+When a large NM body was scaffolded with `gl_func_00000000(...)` at EVERY call site
+(a common state for mid-band spine functions), the real callee at each site is
+recoverable WITHOUT re-deriving control flow: IDO preserves source call order, so the
+body's Nth `gl_func_00000000(...)` in source order maps to the Nth `jal` in the
+resolved `.s` (address order). Recipe:
+1. Extract the jal sequence with addresses:
+   `re.finditer(r'jal\s+(\S+)\s+/\* (\w+)', s_text)` → ordered (addr, callee) list.
+2. Extract the body's placeholder calls in source order (skip doc-comment lines that
+   merely mention `gl_func_00000000`).
+3. Zip them. CROSS-CHECK each pairing by arg shape (arg count, `li a0,0xC` allocator
+   sites = the shared allocator `game_uso_func_055750`, branch-on-return sites, etc.)
+   — straight-line code zips 1:1, but branch-only paths the body's straight-line decode
+   skipped will DESYNC the zip mid-function. When the count differs (e.g. 28 body calls
+   vs 29 jals), trust the head + the unambiguous tail (each-unique-callee runs) and
+   leave the genuinely ambiguous middle as placeholders rather than risk a wrong swap.
+4. The callees are usually defined LATER in the same TU → add forward declarations
+   before the function inside its `#ifdef NON_MATCHING` block, with return types matching
+   the real definitions (void/float/long long — an implicit `int func()` from a bare call
+   will collide with the later real def: "redeclaration / Incompatible return type").
+
+Result on game_uso_func_0000591C: mapped 26 of 28 placeholder calls to real callees
+(A3C4/A604/A7F8 bit-dispatch, 7ACC/7A98 helpers, 7C1C/8CD8 transform arms, 8× 055750
+Vec3 allocs, and the 074D8/0751C/07448/07424/09B88/A7D8/A0E8/AB98/071A4/06FA8/07538 tail
+state machine). objdiff fuzzy 57.51% → 58.21%. This is DECODE PROGRESS (correct jal
+relocs), not a land — the residual is the documented coloring/frame-layout cap. The 2
+unmapped calls were body-structure divergences (synthesized calls with no matching jal),
+not symbol bugs. NO episode (not exact); commit the improved NM body as decode progress.
+
+CAVEAT for the deeper raw-m2c-graft bodies in the same band (8CD8 @ 20%, 00000B3C @ 29%):
+these are NOT just placeholder-callee swaps — they are broken m2c grafts riddled with
+`/* M2C unset $tN */` artifacts and DROP all calls, because m2c ABORTS on the function's
+`jr` jumptable ("Unable to determine jump table"). The jumptable base is a `D_807FFxxx`
+MODULE global (e.g. game_uso_D_807FF970 + 0x50, game_uso_D_807FFA20 + 0x100) that is an
+UNDEFINED extern in the .o (no rodata section) and lives in RUNTIME-initialized data, not
+ROM rodata — so static extraction fails and only emulation (scripts/uso-emu-dump.py +
+extract-uso-jumptable-emu.py) can resolve the case targets. Until the jumptable is
+resolved m2c can't produce a usable draft, so these need the full emu-jumptable infra
+path + a 700-insn FP reconstruction; they remain documented caps (cf. the
+jr-via-EXTERNAL-rodata-table section). disasm-func.py default searches
+`build/non_matching/**` FIRST — for a target draft pass `--obj expected/src/.../X.c.o`
+or you disassemble the BROKEN current NM body instead of the target.
