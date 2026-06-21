@@ -46,6 +46,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### branch likely / bnel
 
+- [Plain beq/bnez/beqz (no branch-likely) + a known -O1 sibling = the file is -O1, not -O2 — flip the whole single-fn file](#feedback-plain-branches-mean-o1-flip-file) — _When a target uses plain beqz/bnez/beq with nop delays everywhere (NOT beql/bnezl) and a structurally identical sibling already lives in a -O1 file, the function is -O1. Building it at the kernel default -O2 folds the branches to likely and runs ~26 insns short. Add `build/src/.../FILE.c.o build/non_matching/src/.../FILE.c.o: OPT_FLAGS := -O1` (safe — INCLUDE_ASM byte output is opt-independent). Took the merged func_80009AB0 from a collapsed -O2 shape to structure-exact (0 mnemonic diffs, residual = pure coloring). Only flip files that contain a single function (or all -O1 functions)._
 - [Isolated-compile vs full-TU IDO -O2 codegen can DIVERGE for the same function — verify decodes against the full `make` build, never an isolated cc](#feedback-isolated-vs-full-tu-o2-divergence) — _A function body can compile to the exact target shape (12 insns, plain beq/bne, nop delays) when cc'd IN ISOLATION with the exact project flags, yet the full-TU `make` build of the same source (asm-processor phase-1 output verified identical) produces a different, worse shape (17 insns, beql/bnel, loop rotation) at the SAME -O2. IDO's optimizer is TU-context-dependent. Implication: a "proven-correct in isolation" decode can still be sub-80 in the real build — that's NOT a logic error, don't re-derive; it's permuter / TU-robust-form territory. Always measure against the build .o. Verified 2026-05-16 game_libs_func_0003D9E4._
 - [Same-base multi-deref: intervening `jal` forces natural reload (exact-able) vs no-call → IDO CSEs base (reload-CSE cap)](#feedback-intervening-call-forces-reload-vs-cse-cap) — _Triage which small fresh/split funcs to push to byte-exact: a `jal` between two same-base derefs forces the reload that matches the target (verified timproc_uso_b3_func_00001184 byte-exact land); no call → IDO CSEs, N-short reload-CSE cap (120C/11D4/EE84/DDC0 family), no C form defeats it. Exact-able case must be unconditional C, not #else INCLUDE_ASM (tautology)._
 - [A 2-insn store-pair schedule-ORDER diff: put both `arr[i]=const` stores on ONE source line — shifts IDO's lui/ori/or scheduling to match (cracked gui_uso 1794+3B14 byte-exact; try by hand before permuter)](#feedback-one-line-stores-fix-schedule-order) — _Manual statement-reorder fails; one-line grouping works. Byte-exact episodes 2026-05-31._
@@ -10988,6 +10989,23 @@ the deref base so the param's home slot is loaded twice), then INSN_PATCH
 the `bne`→`bnel` opcode + the delay-slot load + register renames — all
 same-length word overwrites (jal orphan-relocs auto-stripped). Don't keep
 grinding C control-flow shapes; this residual is regalloc-bound.
+
+---
+
+<a id="feedback-plain-branches-mean-o1-flip-file"></a>
+## Plain beqz/bnez/beq (no branch-likely) + a known -O1 sibling = the file is -O1 — flip the whole single-fn file
+
+_When a target function uses plain `beqz`/`bnez`/`beq` with `nop` delay slots EVERYWHERE (never `beql`/`bnezl`/`beqzl`), and a structurally identical sibling already lives in a file built at -O1, the function is -O1 code. Building it at the kernel/segment default -O2 makes IDO fold the conditional branches into branch-likely and drop the delay `nop`s, collapsing the body ~26 insns short of target._
+
+**Recipe:** add the file to the Makefile's per-file opt overrides:
+```
+build/src/kernel/FILE.c.o build/non_matching/src/kernel/FILE.c.o: OPT_FLAGS := -O1
+```
+This is SAFE for the real build: the INCLUDE_ASM path emits the `.s` bytes verbatim — opt level only affects the compiled NON_MATCHING C. Only flip files that contain a single function (or are entirely -O1 functions); a mixed -O1/-O2 file needs a split first.
+
+**Cracked the merged func_80009AB0 (kernel PI raw-write + BSD domain setup, write sibling of the -O1 func_80009850 in kernel_022_o1_b.c):** at -O2 the spin loop + table dispatch came out as `beql`/`bnezl` and 74 insns; at -O1 it became structure-exact (0 mnemonic diffs across all 100 insns, exact 0x190 size + 0x10 frame). Residual was pure register coloring (a documented separate cap).
+
+**Recognition:** count `beql|bnezl|beqzl|bnel` in the target `.s` — ZERO occurrences in a branchy function whose default-opt build emits them = candidate for the -O1 flip. Confirm by finding the -O1 sibling (`scripts/decomp-search` the family / grep the Makefile for the sibling file).
 
 ---
 
