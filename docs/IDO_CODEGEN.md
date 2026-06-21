@@ -102,6 +102,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [A target base-register-adjust (`v1 += 0x2C`, then small-offset loads) IS C-reachable by MUTATING the pointer (`p += N`), NOT `q = p + N` (which folds back to full offsets)](#feedback-ido-pointer-mutate-forces-base-register-adjust) — _When target does `addiu base,base,N` then loads at small offsets where you emit full offsets, mutate the pointer in place: `p += N;`. `q = p + N;` folds the constant back to the original base. Cracked game_libs_func_0005FE14's "base-adjust not C-reachable" note → 26/26 opcodes exact (also fixed bnel→bne). Re-check any such note._
 - [Inline a re-used base expression (don't name it) to force a fresh reload per access; a named local CSEs to one load](#feedback-ido-inline-base-forces-reload-per-access) — _When the target reloads the same base each time it's used inside a loop (e.g. two `lw base,0(a0)` per iteration before two different accesses through it), do NOT cache it in a named local — IDO will CSE that to a single load (N insns short). Write the base expression inline at each use site: `*(T*)((char*)a0[0] + off)` repeated, not `b = (char*)a0[0]; ... b+off ... b+off+4`. The inline form reloads the base for each access, matching. (Inverse of the named-float-locals load-batching rule.) Verified 2026-05-23 game_libs_func_00060CB8 (per-entry array reset: named base → 18/20, inline a0[0] twice → 20/20 byte-exact)._
 - [Force a SECOND zero FP reg (defeat the 0.0f CSE): store INT `0` through a `float*` variable](#feedback-ido-int-zero-through-float-ptr-forces-second-zero-reg) — _When the target materializes two zero FP regs (e.g. `mtc1 zero,$f0` for most float stores + `mtc1 zero,$f4` for one hoisted into a `jr` delay slot), plain `0.0f` everywhere CSEs to ONE reg (1 insn short), and `float z=0.0f` CSEs too. For the store needing the distinct reg, assign through a `float*` variable and store INT `0` (not `0.0f`): `float *p = ...; *p = 0;` — the int-0→float conversion doesn't CSE with the `0.0f` constant, forcing the 2nd `mtc1`. Cracked timproc_uso_b5_func_00003890 (7/8 → byte-exact, permuter-found). Disproved its "0.0f CSE not C-controllable" cap._
+- [**FP-pseudo register numbering follows C STATEMENT ORDER, not asm schedule — move a const-store statement EARLIER to give its value the LOW $f reg (+ move int stores before FP stores to fix the store interleave)**](#feedback-ido-fp-pseudo-source-order-store-order) — _Generalizes float-const-by-source-order to ALL FP pseudos (arith results too), and pairs it with a store-order lever. A "ugen FP-scheduling cap" near-miss where the asm shape is already byte-identical except (a) the FP store interleave and (b) which $f reg each value lands in. Two source-order moves: (1) if the target emits some INTEGER stores before some FP stores, put those int statements before the FP-store statements in source — the as1 scheduler then matches the interleave; (2) if a constant (e.g. `1.0f`) must color a LOW $f reg while arith results go higher, place that constant's STORE statement before the arith stores in source — IDO numbers FP pseudos by statement order, so the const's pseudo is created first → low $f reg, pushing the arith results up. Both are pure reorderings (no value change). Cracked mgrproc_uso_func_00002324 2026-06-21 (12→6 via int-store-first, 6→0 via const-store-first) — a documented "FP-scheduling cap" that was really C-steerable._
 - [Float-const register choice ($f0 vs $f2) follows C SOURCE order of the constants' first use, not asm store order — reorder to flip](#feedback-ido-float-const-reg-by-source-order) — _A multi-const float-init (e.g. identity matrix: 1.0f on the diagonal, 0.0f elsewhere) where the target puts one constant in $f0 and the other in $f2. IDO assigns $f0 to whichever constant's stores appear FIRST in C source, then reorders the actual stores during scheduling. So if the target has 1.0f in $f0 but stores 0.0f first in asm, write the 1.0f stores first in C — IDO still emits the 0.0f stores first but keeps 1.0f in $f0. Flips the "float-register-swap (f0 vs f2)" cap. Verified 2026-05-23 game_libs_func_0005E83C (3x4 identity init, 14/16 → byte-exact)._
 - [Float→narrow-int store: cast through `(int)` for `trunc.w.s`, NEVER directly to `(char)`/`(short)` (which pulls the soft-float-to-int range-check helper)](#feedback-ido-float-to-int-cast-via-int-not-char) — _For `byte = (T)(f * k)` where T is char/short, `(char)(float)` or `(short)(float)` emits a giant inlined float→int conversion routine (range checks + helper, ~100 insns). The target is just `mul.s; trunc.w.s; mfc1; sb`. Write `(int)(f*k)` and assign to the narrow lvalue — the (int) maps directly to `trunc.w.s`, the store narrows. Verified 2026-05-23 game_libs_func_00047AD8 (Vec3→3 bytes ×127.0f): (char) cast → 111 insns, (int) cast → 20-insn byte-exact._
 - [O32 passes floats in $aN when preceded by a non-float arg — use `mtc1 aN, fM` reconstruction](#feedback-ido-o32-float-in-int-reg) — _When a function signature is `(int_like, float, ...)`, MIPS O32 passes the float in $a1 (the int register), not $f14. **TRAP (verified 2026-05-27 gl_func_0005E664)**: do NOT write the body with `int a1_bits` arg + `float scale = *(float*)&a1_bits;` — taking address of an int arg forces a stack home spill + `lwc1` reload per iteration, regressing 45-insn target to 62 insns. The correct form is `void f(T *p, float scale, ...)` — IDO emits the natural `mtc1 a1, $f12` at entry, $f12 persists across the body. Sig-type-fix lever = byte-exact match on this family._
@@ -2686,6 +2687,50 @@ When you see `swc1 $f0, N(sp)` as the first FPU op with no prior $f0 setter, rec
 _Target 4-insn leaves that return 0.0f via an intermediate ($fN != $f0) like `mtc1 $0,$f2; nop; jr $ra; mov.s $f0,$f2` cannot be reproduced from any tested IDO-O2 C body — literal, local var, volatile local (→stack spill), negate, cast, union punning, arg-ignore. Don't grind; NM-wrap with partial C._
 
 ## Float-const register choice ($f0 vs $f2) follows C source order of the constants' first use — reorder to flip
+<a id="feedback-ido-fp-pseudo-source-order-store-order"></a>
+
+## FP-pseudo register numbering follows C statement order — move stores earlier to steer $f regs and the int/FP store interleave
+
+This generalizes [float-const reg by source order](#feedback-ido-float-const-reg-by-source-order)
+from constants to ALL FP pseudos, and adds a store-interleave lever. Symptom:
+a near-miss whose asm is byte-identical in SHAPE (same opcodes, same schedule
+slots) but differs only in (a) the order int-stores vs FP-stores are emitted and
+(b) which `$fN` each value occupies. This reads like a "ugen FP-scheduling cap"
+but is fully C-steerable by statement order.
+
+Worked example — `mgrproc_uso_func_00002324` (FP state-advance, 54 insns):
+
+Target tail (after computing `x+4`, `y-4`, and the `1.0f` for slot 0x7C0):
+```
+sw    t7, 0x7C4(a0)     # int store (latch = 1)
+sw    t9, 0x7C8(a0)     # int store (counter -= 1)
+swc1  $f16, 0x7A8(a0)   # x+4   -> $f16  (HIGH)
+swc1  $f18, 0x7AC(a0)   # y-4   -> $f18  (HIGH)
+swc1  $f0,  0x7B0(a0)
+swc1  $f2,  0x7B4(a0)
+swc1  $f10, 0x7C0(a0)   # 1.0f  -> $f10  (LOW)
+swc1  $f8,  0x7BC(a0)
+```
+
+Two source-order moves take it from 12 non-reloc diffs to 0:
+
+1. **Int-store-before-FP-store (12→6).** The target emits the two integer
+   stores `0x7C4=1; 0x7C8-=1` *before* the FP stores `0x7A8/0x7AC`. The natural
+   C had the FP stores first. Moving the two int statements ahead of the
+   `x+4`/`y-4` stores makes the as1 scheduler match the interleave.
+2. **Const-store-first for the low $f reg (6→0).** The `1.0f` written to 0x7C0
+   must color `$f10` (low) while the `x+4`/`y-4` results take `$f16/$f18`.
+   IDO numbers FP pseudos in C-statement order, so placing `*(0x7C0)=one;`
+   *before* the `x+4`/`y-4` store statements creates the const pseudo first →
+   it wins the low reg and pushes the arith results up. (A separate
+   `float one = 1.0f;` decl is NOT enough — the constant is materialized at its
+   USE point; it's the STORE STATEMENT's position that sets the pseudo number.)
+
+Generalization: for any FP near-miss whose only residuals are $f-reg numbering
++ store interleave (NOT operand-order math diffs), reorder the C statements to
+match the target's store sequence and put the desired-low-reg value's store
+first. Try this before conceding an "FP-scheduling cap."
+
 <a id="feedback-ido-float-const-reg-by-source-order"></a>
 
 For a multi-constant float-init (the classic case: an identity matrix — 1.0f on
