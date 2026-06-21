@@ -5834,6 +5834,14 @@ Both failures show the same divergence: target uses frame=0x28 + `$v1` for ptr +
 
 **Practical filter (revised):** the sibling-port test is a HIGH-EXPECTED-VALUE first-attempt — about 50% of cases match instantly (3 sibling-ports landed in this 36-insn family so far). When it regresses (fuzzy DROPS from the prior wrap %), revert immediately and treat the cap as needing per-file investigation (frame-pad tricks, `_pad[8]` arrays, return-type adjustments — see h2hproc 1A6C's wrap doc for known-working levers in the alloc-and-link family). The port either works fast or doesn't work at all; don't grind a regressed port further.
 
+**UPDATE 2026-06-21 — the "portability limit" was about SYMBOLS, not file state; 4 MORE family members cracked.** A cross-segment masked-twin sweep (`scripts/find-masked-twins.py`, donors = current matched set including this family's lands) flagged 4 unmatched twins of the eddproc/mgrproc 36-insn alloc-and-link constructor, all previously wrapped with "permanent v0/v1-vs-a2 regalloc + frame + jal-swap cap" doc-comments at 89-93%. Porting the donor body **with the target's RESOLVED reloc symbols** (not placeholder `gl_func_00000000`/`&D_00000000`) landed all 4 byte-exact:
+- `game_uso_func_00003A28`, `game_uso_func_0000AC78`, `game_uso_func_00011A94` (all → `game_uso_func_055750`/`051C28`/`07ACE0` + `&import_8006ED80`)
+- `timproc_uso_b5_func_0000AB24` (→ `timproc_uso_b5_func_055750`/`051C28`/`07ACE0` + `&import_8006ED80`)
+
+The two documented "regressions" (`gl_func_000088B4`, `h2hproc_uso_func_00001A6C`) are NOT a file-state allocator quirk — they live in **zero-reloc raw-word USO objects** (`game_libs.c.o`, `h2hproc_uso.c.o` have 0 relocs in their entire expected/.o; the bytes carry `jal 0`/`lui 0` placeholders with no R_MIPS records). Any correct C emits relocs the raw-word expected lacks, so they cannot pass the gate regardless of C shape — `uso_raw_word-vs-reloc` cap class, needs USO spimdisasm migration, not a regalloc lever. The earlier "ported C produces frame=0x20/$a2" symptom was a red herring: the port WAS the wrong simplified body, but even the correct two-web body can't land there because of the reloc-form mismatch.
+
+**Takeaway for this family:** to find more, run `scripts/find-masked-twins.py` and for each unmatched twin, check the target unit's reloc count (`mips-linux-gnu-objdump -r expected/src/<unit> | grep -c R_MIPS`). If > 0 (reloc-form: game_uso, timproc_*, mgrproc, arcproc, eddproc-reloc, titproc), the donor body + resolved symbols lands. If 0 (raw-word: game_libs, h2hproc, eddproc/boarder *_func_00000000 entries), skip — it's the raw-word cap, not a regalloc cap.
+
 <a id="feedback-tail-fall-through-alt-entry-preamble"></a>
 ## Tail-fall-through alt-entry preamble — 3-insn fragment with no jr_ra that loads an arg-reg then falls through to the next function
 
