@@ -2065,6 +2065,15 @@ game_uso_func_00000000(a0, v1, v2, 1);
 
 **Caveat — does NOT produce `addiu base, OFFSET; lw 0(base); lw 4(base)`:** if the target uses `lui base; addiu base, base, OFFSET; lw 0(base); lw 4(base)` (offset materialized in the addiu, not the lw), this technique still emits `addiu base, base, 0; lw OFFSET(base); lw OFFSET+4(base)` — same shared base register but offset baked into each lw. The constant-fold from `&D+N` is structural per `feedback-ido-constant-address-load-fold-inevitable`. Verified 2026-05-06 on game_uso_func_00010DC8 (sibling of 10E2C, same family-cap at 88.6%).
 
+## Single-base LOOP function off by a whole-register renumber? Type the held base `int` (by-value, NOT `char*`) AND load the first-consumed value BEFORE the base
+
+_For a single-`&D`-base loop function whose only diff is "every register is shifted" (e.g. build colors base/counter/index $v1/$a0/$v1, target wants $a2/$a1/$a0), two levers stack to collapse most of the renumber:_
+
+1. **Type the held base `int`, by value:** `int base = (int)&D_00000000;` (then `*(T*)(base + off)` at use sites). A `char *base` colors the base into a LOW caller-temp early and shifts everything; the `int`-by-value form lets IDO float the base to a higher register. (This is the project's "s32-typed held base flips $s/$t-coloring" lever — the by-value `int` matters; `char*` reverts.)
+2. **Load the FIRST-consumed value before the base:** write the first dependent load with the base inlined — `int v0 = *(int*)((int)&D_00000000 + 0xNNNN);` — so `v0` colors to `$v0/$2` (the natural first temp) instead of the base grabbing it. IDO CSE's the inlined `(int)&D_00000000` with the later `int base = (int)&D_00000000;` into one live range, so there's no extra lui.
+
+**Verified 2026-06-21 on game_libs_func_00021130** (array-zeroing loop): 17→6 differing words, then 6→ a single irreducible diff — EVERY instruction byte-identical except the one long-lived &D base register (build `$v1`, target `$a2`, a clean +3 on one live range). What did NOT help (all reverted toward 17): `char*`-typed base; declaring the counter `a1=0` early; splitting the half-load into its own `short hv` temp; for-loop comma-init; decl-order swaps between locals. The final whole-register placement of a long-lived single base is an irreducible coloring tie — a permuter / `uoptlist`-renumber target, not a C-shape lever. Use this combo to get a single-base loop function down to "one register off," then stop.
+
 <a id="feedback-ido-volatile-pp-forces-n-fold-pointer-reload"></a>
 ## Force N-fold reload of `*(SYM+N)` via `volatile T **` + N intermediate locals (no CSE)
 
