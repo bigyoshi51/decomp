@@ -57,6 +57,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO bnel tail-merging routes the false-path epilogue through the true-path's register-restore tail (cosmetic, ~99 % cap)](#feedback-ido-bnel-tail-merge-register-restore) — When the function body is `if (cond) { several jal calls }` and the true path ends with reload-args-then-jal patterns like `lw a0,0x18(sp); jal; lw a1,0x1C(sp)`, IDO sets the bnel branch target to the MIDDLE of those…
 - [For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely](#feedback-ido-branch-likely-arm-choice) — `if (!cond) return 0; body; return 1;` triggers IDO to emit `bc1tl`/`bnezl` (branch-likely).
 - [A "branch-likely cap" can be a wrong CALL ARGUMENT in disguise — verify which value each jal actually passes before conceding `bnez`-vs-`bnezl`](#feedback-branch-likely-is-wrong-call-arg) — _gl_func_00031898 (game_libs) sat at a documented 95.86% "branch-likely cap" (build `bnez`+move-in-delay vs target `bnezl`+lw-ra-in-delay). The real bug: the conditional-skip call passed `ret_val` (held in a1) when the target passes the **struct pointer a0**. Target spills/reloads a1 across the call and emits `bnezl` with the epilogue `lw ra` hoisted into the annulled delay. Fixing the arg (`gl_ref_00045EA8(a0)` not `(ret_val)`) made IDO emit the `bnezl` naturally — 29/29 exact. Lesson: when a call-skip block shows `bnezl`+epilogue-load-in-delay and your build has `bnez`+arg-move-in-delay, the arg-move is the tell — IDO had to set up a call arg, the target didn't. Decode the jal's actual a0/a1 inputs from the asm before blaming the branch flavor._
+- [Last equality test before an unconditional `b end` folds into `bnel`; split it into inverted-skip + `goto` to force the plain `beq` + `b end`](#feedback-ido-split-last-eq-test-to-suppress-bnel) — _In a goto-chain of equality tests (`if (v==2) goto A; if (v==1) goto B; if (v==3) goto B; return;`), IDO folds the FINAL `if (v==3) goto B; return;` into a branch-likely: `bnel v0,at,end; lw ra (delay); b B` instead of the target's plain `beq v0,at,B; nop; b end; lw ra (delay)`. **Lever: write the last test as an explicit inverted skip-branch plus an unconditional goto** — `if (v != 3) goto end; goto B; end: return;` — splitting the equality+fallthrough so the optimizer can't fold the epilogue `lw ra` into a likely. Cracked mgrproc_uso_func_000014F4 2026-06-20 (40/40, prior "as1-scheduler branch-likely cap" where goto-chain/switch/if-else-if all reproduced the bnel). Do-while-break and `v==1||v==3` short-circuit forms drop a word (worse); the inverted-skip+goto is the one that lands._
 - [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
 - [Wrap the final RMW in `do {…} while(0)` to keep the reloaded pointer in `$v0` and defer the `return CONST` into the jr-ra delay slot](#feedback-ido-dowhile-rmw-tail-v0-delay-return) — _Tail `*a0 |= 1; return 1;` where `a0` is reloaded from its home: plain C reloads into `$v1`, precomputes `li v0,1` early (constant is cheap), leaving the delay slot a nop. Target reloads into `$v0`, does the RMW, then `li v0,1` in the jr-ra delay slot. Wrapping JUST the RMW statement in a trivial `do { *a0 |= 1; } while(0);` (or `if(1){…}`) BB-lever forces IDO to keep the pointer live in `$v0` through the block and emit the return constant last → delay-slot fill + v0/v1 swap, both fixed. Cracked gl_func_0003EDBC 2026-06-20 (the "13-insn INSN_PATCH for delay-fill + v0/v1 + slot-offset" cap; frame half was a `volatile int pad[3]` below the flag local + buf 168→156)._
 - [Circular-list do-while walk emits BOTH branch-likelies naturally (conditional-skip `bnel` + loop-back `bnezl`) — don't fear bnel here, write the obvious do-while](#feedback-ido-circular-list-do-while-natural-bnel) — _A circular-list iteration `node=head; if(node){ do { if(key==node->K) call(self,node); node=node->NEXT; if(node==head) node=0; } while(node!=0); }` compiles BYTE-EXACT including the two target branch-likelies: the `if(key==node->K) call(...)` skip becomes `bnel key,t,skip` (the `node=node->NEXT` advance fills the annulled delay), and the `while(node!=0)` loop becomes `bnezl node,loop` (the next iter's first load fills the delay). No coaxing — the obvious do-while IS the match. Loop state (self/key/node) lands in s0-s2 across the call. Verified 2026-05-24 gl_func_00060ED0 (29/29 first try) and gl_func_0005B568 (sibling, single bnel-free variant). Counter to the usual "bnel is hard" instinct._
@@ -1681,6 +1682,34 @@ Fix: `gl_ref_00045EA8(a0)` not `(ret_val)` → 29/29 words exact, 0 non-reloc di
 **Diagnostic tell:** when a call-skip block shows target `bnezl`/`beqzl` + an epilogue/merge load in the delay, and your build shows plain `bnez`/`beqz` + an **arg-`move` in the delay** — the arg-move is the smoking gun. IDO had to materialize a call argument; the target didn't. Decode the jal's real `a0/a1` inputs from the surrounding asm (what's reloaded just before the jal? does the target do a `move aN,...` anywhere near the call, or not?) before blaming the branch-likely scheduler. Branch flavor often follows from delay-slot availability, which follows from whether arg setup is needed.
 
 ---
+
+<a id="feedback-ido-split-last-eq-test-to-suppress-bnel"></a>
+## Last equality test before an unconditional `b end` folds into `bnel`; split it into inverted-skip + `goto` to force the plain `beq` + `b end`
+
+In a goto-chain of equality tests, the FINAL test's `if (v==K) goto L; return;` shape lets IDO -O2 fold the epilogue into a branch-likely. Example (mgrproc_uso_func_000014F4, a 3-way dispatch):
+
+```c
+/* sub-90% form — IDO folds the v==3 test into bnel */
+if (v == 2) goto case_2;
+if (v == 1) goto case_13;
+if (v == 3) goto case_13;
+return;
+```
+
+emits for the v==3 test: `bnel v0,at,end; lw ra (delay-likely); b case_13; nop` — the optimizer pulls the epilogue `lw ra` into the annulled delay slot of a likely-branch. The target instead has the un-folded `beq v0,at,case_13; nop; b end; lw ra (delay)`.
+
+**Lever — write the last test as an explicit inverted skip-branch plus an unconditional goto:**
+
+```c
+if (v == 2) goto case_2;
+if (v == 1) goto case_13;
+if (v != 3) goto end;   /* inverted skip */
+goto case_13;           /* explicit unconditional */
+end:
+return;
+```
+
+Splitting the equality+fallthrough into a separate inverted branch and a separate unconditional goto blocks the likely-fold, so IDO emits the plain `beq case_13` + `b end` (with `lw ra` in the b-end delay). Cracked mgrproc_uso_func_000014F4 2026-06-20 — 40/40 words, prior documented "as1-scheduler / branch-likely cap" where goto-chain, `switch`, and `if/else-if (v==1||v==3)` forms all reproduced the bnel. Note the negative variants: `do{...if(v==3)goto L; break;...}while(0)` and the `v==1||v==3` short-circuit both DROP a word (the break/short-circuit lets IDO merge the last call's tail) — worse, not better. Only the inverted-skip + explicit-goto form lands.
 
 <a id="feedback-ido-branch-likely-arm-choice"></a>
 ## For float-predicate functions with conditional body, prefer positive-arm form to avoid branch-likely
