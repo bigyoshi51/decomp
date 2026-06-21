@@ -108,6 +108,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [**Declare a byte arg as `unsigned char` to reproduce BOTH its `sw aN` home AND its `andi 0xFF` zero-extend — but the eager extension flips s-reg order vs a later int arg**](#feedback-ido-unsigned-char-param-homes-and-extends) — _When the target both homes an incoming int-register arg (`sw a2,64(sp)`) AND zero-extends it once before use (`andi sX,a2,0xff`, hoisted out of a loop), the arg is an `unsigned char` parameter. Declaring it `int` + masking `a2 & 0xFF` gets the andi but NO home (the home only appears with the char type). The `unsigned char` declaration produces the home + the eager prologue zero-extend together — the cleanest way to match a dead-arg-home that coexists with a byte mask. CAVEAT (verified 2026-05-29 gl_func_0000A7B4): the char extension is EAGER at the prologue, so the extended pseudos are born before a sibling `int` arg's loop-invariant copy and grab the LOWER $s-regs — leaving the int arg (e.g. a1) in a higher $s than the target wants. So char-arg homing and "int-arg-first allocno order" are mutually exclusive; a function needing both lands as a clean cyclic $s-reg renumber (size + control flow + homes all exact). NM-wrap that residual._
 - [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
+- [Short-circuit `||` reproduces the alloc-cascade's fused `bne` (skip-alloc-AND-post-alloc-null-check) at -O0](#feedback-ido-shortcircuit-or-fused-bne-alloc-cascade) — _In a nested alloc cascade `if(p==0){p=alloc(); if(p==0) goto bail;} body`, the target's outer guard is a single `bne p,zero, <past the alloc AND the post-alloc beq>` (offset spans both). An explicit `if(p==0) goto bail;` for the inner check makes IDO -O0 emit `bnez p,.skip; b bail` (TWO branches → wrong bne offset, +2 each). Writing it as `if (p != 0 || (p = alloc()) != 0) { body }` makes IDO emit `bne p,zero,body; alloc; beq p,zero,end:` — a SINGLE `beq`, so the outer `bne` offset spans alloc+beq exactly. Dropped 3 branch-offset diffs on gl_func_00008C3C 2026-06-20 (9→6, branch-byte-exact; residual is the call_root -O0 temp-pool slot only). General: prefer short-circuit `||`/`&&` over explicit `if(){goto}` whenever the target's conditional branch must SKIP a following conditional check (the goto form costs an extra unconditional `b`)._
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
 - [Reuse the PARAMETER as the object (not a fresh local) → IDO arg-saves to the caller slot (small frame) instead of an in-frame spill slot (+8 frame)](#feedback-ido-reuse-param-as-object-caller-slot-spill) — _In an alloc-or-given constructor `obj = a0 ? a0 : alloc(N)` whose object must survive ≥1 jal, a fresh `int obj;` local spills to an IN-FRAME slot (frame grows +8, all spill offsets shift). Assigning back into the PARAMETER instead (`if (a0==0){ a0=alloc(N); … } … use a0 … return a0;`) makes IDO spill via the ARG-SAVE-to-caller-slot convention (`sw a0, framesize(sp)`), keeping the minimal frame and matching the target's spill offsets. Erased the final 6 frame-size diffs on gl_func_00041524 (→ byte-exact 32/32, pure C). Try this whenever the only residual is `addiu sp,-N` / spill-offset off by a constant and the object is param-derived. **EXT 2026-06-20 (titproc_uso_func_00001D7C): also fixes a `$v1`-vs-`$a2` arg-reg COLORING CASCADE (not just frame size) — fresh local = 18 diffs, param-reuse = 2; reach for it whenever a param-derived call-surviving object is colored into the wrong reg, even if the frame already matches. Caveat: USO NM bodies often have placeholder gl_func_00000000/&D_00000000 callees that score ~97% name-blind but are byte-WRONG; restore real R_MIPS_26 callees first.**_
 - [A "frame-size cap" on a format/print wrapper is often a MISDIAGNOSED VARIADIC function — make the signature `(..., ...)` and the frame grows for free](#feedback-ido-frame-size-cap-is-misdiagnosed-variadic) — _When a small wrapper homes ALL incoming arg regs in the prologue (`sw a0,0x20; sw a1,0x24; sw a2,0x28; sw a3,0x2c` — a contiguous a0..a3 block at the TOP of the frame) and then builds a pointer into that block (`addiu aN, sp, 0xNN`) to pass to an inner call, it is a VARARGS function, not a fixed-arity one with a phantom pad. A fixed `f(char*,int,int,int)` signature only homes the args whose address is taken, giving a smaller frame (e.g. 0x18) — no C-level pad/`volatile int pad[]` can grow it back (IDO -O2 elides them). The fix is the signature: `int f(char *out, int a1, ...)` homes ALL named+unnamed arg regs → frame grows to match (0x20), and the va-pointer is `&a1 + 1` (address of the next homed slot = sp+0x28). Byte-exact gl_func_0006EF08 2026-06-20 (sprintf wrapper: `rv = vfmt(fmt, out, a1, &a1+1); if(rv>=0) out[rv]=0; return rv;`), whose prior note claimed a "natural-ceiling frame-size cap, pad locals elided". Reach for this whenever the residual is a frame-size/arg-home shift on a function that passes a stack pointer into a printf/sprintf/format-family callee. (The trailing jr-ra delay-slot nop the C body emits absorbs a separate `_pad.s` GLOBAL_ASM — gate that pad to the INCLUDE_ASM `#else` branch or drop it.)_
@@ -820,6 +821,40 @@ body that populates a Vec3 in `out`.
 - Target asm has `bnez ptr,zero,...` → use if-else `if (p == 0) { p = alloc(N); ... }` + `goto end` for early-exit
 
 ---
+
+<a id="feedback-ido-shortcircuit-or-fused-bne-alloc-cascade"></a>
+## Short-circuit `||` reproduces the alloc-cascade's fused `bne` (skip-alloc-AND-post-alloc-null-check) at -O0
+
+_In a nested alloc cascade, the target's outer guard `bne` skips both the alloc body AND the post-alloc null-check `beq`. The short-circuit `||` form reproduces it; an explicit `if(p==0) goto bail;` for the inner check does not (it costs an extra unconditional `b`)._
+
+A common -O0 alloc cascade (`gl_func_00008C3C`, the 8FFC/9100 siblings) reads as:
+
+```
+move s0,zero            ; root = 0
+bne  s0,zero,+7         ; OUTER guard: if root != 0, skip to body — offset SPANS BOTH the alloc AND the beq
+nop
+li   a0,0xD4; jal alloc; nop
+move s0,v0              ; root = result
+beq  s0,zero,end        ; inner null-check after alloc
+nop
+move s1,s0             ; body: mid = root
+```
+
+The decisive feature is the outer `bne` offset (`+7`): it jumps PAST both the alloc block AND the `beq` post-alloc null-check, landing directly on the body. The C that reproduces this:
+
+```c
+if (root != 0 || (root = (int *)alloc(0xD4)) != 0) {
+    /* body */
+}
+```
+
+`||` short-circuit at -O0 → `bne root,zero, body_start; <eval alloc>; beq root,zero, end; body_start:`. The inner `(p = alloc()) != 0` test compiles to a **single `beq`** (one branch).
+
+The trap: writing the inner check as an explicit `if (root == 0) goto bail;` makes IDO -O0 emit the INVERTED-skip-over-goto form `bnez root,.skip; b bail; .skip:` — TWO branches. That both (a) inflates the function by an unconditional `b` per level and (b) makes the outer guard's offset wrong by 2. So for the SAME control flow, the structured short-circuit `||` form is byte-correct where the goto form is not.
+
+Dropped 3 branch-offset diffs on `gl_func_00008C3C` 2026-06-20 (9 → 6 non-reloc diffs, all branches byte-exact); the only residual is the call_root -O0 temp-pool slot (0x28 mine vs 0x34 target), confirmed an IDO -O0 temp-allocator artifact unsteerable by decl-order/scope/cast (same class as `gl_func_0005D054`).
+
+General rule: prefer short-circuit `||`/`&&` over `if(){goto}` whenever a target conditional branch must SKIP a following conditional check — the goto form always costs the extra `b`.
 
 ---
 
