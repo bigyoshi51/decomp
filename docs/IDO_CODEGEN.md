@@ -4765,6 +4765,43 @@ The target wants forward-load + descending-regs simultaneously — unreachable.
 - BB88/C1B4/CC74 floor at 98.75% (single FP-renumber word). Whole family
   permuter-immune (FP register picks are deterministic on IDO's allocator).
 
+**FP-codegen empirical study 2026-06-21 (agent-i, standalone-cc + in-tree, ~16
+probe variants) — the mechanism is now fully characterized; "unreachable" above
+is too strong, the precise statement is "reachable but always net-loss":**
+
+1. **f-reg # = first-LOAD order, ascending {f0,f2,f12,f14}** for 4 simultaneously-
+   live float copy-locals (IDO skips f4–f10 here). The load *instruction* order
+   the scheduler emits is THE SAME first-reference axis. So `float a,b,c,d;`
+   loaded a→d gives a=f0…d=f14 with loads in a,b,c,d address order. Reverse the
+   decl/load (`d` first) → loads come out reverse-address AND d=f0…a=f14. The two
+   move together — one C knob (textual first-reference order) drives both.
+2. **Store order is NOT a knob.** Writing the 4 stores in any order (forward,
+   reverse, a-last) gets re-sorted by the scheduler to ascending destination
+   address; it never changes the f-reg assignment or load order. (4 store-order
+   variants tested — all identical output.)
+3. **Float ARRAY / struct(Vec4) copy → stack spill** (`f4/f6/f8/f10` round-trip
+   through sp), much worse; the array/struct becomes addressable. Don't type
+   these as Vec4 — the dst offsets (0x11C/0x110/0x118/0x114) aren't even
+   contiguous-in-order, so it is genuinely 4 scalar copies, not a struct copy.
+4. **Pure-DCE'd dead seed does NOT reseed.** `d=d; c=c; b=b; a=a;` (non-volatile
+   self-copies) are eliminated *before* the allocation order is observed → zero
+   effect (frame stays small, regs stay ascending). DCE runs ahead of the seed.
+5. **The ONE configuration that hits the EXACT target order** (forward loads
+   660,612,608,604 AND descending f14,f12,f2,f0 AND correct store order) is a
+   **reverse read-only volatile seed**: `extern volatile float SINK; SINK=d;
+   SINK=c; SINK=b; SINK=a;` BEFORE the real loads. This decouples the allocation
+   order (seeded reverse) from the load scheduling (forward) — verified the FP
+   core comes out byte-identical to BB88's f14/f12/f2/f0 + 0x294…0x25C loads.
+   BUT the volatile seed forces 4 uninit-home `lwc1 fN,N(sp)` + 4 `swc1 fN,0(SINK)`
+   and grows the frame to -0x38. **Net loss** (~8 extra insns + frame word) vs the
+   1-word FP-renumber floor. The CE6C `d++;d--` scaffold is just the minimal form
+   of this same trick (seeds only `d`, costs only +0x18 frame).
+   **TAKEAWAY: forward-load + descending-reg is reachable, but every seeding
+   mechanism that survives DCE costs more than the 1-word it saves.** The cap
+   is economically permanent, not logically impossible. Do not re-grind — the
+   knob space (decl order, load order, store order, array, struct, self-copy,
+   volatile seed, trailing dead `if`, gated reverse stores) is exhausted.
+
 **Related:**
 - `feedback_ido_inline_deref_v0.md` — opposite direction for int derefs
 - `feedback_ido_no_gcc_register_asm.md` — `register T x asm("$fN")` rejected
