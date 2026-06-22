@@ -250,6 +250,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [`volatile int low_pad[N];` declared BEFORE a `float buf[M]` grows the frame by 4N bytes AND pushes buf to a higher stack offset](#feedback-ido-volatile-int-array-low-pad-grows-frame-and-pushes-buf-up) — _When buf is offset 4N bytes too low vs target, a leading `volatile int low_pad[N]; low_pad[i]=0;` grows the frame by 4N AND pushes buf up by 4N (volatile-scalars-before-array layout rule). Verified 2026-05-14 on gl_func_00039A9C: 2-element low_pad moved buf sp+0x24 → sp+0x28. Cost: N visible `sw zero` insns; net regression unless paired with INSN_PATCH to elide them._
 - [Reproduce a target's DEAD store (store X to addr, then overwrite with Y, no intervening read) via a TARGETED volatile cast on just that one store](#feedback-ido-targeted-volatile-keeps-dead-store) — _When the target writes a field twice with no read between (e.g. `sw t3,0x40(a0)` then `andi t5,t3,0xF; sw t5,0x40(a0)` — first store dead), clean C `p[i]=t; p[i]=t&0xF;` lets IDO -O2 dead-store-eliminate the first (1 insn short, shifts branch offsets). Cast ONLY that store's lvalue: `((volatile T*)p)[i] = t; p[i] = t & 0xF;` — the volatile store can't be DCE'd, so both emit. Whole-pointer `volatile T *p` OVER-applies (forces every access to a fresh load — 22 diffs on gl_func_00031784); the targeted single-store cast is surgical. Verified 2026-05-23 on game_libs_func_00031784 (ring-buffer index `=t; =t&0xF`): 26→27 insns, then 5 residual register-renumber insns INSN_PATCHed → byte-exact + episode._
 - [Passing a value as an assignment-expression call argument (`f(.., x = y, ..)`) adds an EXTRA volatile store+reload = +1 word (size mismatch)](#feedback-ido-assign-expr-call-arg-grows-frame) — _When a `volatile` local is both written and read in the same call-argument slot (`f(a, b, init = init_copy, 1)`), IDO -O2 emits the volatile store AND a reload to satisfy the volatile read at the use, growing the function by one instruction. If the target homes the value once (load → spill → reload-as-arg, no extra dead store), this assign-expr form is one word too long → SIZE MISMATCH. Fix: split into two statements (`init_copy = load; init = init_copy;`) and pass the PLAIN copy (`f(.., init_copy, ..)`). The plain int spills/reloads naturally for the arg; the extra volatile reload disappears. Verified 2026-06-20 on `game_uso_func_00002744`: 53→52 words (correct size), 23 residual diffs (frame-layout coloring caps remain). Inverse of the targeted-volatile dead-store lever above — here you want to REMOVE an accidental volatile reload._
+- [Retain a target's DEAD store WITHOUT a reload (target re-stores via REGISTER, no `lw`) by writing the second store as a RE-READ of the same lvalue: `*o = X; *o = *o & M;`](#feedback-ido-reread-retains-deadstore-regforward) — _Sibling of the targeted-volatile dead-store lever (line 251), but for the case where the target keeps BOTH stores yet computes the second value from the REGISTER (no reload between). Clean C `*o = f|0x40; *o = (f|0x40)&0x7F;` lets IDO -O2 dead-store-eliminate the first (build 1 insn SHORT, size -4, whole body shifts). A `volatile` cast on store1 keeps it but emits a stack round-trip / reload (wrong shape). FIX: write the masked store to RE-READ the lvalue — `*o = *o & 0x7F;`. IDO retains store1 (the re-read makes it live) AND register-forwards the just-stored value into the `andi` (no `lw` emitted), exactly matching the target's `sb;andi;sb`. Verified 2026-06-22 on `gl_func_0002A7D8` (96.16→98.37%). Residual = register-coloring (target reserves v1 for a late &D_0 pointer, forcing the body temp to t7; build uses v1 then tN→t(N-2) cascade) — not C-reachable, stays NM. Use this when the target shows store/op/store all on REGISTERS; use the volatile cast (line 251) when a reload is acceptable._
 - [Three scalar float locals passed BY ADDRESS (`f(.., &fx, ..)`) get fy/fz dead-store-eliminated — declare a `float fv[N]` array and pass `fv`](#feedback-ido-vec3-scalar-locals-dead-eliminated) — _When a function converts N values into N adjacent float locals (`fx=..; fy=..; fz=..;`) and passes them to a callee as a Vec3 by address, writing them as separate scalars and passing `&fx` only escapes the address of `fx`. IDO -O2 then cannot prove the callee reads `fx[1]`/`fx[2]` through the pointer, so it dead-store-eliminates fy and fz (drops their `cvt.s.w`/`swc1` sequences — build is several insns SHORT of target). Fix: declare `float fv[N];`, write `fv[0..N-1] = ...;`, pass `fv` (decays to `&fv[0]`). The whole array OBJECT's address escapes, so every element write is kept. Verified 2026-06-21 on `gl_func_0003AE58` (81.9% → 92.6%, recovered 3 cvt sequences / 8 short insns). Residual = frame-size + loop coloring (regalloc-tier). Distinct from the volatile-ptr levers: no qualifier needed, the array-object semantics alone defeat the per-element DCE._
 - [Write-only `volatile int dummy = aN;` keeps an 8-byte frame allocated WITHOUT the dead-load artifact of `(void)dummy;`](#feedback-ido-write-only-volatile-keeps-frame-without-deadload) — _When `volatile int dummy;` is the only lever to keep IDO -O2 from collapsing a small stack frame, the default `(void)dummy;` use-site emits a trailing `lw zero, OFF(sp)` dead-load. Swap it for `dummy = aN;` (volatile-WRITE, no read): slot stays anchored, no trailing load emitted. Verified 2026-05-14 on `gl_func_0006AF0C` (79.28% → 86.78%, 16→14 insns)._
 - [`volatile s32 sp4;` forces IDO to keep a loop counter on the stack with per-iteration `lw/addiu/sw` instead of register-promoting it](#feedback-ido-volatile-loop-counter-for-stack-iter) — When target asm shows a loop body that reloads the counter from `N(sp)` each iteration (`lw rA, N(sp); ... addiu rB, rA, 1; sw rB, N(sp)`), the C source's loop counter must be `volatile` to prevent IDO from promoting it…
@@ -12584,6 +12585,41 @@ A volatile store has identical encoding to a plain `sw`, so the bytes match; vol
 **Origin:** 2026-05-23, game_libs_func_00031784 (ring-buffer push state machine). Targeted volatile took it 26→27 insns (correct length); 5 residual register-renumber insns in the increment block were INSN_PATCHed → byte-exact, reloc-free, episode logged. (Cf. the related but distinct volatile levers: caller-slot spill via `volatile T *p=&arg`, N-fold reload via `volatile T **`, scoped-volatile early-exit shape.)
 
 ---
+
+<a id="feedback-ido-reread-retains-deadstore-regforward"></a>
+## Retain a dead store WITHOUT a reload (target re-stores via register) — write store2 as a RE-READ of the lvalue
+
+Sibling of the targeted-volatile dead-store lever above. Use this when the target keeps BOTH
+stores to a field but computes the second value from the **register** (no `lw`/`lbu` reload
+between the two stores):
+
+```
+0x2c  sb   t9, 0(s0)        # store1: f | 0x40   (looks dead)
+0x30  andi t0, t9, 0x7f     # masked value FROM REGISTER t9 (no reload)
+0x38  sb   t0, 0(s0)        # store2: (f|0x40) & 0x7F
+```
+
+Clean C `*o = f|0x40; *o = (f|0x40)&0x7F;` lets IDO -O2 dead-store-eliminate store1 (build is
+1 insn **short**, size −4, and the whole body shifts → cascade of false diffs). A `volatile`
+cast on store1 keeps it but forces a stack round-trip / reload — the wrong shape (target uses
+no reload). **Fix:** write store2 to RE-READ the same lvalue:
+
+```c
+*(unsigned char *)o = f | 0x40;
+*(unsigned char *)o = *(unsigned char *)o & 0x7F;   /* re-read, not (f|0x40) */
+```
+
+The re-read makes store1 live (store1 can't be DCE'd), and IDO register-forwards the
+just-stored value into the `andi` (it does NOT emit the reload because it proves the load
+equals the prior store) — producing exactly `sb; andi; sb`. Verified 2026-06-22 on
+`gl_func_0002A7D8` (96.16→98.37%, found via the build-vs-expected size-mismatch scan:
+`-4` byte delta is the missing store). Residual = register-coloring (target reserves `v1`
+for a late `&D_0` pointer so the body temp lands in `t7`; build uses `v1` then `tN→t(N-2)`
+cascade) — not C-reachable, stays NON_MATCHING (no episode).
+
+Decision rule: target shows **store / op-on-register / store** → use this re-read form
+(no qualifier). Target shows store then a genuine **reload** before the second store →
+use the targeted `((volatile T*)p)[i]` cast (line above).
 
 <a id="feedback-ido-vec3-scalar-locals-dead-eliminated"></a>
 ## Scalar float locals passed BY ADDRESS get all-but-the-first dead-eliminated — use a `float arr[N]`
