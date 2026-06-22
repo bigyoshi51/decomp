@@ -357,7 +357,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO -O2 leaf with `addiu sp,-8` but no stack use is unreachable from standard C](#feedback-ido-sp-frame-without-stack-use) — When target has a leaf function with stack frame adjust (`addiu sp, sp, -8` / `addiu sp, sp, +8`) but NO sw/lw using the frame, no standard C idiom produces this at IDO -O2.
 - [64-bit-add helper: `long long` PARAM matches the add carry-chain but can regress the whole function via call-convention reshaping](#feedback-ido-64bit-add-param-vs-manual) — _A target whose body shows `lo=glob+a1; t8=0; hi=carry+t8+a0` (literal-0 hi word + `or` copy before the add) is a 64-bit add where one operand arrives as a `long long` param in a0:a1 (hi:lo). Switching the C signature to `unsigned long long X` and writing `(u64)glob + X` reproduces the add EXACTLY (no shift helper — the value is already register-split). BUT if the function then passes only the low word to a downstream call and spills the dead hi word, the long-long form reshapes the call convention + global-store ordering and nets LOWER than a manual `lo=glob+a1; hi=(lo<a1)+a0` form (gl_func_0006FDE8: 63% long-long vs 74% manual). Use long-long only when the 64-bit value flows straight through; keep the manual pair when the callee takes split 32-bit args. NEVER construct the operand via `((u64)a0<<32)|a1` — the `<<32` emits a 64-bit shift helper (regressed 6FDE8 to 43%)._
 - [kernel/func_80008030 (SP_STATUS & 3 check) not reproducible from C at -O1 or -O2](#feedback-ido-sp-status-check-unreachable) — _Simple `if ((SP_STATUS & 3) == 0) ret |= 1;` function (0x24 = 9 insns, no stack frame, ret in $v0 with `or v0,zero,zero` + `ori v0,v0,1`) is not reachable from IDO C. -O1 spills ret to stack (adds 4 insns); -O2 routes…
-- [IDO -O2 picks the lowest-available spill slot when the frame has unused space; can't force a higher slot without bloating the frame](#feedback-ido-spill-slot-picks-low-offset) — When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWEST available slot above the ra-save (e.g. if ra=sp+0x14, it picks sp+0x18).
+- [IDO -O2 picks the lowest-available spill slot when the frame has unused space; can't force a higher slot without bloating the frame](#feedback-ido-spill-slot-picks-low-offset) — When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWEST available slot above the ra-save (e.g. if ra=sp+0x14, it picks sp+0x18). **CRACK (2026-06-21): if YOUR spill is one slot TOO HIGH (gap below it, same frame size), a leading `volatile int pad;` claims the top slot and pushes the spill DOWN for free (push-down=free, push-up=bloat). + reloc-form integer-literal args are often a missing `&D_00000000(+off)` address — pass it to recover count-short jal args. Both: gl_func_00006900 88.8%→100% ROM-exact land.**
 - [Split `char pad[N]` into pad-before-buf + pad-after-locals to fine-tune array offset within a fixed frame size](#feedback-ido-split-pad-for-buf-offset) — When you need a buf at a specific stack offset (e.g., target wants `swc1 $f0, 0x34(sp)` with frame 0x48 but your single `pad[N]` only puts buf at 0x28 or 0x38), split the pad into TWO declarations bracketing your…
 - [IDO -O2 schedules "store non-delay" before "addu feeding delay-slot store" — unreachable from C](#feedback-ido-sw-before-addu-unreachable) — IDO -O2's list scheduler picks `sw $reg, N(a0)` before `addu $t1, a0, $t0` when both are ready and the addu's output is needed for the jr delay slot store.
 - [IDO `switch` statements emit a `.rodata` jump table — breaks 1080's linker (rodata discarded)](#feedback-ido-switch-rodata-jumptable) — Writing a C `switch` at IDO -O2 with 3+ cases produces a jump table in `.rodata` and a `lui+addu+lw+jr` dispatch.
@@ -7558,6 +7558,36 @@ worth a focused investigation (decompiler-flag? slot-allocation order?). Both re
 99.9% via the same levers: 2nd/3rd-param-as-working-reg + goto-to-shared-epilogue,
 then re-grinding the OLD documented sub-70% caps (this session's levers postdate
 those comments — old "cap" %s are stale, re-grind them).
+
+**CRACK (2026-06-21, gl_func_00006900): a leading `volatile int pad;` DOES fix a
+spill at-too-HIGH-an-offset WHEN the frame already has a spare slot above the
+spill — because the pad takes the TOP slot without growing the frame.** The old
+note above says `volatile`/`int pad` always FAIL (they "bloat the frame"). That's
+only true when the frame is fully packed. The opposite sub-case is winnable: if the
+target spills at the LOWEST slot above ra (e.g. ra=0x24 → spill=0x28) but your build
+spills one slot HIGHER (0x2C) leaving a 4-byte gap at 0x28, the frame already
+reserves both 0x28 and 0x2C (your spill at 0x2C, a pad at 0x28). Declaring
+`volatile int pad;` as the **FIRST local** claims the TOP slot (0x2C) — pushing the
+real spill DOWN to 0x28 — and emits ZERO instructions (volatile-unused), so the
+frame size is unchanged. Diagnostic: same frame size, your spill 4 bytes ABOVE the
+target's, and an unused gap at the target's spill offset ⇒ try a leading
+`volatile int pad;`. (gl_func_00006900: v0 spill 0x2C→0x28, frame stayed -0x30,
+count-exact 99/99, ROM-exact land.) NOTE the asymmetry: this lever pushes the spill
+DOWN (your spill too HIGH); the earlier "bloat" failures were trying to push a spill
+UP (target too HIGH) which genuinely needs a new slot. Push-down with a pre-existing
+gap = free; push-up = bloat.
+
+**RELATED LAND LEVER (same fn): reloc-form integer-literal args are often a missing
+`&D_00000000(+off)` address, not a real constant.** When a reloc-form (USO) function
+is count-SHORT and the target materializes an arg via `lui rN,K; addiu rN,rN,LO`
+(2 insns) where a plain integer would be 1 insn (`ori`/`li`/`move`), the arg is a
+symbol address. Pass `(char*)&D_00000000 + OFF` instead of the literal. The build
+emits HI16/LO16 relocs that, after linking, resolve to the SAME bytes as the target's
+pre-linked `lui K; addiu LO` (incl. the `%hi` carry: `%hi(0xD010)=1` → `lui 0x1`).
+A reloc-masked word-diff flags these as "DIFF" (build has reloc, expected doesn't) but
+they are TRUE matches — verify by computing `%hi`/`%lo` by hand or by the final `make`
+ROM-OK gate. Recovered 3 args on gl_func_00006900 (a1=0→`&D`, 0xD010/0xD020→`&D+off`),
+delta -3 → 0.
 
 ---
 
