@@ -388,6 +388,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Signed `%` (and `/`) on a memory-loaded divisor emits a `break 7` (÷0) AND a `break 6` (INT_MIN/−1 overflow) guard pair — C-unsuppressible](#feedback-ido-signed-mod-break-pair) — _A C `(a + b) % n` where `n` is loaded from memory compiles to `div $zero,t4,t5; mfhi tP; bnez t5,+2; nop; break 7` THEN (for the result use) `addiu at,$zero,-1; bne t5,at,+2; lui at,0x8000; bne t4,at,+2; nop; break 6`. The `break 7` is the divide-by-zero trap; the `break 6` is the signed INT_MIN/−1 overflow trap MIPS HW can't represent. Both are emitted for signed `/` and `%` whenever the divisor isn't a compile-time-known nonzero constant — there is NO C form that suppresses them (they're part of IDO's signed-div lowering, not optimizer-removable). A ring-buffer index `idx=(first+count)%max` (inlined osSendMesg shape) therefore caps <100 from plain C unless `max` is a literal. Verified 2026-05-17 func_800044CC (libultra PI-event callback). Use `unsigned` operands to drop to `divu` + only `break 7` (no overflow guard), or post-cc INSN_PATCH if the target really uses signed div._
 - [Trailing `lw v0,saved(sp)` reload (Δ+1 vs target) = `return saved_var` where the target returns the last call's result — change to `return last_call(...)`](#feedback-ido-return-saved-var-trailing-reload) — _A wrapper `r = cb(1); cb(...); cb(...); cb(r); return r;` spills `r` to stack (passed to the last call), then `return r` adds a trailing `lw v0,saved(sp)` reload → Δ+1 / ~95% vs a target that has no v0 reload before the epilogue. The target returns the LAST call's value (v0 already live), so write `return cb(r);` (or `return last_call(...)`) to drop the reload. Quick diagnostic: align built vs target; if the ONLY real diff is one extra `lw v0,K(sp)` right before `addiu sp` / `jr ra`, it's this. Verified 2026-05-23 gl_func_00034C7C (94.7→100). Likely the same shape for several of the Δ+1 count-mismatch near-misses._
 - [Split a `<<16` shift into `(x<<15)<<1` to renumber the temps IDO allocates for a multi-field word-pack](#feedback-ido-split-shift-temp-renumber) — _A 2-word GBI command packer `a0[0]=((a1&0xFF)<<16)|CMD|(arg4&0xFFFF); a0[1]=(a2<<16)|(a3&0xFFFF);` compiles with the second word's temps numbered one lower than the target (t2/t3/t4 vs t3/t4/t5) — a register-renumber residual that doesn't byte-match. Writing the shift as `(a2<<15)<<1` (two shift insns folded back to one `sll ,16` by the optimizer, but the extra RTL node bumps the temp numbering) makes IDO allocate t3/t4/t5 → byte-exact. Permuter-discovered; matched 3 siblings (game_libs_func_0001D624/D770/D7A4). Try it when the ONLY diff is a uniform +1/−1 `$t` renumber on a shift-heavy expression and plain forms won't budge._
+- [A `const/const` float division folds to a `.rodata` literal — force the runtime `div.s` with a shared `float divisor` local](#a-const--const-float-division-const-folds-into-a-rodata-literal--force-the-runtime-divs-with-a-shared-float-divisor-local) — _Target divides a constant ratio (`112.0f/255.0f`) at runtime (`lui 0x42e0; mtc1; div.s ,$f0` with `$f0`=255.0f shared across sibling divisions) but your `112.0f/255.0f` emits a `.rodata` literal load (extra `R_MIPS_HI16/LO16 .rodata` reloc + wrong opcode). Introduce ONE named `float div255 = 255.0f;` and divide by it everywhere — the variable divisor blocks the const/const fold so IDO materializes the numerator + emits a real `div.s` by the shared `$f0`. Companion: 8-bit channel halve+normalize = `(float)(unsigned)(unsigned char)(*(u8*)/2)` (`/2` → signed-/2 idiom bgez;+1;sra; `(unsigned char)` → andi 0xff; `(unsigned)` → 4f80 unsigned→float fixup). Verified bootup_uso func_0000CFA0 2026-06-22._
 
 
 ---
@@ -469,6 +470,39 @@ were a mechanical hand-application of the lever (one edit each, no permuter). Wh
 you hit a word-pack whose only residual is a uniform `$t` renumber on a shift-heavy
 expression, try splitting the shift before reaching for the permuter. Verified
 2026-05-24.
+
+## A `const / const` float division const-folds into a `.rodata` literal — force the runtime `div.s` with a shared `float divisor` local
+
+Symptom: the target computes a constant float ratio (e.g. `112.0f/255.0f`) with
+an actual runtime `div.s` (`lui 0x42e0; mtc1; div.s $fD,$fN,$f0`), where the
+divisor `$f0` is a single shared constant (`lui 0x437f; mtc1 → 255.0f`) reused
+across several sibling divisions in the same block. Your C `112.0f / 255.0f`
+instead emits a `.rodata` literal load (`lwc1 $fX, %lo(.rodata)(at)` with an
+`R_MIPS_HI16/LO16 .rodata` reloc) because IDO -O2 folds the fully-constant
+quotient at compile time. That's a structural byte diff (extra reloc + wrong
+opcode) you cannot reloc-filter away.
+
+Fix: introduce ONE named `float` divisor local set to the constant and divide by
+it everywhere — the constant numerators stay foldable-but-not-collapsible:
+
+```c
+float div255 = 255.0f;                 // held in $f0, reused for all divisions
+out->r = (float)(unsigned)(unsigned char)(src->r / 2) / div255;  // runtime div.s
+out->g = (float)(unsigned)(unsigned char)(src->g / 2) / div255;
+out->b = (float)(unsigned)(unsigned char)(src->b / 2) / div255;
+out->a = 112.0f / div255;              // NO fold to .rodata — divisor is a variable
+```
+
+Because `div255` is a (non-`const`) variable, IDO can't fold `112.0f / div255`,
+so it materializes `112.0f` via `lui 0x42e0` and emits a real `div.s` by the
+shared `$f0` — matching the target exactly, including the single shared 255.0f
+constant register across all four divisions. (The RGB rows are already runtime
+because their numerators are loads.) Verified 2026-06-22 on bootup_uso
+`func_0000CFA0`. Companion idiom in the same function: an 8-bit channel halved
+and renormalized is `(float)(unsigned)(unsigned char)(*(u8*)/2)` — the `/2`
+(not `>>1`) gives IDO's signed-divide idiom (`bgez; addiu ,1; sra ,1`, dead but
+emitted), the `(unsigned char)` gives `andi 0xff`, and the `(unsigned)` triggers
+the unsigned→float `4f80` fixup the target shows.
 
 ---
 
