@@ -121,6 +121,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Register-allocation-renumber caps: the matching toolkit (IDO color order, GVN/dedup, live-range split, permuter PERM_ passes, and the `-zdbug` dump — blocked by an `ecvt` stub)](#feedback-ido-regalloc-renumber-matching-techniques) — _When logic + instruction COUNT match but a value lands in the wrong register (cascading: const in `$a2` vs `$v1`, ptr in `$a3` vs `$t7`, FP `$f4` vs `$f18`). NOT operand-order. IDO colors in fixed order `$v0,$v1,$a0..$a3,$t0..` by first-USE/expression-list position + Chow–Hennessy priority. Levers: reorder first-use (not decls); duplicate/CSE-fold a subexpr to shift the cascade; split live ranges around calls (`a=b; a+=c`); drive permuter `perm_pad_var_decl`/`perm_refer_to_var`/`perm_duplicate_assignment` MANUALLY via PERM_ macros (random mode floors). SYSTEMATIC DIAGNOSTIC: `cc -Wo,-zdbug:6` dumps IDO's UCODE expr-list + regalloc coloring to a file **`uoptlist`** in the CWD (NOT stdout) — **UNLOCKED 2026-05-29** by implementing `wrapper_ecvt`/`wrapper_fcvt` in tools/ido-static-recomp/libc_impl.c (was an `assert(0)` stub that crashed the dump; codegen-verified-safe). The `N: N assigned (unconstrained) R` lines show candidate→register order. Researched from OoT/sm64/mm IDO guides + permuter, 2026-05-29._
 - [**Pass an adjacent int pair AS A STRUCT BY VALUE to reproduce outgoing-arg home-stores (`sw a1,4(sp); sw a2,8(sp)`) — DISPROVES the "precall-arg-spill cap"**](#feedback-ido-struct-by-value-homes-arg-pair) — _When the target stores outgoing register args to their home slots right around a `jal` — `lw a1,0(p); sw a1,4(sp); lw a2,4(p); jal; sw a2,8(sp)` — and your C `f(x, p[0], p[1], k)` does NOT emit the `sw a1,4(sp)/sw a2,8(sp)` stores, the fix is to pass the adjacent pair as a 2-int STRUCT BY VALUE: `typedef struct {int a,b;} Pair2; f(x, *(Pair2*)p, k);`. IDO places the struct's two ints in a1,a2 AND homes them to the caller's outgoing-arg slots (sp+4, sp+8), exactly matching the target. Verified empirically: K&R/`(int,...)`/`(int,int,...)`/`(int,int,int,...)`/`(int,int,int,int)` prototypes and register/pointer/global-addr arg sources ALL fail to home the args; only struct-by-value does it. The old `feedback_ido_precall_arg_spill_unreachable` "cap" was WRONG. Verified 2026-05-28 on game_uso_func_00011168: 61.2% → 93.92% (instruction count 46→60 to match target; residual ~6% is an unrelated $v0/$v1 &D-base renumber). Recheck every NM wrap labeled "precall-arg-spill"/"vararg-spill cap" (game_uso_func_0000FF48/0000FFB8/00010BAC/0000D5F8, etc.) — many pass adjacent int pairs and should now match or near-match. **SINGLE-INT variant (2026-06-20, game_uso_func_0000A374 LANDED 86.7%→100):** the lever also works for ONE int — when the target homes a single varargs arg (`sw a1,0x1C(sp)` incoming-home + `sw a1,0x4(sp)` in the jal delay slot, no `sw a2,8(sp)`), pass that one int by value as a 1-MEMBER struct: `typedef struct {int a;} S1; f(x, *(S1*)&a1)`. IDO puts it in $a1, homes it to 0x4(sp) (outgoing), and the struct addressability forces the 0x1C(sp) incoming home — exactly the two stores. Plain int / `(int,...)` / K&R all fail._
 - [**Declare a stored-as-short arg `unsigned short` to home it (`sw aN,K(sp)`) with NO extension insns**](#feedback-ido-unsigned-short-param-homes-no-extend) — _When the target homes an int-reg arg to its caller-arg slot (`sw a2,8(sp)`, no frame) and the arg is only ever stored as a halfword (`sh a2,…`), declare it `unsigned short`: that homes it with NO widening (plain `short` adds sll/sra; `int` emits no home; `unsigned char` adds andi). Cracked the "unreproducible arg-home cap" on game_libs_func_00022F60 2026-06-22 (73.75→89.58); residual = same-multiset cursor↔const $a2/$a3 coloring swap._
+- [**`switch` dispatching through an EXTERNAL USO jumptable (`lui 0x0; lw 0xNNNN(at); jr t6`) is a STRUCTURAL CAP — a C switch always emits a LOCAL `.rodata` table**](#feedback-ido-external-uso-jumptable-cap) — _A USO function whose dispatch is `sll t,op,2; lui at,0x0; addu at,at,t; lw t,0xNNNN(at); jr t` reads the jump targets from a jumptable in EXTERNAL data at `&D_0+0xNNNN` (the %hi resolved to 0 in the USO, %lo = the data offset). A C `switch` ALWAYS generates its OWN table in the local `.rodata` section referenced by a `R_MIPS_HI16/LO16 .rodata` reloc pair (your build emits `lw 0xSMALL(at)` to a local table); there is no C construct that does `jr` through an arbitrary external data symbol at a fixed offset, so the table-base word (`0xNNNN` vs your local `0xSMALL`) can never byte-match. Knock-on emit-shape diffs ride the same non-C dispatch: the opcode stays in a CALLER-saved reg (build forces a saved reg), the state ptr colors differently, and each `v=*cur++` read emits a redundant `move v1,s0` copy before `lw 0(v1)` (build folds to `lw 0(s0)`). RECONSTRUCT the body faithfully for %-progress (gl_func_00052CD4 65.37→76.95% 2026-06-22) but keep INCLUDE_ASM — the dispatch prologue + external-table reloc form is uncrackable. Diagnostic: `lui at,0x0` (zero %hi) feeding the table `lw`, plus a table offset ≥0x1000 = external data, not a local switch table._
 - [**Fold `+K` into a load %lo (reloc `%hi/%lo(SYM+K)`, no extra addiu) by declaring SYM as an ARRAY and indexing — not `(T*)&SYM+K`**](#feedback-ido-funcarray-fold-reloc) — _`extern float SYM[]; SYM[K/4]` keeps the `+K` as the lwc1/lw offset under one reloc pair; `(char*)&SYM+K` / `(T*)(void*)&SYM` force a separate materialized pointer (+1 addiu). Unreachable in-TU if SYM is a same-TU FUNCTION (splat-folded literal pool, e.g. bootup_uso func_0000098C). func_0000E270 2026-06-22: register-exact reconstruction, blocked further by a same-frame f0↔a1 spill-SLOT swap (target spills the f32 temp at the lower slot)._
 - [**Declare a byte arg as `unsigned char` to reproduce BOTH its `sw aN` home AND its `andi 0xFF` zero-extend — but the eager extension flips s-reg order vs a later int arg**](#feedback-ido-unsigned-char-param-homes-and-extends) — _When the target both homes an incoming int-register arg (`sw a2,64(sp)`) AND zero-extends it once before use (`andi sX,a2,0xff`, hoisted out of a loop), the arg is an `unsigned char` parameter. Declaring it `int` + masking `a2 & 0xFF` gets the andi but NO home (the home only appears with the char type). The `unsigned char` declaration produces the home + the eager prologue zero-extend together — the cleanest way to match a dead-arg-home that coexists with a byte mask. CAVEAT (verified 2026-05-29 gl_func_0000A7B4): the char extension is EAGER at the prologue, so the extended pseudos are born before a sibling `int` arg's loop-invariant copy and grab the LOWER $s-regs — leaving the int arg (e.g. a1) in a higher $s than the target wants. So char-arg homing and "int-arg-first allocno order" are mutually exclusive; a function needing both lands as a clean cyclic $s-reg renumber (size + control flow + homes all exact). NM-wrap that residual._
 - [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
@@ -925,6 +926,46 @@ if (gl_func_X(a0, buf)) {
 **Cap considerations:** Even with this idiom, additional gaps may remain (frame size, register-name choice, downstream branch shape). The recipe specifically targets the delay-slot fill at the conditional-overwrite branch.
 
 ---
+
+<a id="feedback-ido-external-uso-jumptable-cap"></a>
+## `switch` through an EXTERNAL USO jumptable is a structural cap (reconstruct body, keep INCLUDE_ASM)
+
+A USO command/dispatch function whose switch compiles to:
+
+```
+sll  t6, op, 2
+lui  at, 0x0            # zero %hi (USO-resolved)
+addu at, at, t6
+lw   t6, 0x1BE4(at)     # jumptable lives in EXTERNAL data at &D_0+0x1BE4
+jr   t6
+```
+
+is reading its jump targets from a table in **external USO data**, not from
+a compiler-local switch table. A C `switch` ALWAYS emits its own table in
+the unit's `.rodata`, referenced by a `R_MIPS_HI16/LO16 .rodata` reloc pair
+(your build emits e.g. `lui at,%hi(.rodata); lw 0x90(at)` to a local table).
+There is no C construct that performs an indirect `jr` through an arbitrary
+external data symbol at a fixed offset, so:
+
+- the **table-base word** (`lw 0x1BE4(at)` vs your local `lw 0x90(at)`) can
+  never byte-match, and
+- the **`lui` reloc form** differs (target: bare `lui 0x0`; build: `.rodata`
+  HI16 reloc).
+
+Knock-on emit-shape diffs that ride the same non-C dispatch and are NOT
+independently fixable: the opcode stays in a **caller-saved** reg (a3) where
+your build forces a saved reg; the state pointer colors into a different
+saved reg; and every `v = *cur++` read emits a redundant `move v1,s0` copy
+before `lw 0(v1)` (your build folds to `lw 0(s0)`).
+
+**Action:** reconstruct the case bodies, the per-case struct offsets, flag
+RMWs, callbacks, and the finalize block faithfully — this raises fuzzy %
+substantially (gl_func_00052CD4 65.37 → 76.95% 2026-06-22) — but keep the
+function `#ifdef NON_MATCHING` / `#else INCLUDE_ASM`. **Diagnostic:** a
+`lui rN,0x0` (zero %hi, no reloc on the target's raw `.word`) feeding the
+table `lw`, with a table offset ≥ 0x1000, signals external data, not a
+local switch table. This is the "external-data / USO-relative jumptable =
+STRUCTURAL CAP" class — report it, don't grind the dispatch.
 
 <a id="feedback-ido-alloc-or-passthrough-ternary"></a>
 ## IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary
