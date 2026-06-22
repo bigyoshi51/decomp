@@ -203,6 +203,7 @@ _146 entries. Auto-generated from per-memo notes; content may be rough on first 
 - [The "all .word directives" skip rule applies to fresh decomp, NOT to episode logging — `.word`-only USO functions are still episode-eligible if byte-correct via INCLUDE_ASM](#feedback-word-only-skip-rule-doesnt-block-episode-logging) — _The /decompile skill's skip rule says to skip functions whose .s file is all `.word` directives ("data misidentified as code").
 - [An NM-wrap doc claiming "logic verified correct, IDO codegen cap" may actually be hiding a wrong-dereference bug](#feedback-wrap-doc-codegen-cap-may-mask-logic-bug) — _A wrap doc that names a specific IDO codegen pattern as the "cap" (e.g. "&D base-register form not C-flippable") and says "logic verified correct" can be wrong.
 - [Yay0-compressed USO file-split: SOLVED via binary-concat-before-compress (2026-05-28)](#feedback-yay0-uso-blocks-file-split-recipe) — _objcopy each sub-unit's truncated .text → cat in address order → zero-pad to exact block size (NOT 16-align) → crunch64-compress. Unblocks per-file -O0/-g3 in Yay0 USOs. Ref impl: mgrproc_uso_o0_0.c + timproc_uso_b{1,3}_o0_0.c. **Mid-block single function: binary-slice variant (2026-05-29)** — delete the lone function from the bulk .c, carve it into its own -g3/-O0 sub-unit, and slice+insert its .text into the block at the function's offset (no 3-way source split). Ref impl: timproc_uso_b5_g3_1DA4.c._
+- [External-NAMED-global jumptable is C-irreproducible — distinct from "rodata discarded"](#external-named-global-jumptable-lw-rxoffhid_name-jr-rx-is-c-irreproducible-distinct-from-rodata-discarded) — _When the switch dispatch loads case targets from a NAMED data symbol (`lui at,%hi(D_NAME); addu at,at,idx*4; lw t,off(at); jr t`), a C `switch` synthesizes its own LOCAL jumptable so the base reloc points at the wrong symbol — dispatch words diverge no matter how the switch is written. Permanent structural cap (decode case bodies for correct-C credit, expect dispatch red). Discriminate from the linkable case: `%hi(D_<named>)` base = cap; local `%lo(jtbl_*)`/$gp = linkable. timproc_uso_b5_func_0000D884 (capped ~67%), gl_func_00030AF4._
 
 
 ---
@@ -9186,3 +9187,24 @@ but resolve oppositely -- discriminate by the DISPATCHER:
   ceiling (its temps continue the parent's counter -- 276B8's t0/t1
   after the parent consumed t6..t9 = 95.83 ceiling, explained not
   grindable).
+
+## External-NAMED-global jumptable: `lw rX,off(%hi(D_NAME)); jr rX` is C-irreproducible (distinct from "rodata discarded")
+
+Recognition: the switch dispatch loads its case targets from a NAMED
+global table, e.g. `lui at,%hi(D_807FF3E0); addu at,at,idx*4;
+lw t3,0x3C0(at); jr t3` -- i.e. the jumptable BASE carries a
+`%hi(D_...)` reloc to a data symbol that lives OUTSIDE this function.
+This is NOT the usual "IDO emits a local .rodata jumptable that the
+USO linker discards" case (PATTERNS 9110, where the dispatch SHAPE
+still matches and objdiff scores only .text). Here a C `switch` always
+synthesizes its OWN local jumptable symbol, so the `lui`/`lw` base
+reloc points at the wrong symbol and the dispatch words diverge no
+matter how you write the switch -- the case-target table was authored
+as external game data, not compiler output. Verdict: the ~6-word
+dispatch + however many words objdiff attributes to it are a permanent
+structural cap; decode the case bodies as a normal `switch` for
+correct-C credit but expect the dispatch region to stay red. Tell it
+apart from the linkable case by checking whether the jumptable `lw`
+offset rides a `%hi(D_<named>)` (cap) vs a local `%lo(jtbl_*)`/$gp
+(linkable). Seen: timproc_uso_b5_func_0000D884 (D_807FF3E0+0x3C0,
+14-case, capped the fn at ~67%), sibling class gl_func_00030AF4.
