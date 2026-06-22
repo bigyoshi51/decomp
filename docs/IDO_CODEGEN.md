@@ -22,6 +22,10 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [A "register-coloring cascade" residual can be a MISSING INNER DEREF — classify the temp renumber's root before conceding](#a-register-coloring-cascade-residual-can-be-a-missing-inner-deref--classify-the-temp-renumbers-root-before-conceding-gl_func_00057104-2026-06-22) — _gl_func_00057104 sat at ~96% with a "12-diff coloring tie" (const t1 vs t2, OR result cascaded). Root cause was a missing `[0]` deref: slot base used `dl + count*8` but target re-loads AND derefs `a0->0xC` (`lw t9,12(a3); lw t0,0(t9)`) — base lives at `dl[0]`. Writing `(*(int**)((char*)a0+0xC))[0] + count*8` added the extra `lw`, fixing address math AND shifting the const/OR allocation to match (t2/t3). Byte-exact. Lesson: a "shifted one register" cascade is often downstream of ONE missing/extra insn; diff opcode COUNT in the window, not just operands, before conceding a coloring cap._
 
 - [Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)](#frame-size-correctness-unblocks-regressing-code-motion-rewrites-2026-06-16) — _Fix stack-frame size byte-exact FIRST (sweep pad local to match `addiu sp,sp,-N`); then m2c-faithful code-motion that "regressed" with a wrong frame now gains. Diagnose via jal-segment counts (equal jal count + matching per-segment sizes = control structure matches). game_uso 591C +3.66pp._
+
+- [INLINE a vtable fn-ptr call (don't name the local) to force jalr-$t9 + defer the ptr-load past the field reads; pair with the missing sub-object deref (gl_func_0000CDDC LANDED 2026-06-22)](#inline-a-vtable-fn-ptr-call-dont-name-the-local-to-force-jalr-t9--defer-the-ptr-load-past-the-field-reads-gl_func_0000cddc-landed-2026-06-22) — _Sub-object dispatch `p=*(a0+0x28); (*(fn**)(p+0x5C))(a0 + s16(p+0x58))`. Two levers: (1) MISSING DEREF — fields 0x58/0x5C are off `p` (the loaded sub-object), not off `a0`; the "dummy lw v0,0x28(a0)" in a cap comment is the real deref. (2) A NAMED `fn` local gets scheduled early into $v1; INLINING the call `(*(int(**)(int*))(p+0x5C))(arg)` defers the load to the jalr slot so it lands in $t9 (the canonical indirect-call reg) AFTER the halfword field read. A local `int cmd=*a1;` then shifted the compare temp into $v0. 87.57% NM -> byte-exact._
+
+- [VARARGS declaration `(.., ...)` fixes the "frame-size shift / arg-home" cap: homes ALL arg regs + reloads them; read a later call-arg from memory via `((int*)&va)[-1]` to force the reload not a move (gl_func_0006EF08 body byte-exact 2026-06-22)](#varargs-declaration-fixes-the-frame-size-shift-arg-home-cap-gl_func_0006ef08-2026-06-22) — _A vsprintf-style wrapper that homes a0-a3 at a 0x20 frame and reloads them was wrongly typed as fixed `(char*,int,int,int)` -> smaller 0x18 frame ("frame-size shift cap", pad locals elided). Declaring it VARARGS `(char*,int,int,...)` makes IDO spill+reload all four arg slots. Then the 3rd call arg `a1` was emitted as a register move (`or a2,a1`) vs target's reload (`lw a2,36(sp)`); reading it as `((int*)&a2)[-1]` (the homed slot just below the va pointer) forces the memory reload. Body became instruction-identical. CAVEAT: blocked on dewrap by an UNFILLED jr-ra delay nop (target body is 21 insns + `_pad.s` nop; -O2 emits the 22nd nop inline) — same class as -g3/-O0 unfilled-delay splits._
 ## Quick reference by sub-topic
 
 ### uopt internals (allocator opened, 2026-06-11)
@@ -16613,3 +16617,58 @@ own low digits need NOT equal `literal_low`; treat them as independent.
 single-use locals — could not be induced by either distinct scalars or a name array.
 Plus tail Vec3 records' FP scratch-copy scheduling. Logic was complete; the gap was
 pure allocation/schedule shape. Verify per-fn with `scripts/relcmp.py <seg>/<unit> <fn>`.
+
+## INLINE a vtable fn-ptr call (don't name the local) to force jalr-$t9 + defer the ptr-load past the field reads (gl_func_0000CDDC LANDED 2026-06-22)
+
+Pattern: a conditional sub-object dispatch
+`p = *(T**)(a0 + 0x28); (*p->[0x5C])(a0 + (s16)p->[0x58])`.
+
+Two distinct levers stacked to go from an 87.57% NM-wrap to byte-exact:
+
+1. **MISSING INNER DEREF.** The 0x58/0x5C accesses are off the loaded
+   sub-object `p`, NOT off `a0`. The build was reading `0x58(a0)`/`0x5C(a0)`
+   directly (no intermediate `lw`), so it lacked the `lw v0,0x28(a0)` the
+   target has. An old cap comment even called that load a "dummy lw
+   v0,0x28(a0)" — it is the real deref. Always re-check whether a struct-base
+   access should be `(*pp)->field` vs `pp->field`.
+
+2. **INLINE the indirect call.** A named local
+   `int (*fn)(int*) = p->[0x5C];` gets its load scheduled early and colored
+   into `$v1`, with build emitting `jalr v1`. The target loads the fn ptr
+   LAST (right before the call) into `$t9` (the canonical indirect-call
+   register), AFTER reading the s16 field. Writing the call inline —
+   `(*(int(**)(int*))((char*)p + 0x5C))(new_a0);` — defers the load to the
+   jalr slot so it lands in `$t9` in target order.
+
+Residual after those two: `*a1` (the dispatch key compared `== 9`) sat in
+`$t6` vs target's `$v0`. A local `int cmd = *a1; if (cmd == 9)` shifted the
+compare temp into `$v0`. Byte-exact, dewrapped, episode logged. Verify per-fn
+with `scripts/relcmp.py` (or the inline reloc-aware objdump diff).
+
+## VARARGS declaration fixes the "frame-size shift / arg-home" cap (gl_func_0006EF08 2026-06-22)
+
+A vsprintf/`func(fmt, a, b, &va)`-style wrapper that the target compiles with
+a 0x20 frame homing ALL FOUR arg registers (`sw a0,32; sw a1,36; sw a2,40;
+sw a3,44`) and reloading them before the call. Typed as fixed
+`(char*, int, int, int)` it compiles to a smaller 0x18 frame and keeps args
+in registers — the long-standing "frame-size shift cap" (C `pad` locals are
+elided by -O2, so you cannot grow the frame that way).
+
+Fix: declare it **VARARGS** `(char *fmt, int a, int b, ...)`. IDO then spills
+the named + unnamed arg regs to their incoming-arg home slots at a 0x20
+frame, exactly matching the target. `&a2` (address of the last named param)
+is the va_list start (`addiu a3,sp,40`).
+
+One residual: the 3rd call argument (`a1`/the 2nd named param) was emitted as
+a register move `or a2,a1,zero` where the target RELOADS it `lw a2,36(sp)`.
+Reading it from its homed slot — `((int *)&a2)[-1]` (one word below the va
+pointer) — forces the memory reload. The body then becomes
+**instruction-identical** to the target.
+
+CAVEAT (why it did NOT land): the target body is 21 insns ending in `jr ra`
+with an UNFILLED delay slot, and the trailing nop is supplied by a separate
+`_pad.s` sidecar (84-byte body). -O2 emits that jr-delay nop INLINE, giving a
+22-insn / 88-byte body, so dewrapping (removing `_pad.s`) breaks the ROM.
+This is the same unfilled-jr-delay class that needs a per-file -g3/-O0 split
+to land. The improved NM body is kept (instruction-identical decode) for when
+that split lands.
