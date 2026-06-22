@@ -5804,6 +5804,8 @@ If neither appears in `SUFFIX_BYTES :=`, `PREFIX_BYTES :=`, or `PROLOGUE_STEALS 
 
 **How to apply:** add this check as step 0 when picking up any NM-wrap that cites the bundle-blocked claim. Total time-cost: ~30 seconds (two greps). Reward: potentially 3+ exact matches per bundle.
 
+**Variant — the "bundle" header is just FALSE (single coherent function mis-described):** Some headers go further than "blocked" and assert a sub-function layout (e.g. `gui_func_00000148`: "BUNDLED 0x7D0/500 insns / F1+F2+F3+orphan"). Verify against the *expected/* object, not the header: `mips-linux-gnu-objdump -d expected/src/<seg>/<file>.c.o | awk '/<func>:/{f=1}f{print}/<next_symbol>:/{exit}'`. If the function ends in a single `jr ra` + delay and the **next splat symbol begins immediately after**, the "bundle" is one function — the multi-subfn header was speculative (written from a raw-`.word` skim before the boundary was confirmed). `gui_func_00000148` (2026-06-22): header claimed 0x7D0/3-subfns; expected/.o showed one 0x410 fn (0x148-0x558) then `gui_uso_func_0000055C` at 0x55C. Reconstructed as a single glyph-grid-layout ctor, 55→71%. Lesson: the raw `asm/nonmatchings/.../<func>.s` header line (`nonmatching <func>, 0xSIZE`) is authoritative for the symbol span — trust it over prose sub-function speculation.
+
 ## Default `make` doesn't exercise NM bodies — `-DNON_MATCHING` build is what CI runs and what catches re-declaration / type errors
 
 _When you write or modify a `#ifdef NON_MATCHING` body, `make RUN_CC_CHECK=0` (the default `make` target) compiles the `#else` arm — INCLUDE_ASM — and SKIPS the C body. So your wrap can have compile errors that pass locally and fail in CI._
