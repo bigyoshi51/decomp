@@ -148,6 +148,7 @@ explicit shared blocks (goto a common label), not regeneration.
 ### other
 
 - [m2c-graft gotcha: float immediate stored into an s32-typed slot silently drops the float store](#m2c-graft-gotcha-float-immediate-stored-into-an-s32-typed-slot-silently-drops-the-float-store) — _`*(s32 *)p = 1.0f` narrows to int at compile time (no `swc1`); retype to `*(f32 *)`. +17 build words on func_000090CC. Grep large grafts for `\*\(s32 \*\).*= [0-9]+\.[0-9]+f;`._
+- [m2c over-widens byte/halfword struct stores to `*(s32 *)` → unaligned swl/swr/lwl/lwr bloat; narrow to the target mnemonic width](#m2c-overwiden-struct-store-unaligned-2026-06-22) — _Packed-struct field stores left as `*(s32 *)` at non-aligned offsets emit swl/swr; narrow to s8/s16 per the target sb/sh/lbu/lhu. Gate with `grep -cE 'swl|swr|lwl|lwr'`→0. gl_func_00021498 size-gap -44→-33, 24 unaligned ops→0 (necessary-not-sufficient on a call-heavy whale; base-pin cap remains)._
 - [Alloc-cascade constructor cap class — m2c renders goto-on-failure as fused `&&`/`||`, regalloc diverges body-wide](#alloc-cascade-constructor-cap-class--m2c-renders-goto-on-failure-as-fused--regalloc-diverges-body-wide) — _Long alloc-or-use chains (func_000090CC: 58 cascades + unrolled stride-24 inits) need the original goto structure rewritten by hand; m2c's fused-boolean form desyncs regalloc body-wide. Multi-session, not a single-tick land._
 - [Immediate-masked sibling scan finds cross-segment libreultra reimplementations (osSetThreadPri etc.)](#feedback-immediate-masked-sibling-scan-finds-cross-segment-os-implementations) — _Masking 16-bit imms + 26-bit jal targets per insn produces a structural signature that surfaces game_libs USO reimplementations of kernel libreultra functions (e.g. `gl_func_0006F534` = `osSetThreadPri`, `gl_func_0006C9F4` = `__osPiRawStartDma`). Standard byte-identical mirror scan misses these because the externs differ. Used 2026-05-17 to find 2 osXxx siblings._
 - [game_libs-internal masked-twin vein is EXHAUSTED — no unmatched fn shares even an opcode-shape with a matched donor](#game_libs-internal-masked-twin-vein-is-exhausted--no-unmatched-fn-shares-even-an-opcode-shape-with-a-matched-donor-2026-06-21) — _Full masked-shape sweep (scripts/find-masked-twins.py, find-fuzzy-twins.py): 0 donor+unmatched clusters at exact shape, 0 near-twins to 88%, 0 register-renamed twins at loosest opcode-only sig vs the 80-99.99% band. 92 clusters all-matched (harvested), 26 plain-only (no donor — all checked are regalloc/cache/cross-fn-boundary caps). Do NOT re-run a game_libs twin-port sweep._
@@ -9099,3 +9100,32 @@ splat had already folded their delay nop into the function symbol; only the
 non_matching path was unmirrored). Landed 2026-06-22 agent-b. Note: these segments do
 NOT have the game_libs-style bare-jr-ra-cut `.s`, so the merge-the-nop-into-.s half of
 the recipe didn't apply here — only the suffix mirror.
+
+## m2c over-widens byte/halfword struct stores to `*(s32 *)` → unaligned swl/swr/lwl/lwr bloat; narrow to the target mnemonic width {#m2c-overwiden-struct-store-unaligned-2026-06-22}
+
+**Symptom.** A hand/m2c reconstruction of a packed-struct builder is OVERSIZE (built
+> target) and its disasm contains `swl`/`swr`/`lwl`/`lwr` (unaligned word access) that
+the target does NOT have — the target uses plain `sb`/`sh`/`lbu`/`lhu`. Each unaligned
+access is a 2-instruction pair, so a record-init loop full of them inflates the build
+fast (24 such ops = ~7-word size gap on gl_func_00021498).
+
+**Root cause.** m2c defaults every struct-field store/load to `*(s32 *)` regardless of
+the real field width. On a PACKED struct (byte/halfword fields at non-4-aligned
+offsets, e.g. `+0x1C`/`+0x1D`/`+0x1E`/`+0x22`/`+0x24`), a `*(s32 *)(p+0x1D) = x` is an
+unaligned word write → IDO emits `swl/swr`; the target stored a single byte (`sb`) or
+halfword (`sh`). So the over-widening is BOTH a wrong struct model AND pure codegen
+bloat.
+
+**Fix (mechanical, gated).** Read the target mnemonic for each store/load and narrow
+the cast to match: `sb`→`*(s8 *)`, `sh`→`*(s16 *)`, `lbu`→`*(u8 *)`, `lhu`→`*(u16 *)`,
+`lb`→`*(s8 *)`, `lh`→`*(s16 *)`, `lw/sw`→`*(s32 *)`. Also narrow the SOURCE read to the
+load width the target uses (e.g. a field copied as `lbu...;sw...` is `*(s32*)dst =
+*(u8*)src`, a byte-to-word zero-extend — NOT `*(s32*)src`). Diagnostic:
+`disasm-func.py <fn> --obj build/non_matching/.../X.c.o | grep -cE 'swl|swr|lwl|lwr'`
+should reach 0 when widths are right. On gl_func_00021498 (game_libs_post, 2196B) this
+drove the size-gap from -44 to -33 words and removed all 24 unaligned ops in one pass
+(built insns 622→582), though it did NOT close the function — the dominant residual
+was the separate base-pin cap (48 surplus `lui` rematerializing `&D_0` after jals where
+the target holds the base in one saved reg across ~20 calls; m2c's ~45-local temp
+explosion evicts it). So width-narrowing is a reliable correctness+size win to do FIRST,
+but on a call-heavy whale it's necessary-not-sufficient for a land.
