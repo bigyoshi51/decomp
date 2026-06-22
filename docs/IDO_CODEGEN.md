@@ -399,6 +399,29 @@ _When two loop-invariant values (e.g. a base pointer and a multiplier constant) 
 
 _When iterating a stack-local array inside a loop, the C access form decides whether IDO burns a saved register on the array base. Pointer-form (`p = arr; ... *p; p++;` reset each outer iteration) makes IDO hoist the array base address into a **saved register** (computed once, `move` to the working ptr each reset) — a whole extra `$s` reg. Index-form (`arr[i]; i++;`) lets IDO recompute the base cheaply each outer iteration via `addiu sN, sp, OFF` (the array is at a fixed sp offset), using ONE FEWER saved reg. If a near-miss has exactly one extra saved reg (target uses s0-s7, build uses s0-s8) and the function loops over a stack buffer, switch pointer-form → index-form. Verified 2026-05-29 on arcproc_uso_func_00002884 (9→8 saved regs, 62-diff → 9-diff). Caveat: this only changes the base-holding; an explicit `char *base = &D+0xN` loop-invariant pointer is still correctly hoisted to its own `$s` reg (that's wanted) — see the loop-invariant-CSE note. The remaining diffs after the fix are usually allocno-order register swaps between the surviving loop-invariants._
 
+## Verify a reconstructed if/else against the disasm BEFORE conceding a cap — block reconvergence is easy to read inverted
+
+When a near-miss has cascading branch-polarity + register diffs across most of the
+body, the cause is often that the C if/else is **logically inverted** relative to
+the target, not a coloring cap. A prior `gl_func_000332B4` decode-comment claimed
+`if (idx < 0x28) { callback(...); table_store } else { callback0 }` — but reading
+`expected/.o` carefully showed: (1) the `sltiu/bne` skips the callback when
+*in-range*, so the callback fires only when `idx >= 0x28`; (2) the table store runs
+on BOTH paths (they reconverge — there's a `beq zero,zero` past the else, not an
+`else` branch); (3) the trailing `callback0(o)` is the shared tail for the
+*outer* tag-mismatch case, reached by the entry `bne` AND fallen into. Recipe to
+read reconvergence: trace each conditional branch's TARGET address and note which
+basic blocks fall through vs jump; a block that both a forward branch lands on AND
+the prior block falls into is a reconvergence point (shared code), not an else arm.
+Fixing the inverted flow + the reloc-form arg (`(char*)&D_00000000 + 0x1E194`, not
+literal `0x1E194`) took the body from a wrong-logic 82% to byte-exact except ONE
+register. The residual was a real `$v0`-vs-`$a2` coalescing tie (the short-lived
+tag value `*c` coalesces into `idx`'s home `$a2`; the target splits the range to
+`$v0`). Splitting to two C vars (`tag`,`idx`) flips tag→`$v0` but pushes idx→`$a1`
+(net worse); permuter 11k+ iters plateaued at the one reg. Lesson: spend the read
+on block reconvergence first — an inverted-if reconstruction looks exactly like a
+"coloring-multiset cap" but is fully C-fixable. 2026-06-22.
+
 ## Split a `<<16` into `(x<<15)<<1` to renumber the temps IDO allocates for a multi-field word-pack
 
 Symptom: a function that packs several bit-fields into a 32-bit word (GBI-style
