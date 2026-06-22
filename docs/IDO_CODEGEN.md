@@ -373,7 +373,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Frame over-alloc with a BYTE-PERFECT body = IDO reg-alloc-prep OVER-SPLIT, allocator-internal, NOT C-reachable — diagnose via uoptlist `finalnumlr` before grinding](#feedback-ido-overslit-frame-overalloc) — _When the only residual is `addiu sp,-N` too large (e.g. 0x50 vs target 0x40) AND the body byte-matches (all diffs are the frame cascade: prologue/epilogue word + arg-home/incoming-stack-arg offsets all shifted by the same delta) AND the actual stack slots WRITTEN are identical to target (nothing stored in the extra space — it's pure dead reservation), the cause is IDO's reg-alloc-prep splitting MORE live ranges than the original source did, reserving a frame slot per split, then dropping the redundant phantom stores via redundant-store-elim but keeping the frame sized for all splits. CONFIRM with `cc -Wo,-zdbug:6` → `./uoptlist`: `numlr=X finalnumlr=Y` (Y-X = splits) and N× `live range K: K split out M` / `not colored (-ve save)` lines; count splits vs the slots actually used in the asm — extras = phantoms. This is allocator-internal and NOT C-reachable while preserving the byte-identical body: verified EXHAUSTIVELY on gl_func_00056580 (2026-06-22, 7-sub-pointer list-head constructor, 99.92%, frame 0x50 vs 0x40, 8 splits / 5 real). REJECTED: all 5040 decl-order perms (frame invariant), per-block brace-scoped temps (frame GREW 0x68), inline-recompute / direct-compute (reach 0x40 but BREAK body — IDO stops reloading from spill), (param+1)*K alloc forms, -g3, goto-epilogue, param-reuse-into-aN (N/A when the spilled values are sub-pointers `param_1+K`, not param_1 itself which is already in $s0). Permuter base score = the frame-diff floor, NEVER 0 (3 winners all at the floor). DISTINCT from the spill-slot-picks-low / volatile-pad levers (those move a slot WITHIN a fixed frame; this is the frame SIZE being padded by dead reservations). Don't grind frame-over-alloc near-misses whose body already byte-matches — confirm via uoptlist split-count then NM-wrap._
 - [Split `char pad[N]` into pad-before-buf + pad-after-locals to fine-tune array offset within a fixed frame size](#feedback-ido-split-pad-for-buf-offset) — When you need a buf at a specific stack offset (e.g., target wants `swc1 $f0, 0x34(sp)` with frame 0x48 but your single `pad[N]` only puts buf at 0x28 or 0x38), split the pad into TWO declarations bracketing your…
 - [IDO -O2 schedules "store non-delay" before "addu feeding delay-slot store" — unreachable from C](#feedback-ido-sw-before-addu-unreachable) — IDO -O2's list scheduler picks `sw $reg, N(a0)` before `addu $t1, a0, $t0` when both are ready and the addu's output is needed for the jr delay slot store.
-- [IDO `switch` statements emit a `.rodata` jump table — breaks 1080's linker (rodata discarded)](#feedback-ido-switch-rodata-jumptable) — Writing a C `switch` at IDO -O2 with 3+ cases produces a jump table in `.rodata` and a `lui+addu+lw+jr` dispatch.
+- [IDO `switch` statements emit a `.rodata` jump table — breaks 1080's linker (rodata discarded)](#feedback-ido-switch-rodata-jumptable) — Writing a C `switch` at IDO -O2 with 3+ cases produces a jump table in `.rodata` and a `lui+addu+lw+jr` dispatch. **Corollary (2026-06-22, gl_func_0002B09C):** when the TARGET dispatch IS a jumptable accessed USO-relative (`lui at,0x0; lw t8,K(at); jr t8` -> `&D_global+off`), it's a hard STRUCTURAL CAP — a C switch emits a local-label table (wrong reloc) or beq/beql chain, and the `.text`-only expected `.o` has no table to verify. Decode the rest correct-C + NM (69.5->74%); don't grind, permuter can't reach 0.
 - [bootup_uso void setters use unfilled delay slot (sw; jr; nop) — not matchable from C](#feedback-ido-unfilled-store-return) — _Some bootup_uso tiny void setters produce `sw; jr $ra; nop` instead of `jr $ra; sw` (delay slot).
 - [Splat synthetic stubs — INCLUDE_ASM + file-scope `extern int f()` (K&R, int return)](#feedback-ido-unspecified-args) — _For stubs like bootup_uso's func_00000000 that callers use with varying arg counts and sometimes want a return value: INCLUDE_ASM the body, and file-scope declare `extern int f();`.
 - [IDO $v0 vs $t-regs — named locals get $v0, inlined expressions get $t6/$t7/$t8](#feedback-ido-v0-reuse-via-locals) — IDO assigns $v0 to named locals (esp. short-lived ones) and $t-regs to intermediate expression temps.
@@ -6975,6 +6975,14 @@ If only v0 is set and v1 is left untouched (or v1 was set by a sibling load with
 
 **Verified 2026-05-05** on `game_uso_func_00007538` (per-frame event dispatcher + per-bit timer decrementer). Switching from `void` to `long long` return + `ret_hi` tracking lifted fuzzy 36.89→37.51% (+0.62pp). Only one arm currently sets ret_hi (bit-0x04); the bit-0x80 trunk arm also sets it conditionally, so further fuzzy gains will follow once that arm is fully decoded.
 
+**2026-06-22 FULL TARGET DECODE + TWO NEGATIVE LEVERS (game_uso_func_00007538, capped at 63.30%).** Decoded the entire 342-insn target from the raw `.word` .s (binary objdump). Two distinct C-level findings, BOTH regressing — confirming the residual is the documented v0/v1-pair register-allocation cap (same family as `game_uso_func_00010128` line ~222 in this file, exhaustively floored):
+
+  1. **The epilogue sign-clamp tail (target 0x7A78-0x7A94) is DOUBLE-PRECISION and INVERTED on ret_hi vs the prior C.** Target: `if (ret_hi != 0) { a0[0x38]=0.0f; }` (keep f0 from body) `else { d=(double)a0[0x3C]; if (1.0<d) a0[0x3C]=1.0f; else if (d<0.0){a0[0x38]=f12; a0[0x3C]=-1.0f;} f0=a0[0x3C]; }` — uses `cvt.d.s`+`c.lt.d` against double 1.0 (`0x3ff0…`) and 0.0, NOT single-prec `c.le.s`/`>0`. The prior committed C does a single-precision clamp gated on `ret_hi != 0` (wrong both ways). Writing the genuinely-correct double form is structurally close (cvt.d.s/c.lt.d emit correctly) BUT adds ~16 insns (overshoots 342→358) and the extra length cascades the regalloc misalignment → fuzzy 63.30%→**51.84%**. Reverted: the shorter-but-wrong single-prec epilogue scores higher purely by accidental instruction-stream alignment. The double epilogue only pays off if the v0/v1 cap is ALSO cracked.
+
+  2. **Union-AS-STORAGE (`#define ret_lo _r.w.lo` operating on union fields throughout) FORCES the union onto the stack** (`addiu sp,-8; sw zero,4(sp); sw zero,0(sp)` prologue) — ret_lo/ret_hi become a MEMORY object, never reaching v0/v1. Strictly worse than union-AT-RETURN (the existing form). The existing `_r.w.hi=ret_hi; _r.w.lo=ret_lo; return _r.ll;` at the tail is already optimal.
+
+  **The cap:** target keeps ret_lo→v0, ret_hi→v1 the WHOLE function (init `move v0,zero; move v1,zero`, live to return), pushing counter→a2, a1_saved→a3 — a frameless leaf. The build inverts (a1_saved→v0, counter→v1, ret pair→a2/a3 + final move + 2-word spill frame `sw a3,0(sp); sw a2,4(sp)`) because a1_saved's `move v0,a1` entry-copy + the union-at-return computing into a2/a3 give the arg-copies the v0/v1 claim. No per-function zdbug dump is possible (game_uso is one 200+-fn TU). Leave NM at 63.30%; don't re-grind the epilogue or union form.
+
 **Related:**
 - `feedback_ido_double_return_uses_f0_f1_not_f2.md` — analogous gotcha for `double` return (uses $f1, not $f2)
 - [Consuming a 64-bit call return: extract hi/lo with a UNION, not `(int)(r>>32)`](#feedback-ido-consume-64bit-call-return-union) — the inverse direction (this entry packs a return; that one unpacks a callee's 64-bit result).
@@ -8223,7 +8231,37 @@ L_C: return C;
 
 **Example (1080/bootup_uso/func_00000A9C):** 7-way char dispatch. `switch` broke the link. `if-goto` chain got 97.8 % (one register-allocation diff on a shared-return intermediate).
 
+**Corollary — target-HAS-jumptable = structural cap in USO/game_libs (2026-06-22, gl_func_0002B09C):** the inverse of "don't write switch": when the TARGET dispatch is itself a jumptable, you cannot reproduce it. In a USO/game_libs unit the table is accessed **USO-RELATIVE**, not %hi/%lo-local: `lui at,0x0 ; lw t8,4248(at) ; jr t8` where `at` resolves (via reloc) to `&D_global` and `4248`=0x1098 is the table's folded offset. Two reasons it's a hard cap: (1) a C `switch` emits a *local-label* jumptable (different reloc form) or, if .rodata is discarded, a `beq/beql` chain — neither matches the `&D+off` access; (2) the per-function `expected/*.o` is **`.text`-only** (`TRUNCATE_TEXT`), so the table entries aren't even present to verify against. Tell it apart from a coloring cap by the `lw tN,K(at); jr tN` shape (contiguous N-case switch in target = jumptable; your 2-distinct-body C switch = beq/beql chain). The rest of such a function can still be decoded instruction-faithfully — fix the field widths / deref depth and commit the correct-C NON_MATCHING (gl_func_0002B09C went 69.5->74.0 % this way), but byte-match needs the uso-jumptable + reloc-pad infra. Report, don't grind; permuter can't reach 0.
+
 **Origin:** 2026-04-19, 1080 bootup_uso/func_00000A9C.
+
+**USO EXTERNAL-DATA jump table = HARD, PROVEN-unreproducible cap (2026-06-22, game_libs gl_func_00030AF4):**
+
+In reloc-blind USO objects (game_libs / *_uso) the target's dense `switch` does
+NOT load from local `.rodata` — it reads the case-target table from an
+**external base-0 global at a fixed offset**, with the hi/lo zeroed by the
+reloc-blinding:
+```
+sltiu at, x, N
+sll   tM, x, 2
+lui   at, 0x0          ; base-0 placeholder (USO data segment)
+addu  at, at, tM
+lw    tN, 0x18xx(at)   ; literal offset into the external table — NOT %lo(rodata)
+jr    tN
+```
+The expected `.o` for such a function has **ZERO relocations and ZERO `.rodata`
+section** (verify: `readelf -S expected/.../X.c.o`). A compiled IDO `switch`
+ALWAYS emits the table into a LOCAL `.rodata` + `R_MIPS_HI16/LO16` relocs
+(empirically: an 8-case `switch` at -O2 produces a 0x20 `.rodata` + `.rel.text`
++ `.rel.rodata`). No C construct makes IDO read switch targets from an external
+global array at a literal offset, and asm-processor's reloc-blinding can zero a
+reloc but can neither delete the emitted `.rodata` section nor convert a local
+table reference into an external base-0 read. **=> any function with such a
+dispatch is permanently INCLUDE_ASM**, regardless of how perfectly the rest of
+the body is reconstructed. gl_func_00030AF4 has THREE of these (offsets 0x1874 /
+0x18B0 / 0x18E0); the sibling gl_func_000076F0 has the same (switch2/switch4).
+Distinct `D_xxx = 0` externs (CSE-defeat) and literal INCLUDE_ASM fixed jals are
+NOT the blocker here — the external-data jumptable is. Do not re-attempt landing.
 
 **Important refinement (2026-05-02, n64proc_uso_func_0000035C, 80.3 % -> 99.88 %):**
 
