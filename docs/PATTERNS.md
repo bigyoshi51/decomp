@@ -9208,3 +9208,39 @@ apart from the linkable case by checking whether the jumptable `lw`
 offset rides a `%hi(D_<named>)` (cap) vs a local `%lo(jtbl_*)`/$gp
 (linkable). Seen: timproc_uso_b5_func_0000D884 (D_807FF3E0+0x3C0,
 14-case, capped the fn at ~67%), sibling class gl_func_00030AF4.
+
+## Inlined display-list command append: double-read-of-+0xC, single-&buf[n] (2026-06-22)
+
+1080 game_libs constructors (gl_func_0004B620 + cb-driven family
+0004B0A8/00040070/0003E5E0) build dynamic display lists by appending fixed
+2-word Gfx commands. Asm idiom per append (handle held at e.g. obj->0xCC):
+```
+lw   v1, 0xC(handle)    ; head = handle->head   (+0xC)
+lw   s0, 0x4(v1)        ; n = head->count       (+0x4)
+addiu t,s0,1 ; sw t,0x4(v1)        ; head->count = n+1
+lw   t8, 0xC(handle)    ; RE-READ +0xC  (NOT cached)
+sll  k,s0,3 ; lw y,0x0(t8) ; addu p,y,k         ; p = &head->buf[n]
+sw   HI,0x0(p) ; sw LO,0x4(p)                    ; one pointer, both stores
+```
+Two things matter for the byte-shape: (1) `+0xC` is read TWICE (once for
+count, once for buf base) — a single cached `head` local emits only one read
+and diverges; (2) `&buf[n]` is computed ONCE and both words stored through it
+— writing `dl->head->buf[n].w0` / `dl->head->buf[n].w1` re-derefs head a
+THIRD time and diverges. C that reproduces it:
+```c
+typedef struct { u32 w0, w1; } Gfx;
+typedef struct { Gfx *buf; s32 count; } DLHead;     /* +0x0 buf, +0x4 count */
+typedef struct { s32 pad[3]; DLHead *head; } DLList; /* head at +0xC */
+#define DL_APPEND(h, hi, lo) do {                 \
+    DLList *_dl=(h); DLHead *_hd=_dl->head;       \
+    s32 _n=_hd->count; Gfx *_c;                   \
+    _hd->count=_n+1;                              \
+    _c=&_dl->head->buf[_n];   /* re-read head */  \
+    _c->w0=(hi); _c->w1=(lo); } while(0)
+```
+This nails the append region exactly. NOTE: the surrounding constructor still
+caps byte-exact on (a) IDO coloring self into s4 (5 saved s-regs) vs C's s3
+(4 saved) and (b) a dead `&iter!=0 || alloc(0xC)` guard IDO folds from a
+plain `&local` — both from an inlined iterator-ctor returning by value (the
+it->it2->it3 triple stack copy). So DL_APPEND wins the list regions but the
+family stays NON_MATCHING overall (reg-norm stream ratio ~0.73).
