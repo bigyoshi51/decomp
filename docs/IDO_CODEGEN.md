@@ -19,6 +19,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Base-pin cap is C-FIXABLE: held-base-pointer + `s32`-typed-base $s-coloring lever + `for`-comma-init as1-schedule lever](#base-pin-cap-game_libs-d_0--off-held-s32-not-char-flips-s-coloring-for-comma-init-flips-as1-prologue-schedule) — _game_libs &D_0+off "base-pin cap": held `char *g=&D` reproduces structure+base materializations. To land 0: (1) declare a VALUE-ONLY held base as `s32` (its int value) not `char *` → colors it into the LOWER saved reg ahead of a co-live const (char* form mis-colors; complement of the UCODE-reorder lever); (2) rewrite the loop as `for(a=0,b=arg; cond; a+=k,b+=k)` — comma-init flips the as1 prologue tie (base-addiu scheduled ahead of the zero-cost init moves). gl_func_0002A6C0 byte-exact (9→3→0). STILL BLOCKED: single-symbol collapse (N distinct globals all at D_0+0; needs data-symbol split) + FP multi-divide coloring. Diagnose by histogramming `lui rN,0x0` + `or aN,sN,zero`; require placeholder jals (0x0C000000) only._
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
 - ["8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad](#8-byte-dead-slot-below-a-stack-buffer-cap-is-often-a-bufn-array-index-offset-not-a-pad-problem) — _Target passes scratch buf at sp+K+8, build at sp+K, dead 8 bytes below it, frame same? Don't add volatile pad — the buffer is over-sized and the code passes `&local_buf[2]` (a pointer into the middle). Declare buf frame-correct, pass `&local_buf[N]`. Cracked gl_func_0005FE7C (the "needs INSN_PATCH on 6 sp-offset insns" cap)._
+- [A "register-coloring cascade" residual can be a MISSING INNER DEREF — classify the temp renumber's root before conceding](#a-register-coloring-cascade-residual-can-be-a-missing-inner-deref--classify-the-temp-renumbers-root-before-conceding-gl_func_00057104-2026-06-22) — _gl_func_00057104 sat at ~96% with a "12-diff coloring tie" (const t1 vs t2, OR result cascaded). Root cause was a missing `[0]` deref: slot base used `dl + count*8` but target re-loads AND derefs `a0->0xC` (`lw t9,12(a3); lw t0,0(t9)`) — base lives at `dl[0]`. Writing `(*(int**)((char*)a0+0xC))[0] + count*8` added the extra `lw`, fixing address math AND shifting the const/OR allocation to match (t2/t3). Byte-exact. Lesson: a "shifted one register" cascade is often downstream of ONE missing/extra insn; diff opcode COUNT in the window, not just operands, before conceding a coloring cap._
 
 - [Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)](#frame-size-correctness-unblocks-regressing-code-motion-rewrites-2026-06-16) — _Fix stack-frame size byte-exact FIRST (sweep pad local to match `addiu sp,sp,-N`); then m2c-faithful code-motion that "regressed" with a wrong frame now gains. Diagnose via jal-segment counts (equal jal count + matching per-segment sizes = control structure matches). game_uso 591C +3.66pp._
 ## Quick reference by sub-topic
@@ -1071,6 +1072,31 @@ obj->entries[idx] = val;       /* sll idx; addu base; sw val */
 has a fixed 2-word residual: the **target computes the array address (`addu base,idx*N`) BEFORE the count store (`sw count+1`), but IDO's full-TU scheduler emits the count store first** (the `idx+1` is ready before the `idx*N` shift). No C reorder flips it: array-store-first regresses (extra diffs), count-store-first is the 2-word cap. **It also false-converges** — a standalone compile schedules the array-addr first (looks like a match) but the in-tree (full-TU) build puts the count store first; always verify in-tree.
 
 This is a **cap class**, not a one-off — confirmed identical on `timproc_uso_b5_func_0000A95C` (0x3C/0x40), `bootup_uso func_00002088` (0x104/0x108), `func_000020AC` (0xC0/0xC4/0xC8). Recognize the shape and leave NM (~75-90%); don't burn ticks reordering or trusting a standalone zero. (Permuter is the only lever that might reach it — A95C floored, untried on the others.)
+
+## A "register-coloring cascade" residual can be a MISSING INNER DEREF — classify the temp renumber's ROOT before conceding (gl_func_00057104, 2026-06-22)
+
+`gl_func_00057104` (game_libs GBI command emitter, 36 words) sat at ~96% NM with a documented
+"12-diff register-coloring tie": the `0xB900031D` const landed one register low (build t1 vs target
+t2) and the `r|v` OR result cascaded (t2 vs t3). The note blamed the allocator (const materialized
+"before the dl load"). **It was actually a missing memory load.** The slot-base expression was
+```c
+slot = (int *)(*(int *)((char *)a0 + 0xC) + count * 8);   /* dl + count*8  — WRONG */
+```
+but the target re-loads `a0->0xC` (`lw t9,12(a3)`) AND **dereferences it once more** (`lw t0,0(t9)`)
+before the addu — the base lives at `dl[0]`, not at `dl` itself:
+```c
+slot = (int *)((*(int **)((char *)a0 + 0xC))[0] + count * 8);   /* (a0->0xC)[0] + count*8 */
+```
+Adding that one extra `[0]` deref both fixed the address math **and** dissolved the entire temp
+renumber: the extra `lw` consumes a register, shifting the const/OR allocation up by one so they
+color exactly as the target (t2 / t3). Byte-exact, ROM-identical.
+
+**Lesson:** a small "everything is shifted one register" cascade is frequently downstream of a
+single missing/extra instruction (a deref, a reload, a discarded CSE) — not a genuine coloring tie.
+Before conceding a coloring cap, diff the instruction *count and opcodes* in the affected window, not
+just the register operands: if the target has an `lw`/`addu`/`sll` the build lacks, find the C
+expression that emits it. Standalone-cc confirmed it here and (this time) matched in-tree too, but
+still gate on the full ROM build per `feedback_standalone_compile_false_cap_verify_in_tree`.
 
 <a id="feedback-ido-array-index-vs-charptr-spill-packing"></a>
 ## "8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad problem
