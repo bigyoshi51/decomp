@@ -36,6 +36,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [DIRECTED COLORING SEARCH: mechanize the renumber-cap search (scripts/coloring-search.py)](#directed-coloring-search-mechanize-the-renumber-cap-search-scriptscoloring-searchpy) — _GENERATIVE companion to the coloring-solve/split-solve DIAGNOSTICS: enumerates bounded source transforms aimed at one contested LR (register-kw, web-split, interference-injection, span ±, stmt-reorder, inline-don't-name), compiles each with -Wo,-zdbug:6, scores instruction-exact vs target + reads the LR's resulting reg, keeps movers / proves the space EMPTY. Either CRACKS the function or proves the cap with a tool. C28C (t8/t9) + 35834 (v1/a2): both space-exhausted — the interferer that would forbid the low reg is never emission-neutral. **2026-06-16 UPGRADE: parallel multiprocessing.Pool + --depth 2|3 combination + --beam K --rounds N (trace-steered) + --opt/--include-dir. Gotchas: -zdbug coloring dump is -O2-ONLY (beam steer inert at -O1); injected interference is DCE'd without real spill pressure. Validation: depth-2/3 ALSO exhaust on func_800000B0/func_80004B10 — stronger negative, no crack.** Use for the spilltemps big-function class where there's room to maneuver._
 - [INNER-SCOPE DECL: named-var coloring without the frame cost (4ACD4 CRACKED)](#inner-scope-decl-named-var-coloring-without-the-frame-cost-gl_func_0004acd4-cracked) — _need a named var for v0-coloring but the new slot grows the frame? Declare it in an inner block after outer locals die — cfe overlays the slot. Reusing a dead var inherits its wrong color; `register` doesn't suppress the slot._
+- [REUSE A DEAD POINTER VAR to recycle its s0 + SHARED FLAG-LOCAL closes a double-spill size gap (gl_func_0004C928 91.25->94.60%)](#reuse-a-dead-pointer-variable-to-recycle-its-callee-saved-s0-register--shared-flag-local-closes-a-double-spill-size-gap-gl_func_0004c928-9125-9460-2026-06-22) — _When the target reloads a 2nd pointer into the callee-saved reg a now-dead earlier pointer held, assign through that SAME dead local (`st = D_TICK; st->p0C=0;`) not a fresh anonymous deref → IDO recycles its s0 (matched the lui/lw/sw triplet). A multi-loop poll body +8 over target: hoist ONE function-scope `s32 ready;` reused by all loops (fresh per-loop temps were stealing the scratch the save-locals needed) → save-local stays in a saved reg, frame shrinks to target. WORD-read/HALF-store field = s32 read + (s16) store cast, not an s16 member; catch via opcode-multiset (lw/lh count) compare. RESIDUAL = the v1-early/v0-late wait-flag SPLIT-coloring tie (permuter-only)._
 - [UGEN OPENED: -Wc,-d is the ugen debug dump](#ugen-opened--wc-d-is-the-ugen-debug-dump-tree-phases--per-op-register-trace--emission-trace) — _cc phase letter for ugen = `c`; `-Wc,-d` dumps tree phases, per-op final-register trace (`opc = umpy reg = xr14`), and emission trace to stdout. ugen is Pascal (reg_mgr.p/temp_mgr.p/translate.p); ground truth for ugen-temp questions._
 - [PACK-CLASS via mixed +/| spine + identical-chain CSE steals the callee-save const reg](#uopt-or-chain-rotation-written-xyz-evaluates-z-subtree-first--fix-statement-shapes-per-statement-by-spelling-permutation-not-by-chasing-downstream-register-noise) — _Pack class (simple-leading, mid-chain complex) IS reachable: bracket each complex operand's `|` joins with `+` (escapes or-canon, source order) at addu-vs-or cost; apply to ALL switch arms AT ONCE or the downstream ugen-phase cascade looks like a regression (578B4 +2.36pp). Separately: two TEXTUALLY-IDENTICAL computed stores get CSE'd into one long callee-save web that evicts a spanning OR-const from `ra`; inline one chain's named-temp load to break the CSE → const claims `ra`, hi-half const remats per-use (matches target). NOT a blunt const hoist (that craters all regions)._
 - [UOPT OR-CHAIN ROTATION: written (X|Y)|Z evaluates Z first](#uopt-or-chain-rotation-written-xyz-evaluates-z-subtree-first--fix-statement-shapes-per-statement-by-spelling-permutation-not-by-chasing-downstream-register-noise) — _|-chain of complex subtrees emits LAST operand's subtree first; brute 6 spellings per statement w/ register-blind alignment + positional windows (global LCS see-saws until a whole arm is consistent). Also: (x-1)*4 distributes to x*4-4 (spell (x-1)<<2); +-operand order picks load order; store-stmt pairs keep source order. 578B4 875→1435._ — _free list order t6,t7,t8,t9,t0..t5; head-take/tail-append = rotation; advanced by every uncolored materialization (expr temps, spill reloads); calls/BBs don't reset. A t8↔t9 diff = ±1 scratch consumption earlier; fix the PHASE via -Wc,-d trace alignment._
@@ -16913,3 +16914,46 @@ RESIDUAL CAP: 4-insn gap is pure coloring — IDO here keeps 9 values in s0-s8
 and spills the loop counter; the target keeps 8 (s0-s7) and spills the
 loop-invariant `arg0+0x2FC`. Inlining the invariant + decl reorder didn't move
 it (IDO re-CSEs it into a saved reg). Left NM-wrapped @42%.
+
+## REUSE A DEAD POINTER VARIABLE to recycle its callee-saved (s0) register + SHARED FLAG-LOCAL closes a double-spill size gap (gl_func_0004C928 91.25->94.60% 2026-06-22)
+
+State-spin/clamp reconstruction near-miss. Two reusable levers landed structural
+ground (frame size exact, one whole region byte-exact) even though the function
+stays NM (the core is the split-coloring tie below):
+
+1. **Reuse the dead pointer var to claim its s0.** Target reloaded a SECOND
+   global pointer (`D_TICK`) into `s0` — the same physical reg that had held the
+   now-dead first state ptr (`st`) used by the preceding wait-loops. The natural
+   spelling `D_TICK->p0C = 0;` (anonymous deref) colored the reload into a
+   caller-saved `t6`. Writing it as **`st = D_TICK; st->p0C = 0;`** — reassigning
+   the *existing dead variable* — makes IDO recycle st's `s0` slot for the new
+   pointer, byte-matching the reload triplet (lui/lw/sw). Generalizes: when the
+   target reloads a pointer into a callee-saved reg that an earlier dead pointer
+   local occupied, assign through that SAME local rather than a fresh anonymous
+   deref. (Companion to the inner-scope-decl + param-reuse levers; this one is
+   "reuse the named var, don't make a new deref".)
+
+2. **A shared flag-local closes a +8 frame / double-spill size gap.** Four
+   wait-loops each emitted via a macro that declared a *fresh* `s32 r;` per
+   invocation. That, combined with two save-restore locals (`old_d0`/`old_d4`)
+   live across a call, pushed IDO to spill BOTH save-locals to stack (frame
+   0x80, +2 insns). Hoisting ONE function-scope `s32 ready;` reused by all four
+   loops freed the allocator to keep `old_d0` in a callee-saved reg and spill
+   only `old_d4` (frame 0x78, target-exact) — the per-loop fresh temps were
+   competing for the same scratch the save-locals wanted. Reach for a single
+   shared flag-local when a multi-loop poll body's frame is +8 over target.
+
+3. **WORD-read / HALF-store field:** target `lw v0,0x1AC(s1)` then `sh` the low
+   half. That field is `s32` (read full word), cast `(s16)` only at the store —
+   NOT an `s16` struct member (which would emit `lh`). Mnemonic-multiset compare
+   (Counter of opcodes, build vs expected) catches these lw/lh count mismatches
+   even when the schedule is shifted by a coloring cascade.
+
+RESIDUAL CAP = uopt first-temp SPLIT-coloring tie: target colors the wait-loop
+readiness flag `v1` in loops #1/#2 (which sit before the fcb call that reserves
+v0) and `v0` in loops #3/#4 (after the calls free v0); the build picks v0 in all
+four. This per-region flag split + its temp-register cascade (fcb s0-vs-v0,
+float-clamp tN renumber, StackA-block slot schedule) is the documented
+permuter-floored / C-immune class (#17 timproc cascade, #122 renumber toolkit,
+#188 v0/v1 flag-return). No permuter was installed in the agent-e worktree;
+manual levers exhausted at 145 word diffs / 94.60% fuzzy. Keep INCLUDE_ASM.
