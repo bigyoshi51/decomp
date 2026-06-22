@@ -45,6 +45,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [FRAME-SIZE GAPS: dead named locals persist in the frame (func_0001304C verdict)](#frame-size-gaps-deadoptimized-away-named-locals-persist-in-the-frame--count-them-dont-fight-the-allocator-func_0001304c-verdict) — _Target frame bigger = original had more named locals (M3 homes survive total optimization). 1304C -72→-96 reproduced with 7 dead ints. Inverse for 578B4-class: m2c temp mass creates "-ve save" homes._
 - [STAGE-THEN-STORE struct init: INTEGER struct-copy to a temp gives alternating lw/sw; FLOAT store out; pad locals fix frame; component-zero ORDER matches swc1-$f0 scheduling (game_uso_func_000003F8 61.6→100)](#stage-then-store-struct-init-integer-temp-copy-float-store-out-pad-frame-component-order-game_uso_func_000003f8) — _A Vec3/struct init that stages each result on the stack then writes it to the output: (1) src→temp copy via `*(IntStruct*)&tmp = *(IntStruct*)&staging` emits IDO's alternating `lw/sw` with a REUSED reg (explicit per-element `((int*)&tmp)[i]=...` emits GROUPED loads = wrong); (2) temp→out store is FLOAT `lwc1/swc1` even though the in-copy is int; (3) distinct staging slot per result (reusing one slot regresses) + dead pad locals to hit the target frame size & slot offsets; (4) the per-result component-zero assignment ORDER must match IDO's `swc1 $f0` scheduling (here fwd: y,x; up: z,x,y; zero2: z,y,x) — reorder the `.x/.y/.z=0` statements to flip adjacent zero stores; (5) `mtc1 zero,$f0` at entry is just IDO hoisting the shared 0.0f constant — no caller-arrangement needed (the old "$f0 must be caller-set" note was WRONG)._
 - [REUSE an already-homed local to hold a value across a branch instead of a fresh named temp (avoids +8 frame); but `volatile`-required-for-loop blocks the inline-CSE that yields a homeless register temp (func_80007698 95.9→99.5%, 1-insn cap)](#reuse-an-already-homed-local-to-hold-a-value-across-a-branch-not-a-fresh-named-temp--avoids-8-frame-func_80007698) — _A short-lived value reused across one branch: don't `u16 t = HW(p); if(t)…use t` (3rd M-class home → frame +8); reuse a local already homed for an unrelated later value (`sp1C`) so the value rides in a register matching the target's reuse. Cost: a dead `sw t,home(sp)` in the branch delay slot (target=nop), because any homed local writes its home. A register-ONLY subexpr temp (no home) needs inline-CSE, which is blocked when the same pointer is `volatile` (needed to force the loop's per-statement reload at -O1). Loop-reload-via-volatile vs tail-CSE-via-nonvolatile is a true conflict → 1-insn cap._
+- [Repeated `*p &= ~M` byte-RMW on the SAME field: IDO CSEs the just-stored value across non-aliasing intervening stores (1 reload short) — route the later clears through a `volatile T*` VIEW cast to force the per-clear reload](#feedback-ido-volatile-view-forces-rmw-reload) — _A reset routine doing `*(u8*)(p+0xB0) &= ~0x80; *(char*)(p+0x34)=0; *(u8*)(p+0xB0) &= ~0x20;` — the target emits a fresh `lbu;andi;sb` per clear (re-reads p+0xB0 each time), but IDO proves the second/third reload redundant because the intervening byte stores (p+0x30, p+0x34) don't alias p+0xB0, so it keeps the stored value live and drops the reload (build 1+ insn short, e.g. 86.5% ceiling). FIX: cast ONLY the later same-field accesses through `volatile`: `*(volatile unsigned char*)(p+0xB0) &= ~0x80;`. The volatile view forces a genuine reload-modify-store each time, matching the target's repeated `lbu`. Leave the FIRST access (and the non-aliasing stores) plain — over-volatiling the whole pointer over-reloads. Verified game_libs_func_00027DC0 byte-exact 2026-06-21 (86.48→100%, 25/25 words, clean ROM). Distinct from the unconditional-reload-statement CSE-breaker below (that's for a field re-read across a BRANCH into a fresh register); this is for repeated in-place RMW of the SAME field where the reload IS the missing insn — the targeted volatile-view is the minimal lever (no extra statement, no whole-pointer volatile)._
 - [A second-check "re-read into a fresh register" (target reloads the SAME field twice across a branch) is reproduced by an UNCONDITIONAL reload before the second check — NOT inline-deref CSE (gl_func_0000E5D0, 15→8 diffs)](#feedback-ido-unconditional-reload-defeats-cse-bnezl-reread) — _Two sequential `if(field>=K){...}` checks where the target re-reads the same field into a FRESH register for the second check (t9 then t2) + hoists the re-read into the first bnezl's annulled delay slot. Inline-deref or a cached local lets IDO CSE the field into ONE register (structurally off, ~15 diffs). FIX: (1) type the pointer as a struct for clean field derefs; (2) reload the pointer UNCONDITIONALLY before the second check (a bare reload statement OUTSIDE the first if — inside it doesn't work). The reload defeats CSE → check2 re-reads fresh, matching the bnezl-delay re-read. Inverse of loop-reload/tail-reuse caps: here you FORCE a reload; plain reload statement = cleanest CSE-breaker, no volatile needed. Residual cap caveat: when zdbug:6 shows the target coloring but emission diverges, it's a spilltemp-reload assignment the source levers can't reach._
 
 ### branch likely / bnel
@@ -16202,6 +16203,45 @@ GENERAL: for "+8 frame from a fresh temp held across a branch", first try reusin
 local already homed for a later disjoint value — it removes the frame growth for free.
 If the only residual is then a single dead home-store in the delay slot AND the target
 uses a register-only temp that your `volatile` (or any CSE-blocker) prevents, it's a cap.
+
+<a id="feedback-ido-volatile-view-forces-rmw-reload"></a>
+## Repeated `*p &= ~M` byte-RMW on the SAME field — IDO CSEs the stored value across non-aliasing stores (1 reload short); route the later clears through a `volatile T*` VIEW cast (game_libs_func_00027DC0 byte-exact 2026-06-21)
+
+Shape: an object-reset routine clears several flag bits in one byte field, with
+unrelated stores to OTHER fields interleaved between the clears:
+```c
+*(unsigned char*)(p+0xB0) &= ~0x40;   // clear A
+*(char*)(p+0x30) = 0;                   // non-aliasing store
+*(unsigned char*)(p+0xB0) &= ~0x80;   // clear B  <-- target reloads p+0xB0 here
+*(char*)(p+0x34) = 0;                   // non-aliasing store
+*(unsigned char*)(p+0xB0) &= ~0x20;   // clear C  <-- target reloads p+0xB0 here
+```
+The TARGET emits a fresh `lbu;andi;sb` for EACH clear (re-reads `p+0xB0` every
+time). IDO instead proves the reload for clears B and C redundant: the intervening
+byte stores (`p+0x30`, `p+0x34`) are at different offsets, so the aliasing
+analysis keeps the just-stored 0xB0 value live in a register and drops the
+reload — the build is 1+ insn short (e.g. 86.48% ceiling, the count-short tell).
+
+FIX — cast ONLY the later same-field accesses through `volatile`:
+```c
+*(unsigned char*)(p+0xB0) &= ~0x40;            // first: plain
+*(char*)(p+0x30) = 0;
+*(volatile unsigned char*)(p+0xB0) &= ~0x80;   // force reload
+*(char*)(p+0x34) = 0;
+*(volatile unsigned char*)(p+0xB0) &= ~0x20;   // force reload
+```
+The `volatile` view forces a genuine load-modify-store each time → matches the
+target's repeated `lbu`. Keep the FIRST access (and the non-aliasing stores)
+plain; over-volatiling the whole pointer over-reloads. Also needed here: the
+`bit30` extract test wants `(((u32)field<<1)>>31) == 1` (explicit `==1`, not bare
+truthy) to emit `sll;srl;bne ==1` instead of a collapsed `sll;bgezl` sign-check.
+
+Verified game_libs_func_00027DC0 (25 insns) 86.48→100% byte-exact, clean ROM.
+This is the minimal lever for repeated in-place RMW of the SAME field where the
+missing insn IS the dropped reload — no extra reload statement, no whole-pointer
+volatile. Distinct from the unconditional-reload CSE-breaker below (that's a field
+re-read across a BRANCH into a fresh register) and from the intervening-`jal`
+reload-CSE cap (a call between same-base derefs forces the reload naturally).
 
 <a id="feedback-ido-unconditional-reload-defeats-cse-bnezl-reread"></a>
 ## A second-check "re-read into a fresh register" (target reloads the SAME field twice across a branch) is reproduced by an UNCONDITIONAL reload before the second check — NOT an inline-deref CSE (gl_func_0000E5D0, 15->8 diffs 2026-06-20)
