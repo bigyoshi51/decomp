@@ -10,12 +10,13 @@
 
 > Operational recipes for the matching workflow: NM wraps, fragment merging, objdiff scoring quirks, expected/ baseline care, file split mechanics, build hygiene.
 
-_73 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_74 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 ## Quick reference by sub-topic
 
 ### NM wrap mechanics
 
+- [A "trailing jr-ra delay nop" cap is often a SPLAT SYMBOL-BOUNDARY artifact — merge the delay nop into the .s and the -O2 body lands (gl_func_0006EF08, 2026-06-22)](#splat-symbol-boundary-trailing-delay-nop-2026-06-22) — _When a near-100 body's only residual is "the target leaves the jr-ra delay slot unfilled / supplied by a `_pad.s` sidecar," check the function .s SIZE first: splat may have cut it at a bare `jr ra` (e.g. 0x54) and carved the delay nop into `_pad.s`, giving a function SYMBOL one word shorter than any C-compiled body (a C `jr ra` always owns its delay slot → 0x58). objdiff then scores that 1-word symbol-boundary diff (95.65%), not a codegen diff. Fix is NOT -g3 (reschedules) and NOT a donor splice (the splice keys on symbol size, so trailing pad outside the symbol is never copied): merge the delay nop INTO `<func>.s` (bump its size header by 4), dewrap, and append the genuine inter-function alignment pad via `SUFFIX_BYTES_FORCE=<func>=0x00000000` (FORCE because the function now ends in the natural jr-ra;nop epilogue). Delete the orphaned `_pad.s`. Symmetric across decomp + INCLUDE_ASM-baseline paths; verify against a true `refresh-expected-baseline.py` baseline (not `make expected`, which snapshots your own build → false 100)._
 - [asm-processor auto-wraps C bodies in #ifdef NON_MATCHING when sibling _pad.s exists; symbol disappears, objdiff returns null %](#feedback-asmproc-auto-nm-wrap-kills-objdiff-pct) — _When you replace `INCLUDE_ASM(<func>); #pragma GLOBAL_ASM(<func>_pad.s)` with a bare C function body (no source-level #ifdef), asm-processor outputs `#ifdef NON_MATCHING / [your C] / #else / void…
 - ["bare function" scans give FALSE POSITIVES when a long doc-comment sits between `#else` and `INCLUDE_ASM` — check NM-wrap membership by preprocessor-block state, not the immediately-preceding line](#feedback-bare-scan-comment-between-else-and-include-asm) — _An already-NM-wrapped function whose `#else`/`INCLUDE_ASM` are separated by a multi-line `/* ... */` looks "bare" to a heuristic that only inspects the prior non-blank line. 2026-05-24: both game_uso "bare" candidates were already wrapped._
 - [redeclaring `extern char D_00000000` in NM wrap blocks NM-build when file already has it as `extern int`](#feedback-extern-redeclaration-blocks-nm-build) — _IDO cfe rejects extern redeclarations with conflicting types.
@@ -8931,3 +8932,123 @@ The vein is dry; remaining unmatched game_libs fns are genuine regalloc /
 toolchain / cross-fn-boundary caps, not uncounted twins of matched donors.
 The scripts remain for future segments (USO families may still have live
 donor+unmatched clusters — those are handled by find-byte-identical-clones.py).
+
+## Wide-net medium-band re-scout of game_uso + timproc_uso_b5 + mgrproc_uso (2026-06-21): 0 fresh structural wins — band corroborated cap-dense; scripts/wordcmp.py added
+
+Independent fan-out scout of the 80-99% / 80-520B reloc-form functions in
+game_uso, timproc_uso_b5, mgrproc_uso (41 candidates) looking for fresh
+*structural* (reconstructable) gaps per the "count-short = missing reloc-form
+arg / placeholder-jal" hypothesis. RESULT: **zero landable**. Every near-miss
+residual classified to one of the already-documented sub-C cap classes — fully
+corroborating the 2026-06-20 reconstruction-fan-out entry above.
+
+NEW TOOL — `scripts/wordcmp.py FUNC`: reloc-masked word-compare of
+`build/non_matching/<unit>.o` vs `expected/<unit>.o` for one function. Prints
+per-index diffs, marks `RELOC-PRESENCE-DIFF` (base has a reloc the target lacks
+or vice-versa) and `RELOC-SYM-DIFF`, and flags `LENGTH MISMATCH … (count-short/
+long by N)`. This is the fast triage for "is the gap structural or coloring?":
+run it, then `grep -v RELOC-PRESENCE` to see the true non-reloc masked diffs.
+(Build non_matching .o first: `make non_matching_objects RUN_CC_CHECK=0`.)
+
+Cap classes seen (with the exemplar fns), so future scouts can skip them:
+- **implicit-$f0 caller-arranged zero** (count-LONG by 1, leading `mtc1 zero,$f0`):
+  game_uso_func_000003F8, mgrproc_uso_func_00002E3C. Target zeroes a struct via
+  `swc1 $f0` with NO `mtc1` setter — caller leaves $f0=0.0. C always emits the
+  extra `mtc1 zero,$f0`. NOTE: 2E3C's old wrap blamed "-O0 Yay0 segment" — WRONG,
+  it's -O2 (region3) and the real blocker is implicit-$f0. Reclassify before
+  trusting an old "-O0 cap" comment.
+- **USO import HI16/LO16 reloc-encoding** (`RELOC-PRESENCE-DIFF` on the LO16):
+  target emits `lui aN,%hi(import_X)` + `addiu/lw …,0(…)` with imm 0 and **no
+  LO16 reloc** (the import resolves via the HI16 alone at USO load); C `&import_X`
+  always emits a HI16+LO16 reloc pair. Not address-arithmetic-steerable
+  (`(char*)0x8024CAF8` gives a non-zero LO16). Exemplars: mgrproc_uso_func_000011A4,
+  _00002850, timproc_uso_b5_func_00008D38.
+- **first-pseudo register coloring** (ptr in $a1 vs $v1, stride const in $a2 vs
+  $v1, etc.): timproc_uso_b5_func_0000C8AC/_0000C044, mgrproc_uso_func_00001594/
+  _00000C14/_00000B5C.
+- **IV-collapse** `slt+bnezl` (i<n) vs `bnel` (i!=n): timproc_uso_b5_func_00008D38.
+- **reorg branch-likely annul** (last switch case `beq;nop;b` vs `bnel`; nested
+  selector `bnez;move` vs `bnezl`): game_uso_func_0000174C, game_uso_func_0000BFDC.
+- **as1 scheduler tie** (prologue store / `move sN,aN` placement, OR-operand
+  order): mgrproc_uso_func_00002850, _000011A4.
+
+Frame-size check (the one lever that DOES crack mislabeled "coloring" caps —
+see IDO_CODEGEN "coloring cap is often a frame-layout diff"): ran on all closest
+candidates; **all frame sizes already match** (`addiu sp,sp,-N` identical), so
+none is the hidden decl-order/pad type. Placeholder-jal mapping confirmed
+%-neutral (reloc-aware objdiff scores `0C000000` placeholder == real symbol).
+STRATEGIC: this band is exhausted for single-tick lands; the live land vein
+remains the LOWER bands (oversimplified stubs, build-insns << target).
+
+## A "trailing jr-ra delay nop" cap is often a SPLAT SYMBOL-BOUNDARY artifact, not codegen — merge the delay nop into the .s {#splat-symbol-boundary-trailing-delay-nop-2026-06-22}
+
+**Symptom.** A near-100 NM-wrapped body whose comment says something like *"body
+is instruction-identical; the 1 residual is the trailing jr-ra delay nop — target
+leaves it UNFILLED (supplied by the `_pad.s` sidecar); -O2 emits it inline."* The
+function won't dewrap to 100 and -g3/-O0 "unfilled-delay" splits don't help.
+
+**Root cause.** objdiff scores per-function-SYMBOL (st_size), comparing
+`build/non_matching/<unit>.o` against `expected/<unit>.o`. Splat sometimes cuts a
+function's `.s` at a *bare* `jr ra` (size e.g. `0x54`) and carves the jr-ra
+delay-slot nop into a separate `<func>_pad.s` GLOBAL_ASM sidecar. That makes the
+BASELINE function symbol 0x54. But any C-compiled `jr ra` owns its delay slot, so
+a real -O2 body is 0x58. objdiff then reports ~95.6% on that **1-word symbol-size
+boundary mismatch** — the BYTES are identical, only the symbol boundary differs.
+
+**Diagnosis.** `mips-linux-gnu-nm -S expected/<unit>.o | grep <func>` — if the
+target symbol size ends exactly one word before a trailing nop that your -O2 build
+includes, it's this artifact.
+
+**Fix (NOT -g3, NOT donor splice).**
+- `-g3` was tried: it disables assembler delay-slot fill but ALSO reschedules the
+  prologue store pair (`sw ra`/`sw a0`) and the epilogue (`lw ra`/`addiu sp`/`move
+  v0`) → body diverges. Rejected.
+- `REPLACE_FUNC_BODY` donor splice was tried: the splice keys on the donor
+  function's st_size, so a trailing alignment pad that lives OUTSIDE the symbol is
+  never copied (`replace-body-skip: already matches donor`). Doesn't add the word.
+- **What works:** merge the delay nop INTO `<func>.s` (add the `.word 0x00000000`
+  line and bump the `nonmatching <func>, 0xNN` size header by 4, e.g. 0x54→0x58),
+  so the baseline function symbol matches real -O2 codegen. Dewrap the C. Then the
+  separate inter-function ALIGNMENT pad (the word that positions the *next*
+  function) is appended with `SUFFIX_BYTES_FORCE := <func>=0x00000000` — FORCE
+  because the function now ends in a natural `jr ra; nop` epilogue (plain SUFFIX
+  skips that). Apply the same via `NON_MATCHING_SUFFIX_BYTES_FORCE` so the
+  non_matching object scores too. Delete the now-orphaned `<func>_pad.s`.
+
+Do NOT try to append the alignment word with the `_pad.s` GLOBAL_ASM sidecar
+restored: the GLOBAL_ASM block 8-byte-aligns the following function and adds an
+extra word (next fn lands at +0x60 instead of +0x5C). SUFFIX_BYTES_FORCE appends
+exactly one word with no alignment side effect.
+
+**Why symmetric.** The Makefile rule targets `build/src/<unit>.o`, which is built
+BOTH as the decomp object and (with INCLUDE_ASM-swapped source) as the
+`expected/` baseline by `refresh-expected-baseline.py`. With the delay nop merged
+into the .s, INCLUDE_ASM gives 0x58 and -O2 gives 0x58; SUFFIX adds the same word
+to both → 0x5C, next fn at +0x5C. Verify with `refresh-expected-baseline.py` then
+`refresh-report.sh`. NEVER use `make expected` to refresh a single land — it
+snapshots your own build as the target and reports a FALSE 100.
+
+Landed gl_func_0006EF08 (game_libs) byte-exact 2026-06-22 (ROM byte-identical +
+fuzzy 100 vs INCLUDE_ASM baseline). The body itself is the VARARGS sprintf-wrapper
+shape documented in docs/IDO_CODEGEN.md.
+
+**Mirror direction: a function already byte-exact in the ROM can still score <100
+because the non_matching object lacks the suffix mirror.** When you find a function
+whose MATCHING `build/src/<unit>.o` already equals `expected/` (ROM is byte-identical)
+but report.json still shows <100, the gap is almost always that the `.c.o` rule has
+`SUFFIX_BYTES_FORCE := <fn>=0x00000000` (so the default-build ROM lands) but NO
+`build/non_matching/.../<unit>.c.o: NON_MATCHING_SUFFIX_BYTES_FORCE := <fn>=0x00000000`.
+objdiff/report.json compare `build/non_matching/<unit>.o` against `expected/`, so the
+non_matching symbol stays 1 word short (e.g. 0x2C vs expected 0x30) and scores on a
+pure symbol-boundary diff. Fix = add the `NON_MATCHING_SUFFIX_BYTES_FORCE` line
+mirroring the existing `SUFFIX_BYTES_FORCE`. Scanner signature is
+`EXPECTED_HAS_EXTRA_NOP` (expected = build+4, body prefix identical, extra word is a
+nop) — the mirror of game_libs' `BUILD_HAS_EXTRA_NOP`. Adapt `scan_trailing_nop.py`
+to flag both directions. A clean sweep of all non-game_libs segments (bootup_uso +
+mgrproc/timproc_b1/b3/b5/arcproc/eddproc/n64proc/gui/h2hproc/titproc/game_uso/map4)
+found exactly 3 such cases — func_0000EE8C (bootup), gui_func_0000161C,
+h2hproc_uso_func_00000274 — all the missing-mirror kind (NOT new .s merges, because
+splat had already folded their delay nop into the function symbol; only the
+non_matching path was unmirrored). Landed 2026-06-22 agent-b. Note: these segments do
+NOT have the game_libs-style bare-jr-ra-cut `.s`, so the merge-the-nop-into-.s half of
+the recipe didn't apply here — only the suffix mirror.
