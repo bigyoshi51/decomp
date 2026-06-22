@@ -16684,6 +16684,23 @@ single-use locals — could not be induced by either distinct scalars or a name 
 Plus tail Vec3 records' FP scratch-copy scheduling. Logic was complete; the gap was
 pure allocation/schedule shape. Verify per-fn with `scripts/relcmp.py <seg>/<unit> <fn>`.
 
+**Twin: gl_func_00001C54 (game_libs, 1832B, 2026-06-22) — distinct-scalar fix did
+NOT crack the coloring; the post-call use count matters.** Same shape (16 unrolled
+`child=arg0+off / alloc(0x18) / init(child,arg0,id,1) / child[0xC]=&D+0xC764 + magic`
+blocks, +1 float-quad block). Reconstruction 54.5%→69.8% via real HI16/LO16 globals
+(the m2c graft had baked them as int literals like `0xCC74`), array-address-taken to
+keep the 14 dead `ids[]` stores (the descending-slot stash above), and `Quad4`
+WORD-copy (`dst = *(Quad4*)src`) for the 3 stack quads (element-wise `f32` assignment
+emits lwc1/swc1 churn; the struct copy emits the target's held-base `lw/sw`). BUT the
+child stayed in $s0 (target: spill to 0x88(sp) around the call, ~33 missing `sw`).
+Unlike timproc here, distinct `c0..c13` did NOT force the spill — the difference is
+the child has **3 post-call field stores** (vs timproc's ~1), so IDO judges $s cheaper
+than caller-save+reload. Whack-a-mole confirmed: param-reuse / separate-`self` /
+split-live-range goto all leave child in $s; a single recycled `char*[1]` spill buf
+DOES spill the child but then promotes the `&D+0xC764` CSE to $s instead (re-shifting).
+Heuristic: distinct-scalar spill-forcing works only when each transient has ≤1-2 uses
+after its call; 3+ post-call field writes re-tip IDO to a saved reg → genuine cap.
+
 ## INLINE a vtable fn-ptr call (don't name the local) to force jalr-$t9 + defer the ptr-load past the field reads (gl_func_0000CDDC LANDED 2026-06-22)
 
 Pattern: a conditional sub-object dispatch
