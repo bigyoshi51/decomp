@@ -468,6 +468,29 @@ is NOT in this class: its build frame is `-64` vs target `-40` (24 extra bytes o
 a real register-pressure / spill divergence, harder than coloring; the FP/int operand-order diffs
 there are symptoms of the frame mismatch, not standalone ties.
 
+**ROOT-CAUSE CONFIRMED via the `-Wo,-zdbug:6` dump + uopt source (2026-06-21, agent-b).** Dumped
+C8AC's `uoptlist` and read the global-coloring pass (`references/ido/src/uopt/uoptreg2.c`
+`global_coloring`/`cupcosts`). The base pointer `v1 = a0[0x2B8/4]` is NOT a single live range — the
+cfe/uopt frontend splits it into TWO integer allocnos: a high-priority **expression-temp** (the
+loaded+CSE'd pointer value, `{498|0}`, referenced in the clamp re-reads) and the lower-priority
+**named-variable home** (`{1008|0}`, referenced only in the first flag-test block). Coloring order =
+descending `adjsave` (savings/span) priority; the dump emits them in that order: `p128`-offset →
+reg1 (v0), the expr-temp → reg2 (v1), the named home → reg4 (a1). Because the base pointer is **not
+live across the trailing jal**, `cupcosts` returns 0 for every caller-saved candidate → it's a *pure
+tie* broken by lowest-free register at color time; by the time the named home (`{1008|0}`) is colored,
+v0 and v1 are already taken by the two higher-priority temps, so it gets a1. The target unifies the
+first-block base onto v1 (the same reg as the reloads). **No emission-neutral C edit reaches the
+target's exact split** (first-block-base=v1 + cached-offset=v0 + held-name). Dump-verified NEGATIVE
+on 5 fresh variants beyond the earlier list: fresh-tail-var (allocno0 still a1), full-macro-inline
+(collapses the `addiu v0,v1,0x128` → base lands v0, structure diverges), per-block explicit reload-
+into-`v1` (base→v0, p128→v1, offsets swap), struct-typed pointer (field-offset folding deletes the
+`addiu` entirely → base splits v0/v1 across blocks). Every variant that keeps the cached `p128`
+pointer (needed for the target's `addiu v0,vN,0x128`) re-creates the high-priority expr-temp that
+claims v1 ahead of the named home. **Confirmed cap; coloring-steering is NOT a viable vein here** —
+the lever the model needs (invert two integer LRs' savings/span priority *without* changing emitted
+structure) is unreachable from C and is exactly the live-range-split transform the permuter already
+floored at zero improvement.
+
 <a id="feedback-ido-3save-vs-2save-arg-preserve"></a>
 ## A caller-saved value spilled-and-reloaded AROUND a jal is often a genuine ARG to that call — pass it (don't grind reg-alloc)
 
@@ -1817,6 +1840,8 @@ Add the new symbols to `undefined_syms_auto.txt` at `0x00000000` following the e
 This is the inverse of the LICM-promotion lever above: there you WANT the saved-reg promotion (use the symbol directly); here the target does NOT promote (distinct symbols), so collapsing to one placeholder over-promotes. Verified gl_func_000381F8 2026-06-21: single-placeholder = 28 diffs / s0 frame; distinct symbols + inlined fn-ptr call (`jalr $t9`) = byte-exact (39/39, ROM-identical).
 
 **WHEN DISTINCT SYMBOLS ARE NECESSARY-BUT-NOT-SUFFICIENT (large unrolled constructors): the distinct-symbol fix can correctly defeat the CSE/over-promotion yet still leave a frame-SIZE residual driven by a separate spill-slot artifact.** game_uso_func_0000C48C (2026-06-21, ~3.4KB spine constructor, 32 dead-sentinel-guarded sub-object init stages): the prior NM body used ONE `&D_00000000 + (0x122C+N*4)` base for all 32 per-stage index loads (and one `gl_func_00000000` for every callee). Replacing those with the 32 real distinct globals `game_uso_D_807FF81C..898` (one `lui;lw` per stage) + real callees (`055750`/`04A188`/`0000D458`) made the ENTRY region match the target shape closely (s0=a1, s2 save, a0/a2 home spills, find-or-create p, s1 v1-alias init). BUT the build frame is `-0x48` vs target `-0xC8`: the target spills EACH stage's index to its OWN rotating sp slot (sp+0xC0 down to sp+0x44) AND round-trips it through a fixed `s2`-pointed slot (sp+0x2C) right before each `04A188` call. A single function-scope `int val` gets ONE coalesced slot (frame too small); an `int scr[32]` array gives 32 slots but the wrong (indexed) addressing (more diffs). Neither C form reproduces IDO's per-stage distinct-spill + s2-round-trip coloring — that is a genuine permuter-class regalloc/scheduling ceiling on top of the symbol fix. TAKEAWAY: on a large unrolled init body, wire the distinct symbols FIRST (it's correct and fixes the entry), but don't expect byte-exact if the target also rotates per-iteration stack scratch — that residual is a separate cap. Left as faithful NM reconstruction (real symbols, 32 stages, builds clean, ROM stays byte-identical), no episode.
+
+**2026-06-21 agent-e — the `T buf[1]` round-trip lever (PATTERNS.md#feedback-one-element-array-local-forces-stack-spill, validated on the SIBLING 044F4) does NOT crack the per-stage reload here; confirmed by direct experiment.** Target stage shape is a TWO-slot round-trip: `lui t1; lw t1,D[N]; addiu t2,sp,192-4N; addiu s2,sp,44; sw t1,192-4N(sp); lw t4,0(t2); ...bne s1,sentinel (delay: sw t4,0(s2)); ... lw a2,0(s2); jal 04A188 (delay: sw a2,8(sp))`. I rewrote stage 0 three ways: (1) `int slot0[1]; int valarr[1]` with array-index stores + reads; (2) same but accessed through explicit held pointers `int *t2=slot0,*s2=valarr` with `*t2=`, `val=*t2`, `*s2=val`, call arg `*s2`; (3) `volatile int slot0[1]/valarr[1]`. ALL THREE produce the two `sw` stores to distinct sp slots (frame grew FFB8→FFA8, +2 words) BUT IDO -O2 keeps the D[N]-load value register-resident (`lw s2,D[N]` then `or a2,s2` to the call) and ELIDES both reloads (`lw t4,0(t2)` and `lw a2,0(s2)` never emit) — even when the C explicitly reads the `volatile` slot. IDO tracks the volatile/array slot's last-written source register and reuses it for the argument rather than reloading. The reload survives in the TARGET because `t4` is a fresh register loaded from the slot and consumed across the sentinel branch (live on both arms); no C expression makes IDO forget the source register across that store. Net: experiment increased differing words (644 vs 640) — strictly worse. Also note the permuter is the WRONG tool: build is 673 insns vs 862 target, a +189 SIZE gap (missing instructions), and the permuter only re-colors/re-schedules a same-size body, it cannot synthesize the absent reload+spill pairs. This is a genuine emit-shape ceiling, not a coloring tie. Reverted to the clean reconstruction; ROM stays byte-identical (`make` → "ROM OK"). Do NOT re-try the buf[1]/volatile/permuter levers on this function.
 
 <a id="feedback-ido-split-last-eq-test-to-suppress-bnel"></a>
 ## Last equality test before an unconditional `b end` folds into `bnel`; split it into inverted-skip + `goto` to force the plain `beq` + `b end`
