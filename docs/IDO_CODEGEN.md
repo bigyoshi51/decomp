@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Declaring a loop-invariant table-base pointer INSIDE the loop body forces IDO to recompute it each iteration — fixes unrolled-loop coloring caps](#declaring-a-loop-invariant-table-base-pointer-inside-the-loop-body-forces-ido-to-recompute-it-each-iteration--fixes-unrolled-loop-register-coloring-caps-kernel-func_80000e8c-2026-06-23) — _Fixed-count global-table scan that IDO -O2 unrolls x4 stuck at ~97% with a PURE coloring residual (instructions/order byte-exact, registers permuted)? Move the loop-invariant `tbl=(T**)&D_GLOBAL` decl INSIDE the loop body — IDO then recomputes the base each iter, changing which regs are free in the unrolled body, and coloring snaps to target. Recipe: (1) `for(i=0;i<COUNT;i++)` literal count so IDO folds the trip count into prologue+4x-unroll; (2) direct member-access add order `e->fA + e->fB`; (3) base-decl-in-loop. Found via permuter (425→40), hand-applied to 100% + byte-identical ROM. kernel func_80000E8C 61.8%→100%. Also: target `lw v0,0(v0)`/%lo(D+4) vs build `lw v0,4(v0)`/%lo(D) resolve to identical bytes post-link — don't count reloc-base+offset as diffs._
 - [timproc_uso_b5 master-tick sub-handlers 7E34 / 7078 / C8AC: residual is a whole-function first-temp coloring cascade (v0/v1↔a1/tN, $f0↔$f8) — permuter-floored, C-lever-immune; leave NM](#timproc_uso_b5-master-tick-sub-handlers-residual-first-temp-coloring-cascade-permuter-floored-2026-06-21) — _The count-exact reconstructions of 7E34 (99.1%, 23 diffs), 7078 (97.9%, FP-renumber), C8AC (99.6%, 4 diffs) are structurally byte-exact; the ONLY residual is a systematic register-NUMBER offset originating at the first short-lived temp (EXP colors a pointer/product to a v/t/$f8 temp, base picks the next free arg reg a1 / return reg $f0, and the choice cascades). C8AC isolates it to ONE load (`lw v1,696(a0)` vs `lw a1,696(a0)`). NEGATIVE on ALL documented levers: inline-the-temp, named-temp, const-first FP, source-reversed FP, pointer-cast vs `[i]` array spelling, decl-order swap — every variant reproduces base's coloring (0 change). Permuter HARD-CAPPED 600s/j4: 7E34 330→265 (61k iters), 7078 440→350 (66k iters), C8AC 40→40 ZERO improvement (81k iters) — none reach 0. This is the pure uopt first-temp coloring tie (a1/$f0 preference), a true cap. 7B2C is WORSE (extra frame: -64 vs -40 = real spill divergence, not pure coloring). Don't re-grind; the FP-reduction operand-order and 2B74 per-slot-local levers do NOT apply (no FP reduction; not a record-builder)._
 - [DISTINCT per-slot locals (not one reused temp) make IDO spill-around-call instead of promoting to a saved reg — fixes whole-prologue $s0/$s1 shift in record-builder loops](#distinct-per-slot-locals-vs-one-reused-temp-controls-spill-vs-saved-reg-promotion-fixes-prologue-coloring-in-unrolled-record-builders-timproc_uso_b5_func_00002b74-2026-06-21) — _Unrolled constructor where each record does `c=alloc(); init(c,...)`? Reusing ONE `c` var across all records makes IDO see it long-lived → promotes to callee-saved $s0, pushing the real persistent var (`self`) to $s1 and shifting the whole prologue. Give each record its OWN scalar (`c0..cN`): each lives only across its own call → IDO spills to stack (matching target's `sw/lw` around the jal) and `self` lands in $s0. Prologue went byte-exact on timproc 2B74. Complement of "remove-local-to-force-spill". Also: USO HI16-only globals → C `&D_807Fxxxx + literal_low` reproduces the lui/%hi + literal-addiu pair (the unit has 0 LO16 relocs; .text bytes match regardless of the extra C-side LO16 reloc)._
 - [Base-pin cap is C-FIXABLE: held-base-pointer + `s32`-typed-base $s-coloring lever + `for`-comma-init as1-schedule lever](#base-pin-cap-game_libs-d_0--off-held-s32-not-char-flips-s-coloring-for-comma-init-flips-as1-prologue-schedule) — _game_libs &D_0+off "base-pin cap": held `char *g=&D` reproduces structure+base materializations. To land 0: (1) declare a VALUE-ONLY held base as `s32` (its int value) not `char *` → colors it into the LOWER saved reg ahead of a co-live const (char* form mis-colors; complement of the UCODE-reorder lever); (2) rewrite the loop as `for(a=0,b=arg; cond; a+=k,b+=k)` — comma-init flips the as1 prologue tie (base-addiu scheduled ahead of the zero-cost init moves). gl_func_0002A6C0 byte-exact (9→3→0). STILL BLOCKED: single-symbol collapse (N distinct globals all at D_0+0; needs data-symbol split) + FP multi-divide coloring. Diagnose by histogramming `lui rN,0x0` + `or aN,sN,zero`; require placeholder jals (0x0C000000) only._
@@ -772,6 +773,14 @@ sb    t1, 7(at)
 **Bottom line as of 2026-04-20:** the struct retype prescription in the PREVIOUS version of this memo was wrong. Do NOT recommend struct retype as the fix until confirmed on at least one function. Mark as NON_MATCHING and move on, or try a real `char*` base-pointer local.
 
 **Origin:** 2026-04-20, kernel/func_80004E50. Both plain-externs and full-struct versions produced separate `lui $at` per store. The target's shared-`$at` output is still unexplained.
+
+**UPDATE 2026-06-23 (func_80004E50 revisited, all "untried" levers now tested NEGATIVE):**
+- `char *p = &D_800195D6; p[0]=6; p[1]=2;` — the local pointer DOES make IDO coalesce the two stores into a shared base, BUT the held base register gets SPILLED to the stack (`sw t0,24(sp) ... lw t3,24(sp)`) across the straight-line init region and perturbs every downstream register number + adds a trailing nop. Net WORSE (33 diffs vs baseline 1).
+- `((u8*)&D_800195D6)[0]=6; ((u8*)&D_800195D6)[1]=2;` (array form) — also coalesces D6/D7 cleanly WITHOUT a spill, but renumbers the tail registers (t2→t4) and adds a trailing nop. Still net worse.
+- Statement reorder (D9-first, D7-before-D6) — all regress (5–8 diffs).
+- Permuter: 2 runs (~1.5k iters total, boosted perm_temp_for_expr/reorder_stmts/split_assignment weights, 2 seeds) — base score 190, NEVER improved. No source transform reaches the schedule.
+- SEPARATELY FIXED a real byte diff in the same fn: `func_800030D0`'s arg must be `&D_800195D0 + 5` (the returned base + 0x14), NOT `&D_800195E0 + 1` — both equal 0x800195E4 but the target materializes it from D_800195D0, so the linked %lo/addiu-imm bytes differ. After that fix the fn has exactly ONE residual diff = this $at-share.
+**CONCLUSION: confirmed permanent cap.** The D6/D7 shared-`$at` is an IDO-internal instruction-scheduler coalescing decision, NOT reachable from any source form (the only forms that trigger the share introduce a held/spilled base reg that costs more than it saves). Leave NON_MATCHING, no episode.
 
 ---
 
@@ -17214,3 +17223,51 @@ that no C shape forces and the permuter can't reach. Sibling of the "Inline
 expression keeps $t-regs / named local moves to $v" family, but the lever here
 is specifically about freeing ARGUMENT regs for GLOBAL-POINTER bases + the
 branch-delay-slot `lui %hi` hoist, not $t-vs-$v on a single value.
+
+### Declaring a loop-invariant table-base pointer INSIDE the loop body forces IDO to recompute it each iteration — fixes unrolled-loop register-coloring caps (kernel func_80000E8C, 2026-06-23)
+
+A fixed-count scan over a global pointer table that IDO -O2 unrolls x4 (with a
+remainder prologue) can sit at ~97% with a pure register-coloring residual: the
+instruction sequence and order match the target exactly, but the registers are
+permuted (e.g. arg held in `$a0` throughout vs target's `move a3,a0` then base
+loaded back into `$a0`; loaded base in `$v1` vs `$a0`). Everything else is byte-
+identical.
+
+The lever: declare the table-base pointer **inside** the loop body, not before
+the loop.
+
+```c
+/* 97% — coloring permuted: tbl hoisted, IDO keeps one base live */
+UsoEntry74 **tbl = (UsoEntry74 **) &D_80012D60;
+for (i = 0; i < 135; i++) { e = tbl[i]; ... }
+
+/* 100% — tbl recomputed per iter, coloring matches target exactly */
+for (i = 0; i < 135; i++) {
+    UsoEntry74 **tbl = (UsoEntry74 **) &D_80012D60;
+    e = tbl[i];
+    ...
+}
+```
+
+Putting the constant table-base decl inside the loop makes IDO treat the base as
+recomputed each iteration rather than a single loop-invariant live value; that
+changes which registers are free when the unrolled body loads each entry's
+fields, and the whole coloring snaps to the target. (Functionally identical —
+`&D_80012D60` is a link-time constant — but the codegen-shaping effect is real.)
+
+Found via the permuter: base score 425 → 40 from this single hoist-into-loop
+move; applying it by hand then reached objdiff 100% and a byte-identical ROM.
+
+Recipe for this whole class (fixed-count global-table scan, IDO unrolls x4):
+1. Express the loop as `for (i = 0; i < COUNT; i++)` with a literal COUNT
+   (= table_byte_span / elem_size) so IDO constant-folds the trip count into
+   the prologue + 4x-unroll shape. (Array form `tbl[i]`, not pointer-walk.)
+2. Use direct member-access add operand order, e.g. `e->field_4C + e->field_14`
+   (not via an intermediate `base` local).
+3. If a pure coloring residual remains, move the loop-invariant table-base decl
+   INSIDE the loop body.
+
+Note on diff classification: target `lw v0,0(v0)` with `%lo(D_80012D64)` reloc
+vs build `lw v0,4(v0)` with `%lo(D_80012D60)` reloc resolve to identical bytes
+after linking (D_80012D60+4 == D_80012D64); objdiff scores these as matched.
+Don't count reloc-base+offset differences as real diffs.
