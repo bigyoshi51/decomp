@@ -17651,3 +17651,15 @@ casts, register/inline variants. Treat as an -O0 cap: each such site costs +1 wo
 fn with N of them floors ~N words short. Not match-fakeable; leave NM. (If a future angle
 cracks it — e.g. a C shape that keeps the param live without a fresh load — it would
 unlock several bootup_uso -O0 fns at once.)
+
+## -O0 eval-order: comparison-operand inversion does NOT flip `expr±k == *mem`
+
+For `a1 + 1 == *(short*)(ptr)` at -O0, IDO loads the MEMORY operand last is NOT what
+happens — it computes the memory load FIRST and the `a1+1` second, and SWAPPING the
+operands (`*mem == a1+1`) does not change that (still memory-first in the build). The -O0
+TARGET sometimes wants the `a1+1` computed first (it appears before the load in the asm) —
+operand inversion can't produce that. Negative result from func_000122C4 (bootup_uso, 75w,
+stuck at 88.75%): the eval-order delta + an s0-vs-temp reg-alloc on the field pointer are a
+correct-logic/divergent-codegen -O0 cap; don't burn ticks on operand-swap for it. (If you
+need `a1+1` first, a precomputed local round-trips through the stack at -O0 — usually a net
+loss, not a fix.)
