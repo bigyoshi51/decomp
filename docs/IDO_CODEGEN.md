@@ -17412,3 +17412,20 @@ and a 480s permuter run (best variant just inlined all constants → fewer s-reg
 never reached score 0). Conclusion: genuine -O2 coloring cap; NM-wrap. Contrast
 with func_80000E8C above (unrolled array-scan, crackable via inside-loop hoist) —
 the non-unrolled pointer-walk variant of the same table is NOT crackable.
+
+**Second confirmed instance — kernel func_8000085C (2026-06-23, NM).** Same family,
+even simpler shape: `do { state->field_84(arg0, i, p1->field_94, p2); i++; p1+=0x9C;
+p2+=0x9C; } while (i != 0x87);` over a fixed-count table (no `if(e)` guard — the
+call is UNCONDITIONAL every iter). Target saves **6** s-regs (s0=i, s1/s2=base
+ptrs, s3=arg0, s4=state, s5=end=0x87) with `lw $t9,0x84($s4)` inside the loop;
+build saves only **5** and rematerializes state (`lui $t9; lw $t9,0x84($t9)`).
+The unconditional call does NOT save it — `state` still dies pre-`jalr` (its value
+flows only into `$t9`), so -O2 still refuses the promotion. New negative data
+points beyond the sibling: (1) dropping the named `end` (compare `i != 0x87`
+literal) does NOT free state — IDO keeps the 0x87 constant in a saved reg OVER
+state, proving it is the dead-pre-jalr rule, not a 6-reg capacity limit;
+(2) the for-loop literal-count form does NOT unroll here (emits 49 insns w/ a
+`mult`, larger than the 38-insn do/while). do/while is the size-exact structure.
+Also a secondary `lui;ori` (build) vs `lui;addiu` (target) literal-formation diff
+on the two no-reloc absolute base constants (0x800130A0/0x80013112), downstream of
+the same allocation. `register` hints are a no-op for IDO (ignored). NM-wrap.
