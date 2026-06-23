@@ -10167,6 +10167,14 @@ void f(u8* src, u8* dst, s32 count) {
 
 **Caveat**: this is opposite to the usual "don't mutate args" guidance. For decomp purposes, `count--` is correct when target shows arg-mutation; resist the lint instinct.
 
+**REFINEMENT 2026-06-23 (func_80000598 driven to 15/16 byte-exact, single dead-copy residual).** The closest honest body is a SEPARATE-CURSOR reconstruction, NOT the `register`-everything form. Persistent cursors `sp=src; dp=dst;` (land in $v0/$v1) plus per-iteration working copies `p=sp; q=dp;` (land in $a0/$a3, used for the lbu/sb deref) while sp/dp increment and `count--` decrements the arg in place ($a2). Snapshot ORDER inside the loop pins the register picks: write `p = sp; rem = count; q = dp;` — `rem` (count snapshot) before `q` (dst snapshot) makes IDO color q→$a3 and rem→$a1 (target order); the reverse source order swaps them. Body:
+```c
+u8 *sp=src,*dp=dst,*p,*q; s32 rem;
+if (count != 0) { count--;
+  do { p=sp; rem=count; q=dp; dp++; sp++; *q=*p; count--; } while (rem != 0); }
+```
+This matches all 15 emitted insns (register picks, snapshot order, store-via-$a3, bnez+addiu tail) byte-for-byte. **The SOLE residual is the target's prologue `or $a3,$a2` — a DEAD count-copy (overwritten by the loop's `q=dp` before any read) that IDO refuses to emit.** This UPDATES the old `(void)cp;` advice above: `(void)cp`, `(void)rem`, and an empty `if(rem){}` are ALL DCE'd (a cast/empty-branch is not a live read), so they do NOT resurrect the prologue copy. The only thing that forced the dead copy back was reading the snapshot in the loop EXIT test (`while (rem != -1)` after a live-in `if(rem){}`), but that swaps the tail to `li $t,-1; bne $a2,$t` — costing 2 insns to buy 1, net worse. Conclusion: the dead prologue copy is a genuine OVER-EMIT/dead-instruction cap (target keeps a copy unreachable from any semantics-preserving C); stays NON_MATCHING per no-instruction-forcing policy. Decl-order permutation and a third "count-save" local were also tried and only reshuffled the (already-correct) register layout.
+
 
 ## `volatile int off = K;` to defeat constant-fold of `&D + K` produces WORSE codegen, not target's `addiu+lw0` form
 
