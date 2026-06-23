@@ -17663,3 +17663,17 @@ stuck at 88.75%): the eval-order delta + an s0-vs-temp reg-alloc on the field po
 correct-logic/divergent-codegen -O0 cap; don't burn ticks on operand-swap for it. (If you
 need `a1+1` first, a precomputed local round-trips through the stack at -O0 — usually a net
 loss, not a fix.)
+
+## -O0 reconstruction: INLINE intermediate values, don't cache them as locals
+
+At -O0 every named local gets a stack home and a load/store per use, so a local that the
+-O2 brain would "cache" (an index, a derived pointer) costs a stack slot + reloads and
+INFLATES the frame and word count vs the -O0 target — which instead re-derives the value
+inline each use. Reconstruction rule: when matching an -O0 target, INLINE the intermediate
+(`((int*)a0[0xE0/4 + a0[0x128/4]])[6]` rather than `idx = a0[0x128/4]; p = ...; p[6]`).
+Caching `idx`+`p` in func_00011E00 gave frame -16 / 71w; inlining both gave frame -8 / 65w
+(target 53w). This is the dual of the register-var recipe: cache in a `register` (s-reg, no
+stack) when the target keeps it in a saved reg across calls; inline when the target
+re-derives it. Residual control-flow shape (shared single return-0 reached by all early
+exits, values computed directly in v0) is a separate axis — multi-return-no-var duplicates
+the return-0, a result-var spills it; neither matched func_00011E00 exactly (still 6w over).
