@@ -17635,3 +17635,19 @@ GOTCHA also seen here: the NM-wrap had `&func_00000188 + 0x190` but the real rel
 `symbol + 8` — 0x190 was the symbol's module *address* (the symbol func_00000188 sits at
 0x188; the datum is at 0x190, i.e. +8). Verify the offset against the expected LO16
 immediate, not the absolute address.
+
+## -O0 param-reload cap: `off + param` indirect-call arg reloads the param instead of reusing a cached reg
+
+Recurring -O0 residual (func_0000F9E8 last word, func_0000F6C4 last 2 words). Shape: a
+param `a0`/`self` is loaded into a temp for a struct access (`m = *(char**)(a0+0x28)` ->
+`lw t8,40(sp); lw s0,40(t8)`), then an indirect call's arg adds an offset to the same
+param: `(*(fp)(m+0x6C))(*(short*)(m+0x68) + a0)`. The -O0 TARGET reuses the cached param
+reg: `lh t9,..(s0); addu a0,t9,t8` (t8 still = a0). The C build instead RELOADS it:
+`lh t9,..(s0); lw t0,40(sp); addu a0,t9,t0` (+1 word per site). This is IDO -O0
+register-retention across statement boundaries — the build re-fetches the param from its
+stack home where the target kept the just-loaded copy live. Tried & FAILED to flip it:
+operand swap (`a0 + off` vs `off + a0` — order is already off-first either way), (int)
+casts, register/inline variants. Treat as an -O0 cap: each such site costs +1 word, so a
+fn with N of them floors ~N words short. Not match-fakeable; leave NM. (If a future angle
+cracks it — e.g. a C shape that keeps the param live without a fresh load — it would
+unlock several bootup_uso -O0 fns at once.)
