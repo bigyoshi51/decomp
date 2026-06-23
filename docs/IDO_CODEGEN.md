@@ -404,7 +404,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Use `volatile T *arg` to prevent IDO from fusing two `sb`/`sw` stores to the same address](#feedback-ido-volatile-preserve-redundant-io) — When the target asm has two distinct stores to the same address (e.g. `sb $t9, 0(a0); sb $t0, 0(a0)` where the second value is derived from the first), plain C emits ONE store because IDO fuses `*a0 = val; *a0 = val |…
 - [`volatile int saved_arg = aN;` forces IDO to spill aN to a LOCAL stack slot instead of the caller's outgoing-arg slot](#feedback-ido-volatile-unused-local-forces-local-slot-spill) — _When target has `sw $aN, 0x24(sp)` (local-slot offset) but your IDO build emits `sw $aN, 0xBC(sp)` (caller's outgoing-arg slot at sp+frame_size+slot), the difference is whether IDO treats the saved arg as "live local"…
 - [`(void)a; (void)b; (void)c;` after the call forces IDO to spill ALL incoming args to caller's outgoing-arg-shadow](#feedback-ido-void-cast-arg-spill) — _Multi-arg forwarder pattern: `f(a, b, c) { callee(&D); (void)a; (void)b; (void)c; }` emits `sw $a0,0x18(sp); sw $a1,0x1c(sp); sw $a2,0x20(sp)` (varargs-prologue-style) instead of register-shifting args. Sister technique to `volatile int saved` but for many args._ **2026-05-27 INTERLOCK NOTE**: switching FROM `volatile int aN_sp = aN;` (which allocates a 4-byte local at sp+0xLOW) TO `(void)&aN;` (which only spills to caller's shadow at sp+0xHIGH) **shrinks frame by the freed local-slot bytes**. Compensate with `char _pad[N];` (e.g. +8 bytes) to keep frame size constant, OR you'll lose 8 bytes of frame and shift every downstream sp-relative ref by -8. Verified on game_uso_func_000044F4 (spine #1): the (void)&aN switch correctly placed args at sp+0xE8/0xEC/0xF0 but the lost volatile-local slot dropped the frame from 0xE8→0xE0, net -0.5pp match. Always pair `(void)&aN` migrations with frame-padding adjustments in a single edit.
-- [Signed `%` (and `/`) on a memory-loaded divisor emits a `break 7` (÷0) AND a `break 6` (INT_MIN/−1 overflow) guard pair — C-unsuppressible](#feedback-ido-signed-mod-break-pair) — _A C `(a + b) % n` where `n` is loaded from memory compiles to `div $zero,t4,t5; mfhi tP; bnez t5,+2; nop; break 7` THEN (for the result use) `addiu at,$zero,-1; bne t5,at,+2; lui at,0x8000; bne t4,at,+2; nop; break 6`. The `break 7` is the divide-by-zero trap; the `break 6` is the signed INT_MIN/−1 overflow trap MIPS HW can't represent. Both are emitted for signed `/` and `%` whenever the divisor isn't a compile-time-known nonzero constant — there is NO C form that suppresses them (they're part of IDO's signed-div lowering, not optimizer-removable). A ring-buffer index `idx=(first+count)%max` (inlined osSendMesg shape) therefore caps <100 from plain C unless `max` is a literal. Verified 2026-05-17 func_800044CC (libultra PI-event callback). Use `unsigned` operands to drop to `divu` + only `break 7` (no overflow guard), or post-cc INSN_PATCH if the target really uses signed div._
+- [Signed `%` (and `/`) on a memory-loaded divisor emits a `break 7` (÷0) AND a `break 6` (INT_MIN/−1 overflow) guard pair — C-unsuppressible](#feedback-ido-signed-mod-break-pair) — _A C `(a + b) % n` where `n` is loaded from memory compiles to `div $zero,t4,t5; mfhi tP; bnez t5,+2; nop; break 7` THEN (for the result use) `addiu at,$zero,-1; bne t5,at,+2; lui at,0x8000; bne t4,at,+2; nop; break 6`. The `break 7` is the divide-by-zero trap; the `break 6` is the signed INT_MIN/−1 overflow trap MIPS HW can't represent. Both are emitted for signed `/` and `%` whenever the divisor isn't a compile-time-known nonzero constant — there is NO C form that suppresses them (they're part of IDO's signed-div lowering, not optimizer-removable). The guards are exactly what the target libultra ring-buffer code has too, so a plain-C `idx=(first+count)%max` REPRODUCES them — including (verified 2026-06-23) the break guards emitting AFTER the `msg[idx]` store, which plain C does at -O1. So the breaks are NOT the cap. Verified 2026-05-17 / re-verified 2026-06-23 func_800044CC (libultra PI-event send_mesg). Use `unsigned` operands to drop to `divu` + only `break 7` (no overflow guard). (INSN_PATCH is BANNED — never fake the guard.)_
 - [Trailing `lw v0,saved(sp)` reload (Δ+1 vs target) = `return saved_var` where the target returns the last call's result — change to `return last_call(...)`](#feedback-ido-return-saved-var-trailing-reload) — _A wrapper `r = cb(1); cb(...); cb(...); cb(r); return r;` spills `r` to stack (passed to the last call), then `return r` adds a trailing `lw v0,saved(sp)` reload → Δ+1 / ~95% vs a target that has no v0 reload before the epilogue. The target returns the LAST call's value (v0 already live), so write `return cb(r);` (or `return last_call(...)`) to drop the reload. Quick diagnostic: align built vs target; if the ONLY real diff is one extra `lw v0,K(sp)` right before `addiu sp` / `jr ra`, it's this. Verified 2026-05-23 gl_func_00034C7C (94.7→100). Likely the same shape for several of the Δ+1 count-mismatch near-misses._
 - [Split a `<<16` shift into `(x<<15)<<1` to renumber the temps IDO allocates for a multi-field word-pack](#feedback-ido-split-shift-temp-renumber) — _A 2-word GBI command packer `a0[0]=((a1&0xFF)<<16)|CMD|(arg4&0xFFFF); a0[1]=(a2<<16)|(a3&0xFFFF);` compiles with the second word's temps numbered one lower than the target (t2/t3/t4 vs t3/t4/t5) — a register-renumber residual that doesn't byte-match. Writing the shift as `(a2<<15)<<1` (two shift insns folded back to one `sll ,16` by the optimizer, but the extra RTL node bumps the temp numbering) makes IDO allocate t3/t4/t5 → byte-exact. Permuter-discovered; matched 3 siblings (game_libs_func_0001D624/D770/D7A4). Try it when the ONLY diff is a uniform +1/−1 `$t` renumber on a shift-heavy expression and plain forms won't budge._
 - [A `const/const` float division folds to a `.rodata` literal — force the runtime `div.s` with a shared `float divisor` local](#a-const--const-float-division-const-folds-into-a-rodata-literal--force-the-runtime-divs-with-a-shared-float-divisor-local) — _Target divides a constant ratio (`112.0f/255.0f`) at runtime (`lui 0x42e0; mtc1; div.s ,$f0` with `$f0`=255.0f shared across sibling divisions) but your `112.0f/255.0f` emits a `.rodata` literal load (extra `R_MIPS_HI16/LO16 .rodata` reloc + wrong opcode). Introduce ONE named `float div255 = 255.0f;` and divide by it everywhere — the variable divisor blocks the const/const fold so IDO materializes the numerator + emits a real `div.s` by the shared `$f0`. Companion: 8-bit channel halve+normalize = `(float)(unsigned)(unsigned char)(*(u8*)/2)` (`/2` → signed-/2 idiom bgez;+1;sra; `(unsigned char)` → andi 0xff; `(unsigned)` → 4f80 unsigned→float fixup). Verified bootup_uso func_0000CFA0 2026-06-22._
@@ -11997,11 +11997,40 @@ only `break 7` appears because the divisor equals the shifted dividend
   original operands were `unsigned` — make the C operands `u32`.
 - If the target has NEITHER break (bare `div;mflo`), the divisor was a
   known constant there — use a literal, or it's a different routine.
-- Only reach for post-cc INSN_PATCH if the target genuinely lacks a
-  guard your signed C must emit (rare).
+- INSN_PATCH is BANNED (match-faking, removed 2026-05-23). Never
+  hand-emit or hand-remove a break guard.
 
 Verified 2026-05-17 on `func_800044CC` (1080 kernel, libultra
 PI-event callback with an inlined `osSendMesg` ring-index `%`).
+
+**2026-06-23 deep re-verification of func_800044CC** (corrects two
+earlier WRONG cap claims from the NM-wrap comment):
+- **Break placement is NOT a cap.** Standalone IDO 7.1 compile of the
+  plain-C `(first+count) % msgCount` emits the `break 7`/`break 6` guards
+  AFTER the `msg[idx] = message` store — byte-for-byte matching the
+  target. The earlier note that "C emits the guards right after the div,
+  target emits after the store" was false.
+- **No `__osEventStateTab` address discrepancy.** The target object has a
+  clean `R_MIPS_HI16/LO16 __osEventStateTab` reloc; the symbol resolves to
+  the `symbol_addrs` value (0x80019510). The earlier "0x8001F510, a 0x6000
+  discrepancy" claim was false — always read the REAL reloc from
+  `expected/.../UNIT.c.o` (`objdump -drz`) before asserting a symbol gap.
+- **The actual cap is opt level + register coloring.** The target is -O1
+  shaped (ZERO branch-likely across the whole unit; mq/es stack-spilled).
+  Default unit opt was -O2 → small frame + `beqzl`. A per-unit `-O1`
+  override is safe because func_800044CC is the ONLY C-compiled fn in
+  kernel_000_b (other 19 are INCLUDE_ASM = raw bytes, opt-independent;
+  matching `.text` stays byte-identical, full `make` ROM stays
+  byte-identical). At -O1 the reconstruction is structurally exact and
+  within 4 instructions: target SPILLS mq/es to stack and reloads on each
+  use in the modulo/inner block; clean C keeps them live in registers.
+  Permuter (462k iters, base 575, best 350, never 0) + ~15 source variants
+  (volatile, addr-taken, separate locals, register pins) could not provoke
+  the selective spill. Confirmed register-coloring cap class. Stays NM.
+  **Workflow lesson:** a unit whose only C body is -O1-shaped but whose
+  Makefile default is -O2 can be safely flipped to -O1 if every OTHER fn in
+  it is INCLUDE_ASM — verify by rebuilding the MATCHING object and
+  `cmp`-ing its `.text` to `expected/` before/after the flip.
 
 ## Split a local's declaration from its initializer to hoist intervening stores together
 <a name="feedback-ido-split-decl-init-hoists-stores"></a>
