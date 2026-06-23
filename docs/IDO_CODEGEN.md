@@ -23,6 +23,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
 - ["8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad](#8-byte-dead-slot-below-a-stack-buffer-cap-is-often-a-bufn-array-index-offset-not-a-pad-problem) — _Target passes scratch buf at sp+K+8, build at sp+K, dead 8 bytes below it, frame same? Don't add volatile pad — the buffer is over-sized and the code passes `&local_buf[2]` (a pointer into the middle). Declare buf frame-correct, pass `&local_buf[N]`. Cracked gl_func_0005FE7C (the "needs INSN_PATCH on 6 sp-offset insns" cap)._
 - [Separate-cursor INVERSE of param-direct: a SECOND copy `p=param` keeps the loop-resident pointer in its OWN slot distinct from the param's arg-home (+8 frame is REAL here); pair with decl-order = high→low slot numbering and per-loop distinct tmps](#separate-cursor-keeps-loop-pointer-distinct-from-arg-home-decl-order-slot-numbering-func_800070a0-2026-06-23) — _Opposite of "param-direct beats separate-local": when the target homes the pointer param at its arg-home AND keeps a working copy in a separate loop slot (frame genuinely +8), introduce a `char *p = param` cursor and use `p` everywhere in the loops. Decl order `p, n, tmp, tmp2` reproduces IDO -O1's high→low slot numbering (first-declared gets the highest sp offset); two distinct `int tmp` (one per loop) force the target's two scratch slots. `p += 4; func(p - 4)` hoists the increment above calls (avoids post-call reload). Cracked func_800070A0 frame -0x30→-0x38 (84%→92.3%). Residual = pure `move oldreg` vs `addiu newreg,-4` regalloc tie._
+- [`reg[i] = (s32)*src;` (src is `s64 *`) reproduces the "dead high-word load + redundant move" when a GPR-save loop narrows a 64-bit register to its lo word — but ONLY inlined, never via a named `s64` temp (which spills the pair)](#reg-narrow-s64-deref-dead-highword-load-func_80008e98-2026-06-23) — _An rmon/debug GPR copy loop that reads each 64-bit register and stores only the low 32 bits emits `lw lo,4(p); lw hi,0(p)(DEAD); move t,lo; sw t,reg[i]` — a dead hi-word load plus a redundant move that a plain `reg[i] = ((s32*)p)[1]` (one lw, no move) does NOT produce. Spell it `s64 *src; ... reg[i] = (s32)*src; src++;` — the inline 64-bit deref narrowed to (s32) gives the exact pair-load + move. CRUCIAL: do NOT introduce a named `s64 tmp = *src;` — the named s64 gets a stack home and spills BOTH words each iter (+8 frame, 2 extra `sw`/iter); the cast must be inline so the pair lives only transiently in regs. Got func_80008E98's two copy loops + prologue + guards byte-exact (frame -0xD8). RESIDUAL there = IDO frame slot-ordering (spills-low/hdr-high vs the reverse), a separate regalloc cap; NM._
 - [A "register-coloring cascade" residual can be a MISSING INNER DEREF — classify the temp renumber's root before conceding](#a-register-coloring-cascade-residual-can-be-a-missing-inner-deref--classify-the-temp-renumbers-root-before-conceding-gl_func_00057104-2026-06-22) — _gl_func_00057104 sat at ~96% with a "12-diff coloring tie" (const t1 vs t2, OR result cascaded). Root cause was a missing `[0]` deref: slot base used `dl + count*8` but target re-loads AND derefs `a0->0xC` (`lw t9,12(a3); lw t0,0(t9)`) — base lives at `dl[0]`. Writing `(*(int**)((char*)a0+0xC))[0] + count*8` added the extra `lw`, fixing address math AND shifting the const/OR allocation to match (t2/t3). Byte-exact. Lesson: a "shifted one register" cascade is often downstream of ONE missing/extra insn; diff opcode COUNT in the window, not just operands, before conceding a coloring cap._
 
 - [Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)](#frame-size-correctness-unblocks-regressing-code-motion-rewrites-2026-06-16) — _Fix stack-frame size byte-exact FIRST (sweep pad local to match `addiu sp,sp,-N`); then m2c-faithful code-motion that "regressed" with a wrong frame now gains. Diagnose via jal-segment counts (equal jal count + matching per-segment sizes = control structure matches). game_uso 591C +3.66pp._
@@ -17441,3 +17442,40 @@ state, proving it is the dead-pre-jalr rule, not a 6-reg capacity limit;
 Also a secondary `lui;ori` (build) vs `lui;addiu` (target) literal-formation diff
 on the two no-reloc absolute base constants (0x800130A0/0x80013112), downstream of
 the same allocation. `register` hints are a no-op for IDO (ignored). NM-wrap.
+
+<a id="reg-narrow-s64-deref-dead-highword-load-func_80008e98-2026-06-23"></a>
+## `reg[i] = (s32)*src;` (src is `s64 *`) reproduces the dead high-word load + redundant move in a GPR-narrowing loop — inline only, never a named s64 temp (func_80008E98, 2026-06-23)
+
+A debug/rmon register-save loop that copies each 64-bit GPR but keeps only the
+low 32 bits emits a tell-tale 5-insn body in the IDO 7.1 -O1 target:
+
+```
+lw   $t5, 4($t2)     # lo word
+lw   $t4, 0($t2)     # hi word — DEAD (never stored, never used)
+addiu $s1, $s1, 1
+or   $t3, $t5, $zero # redundant move lo -> result reg
+sw   $t3, 0x40($t7)  # reg[i] = lo
+```
+
+A naive `reg[i] = ((s32 *)p)[1]` (treat src as `s32 *`, take the odd word)
+collapses to a single `lw; sw` — no dead load, no move — and will NOT match.
+The dead hi-load + move come from reading the value as a full 64-bit quantity
+and narrowing it: declare `s64 *src;` and write `reg[i] = (s32)*src; src++;`.
+
+CRUCIAL caveat: keep the deref INLINE. A named intermediate `s64 tmp = *src;`
+(even `register s64 tmp`) gives the s64 a stack home and IDO spills BOTH halves
+every iteration (two extra `sw` per iter + the frame grows 8 bytes). The
+inline `(s32)*src` lets the loaded pair live only transiently in temporaries,
+matching the target exactly.
+
+This one idiom (plus `register s32 *msg = arg0;` / `register s32 i;` to pin the
+message pointer and loop counter into $s0/$s1, and structuring the two early-out
+returns as the family-standard `if (guard == 0) { ...; return 0; } return -2;`
+so the two `li v0,-2` land in ROM order) made func_80008E98's prologue, both
+guards, and both copy loops byte-exact at frame -0xD8. The remaining residual
+is the IDO frame slot-ordering (the target gives spill temporaries the LOW
+stack slots and the address-taken send buffer the HIGH slots; IDO here does the
+reverse, shifting every sp-relative immediate by 0xC) — a separate allocno-
+numbering cap, the same class that pins matched-family sibling func_8000969C at
+99.7% NM. Permuter fuzzy-gain is a false positive on a pure slot-offset
+residual (objdiff normalizes sp-offsets); left NM.
