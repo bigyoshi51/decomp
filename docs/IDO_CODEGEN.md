@@ -17616,3 +17616,22 @@ use an implicit K&R decl (`void fn();` before the caller, no params) so the
 call still emits a direct `jal`+R_MIPS_26 (a fn-ptr cast would give lui/jalr).
 Residual after this lever = pure IDO scheduling/coloring (grouped vs interleaved
 load/mul/store, slot-offset shifts, a dead `addiu &field` addr-form) — left NM.
+
+## -O0 symbol+offset load: struct-field ref folds to `lui;lw N`, array/scalar `+N` adds a materializing `addiu`
+
+At -O0, how you spell a load from `SYMBOL+N` controls whether IDO folds the offset
+into the load or materializes the full address first:
+- `func_00000188.c` (declare `extern struct { int a, b, c; } func_00000188;`, field at
+  offset 8) → `lui reg,%hi(sym); lw a0,8(reg)` — **folded, 2 insns**, result goes
+  straight to the arg reg.
+- `((int*)&func_00000188)[2]` or `*(int*)((char*)&func_00000188 + 8)` (array/scalar +
+  byte offset) → `lui t9,%hi; addiu t9,t9,%lo; lw a0,8(t9)` — **3 insns**, an extra
+  `addiu` materializing `&sym` into a temp.
+So when the -O0 target shows the folded 2-insn form (`lui X; lw X,N(X)`), use a STRUCT
+ref with the field at offset N, not an array/pointer-arith ref. Cracked func_0000F954
+(the +1-word residual was exactly this addiu). Same family as the bootup_uso_o0_100F0
+FP-pool struct-ref recipe (a float struct reproduces `lui;lwc1 %lo` byte-for-byte).
+GOTCHA also seen here: the NM-wrap had `&func_00000188 + 0x190` but the real reloc is
+`symbol + 8` — 0x190 was the symbol's module *address* (the symbol func_00000188 sits at
+0x188; the datum is at 0x190, i.e. +8). Verify the offset against the expected LO16
+immediate, not the absolute address.
