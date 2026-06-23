@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [`goto`+two `return 0;` → `do/while` MERGES the loop-skip and loop-exit into ONE shared epilogue tail (kills a +2-word structural diff); pair with `new_var=&p->field` store-target hoist (kernel func_80002250 56→23 words 2026-06-23)](#gotowhile-shared-tail-merge--store-target-hoist-kernel-func_80002250-2026-06-23) — _A loop guarded by `if (count>0){ loop... ; return 0; } return 0;` written with a `goto loop;` body emits TWO `or v0,$0` + a `b` (the count<=0 skip jumps to the outer return; the loop-completion has its own return) = +2 words vs target. Rewriting as `if (count>0){ do{...}while(cond); } return 0;` makes BOTH the `blez` skip and the loop-bottom fall through to ONE shared `v0=0; epilogue` tail — size snaps to exact and the diff collapses (56→25). Then hoisting a write's address into a named pointer BEFORE the write (`p=&v1->4; *v=...; *p=load;`) trims 2 more (25→23) by reordering the store-target materialization. Residual 23 = a genuine candidate-creation-order coloring cap: arg0(read-only param) vs the loop counter(IV passed as 4th call-arg) contesting the single saved $s0; target keeps arg0 in $s0 (frees $a0 for the index `lh`) + counter in $a3 (nop call-delay), our build reverses it. Permuter (>18k iters, reseeded) finds NO clean zero — its only sub-23 hit corrupts the counter (rejected). FAILED levers (don't re-try on this shape): decl-order swap, `register`/plain `void*self=arg0` alias (forces a copy, worse), `register` on the counter, counter-copy for the call arg._
 - [Declaring a loop-invariant table-base pointer INSIDE the loop body forces IDO to recompute it each iteration — fixes unrolled-loop coloring caps](#declaring-a-loop-invariant-table-base-pointer-inside-the-loop-body-forces-ido-to-recompute-it-each-iteration--fixes-unrolled-loop-register-coloring-caps-kernel-func_80000e8c-2026-06-23) — _Fixed-count global-table scan that IDO -O2 unrolls x4 stuck at ~97% with a PURE coloring residual (instructions/order byte-exact, registers permuted)? Move the loop-invariant `tbl=(T**)&D_GLOBAL` decl INSIDE the loop body — IDO then recomputes the base each iter, changing which regs are free in the unrolled body, and coloring snaps to target. Recipe: (1) `for(i=0;i<COUNT;i++)` literal count so IDO folds the trip count into prologue+4x-unroll; (2) direct member-access add order `e->fA + e->fB`; (3) base-decl-in-loop. Found via permuter (425→40), hand-applied to 100% + byte-identical ROM. kernel func_80000E8C 61.8%→100%. Also: target `lw v0,0(v0)`/%lo(D+4) vs build `lw v0,4(v0)`/%lo(D) resolve to identical bytes post-link — don't count reloc-base+offset as diffs._
 - [timproc_uso_b5 master-tick sub-handlers 7E34 / 7078 / C8AC: residual is a whole-function first-temp coloring cascade (v0/v1↔a1/tN, $f0↔$f8) — permuter-floored, C-lever-immune; leave NM](#timproc_uso_b5-master-tick-sub-handlers-residual-first-temp-coloring-cascade-permuter-floored-2026-06-21) — _The count-exact reconstructions of 7E34 (99.1%, 23 diffs), 7078 (97.9%, FP-renumber), C8AC (99.6%, 4 diffs) are structurally byte-exact; the ONLY residual is a systematic register-NUMBER offset originating at the first short-lived temp (EXP colors a pointer/product to a v/t/$f8 temp, base picks the next free arg reg a1 / return reg $f0, and the choice cascades). C8AC isolates it to ONE load (`lw v1,696(a0)` vs `lw a1,696(a0)`). NEGATIVE on ALL documented levers: inline-the-temp, named-temp, const-first FP, source-reversed FP, pointer-cast vs `[i]` array spelling, decl-order swap — every variant reproduces base's coloring (0 change). Permuter HARD-CAPPED 600s/j4: 7E34 330→265 (61k iters), 7078 440→350 (66k iters), C8AC 40→40 ZERO improvement (81k iters) — none reach 0. This is the pure uopt first-temp coloring tie (a1/$f0 preference), a true cap. 7B2C is WORSE (extra frame: -64 vs -40 = real spill divergence, not pure coloring). Don't re-grind; the FP-reduction operand-order and 2B74 per-slot-local levers do NOT apply (no FP reduction; not a record-builder)._
 - [DISTINCT per-slot locals (not one reused temp) make IDO spill-around-call instead of promoting to a saved reg — fixes whole-prologue $s0/$s1 shift in record-builder loops](#distinct-per-slot-locals-vs-one-reused-temp-controls-spill-vs-saved-reg-promotion-fixes-prologue-coloring-in-unrolled-record-builders-timproc_uso_b5_func_00002b74-2026-06-21) — _Unrolled constructor where each record does `c=alloc(); init(c,...)`? Reusing ONE `c` var across all records makes IDO see it long-lived → promotes to callee-saved $s0, pushing the real persistent var (`self`) to $s1 and shifting the whole prologue. Give each record its OWN scalar (`c0..cN`): each lives only across its own call → IDO spills to stack (matching target's `sw/lw` around the jal) and `self` lands in $s0. Prologue went byte-exact on timproc 2B74. Complement of "remove-local-to-force-spill". Also: USO HI16-only globals → C `&D_807Fxxxx + literal_low` reproduces the lui/%hi + literal-addiu pair (the unit has 0 LO16 relocs; .text bytes match regardless of the extra C-side LO16 reloc)._
@@ -17223,6 +17224,55 @@ that no C shape forces and the permuter can't reach. Sibling of the "Inline
 expression keeps $t-regs / named local moves to $v" family, but the lever here
 is specifically about freeing ARGUMENT regs for GLOBAL-POINTER bases + the
 branch-delay-slot `lui %hi` hoist, not $t-vs-$v on a single value.
+
+### goto/while shared-tail merge + store-target hoist (kernel func_80002250, 2026-06-23)
+
+A loop guarded by an outer `if (count > 0)` where the loop body ends in
+`return 0;` AND there is a trailing `return 0;` after the `if` is the classic
++2-word structural near-miss. Written with a `goto`-style body:
+
+```c
+if (FW(arg0,4) > 0) {
+loop_4:
+    ... ; if (done) return 0;   /* exit A: own `or v0,$0` + `b epilogue` */
+    goto loop_4;
+}
+return 0;                       /* exit B: another `or v0,$0` */
+```
+
+IDO emits TWO `or v0,$0,$0` and an extra `b` — the `blez` count<=0 skip jumps to
+exit B while the loop completion uses its own exit A. Rewrite as a `do/while` so
+both the skip and the loop-bottom **fall through to one shared epilogue tail**:
+
+```c
+if (FW(arg0,4) > 0) {
+    do { ...; } while (var_a3 < FW(arg0,4));
+}
+return 0;
+```
+
+Now the `blez` skip and the loop's `slt/bnez` both fall into a single
+`.L: or v0,$0; lw ra; ...; jr ra`. Size snaps to exact; on func_80002250 this
+took the diff 56→25 words. A second, smaller lever: hoist a store's
+*destination address* into a named pointer declared just before the store
+(`new_var = (s32*)((char*)var_v1 + 4); *(s16*)var_v1 = ...; *new_var = load;`) —
+this reorders the address-materialization and shaved 25→23.
+
+Residual (23 words, size-exact 0x10C) is a genuine candidate-creation-order
+coloring cap: a read-only parameter (arg0) vs the loop counter (an IV passed as
+the 4th call-argument) contend for the single saved register. Target puts arg0
+in `$s0` (freeing `$a0` for the `lh` entry-index load) and the counter in `$a3`
+(= 4th-arg slot, so the callback's delay slot is a `nop`); our build reverses it
+(arg0→`$a3`, counter→`$s0`, delay = `move a3,s0`). Every other diff (multu/addu
+operand order, index temp reg) cascades from that one swap. Regalloc-dump
+(`-Wo,-zdbug:6`): arg0 is a LATE candidate ("not colored / -ve save"); the
+counter wins the saved slot. Permuter (>18k iters, 7 threads, reseeded from the
+23-word body) found NO clean zero — its only sub-23 hit (score 135) matches by
+overwriting the counter with the entry index (semantic corruption, rejected).
+FAILED levers on this shape (don't re-try): decl-order swap (no-op),
+`register`/plain `void *self = arg0` alias (forces a copy, 30/65 words),
+`register s32` on the counter (no-op), copying the counter for the call arg
+(no-op). Stays NON_MATCHING.
 
 ### Declaring a loop-invariant table-base pointer INSIDE the loop body forces IDO to recompute it each iteration — fixes unrolled-loop register-coloring caps (kernel func_80000E8C, 2026-06-23)
 
