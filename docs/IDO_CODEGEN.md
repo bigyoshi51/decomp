@@ -354,6 +354,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO target's "base-adjust trick" (addiu base, base, +N then use smaller offsets) isn't reachable from natural C](#feedback-ido-base-adjust-for-clustered-offsets) — When target asm does `addiu $v1, $v1, +0x2C` once and then accesses fields at offsets 0xC, 0x0, 0x10, etc. (= original 0x38, 0x2C, 0x3C of the struct), it's an IDO-O2 base-adjust optimization for accessing a CLUSTER of…
 - [IDO stack placement — use `int buf[2]` not `int buf` to force 8-byte alignment](#feedback-ido-buf-array-alignment) — When a stack buffer ends up 4 bytes higher than target, try declaring it as `T buf[2]` instead of `T buf`; IDO aligns arrays to 8 bytes, simple scalars to 4.
 - [IDO 7.1 cfe rejects specific non-C-syntax chars EVEN IN COMMENTS — concrete blocklist](#feedback-ido-cfe-strict-ascii-gotchas) — _The general rule "no unicode in C source" is well known, but IDO 7.1's cfe is stricter than standard C — it rejects specific characters even inside `/* ... */` comment blocks.
+- [Dense delay-slot-packed `beq`-chain dispatch (li-in-delay, beqzl case-0) is COUPLED to $a-class arg coloring — when the target keeps arg0 in $a0 / mask in $a2 / record-ptr in dead-arg1 $a1 but every C form spills arg0 (`move a2,a0`), it's a structural+regalloc cap, not goto-chain-fixable](#feedback-ido-dense-dispatch-coupled-arg-coloring-cap) — _gl_func_00056D14 (game_libs, 10-case mask dispatch each appending an 8-byte word pair): target packs the whole `beq a2,at` chain with the NEXT `li at` in each delay slot + `beqzl` (body-load in delay) for case 0, bodies after, default `b` jump separating dispatch from case-0 body. Reachability is gated by REGALLOC: the target keeps arg0 in $a0 throughout (recomputing `lw v0,12(a0)` per arm), the mask in $a2 (passed to the default printf-helper as both a1 and a2 via one `move a1,a2`), and the append-ptr in $a1 (reusing the register of the dead arg1). EVERY C dispatch form (m2c `switch` → slti binary-search; `if/goto` chain → first-test-inverted bnez-skip that inlines case-0) makes IDO spill arg0 with a leading `move a2,a0`, color the mask to $a3, and the append-ptr to $a0 — a uniform a0↔a2 / a1↔a0 / a2↔a3 rename PLUS a +6..8-insn looser dispatch (nop/bnel delays instead of li/body-load delays). Permuter-factory (12k iters, -j4, best score 4205 — far above the ≥1000 structural floor, $a-class resist) lifted only 66.51→72.61. The dispatch-packing and the arg-coloring are the SAME cap (the spill is what makes the chain loosen). Keep the highest-fuzzy NM body; ROM path is INCLUDE_ASM. Don't re-grind switch/if-goto/permuter._
 - [For 16-case sparse dispatchers in segments without .rodata, `if (a1 == N) goto cN;` chain beats both switch (jumptable) and if-else-if chain](#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse) — _When the target asm is a chain of sequential `li at, K; beq a1, at, body_K` (compares grouped at top, case bodies after), straight `if-else-if` produces 49 % match (interleaves bodies) and `switch` produces 69 %…
 - [IDO -O2 `void f(void) {}` produces exactly `jr ra; nop` — empty functions ARE matchable](#feedback-ido-empty-void-matchable) — _The CLAUDE.md general note ("Empty functions should stay as INCLUDE_ASM — the compiler typically omits the delay slot nop") is WRONG for IDO 7.1 at -O2.
 - [Tiny branch-predicate funcs with forced `addiu sp, -8/+8` frame + explicit `b` to epilogue — unreachable from IDO -O0/-O1/-O2](#feedback-ido-forced-frame-tiny-predicate) — Some 7-9-insn predicate functions (e.g. `return (a & MASK) != 0;`) have a target shape with a forced stack frame (`addiu sp, -8` prologue / `addiu sp, +8` in jr delay slot) AND an explicit `b` to the epilogue-merge…
@@ -16961,3 +16962,34 @@ float-clamp tN renumber, StackA-block slot schedule) is the documented
 permuter-floored / C-immune class (#17 timproc cascade, #122 renumber toolkit,
 #188 v0/v1 flag-return). No permuter was installed in the agent-e worktree;
 manual levers exhausted at 145 word diffs / 94.60% fuzzy. Keep INCLUDE_ASM.
+
+<a id="feedback-ido-dense-dispatch-coupled-arg-coloring-cap"></a>
+## Dense delay-slot-packed beq-chain dispatch is COUPLED to $a-class arg coloring — a structural+regalloc cap, NOT a goto-chain shaping problem (gl_func_00056D14, 2026-06-22)
+
+The sister failure-mode to [#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse](#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse). That note says a `if (k==N) goto cN;` chain reproduces "compares-first, bodies-after" sparse dispatch. It does — *as long as the register allocation cooperates*. When it doesn't, no dispatch shaping helps.
+
+**Target shape (gl_func_00056D14, 10-case `(a1->4 & 0xF00)` dispatch, each arm appends an 8-byte GFX word pair to the list at `a0->C`):**
+```
+andi a2,v0,0xf00
+beqzl a2,case0          ; branch-LIKELY, case-0 body load in delay
+lw   v0,12(a0)          ; <- case0 first insn, annulled if a2!=0
+beq  a2,at,case400      ; at=1024 preloaded
+li   at,256             ; <- NEXT compare's li in THIS beq's delay slot
+beq  a2,at,case100
+...                      ; 8 more beq, each delay = next li at,K
+sll  t4,v0,0xc           ; (c300 helper, in last beq delay)
+b    default
+lui  a0,0x2              ; default const setup in b's delay
+case0: ... (bodies follow, in source order) ...
+```
+Two things make this dense: (1) each `beq` delay holds the next `li at,K`; `beqzl` (zero compare needs no li) holds the case-0 body load. (2) The register allocation: **arg0 stays in `$a0`** (each arm recomputes `lw v0,12(a0)`), the **mask in `$a2`** (the default printf-helper `gl_func_00034458(fmt, mask, mask)` gets it via one `move a1,a2` since a2 already = mask), and the **append-pointer in `$a1`** — recycling the register of the now-dead `arg1`.
+
+**Why no C reaches it:** every dispatch form spills arg0.
+- m2c `switch` → `slti at,1025` binary-search (sorted, reordered) + `move a2,a0`.
+- `if (k==K) goto cK;` chain → IDO inverts the FIRST test to `bnez a3,skip; nop` and inlines case-0 as the fall-through; mask colors to `$a3`, arg0 copied to `$a2` (`move a2,a0`), append-ptr to `$a0`.
+
+Both give a uniform `a0↔a2 / a1↔a0 / a2↔a3` rename **plus** a +6..8-insn looser dispatch (the spill forces `nop`/`bnel` delays instead of li/body-load delays). The dispatch-looseness and the arg-coloring are the **same cap** — the leading `move a2,a0` spill is what prevents the chain from packing.
+
+**Permuter:** factory run (`--only`, -j4, 420s ≈ 12k iters) lifted 66.51→72.61 fuzzy, best score **4205** (well above the ≥1000 "structural, no match" floor; this is the $a-class register-renumber class the permuter explicitly resists). Plateaued.
+
+**Diagnostic / rule:** when a multi-arm `beq`-chain target has its dispatch compares packed with `li`/body-loads in the delay slots AND keeps a *param* register live across all arms (no `move aN,a0` in the target) while EVERY C variant emits a leading `move a2,a0` (or similar param spill), classify it as a coupled structural+$a-regalloc cap. Don't grind switch/if-goto re-shaping or permuter past one bounded pass — keep the highest-fuzzy NM body (factory permuter-best) and leave ROM = INCLUDE_ASM.
