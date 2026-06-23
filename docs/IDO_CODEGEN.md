@@ -27,6 +27,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 - [VARARGS declaration `(.., ...)` fixes the "frame-size shift / arg-home" cap: homes ALL arg regs + reloads them; read a later call-arg from memory via `((int*)&va)[-1]` to force the reload not a move (gl_func_0006EF08 body byte-exact 2026-06-22)](#varargs-declaration-fixes-the-frame-size-shift-arg-home-cap-gl_func_0006ef08-2026-06-22) — _A vsprintf-style wrapper that homes a0-a3 at a 0x20 frame and reloads them was wrongly typed as fixed `(char*,int,int,int)` -> smaller 0x18 frame ("frame-size shift cap", pad locals elided). Declaring it VARARGS `(char*,int,int,...)` makes IDO spill+reload all four arg slots. Then the 3rd call arg `a1` was emitted as a register move (`or a2,a1`) vs target's reload (`lw a2,36(sp)`); reading it as `((int*)&a2)[-1]` (the homed slot just below the va pointer) forces the memory reload. Body became instruction-identical. CAVEAT: blocked on dewrap by an UNFILLED jr-ra delay nop (target body is 21 insns + `_pad.s` nop; -O2 emits the 22nd nop inline) — same class as -g3/-O0 unfilled-delay splits._
 - [GROUP vec components into `f32[N]` arrays to force contiguity + memory-residence (separate scalars get reg-kept + DCE'd through the taken address) (gl_func_00065494 32->42% 2026-06-22)](#group-vec-components-into-f32n-arrays-to-force-contiguity--memory-residence-gl_func_00065494-32-42-2026-06-22) — _When a fn passes a vecN by address (`&sp168`) AND accumulates its components in a loop, declaring them as separate scalars lets -O2 keep them in FP regs and DCE the ones it can't prove are read through the address — too few swc1/lwc1/div.s, too-small frame. Declare the group `f32 sp168[3]` (index 0 = lowest offset) to force contiguous + memory-resident; every accumulation then round-trips to stack like the target. On 65494: div.s 2->6, swc1 40->53, lwc1 55->65, 32%->42%. Pass BY NAME (decays to `f32*`). Co-fixes: distinct-named placeholder externs called DIRECTLY = `jal` (USO has no relocs, jal word is 0x0C000000 regardless, objdiff credits); 3-word int struct-copy temp for lw/sw; PROTOTYPE the fn-ptr so an f32 arg goes via mfc1 not double-promote (cvt.d.s); short->int slot is `*(int*)p=sval` (lh+sw) not cvt.s.w. RESIDUAL = pure coloring cap (9 saved regs + spilled counter vs target's 8 + spilled loop-invariant)._
+- [Dual-back-edge loop shape (`do{}while(perma-0 flag); <dead tail>; goto top;`) unlocks saved-reg PROMOTION of loop-invariant data-template pointers; plain `do{}while(1)` re-materializes them inline (gl_func_00034EB4 53.84->94.01% 2026-06-23)](#dual-back-edge-loop-shape-dowhileperma-0-flag-tail-goto-top-unlocks-saved-reg-promotion-of-loop-invariant-data-template-pointers-gl_func_00034eb4-5384-9401-2026-06-23) — _A raw-word USO (re-)init orchestrator loops over a bank of fixed data-seg template ptrs (`&D + 0x1E484..0x1E508`, + base `&D+0`), each passed once/iter to a callback; target promotes the 4 templates to s5-s8 + base to s3 (9-saved-reg / 0x40 frame). Two levers: (1) ref templates as `(char*)&D_00000000 + off` NOT raw `(char*)0x1E484` — symbol form gives the target `lui 0x2 + signed addiu` with R_MIPS_HI16/LO16 relocs (raw-int = reloc-blind `lui 0x1 + ori`, never matches relocatable USO); (2) plain `do{}while(1)` leaves each template used once/iter and IDO RE-MATERIALIZES inline (small frame, no promotion) — give the loop the target's dual-back-edge shape `int s4=0; loop_top: <peel>; do{...}while(s4==0); <dead 0x6C tail>; goto loop_top;` so IDO rotates it into `beqzl s4` + never-taken fall-through, which raises perceived pressure enough to promote templates->s5-s8 + base->s3 and grow the frame exactly. Word count 144->167 (exact), 70->94% in one edit. RESIDUAL (cap): the &D_0 flag read CSE-folds onto base/s3 in our build vs target's throwaway `lui t6; lw t6,0(t6)`; same-symbol CSE-vs-recompute scheduler choice, permuter 1210->760 only via noise. Left NM at 94%._
 ## Quick reference by sub-topic
 
 ### uopt internals (allocator opened, 2026-06-11)
@@ -17059,3 +17060,49 @@ the probe makes obvious). Byte-exact: 224/224 words (incl. 3× the
 `arg0 + 0x20 + 0xFC` lazily and kept `arg0` in a temp; moving the
 `temp_s0 = arg0 + 0x20` assignment (typed `char*`) BEFORE the first call made
 IDO materialize `s0` early (`lw s0,sp; addiu s0,32`) to match the target head.
+
+## Dual-back-edge loop shape (`do{}while(perma-0 flag); <tail>; goto top;`) unlocks saved-reg promotion of loop-invariant data-template pointers (gl_func_00034EB4 53.84->94.01% 2026-06-23)
+
+A raw-word USO "(re-)init orchestrator" loops over a bank of fixed data-segment
+template pointers (`&D + 0x1E484 / 0x1E490 / 0x1E494 / 0x1E4A0`, plus the segment
+base `&D + 0`), each passed once per iteration to a callback. The TARGET promotes
+all four templates to `s5/s6/s7/s8` and the base to `s3` (computed once in a
+setup block, held across the loop), giving a full 9-saved-reg / `0x40` frame.
+
+Two separate levers were needed:
+
+1. **Encoding + relocs:** reference the templates as `(char*)&D_00000000 + off`,
+   NOT raw integer constants `(char*)0x1E484`. The symbol form makes IDO emit the
+   target's `lui 0x2 + signed addiu` (%hi/%lo) pair WITH `R_MIPS_HI16/LO16` relocs
+   against `D_00000000`; the raw-int form emits reloc-blind `lui 0x1 + ori` and can
+   never match a relocatable USO. (General rule for raw-word USO data refs.)
+
+2. **Loop SHAPE drives promotion.** A plain `do { ... } while (1)` leaves each
+   template used once-per-iteration and IDO RE-MATERIALIZES it inline every time
+   (recompute cheaper than a saved reg, by its heuristic) — frame stays small, no
+   promotion. Giving the loop the target's **dual-back-edge** shape promotes them:
+
+   ```c
+   int var_s4 = 0;            /* permanently 0 */
+   loop_top:
+       <peeled first part>;
+       do {
+           <body using t0..t3, base>;
+       } while (var_s4 == 0);  /* IDO: beqzl s4 back-edge */
+       <dead tail: 0x6C dispatch>;
+       goto loop_top;          /* IDO: unconditional b -> top (dead path) */
+   ```
+
+   IDO rotates this into a `beqzl s4` likely back-edge plus a never-taken
+   fall-through (the tail + `b top`). That shape raises the loop's perceived
+   register pressure/invariant-hoist value enough to promote the templates to
+   `s5-s8` + base to `s3` and grow the frame to the exact target layout. Word
+   count jumped 144->167 (exact) and ratio 70->94 in one edit.
+
+**Residual (genuine cap):** the `&D_0` flag read at the head (`*(int*)&D_00000000
+& 1`) CSE-folds onto the base register `s3` in our build (`lui s3;addiu s3;lw
+0(s3)`), whereas the target reads it into a throwaway temp (`lui t6; lw t6,0(t6)`)
+and keeps `s3`-setup in the later block; likewise the `lw 0x218(s3)` deref is
+re-materialized as a fresh `lui` in our build. Same-symbol/same-offset
+CSE-vs-recompute scheduler choice — permuter moved 1210->760 only via noise
+mutations (base++/base--, if(1){}), not clean source. Left NON_MATCHING at 94%.
