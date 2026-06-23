@@ -17186,3 +17186,31 @@ by hand. Sibling of the line ~13458 "-O1 STATEMENT-REORDER coloring levers"
 entry; the new rules this adds are (a) decl-order == REVERSE slot numbering as
 a FRAME-SIZE fix, and (b) register-flag s-reg pinning + dead-flag accumulator
 reuse to avoid a 3rd s-reg.
+
+## Inline a short-lived MASK (alignment-1) to free argument regs ($a1/$a2) for global-pointer bases — and let IDO hoist a `lui %hi` into an early branch delay slot
+
+When a function loads/stores several file-scope globals and ALSO has an early
+mask-test (e.g. a bump allocator: `if (size & (alignment-1)) size = ...`), the
+register IDO uses for the two global-pointer bases is sensitive to whether the
+mask `(alignment-1)` is held in a NAMED local or INLINED at its use sites.
+
+- Named mask var: IDO keeps it in a low reg and burns `$v0`/an arg reg on the
+  first global pointer base, scattering the base coloring.
+- INLINE the mask `(alignment-1)` at both the `&` test and the `& ~(alignment-1)`
+  rounding: IDO frees the dead argument registers ($a1 = alignment, $a0-adjacent)
+  and reuses `$a1`/`$a2` for the two global pointer bases. It ALSO becomes free to
+  hoist `lui %hi(D_second_global)` up into the EARLY mask-test `beqz` delay slot
+  (instead of the masked-size `addu`), exactly matching targets that materialize
+  both global addresses up front.
+
+Pair this with an explicit `r = v; if (cond) r = 0; return r;` early-result-set
+to reserve `$v0` for the return value through the body — together these collapse
+the address-materialization + load/store regions to an exact match.
+
+Validated: kernel func_800000B0 (1080 bump allocator), 11 mnemonic diffs -> 7
+(15/26 -> 18/25 insns). The residual 7 are an unrelated +1-insn structural cap
+(preemptive `move v0,v1` before sltu + double `jr ra`, 25 vs natural 24 insns)
+that no C shape forces and the permuter can't reach. Sibling of the "Inline
+expression keeps $t-regs / named local moves to $v" family, but the lever here
+is specifically about freeing ARGUMENT regs for GLOBAL-POINTER bases + the
+branch-delay-slot `lui %hi` hoist, not $t-vs-$v on a single value.
