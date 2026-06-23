@@ -6,6 +6,7 @@ _10 entries. Auto-generated from per-memo notes; content may be rough on first p
 
 ## Index
 
+- [Kernel rmon switch fns (func_8000858C / func_80001EC8) reference jumptables that DON'T EXIST in the retail ROM — splat-auto `jtbl_*` symbols resolve to audio/string data; NOT C-fixable](#kernel-rmon-jumptable-resolves-to-data-not-table) — _The `lui;addu;lw;jr` dispatch in these dead rmon-disassembler fns hardcodes an ABSOLUTE address (0x8000AA90 etc.) which in the retail link holds audio coefficients / panic strings, not code pointers. No run of case-target words (0x800085F0..0x800087C0) exists anywhere in the kernel region. A C `switch` always emits a LOCAL PC-relative table in its own TU's .rodata — it can neither hardcode the foreign absolute address nor reproduce bytes that aren't a table. Permanent INCLUDE_ASM cap; not a splat-relayout fix._
 - [bootup_uso FP literal pool is splat-folded into func_0000098C — 3 mis-attributed f32/f64 consts block func_0000E270/D900/E2D0](#bootup-uso-fp-literal-pool-folded-into-func-0000098C) — _splat disassembled the bootup_uso FP constant region (vram 0x990-0x9A8) AS code because the USO segment has no literal-pool symbol; `func_0000098C + {0x4,0xC,0x14}` are really f64/f32/f64 constants. Fix = splat-config literal-pool break-out + re-extract (deferred, multi-file)._
 
 - [1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches](#feedback-1080-rsp-ucode-not-f3dex2) — Spiked 2026-05-04.
@@ -18,11 +19,21 @@ _10 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [N64 ucode IMEM + DMEM can live in different ROM segments — search both before declaring a blob "non-ucode"](#feedback-n64-ucode-imem-dmem-split-across-segments) — _1080 stores gfx ucode IMEM (5 KB each, F3DEX 1.x family) in `game_libs` segment ROM 0xDFA43C+, but the paired DMEM data tables (0x800 each) in `bootup_uso_pre` ROM 0xDB7140+.
 - [n64sym is unreliable](#feedback-n64sym) — n64sym has very high false positive rate — validate ALL names against real function prologues before using
 - [gui_uso has inline CPU-side RDP display-list builders (texture-load Gfx fragments) via a GfxCtx idiom — recognize by `0xFD10/0xF510/0xE600/0xF400/0xE700/0xF200/0x700` constant lui's + no calls/branches](#feedback-gui-uso-inline-rdp-dl-builder) — _A no-call/no-branch function emitting paired words via `g=(ctx*)a0->0xC; i=g->idx; g->idx=i+1; slot=(int*)g->buf + i*2; slot[0]=w0; slot[1]=w1;` (a0->0xC reloaded TWICE per packet) is a hand-built RDP DL fragment, not opaque data. Top-byte constants decode as G_SETTIMG(0xFD)/G_SETTILE(0xF5)/G_RDPLOADSYNC(0xE6)/G_LOADTILE(0xF4)/G_RDPPIPESYNC(0xE7)/G_SETTILESIZE(0xF2). Verified gui_uso_func_0000413C 2026-05-17: 7-packet texture-load sequence; args = texW/texH/fmt. The GfxCtx double-reload idiom ×N + cross-packet constant CSE drives a regalloc cascade that no first-pass C reproduces (1% first attempt) — multi-run sub-80 target; decode-comment the packet formulas for forensic value._
+- [game_uso D_807FE6xx/9xx data symbols are HI16-ONLY-UNPAIRED in expected — any fn referencing them is a reloc-form cap (decode-only)](#game-uso-hi16-only-unpaired-reloc-cap) — _expected/game_uso.c.o references these data syms with R_MIPS_HI16 and NO R_MIPS_LO16 anywhere (LO16/displacement baked at assembly time, syms = 0). IDO from any C extern-symbol form always emits a HI16+LO16 PAIR (verified: `&SYM+K`, `*(int*)((char*)&SYM+K)`, and the `extern int SYM[]; SYM[K/4]` array-fold all emit the pair), so the reloc SET is unreproducible. Classify with `objdump -r game_uso.c.o | grep 807FE | grep -c LO16` (== 0) BEFORE attempting; reconstruct callees/globals for decode value but leave NON_MATCHING. game_uso_func_00003018/000018FC (2026-06-22)._
 - [1080 game_libs contains IDO-compiled libultra ports — recognize __osViSwapContext by the VI register block (0xA4400000..34) write fan-out](#feedback-game-libs-libultra-ports-vi-fingerprint) — _A game_libs fn that fans out stores to the absolute VI register block (`*(s32*)0xA4400000`..`0xA4400034`) preceded by a VI_CURRENT(0xA4400010)&1 field-parity read IS libultra's `__osViSwapContext`. Copy the structure from references/libreultra/src/io/viswapcontext.c. Caps at ~52% because __osViNext/__osViCurr are distinct globals that reloc-collapse to &D_00000000. Verified gl_func_00070C44 2026-06-03._
 - [Splat-bundled "function" with 100+ jr-ra-byte patterns is opaque data — but its TYPE (RSP ucode vs GFX DL data vs other) needs forensic check](#feedback-rsp-microcode-mistaken-for-code) — _When a bundled "function" has anomalous size (50+ KB) with high `grep -c 03E00008` count, it's NOT CPU code — that part of the original claim still holds. (See 2026-05-18 ADDENDUM in that section: the SMALL sub-16 KB "tiny real fn + misID-data tail" variant — realjr/`grep 03E00008` is inflated by the data tail and is NOT a bundle signal unless inter-return words are valid o32. ADDENDUM 18b: no-frame-leaf bundles read as a FALSE single function — use jr-spacing not prologue count. ADDENDUM 18c: `grep 03E00008` UNDER-counts — register-indirect `jr $rN` jump-table dispatch is invisible to it; use `grep -nE '0[0-3][0-9A-F]00008'` on dispatch-heavy code.)_
 
 
 ---
+
+<a id="game-uso-hi16-only-unpaired-reloc-cap"></a>
+## game_uso D_807FE6xx/9xx data symbols are HI16-only-unpaired (reloc-form cap)
+
+_2026-06-22 (agent-i, game_uso_func_00003018). A family of game_uso data symbols (`D_807FE608`, `D_807FE620`, `D_807FE964`, `D_807FE96C`, `D_807FE970..98C`, `D_807FE9B8`, …; all `= 0` in undefined_syms_auto.txt) is referenced in `expected/src/game_uso/game_uso.c.o` with **R_MIPS_HI16 relocs that have NO paired R_MIPS_LO16 anywhere in the object** — the LO16/displacement was baked into the instruction at assembly time. Check: `mips-linux-gnu-objdump -r expected/src/game_uso/game_uso.c.o | grep 807FE | grep -c LO16` returns 0 while the HI16 count is 60+._
+
+- **Why it's a cap:** IDO compiling from C emits a HI16+LO16 reloc PAIR for every `extern` data-symbol reference. Tested and all produce the pair (so the reloc SET diverges, e.g. build 12 HI16 + 12 LO16 vs expected 19 HI16 + 0 LO16): `(char*)&SYM + K`, `*(int*)((char*)&SYM + K)`, and the `extern int SYM[]; SYM[K/4]` array-index fold (the [doc-127 fold](IDO_CODEGEN.md) does NOT apply to these). The expected's HI16-only form comes from the original build's symbol resolution, not C.
+- **Contrast with `&D_00000000 + K`:** the special base symbol `D_00000000` (= 0) gets its HI16/LO16 relocs *applied and stripped* in `expected/` (no reloc remains; final bytes), so matched siblings like game_uso_func_00003ED4 (`(char*)&D_00000000 + 0x90`) match byte-exact even though the build emits a HI16+LO16 pair against `D_00000000`. The named `D_807FE*` syms keep their HI16 reloc unresolved instead — that's the difference.
+- **Workflow:** before attempting any game_uso fn, `grep 807FE … grep -c LO16` on its reloc range. If 0, it's decode-only — reconstruct the real callees/globals/structure for forensic value (placeholder→real swap preserves logic) but leave NON_MATCHING. No matched game_uso fn references these symbols; the unmatched sibling game_uso_func_000018FC has the identical cap. (Secondary gap on 00003018: the dead min/max Vec3 buffers + their ent copies are genuine IDO -O2 dead stores the target emits anyway — array/held-ptr/Tri3i-copy forms all get dead-stripped, same unsolved gap as 18FC.)
 
 <a id="feedback-game-libs-libultra-ports-vi-fingerprint"></a>
 ## 1080 game_libs contains IDO-compiled libultra ports — VI register block fingerprint
@@ -847,3 +858,59 @@ bytes, e.g. 5C50's table address holds the command-name STRINGS).
 Disposition: permanent INCLUDE_ASM; no C can match a handwritten
 runtime-table dispatch. Check the table's SECTION before attempting
 any jumptable synthesis or graft.
+
+<a id="kernel-rmon-jumptable-resolves-to-data-not-table"></a>
+## Kernel rmon switch fns: jumptable resolves to DATA, the table doesn't exist in the ROM (func_8000858C / func_80001EC8 — NOT C-fixable)
+
+_2026-06-23 (agent-b). Investigated the "kernel jumptable-mislabel" cap on
+func_8000858C (rmon MIPS-insn single-step disassembler, two jr-tables) and
+func_80001EC8 (USO section-record loader, one jr-table). Conclusion: NOT
+FIXABLE — the jumptables these functions dispatch through do not exist as
+code-pointer tables anywhere in the retail baserom._
+
+**The dispatch is an ABSOLUTE-addressed external load, not a local switch table.**
+The code shape is `sll tN,idx,2; lui at,%hi(jtbl); addu at,at,tN; lw tN,%lo(jtbl)(at); jr tN`.
+The `lui 0x8001` / `lo` pair hardcodes a single FIXED absolute address:
+- func_8000858C → `jtbl_8000AA90` (op = (insn>>26)&0x3F, bound `sltiu 0x18`, no bias → base = 0x8000AA90) and `jtbl_8000AAF0`.
+- func_80001EC8 → `jtbl_8000A64C` (idx = (val-1), bound `sltiu 0xC` → base = 0x8000A64C).
+
+These `jtbl_*` symbols are **splat-AUTO-generated** (undefined_syms_auto.txt:
+`jtbl_8000AA90 = 0x8000AA90;` etc.) — splat saw the lui/lw/jr shape and minted
+a symbol at the computed absolute address. The `expected/.../kernel_*.c.o`
+references them as **undefined externs** (R_MIPS_HI16/LO16, `U jtbl_8000AA90`
+in nm) only because `expected` is just the assembled `.s` — that's a tautology,
+it tells you nothing about original source structure.
+
+**The bytes at those addresses are NOT a jumptable.** Reading the retail baserom
+(vram 0x8000XXXX → rom 0x1000 + (vram-0x80000000)):
+- 0x8000AA90 / 0x8000AAF0 → audio coefficient data (signed 16-bit pairs like
+  `F467F6AA`, `0B2B0B8B`), no 0x800xxxxx code pointers.
+- 0x8000A64C → ASCII rmon panic strings ("SP Break\n", "HitCpuFault\n").
+  (Contrast 0x8000A700–0x8000A74C, which DOES hold a real pointer run —
+  0x80008B9C ×12, 0x80008AB4 ×4 — belonging to a *different* function.)
+- An exhaustive scan of the entire kernel region (rom 0x1000..0xBBC0) for ANY
+  run of words in the case-target range 0x800085F0..0x800087C0 (the func_8000858C
+  case-body addresses), and for any individual case-body address, finds NOTHING.
+  The table for these functions is simply absent from the ROM.
+
+**Why it's permanent (not a splat-relayout fix):**
+1. A real table doesn't exist to extract — there is no symbol/section edit that
+   surfaces it. (Distinct from the 5C50 biased-index case above, where a real
+   adjacent table existed BELOW the symbol; here the index has no bias that
+   moves the base off the data, and no pointer run exists anywhere.)
+2. Even if it did, IDO compiles a C `switch` to a **TU-local PC-relative** table
+   (a `$LXXX` label in *this* file's .rodata, placed by the linker at the
+   kernel .rodata vram ~0x8000DE60+). C cannot (a) hardcode a foreign absolute
+   address like 0x8000AA90, nor (b) emit a table into the middle of the
+   matching audio/string blob — doing so would relayout the whole kernel data
+   region and break the byte-identical ROM (the residue=414 reloc-word drift cap).
+
+**Interpretation:** these are dead/stripped rmon debug-monitor functions in the
+retail build. The rmon disassembler's jumptables were never linked into retail;
+the absolute `jtbl_*` references dangle onto addresses now occupied by
+audio/string data. The functions are not reachable at runtime in retail.
+
+**Recognition / don't-regrind:** kernel rmon fn + `lui 0x8001;...;jr tN` dispatch
++ splat-auto `jtbl_8000Axxx` symbol → read the baserom at that absolute vram.
+If it's not a 0x800xxxxx pointer run, it's this cap. Leave INCLUDE_ASM, no
+episode. Same class blocks any other rmon `jtbl_*` dispatch.
