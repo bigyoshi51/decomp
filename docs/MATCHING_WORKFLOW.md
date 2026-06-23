@@ -70,6 +70,7 @@ _74 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [`objdiff-cli report generate` is reloc-NAME-BLIND; only `objdiff-cli diff` is name-aware — the report/land gate CANNOT validate a USO call target, even with symbolized expected](#feedback-objdiff-report-name-blind-vs-diff-name-aware) — _Controlled proof: a wrong R_MIPS_26 target symbol scores 99.17% under `objdiff diff` but 100.0 under `report generate` (and the land `byte_verify` is also name-blind: jal 0 == jal 0). Symbolizing expected does NOT un-fool the gate. Validate USO targets against the ROM reloc table (`scripts/uso-reloc-encode.py` extractor vs decoded TextReloc), never objdiff. Refutes the "symbolize expected → genuine 100" rollout recipe; 2026-05-25._
 - [Raw-word byte-compare is BLIND to reloc targets — a pure symbol-reference leaf (lui 0 / lw 0) byte-matches regardless of WHICH symbol the reloc points at](#feedback-byte-compare-blind-to-reloc-target) — _Comparing built `.text` words to the `.s` raw words can't verify reloc-bearing instructions: in both, the immediate of `lui %hi(SYM)`/`lw %lo(SYM)`/`addiu %lo(SYM)`/`jal SYM` is 0 (the linker/objdiff fills it). For a leaf whose ENTIRE content is a symbol reference with no discriminating literal offset — e.g. `return D_X` = `lui v0,0; jr ra; lw v0,0(v0)` — two functions referencing DIFFERENT globals produce IDENTICAL raw bytes. The recognizer reports MATCH but the reloc symbol may be wrong (false positive). When the function's only content is a reloc'd symbol ref with offset 0, verify the reloc target separately (`objdump -r`) or skip. Functions WITH a non-reloc'd discriminating offset (e.g. the lbu/sb `0x2C40` in the D_-table triplet) are safe — the offset confirms identity. Verified 2026-05-23 (deferred game_libs 38B94/666F0/3487C/44CB0)._
 - [De-alias a raw-word USO decode into the REAL reloc-table symbols — big DECODE-% lever (5.63%→75.30%)](#de-alias-into-the-real-reloc-table-symbols--the-big-decode--lever-for-raw-word-uso-563-7530) — _When a large NM decode paraphrases EVERY call/global through one catch-all extern (`<seg>_alias()`), the distinct R_MIPS_26/HI16-LO16 targets all collapse to one symbol and score terribly (timproc_uso_b5_func_00005FC0: 5.63% reloc-masked, 284 vs 245 insns, frame shifted). The distinct names ARE in `expected/.../<seg>.c.o`'s reloc table — `objdump -dr` prints each `R_MIPS_26 <name>`/`R_MIPS_HI16 <name>`. Declare those exact externs and call them directly (each callee→distinct extern; global→`&SYM[+off]`); relocs then resolve to the target's symbols → match jumps to 75.30%. Inverse of the `&D_00000000`-CSE rule: use real names when known, `&D_00000000` only as placeholder fallback. Gotchas: in-TU callees already prototyped → forward-decl matching their return type (don't conflict); int-return→char* needs `(char*)`; `lh`=s16 / `lwc1`=f32; FP `var*const` → write const-first for IDO reg coloring. DISTINCT from the oversized-CSE-constructor REGRESSION (func_00004118): there symbolizing an already-oversized body ADDS words & drops fuzzy; here the body is correctly-sized and de-aliasing only fixes symbols. Residual = m2c-vs-IDO jumptable + FP spill ordering (decode-only, no episode). 2026-06-22._
+- [After de-aliasing data bases: an UNPAIRED HI16 on a NON-page-aligned symbol is a hard decode-only cap (C can't suppress the LO16)](#unpaired-hi16-nonaligned-symbol-decode-only-cap-2026-06-23) — _When de-aliasing a USO decode (entry above), some data bases score the SAME or barely move because the TARGET reaches them by `lui %hi(SYM)` (R_MIPS_HI16) + an addiu whose immediate is a baked, UN-relocated literal (NO R_MIPS_LO16). C's `&SYM + off` ALWAYS emits a HI16/LO16 pair (objdump -r shows R_MIPS_LO16 on your addiu) — you cannot make those byte-exact. This is the USO link-direct form where the loader patches only HI16. CONFIRM it's a real cap (not a page-aligned omission): `printf '%x\n' $((0xSYMADDR & 0xFFFF))` — if low16 != 0 the symbol is non-aligned, so target's plain-immediate addiu can ONLY come from loader-patched-HI16, never from C. If low16 == 0 it's page-aligned and a single lui suffices (matchable). Same family as the jr-external-rodata cap (line ~197) but for ordinary data bases, not jumptables. mgrproc_uso_func_00002B7C: 5 non-aligned bases (import_8024CAF8/8025CAF8/80264A28/80264A3C/80263D48), all HI16-unpaired → decode-only; de-aliasing fixed the 6 R_MIPS_26 callees + control flow but the data-base lui's stay capped. 2026-06-23._
 - [1080's land script now accepts byte-verify against expected/.o as an alternative to fuzzy=100.0](#feedback-land-script-accepts-byte-verify-for-post-cc-recipes) — _As of commit bbc3b6e (2026-05-04), `scripts/land-successful-decomp.sh` lands a function if EITHER `fuzzy_match_percent == 100.0` OR `mips-linux-gnu-objdump` of the function's disasm in build/<unit>.c.o equals…
 - [Trapped-exact-match scan: report.json fuzzy=100 for NM wraps is TAUTOLOGICAL — scan the non_matching .o, watch nop/reloc caveats, and know promotion is metric-neutral](#feedback-trapped-match-scan-and-metric-neutrality) — _To find "trapped" exact matches (NM-wrapped functions whose C is actually byte-exact), do NOT trust report.json's `fuzzy_match_percent==100` — for any `#ifdef NON_MATCHING/#else INCLUDE_ASM` function the report measures the DEFAULT build (=INCLUDE_ASM=target=100, tautological). Correct scan: build `build/non_matching/<file>.o` and diff the function vs `expected/.o`. TWO false-positive classes survive even a 0-diff non_matching compare: (a) **leading-nop functions** — the C body matches but the ROM function has 2 leading `nop`s a C body can't emit (`void f(void){}` → `jr ra;nop` only); these carry a "stays NM / leading-nop injection banned" comment — respect it. (b) **function-address / &D relocs** — a disasm-string diff can't see a wrong reloc SYMBOL (jal 0 == jal 0); verify with the land script's reloc-aware gate (un-wrap → `objdiff-cli report generate` on the DEFAULT build → must read 100). Clean candidates: leaves with no calls/relocs/nops (e.g. pure FP math `a*d-b*c`, verified-byte-exact-but-never-promoted). **Metric note: promoting an already-100% trapped match does NOT move the objdiff byte-match count** (it already counted the INCLUDE_ASM as 100) — it IS real asm→C decomp progress (needed for the PC port) but won't bump the headline %; cracking a <100% wrap (e.g. via a regalloc/decl-order lever) is what moves the count. 2026-05-28: game_libs_func_0005C4CC promoted (count unchanged 1671)._
 - [byte_verify against build/.o is circular for NM-wrapped functions — use build/non_matching/.o](#feedback-include-asm-tautology-trap) — _The land script's `byte_verify` globs `build/.o` and compares to `expected/.o`. For any function wrapped in `#ifdef NON_MATCHING / #else INCLUDE_ASM`, both paths contain the same ROM bytes by construction (default build takes the `#else`, expected/ is generated via INCLUDE_ASM) — the comparison is trivially true regardless of whether the C body matches. Combined with `ensure_not_include_asm` silently passing when rg isn't on PATH (Claude Code agent sessions have rg as a shell function, not a binary), false-positive episodes accumulated. Fixed 2026-05-06: byte_verify routes to build/non_matching/ when src has INCLUDE_ASM for the function; ensure_not_include_asm uses POSIX grep -r; new `scripts/validate-episodes.sh` re-runs the full gate as defense-in-depth._
@@ -1010,6 +1011,44 @@ coloring (nudged one more diff off). Residual cap = m2c-vs-IDO jumptable
 (`.rodata` vs the named `<seg>_D_807FF1B0` table) + FP spill-slot ordering;
 that's decode-only (no episode, raw-word USO can't reach fuzzy=100). Verified
 2026-06-22 (timproc_uso_b5_func_00005FC0).
+
+---
+
+## After de-aliasing data bases: an UNPAIRED HI16 on a NON-page-aligned symbol is a decode-only cap {#unpaired-hi16-nonaligned-symbol-decode-only-cap-2026-06-23}
+
+When you de-alias a raw-word USO decode (entry above), the **call** relocs
+(R_MIPS_26) and page-aligned data bases resolve and the score jumps. But some
+data bases barely move. Diagnose with `objdump -r expected/.../<seg>.c.o`: if a
+data base is reached by a **lone `R_MIPS_HI16`** with **no matching
+`R_MIPS_LO16`** (the addiu's immediate is a baked, un-relocated literal), it is a
+hard **decode-only** cap.
+
+Why C can't reproduce it: `&SYM + off` in IDO C **always** emits a HI16/LO16
+**pair** — your build's `objdump -r` will show an `R_MIPS_LO16` on the addiu that
+the target does not have. The target form (HI16 only, plain-immediate addiu) is
+the **USO link-direct** layout where the loader patches only the HI16 and the
+offset is folded into the addiu.
+
+**Confirm it's a true cap (not just a page-aligned single-lui):**
+```
+printf '%x\n' $((0xSYMADDR & 0xFFFF))   # SYMADDR = the import_8025CAF8-style base
+```
+- low16 **== 0** → symbol is page-aligned; a single `lui` with no addiu suffices,
+  and C *can* match it. Not a cap.
+- low16 **!= 0** → non-aligned; the target's plain-immediate addiu can only come
+  from a loader-patched HI16, never from a C `&SYM+off` (which would need the
+  LO16). Permanent decode-only cap for that lui/addiu pair.
+
+Same root cause as the jr-external-rodata cap (`#jr-external-rodata-table-unmatchable-2026-06-20`)
+but for ordinary data bases rather than jumptables — there's no jr involved, just
+a data load whose base lui is HI16-only.
+
+Verified 2026-06-23 on `mgrproc_uso_func_00002B7C`: five non-aligned bases
+(`import_8024CAF8`/`8025CAF8`/`80264A28`/`80264A3C`/`80263D48`, all low16 != 0)
+are HI16-unpaired in the target. De-aliasing fixed the six distinct R_MIPS_26
+callees + full control flow + the duplicate `->0x568` load, but the data-base
+lui's stay capped (plus a 5-saved-reg/frame coloring residual and a loop-IV
+strength-reduction tie). Stays NON_MATCHING.
 
 ---
 
