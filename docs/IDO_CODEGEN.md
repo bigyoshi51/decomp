@@ -2551,6 +2551,25 @@ div.s` is if the original C had a non-divisor expression that incidentally
 emits as 2.0f at the asm level — there's no C lever from the simple `/2.0f`
 form. Defer to permuter or leave NM.
 
+**REFINEMENT (2026-06-23, bootup_uso func_00000610):** the exact-reciprocal fold
+fires at const-propagation time, so it can be defeated by a divisor IDO cannot
+prove constant — but only ways that ADD instructions/stores the target lacks:
+- A *branch-fed* local (`float k; if(sel) k=4.0f; else k=4.0f; a=x/k; b=y/k;`)
+  DOES emit the exact target shape `lui 0x4080; mtc1 at,$f0; div.s; div.s` with
+  NO stack store, $f0 reused for both divides. (Confirmed byte-shape.)
+- A *global* divisor (`float gk; x/gk`) emits `lwc1 $fN,0(at); div.s` (load, not
+  lui/mtc1 immediate) — diverges.
+- A plain single named local `float d=4.0f; x/d` STILL reciprocal-muls (the
+  "named local" lever above does NOT apply to exact-power-of-2 — re-confirmed).
+So the no-store `lui 0x40xx; div.s` form is reachable ONLY if the ORIGINAL C
+genuinely had a non-foldable 4.0 (a real branch/variable that happens to be 4.0
+at runtime). You cannot fabricate the branch from an honest `/4.0f` literal —
+that would be contriving control flow that isn't in the function. So: if the
+function's logic truly has no such variable, this stays an honest cap; if it
+plausibly does (a divisor selected by a mode/flag already in the function), the
+branch-fed form is the legitimate match. func_00000610 had no such variable →
+left NM.
+
 **Rule 2 — mtc1 load-delay nops**:
 
 After `mtc1 rN, fM`, the float register fM has a 1-cycle load-delay
