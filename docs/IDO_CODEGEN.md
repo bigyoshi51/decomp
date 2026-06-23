@@ -3687,6 +3687,8 @@ _When target emits `*(int*)&X = 0` (naked store: single `lui at; sw 0(at)`, 2 in
 - `feedback-ido-cse-bust-via-distinct-externs` — for same-call-arg CSE
 - `feedback-ido-type-split-unique-extern-breaks-cse` — type-split for arg-list CSE
 
+**REFINEMENT 2026-06-23 (`func_80001184`, 81.58% → 82.11%): prefer a DISTINCT-EXTERN alias on the STORE over near-symbol pointer-arith on the bound.** The near-symbol form (`end = D_80012D3C + 8`) breaks the CSE but RE-DERIVES `end` from the D3C base — emitting an extra `lui` + `addiu N` and swapping which symbol lands in which $v reg vs the target's clean `lui v?,%hi(D5C); addiu v?` direct load. Cleaner: declare a second extern at X's address (`D_80012D5C_alias = 0x80012D5C;` in `undefined_syms_auto.txt`) and use it ONLY for the naked store (`*(s32*)&D_80012D5C_alias = 0;`), keeping `end = &D_80012D5C` for the bound. The store stays naked-`$at` (alias post-links byte-identical) AND `end` keeps the direct D5C `lui;addiu` form. The alias-vs-real symbol name shows as an objdiff diff word but the LINKED bytes are identical (both resolve to 0x80012D5C). Also: write the loop test as `if (end != ptr)` (constant-bound first) to get `bne v1,v0` matching the target operand order. Residual after both = two emit-shape caps only: (a) D34 naked-`$at` MERGE — IDO 7.1 never reuses `$at` across consecutive naked absolute stores (re-`lui`s each; any base-sharing C form moves the base into a GPR, not `$at`), confirmed by direct cc probes at -O1/-O2/-O3/mips1/mips2; (b) reg-renumber — IDO gives the loop-incremented `ptr` the LOWER $v reg and the constant bound the higher, opposite the target; decl/assign-order + register hints don't flip it. Function stays NON_MATCHING.
+
 ---
 
 ---
