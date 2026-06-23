@@ -1372,6 +1372,14 @@ Target 0x7AC0 is PAST the function's own end 0x7AB8. Looking at the next functio
 
 So 7A98's null-case uses 7ABC's "nop; jr ra; mov.s f0, f2" as its return tail, sharing 3 instructions of code.
 
+## A 3-piece splat-split function (front + alt-entry preamble + main/epilogue) can be ONE function whose middle pieces are ALSO standalone jal targets — reconstruct the whole, but expect the SAME cap as its in-file siblings
+
+_When a near-miss target has NO `jr ra`, a prologue that allocates a frame restored only in a LATER symbol, and a `b` into a later symbol's epilogue, it is the FRONT of a function splat cut into pieces. The middle/tail pieces may each ALSO be independent `jal` targets (alt-entries) — that does NOT block reconstruction: re-export their addresses via `undefined_syms_auto.txt` (already standard) and they resolve into the merged body; the bytes are one contiguous blob either way. The merged whole is the only genuine match path (a standalone C function always emits its own epilogue, so the front piece can never byte-match alone)._
+
+**1080 case (func_800009EC + func_80000A88 + func_80000A98, kernel_000.c):** USO module loader. Front 0x9EC (no jr ra, frame -0x80), 4-insn alt-entry preamble 0xA88 (no prologue, falls through), main loop + shared epilogue 0xA98 (`.L80000C70` is the restore/jr). m2c on the concatenated .s (add a `.L` label for any raw `func_8000XXXX` branch target inside the range) produced a clean, correct merged decompilation in one shot.
+
+**Key lesson — classify the residual against in-file siblings BEFORE spending permuter time.** The merged reconstruction was instruction-shape-exact (same callees, error codes, unrolled cleanup loops, return) but built 191 insns vs 167 — a genuine -O2 register-coloring cap: the per-iteration module base `0x800130A0` was not promoted to a saved reg (so -O2 rematerializes it each iteration), plus s1/s2 coloring swap and `lui;ori` vs target `lui;addiu` for two no-reloc absolute constants. This is the IDENTICAL cap already documented in the same file for siblings `func_8000085C` / `func_800007D4` / `func_800008F0` (failed levers: register hints, decl-order permutation, CSE-hold of the shared base). When a reconstruction's residual matches a sibling's known cap, it is the same cap — keep `#ifdef NON_MATCHING`, don't re-run the sweep.
+
 **Why it's unreproducible:**
 
 From standalone C for 7A98:
