@@ -7683,10 +7683,9 @@ Build dispatch from C `if (v == 0) { ... } else if (v == 1) { ... }`:
 
 When target asm dispatch starts with `addiu $at,zero,N; beql v0,zero,...; <lw delay>; beql v0,$at,...; <lw delay>; b end`:
 - Recognize this as a switch (case 0 + case N).
-- Don't grind C if-else trying to flip to beql — it won't.
-- Write the if-else C with logic-correct semantics, NM-wrap.
-- Document the switch-vs-if-else gap as the structural cap.
-- Logic-correct decode IS forward progress (sets up struct types, callee signatures), even if .o-level objdiff stays NM.
+- **Write it as a C `switch`, NOT if-else — `switch` DOES reproduce the beql-chain + delay-slot lw-preload dispatch byte-for-byte** (UPDATE 2026-06-23; the original "unreachable / NM-wrap and accept" verdict below was for the *if-else* form only and is now superseded for the dispatch shape). Confirmed on `arcproc_uso_func_00000FA8` (sparse cases 0,1,4 WITH lw-preload delay slots): an if-else cascade emitted plain `bnez`/`bne` (137 insns, dispatch all wrong); the identical logic as `switch (state) { case 0:…case 1:…case 4:… }` emitted the exact `beqzl s0,case0; <lw delay>; beq s0,1,case1; beql s0,4,case4; b end; <lw ra delay>` dispatch (115 insns, dispatch byte-exact). This holds for ≥3 sparse arms WITH lw-preloads, not just the 2-case store variant noted below — the rodata-jumptable fear is moot for a single-symbol function (`.text`-only objdiff doesn't score the generated `.rodata`; see docs/PATTERNS.md "rodata-jumptable cap is FALSE for a single symbol").
+- **Lever to pin the discriminant into the right reg:** if the target reads `state` into a *saved* reg (e.g. `lw s0,…` then reuses s0 as a case-body loop counter), declare ONE variable for both and reuse it (`int i = state; switch (i) { case 0: … i = count-1; do{…}while(i>=0); … }`). The discriminant then colors into the same saved reg as the counter, matching the target's `lw s0` dispatch exactly.
+- Logic-correct + dispatch-exact decode IS forward progress even if a residual coloring diff (e.g. a loop-carried base held in `$v0`-across-call vs our `$sN` spill) keeps it NM.
 
 **Symptom signature (3-arm beql sparse switch):**
 - 1 register prep (`addiu $at,zero,N`)
