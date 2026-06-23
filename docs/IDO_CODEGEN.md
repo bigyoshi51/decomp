@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Compute a value AFTER a call so its source stays live in a saved reg — EVICTS a hoisted loop-invariant constant from the saved-reg file (gui_func_00000D04 71→95.74% 2026-06-23)](#compute-a-value-after-a-call-to-keep-its-source-live-in-a-saved-reg--evicts-a-hoisted-loop-invariant-const-gui_func_00000d04-2026-06-23) — _A per-char render loop stuck with a loop-invariant literal (`' '`=32) hoisted into a SAVED reg (`li s8,32`), shifting every other saved-reg down by one (`i`→s7 not s8, `p`→s6 not s7) = systematic coloring cascade. The target has higher saved-reg pressure that denies the const a saved home (uses `li at,32` per-iter instead). To recreate the pressure: take a value derived inside the loop (here the masked glyph index `gi=(unsigned char)g`) and compute its DEPENDENT (the masked offset / pointer) AFTER an intervening call rather than before — that forces `gi` to be saved across the call (a value only gets pinned to a callee-saved reg if it's used AFTER a call). The newly-pinned saved value occupies the reg the const wanted, evicting the const to a temp and shifting all the loop regs up to match (single biggest jump on this fn, 82→94%). Companion levers on the same fn: (a) loop bound = per-char callback's RETURN re-evaluated each iter (peeled `if(c){do{}while(c);}`, `(unsigned)` cmp → sltu/beqzl); (b) a re-derived array index masked to a byte uses `(unsigned char)g` (target `andi 0xff`) — first lookup raw, second masked; (c) hold a twice-used field in a named local (target s0); (d) keep only the OFFSET and re-derive the base per field access (matches target's re-read). Residual ~4% = pure as1 scheduling/coloring ties (RDP-const ori/lw order, delay-slot move placement, `lbu` dest + `move a0,v0`). NM at 95.74%, 128/128 insns._
 - [`goto`+two `return 0;` → `do/while` MERGES the loop-skip and loop-exit into ONE shared epilogue tail (kills a +2-word structural diff); pair with `new_var=&p->field` store-target hoist (kernel func_80002250 56→23 words 2026-06-23)](#gotowhile-shared-tail-merge--store-target-hoist-kernel-func_80002250-2026-06-23) — _A loop guarded by `if (count>0){ loop... ; return 0; } return 0;` written with a `goto loop;` body emits TWO `or v0,$0` + a `b` (the count<=0 skip jumps to the outer return; the loop-completion has its own return) = +2 words vs target. Rewriting as `if (count>0){ do{...}while(cond); } return 0;` makes BOTH the `blez` skip and the loop-bottom fall through to ONE shared `v0=0; epilogue` tail — size snaps to exact and the diff collapses (56→25). Then hoisting a write's address into a named pointer BEFORE the write (`p=&v1->4; *v=...; *p=load;`) trims 2 more (25→23) by reordering the store-target materialization. Residual 23 = a genuine candidate-creation-order coloring cap: arg0(read-only param) vs the loop counter(IV passed as 4th call-arg) contesting the single saved $s0; target keeps arg0 in $s0 (frees $a0 for the index `lh`) + counter in $a3 (nop call-delay), our build reverses it. Permuter (>18k iters, reseeded) finds NO clean zero — its only sub-23 hit corrupts the counter (rejected). FAILED levers (don't re-try on this shape): decl-order swap, `register`/plain `void*self=arg0` alias (forces a copy, worse), `register` on the counter, counter-copy for the call arg._
 - [Declaring a loop-invariant table-base pointer INSIDE the loop body forces IDO to recompute it each iteration — fixes unrolled-loop coloring caps](#declaring-a-loop-invariant-table-base-pointer-inside-the-loop-body-forces-ido-to-recompute-it-each-iteration--fixes-unrolled-loop-register-coloring-caps-kernel-func_80000e8c-2026-06-23) — _Fixed-count global-table scan that IDO -O2 unrolls x4 stuck at ~97% with a PURE coloring residual (instructions/order byte-exact, registers permuted)? Move the loop-invariant `tbl=(T**)&D_GLOBAL` decl INSIDE the loop body — IDO then recomputes the base each iter, changing which regs are free in the unrolled body, and coloring snaps to target. Recipe: (1) `for(i=0;i<COUNT;i++)` literal count so IDO folds the trip count into prologue+4x-unroll; (2) direct member-access add order `e->fA + e->fB`; (3) base-decl-in-loop. Found via permuter (425→40), hand-applied to 100% + byte-identical ROM. kernel func_80000E8C 61.8%→100%. Also: target `lw v0,0(v0)`/%lo(D+4) vs build `lw v0,4(v0)`/%lo(D) resolve to identical bytes post-link — don't count reloc-base+offset as diffs._
 - [Sibling NON-unrolled pointer-walk over the SAME table is a hard -O2 cap: a loop-invariant base whose live range DIES before the per-iter `jalr` won't get callee-saved promotion](#sibling-non-unrolled-pointer-walk-over-the-same-table-is-a-hard--o2-cap-a-loop-invariant-base-whose-live-range-dies-before-the-per-iter-jalr-wont-get-callee-saved-promotion-kernel-func_800007d4-2026-06-23-nm) — _Single-step `do{e=*p; if(e) state->field_84(arg0,e+0x72,off,off+e->f14); p++;}while(p!=end)` over D_80012D60..F7C. Logic + insn sequence byte-exact EXCEPT: target saves 4 callee-saved regs (hoists all 4 invariant bases incl. state=s2, `lw $t9,0x84($s2)`); build saves only 3 and leaves `state` in a caller-saved temp (`lui $t9; lw $t9,0x84($t9)` per iter). Cause: state's live range DIES before the `jalr` (read only to fetch the fn ptr) → -O2 won't callee-save-promote it; a value only gets pinned to a saved reg if used AFTER a call. The `addu $a3,$a2,$t6` vs `$t6,$a2` diff is downstream (IDO canon's commutative add by reg order, not C source order — both `off+f14` and `f14+off` emit `t6,a2`). FAILED: decl=lui-order, inline-field, inside-loop hoist (the lever that cracked unrolled sibling 80000E8C), 480s permuter (never 0). Genuine coloring cap; NM. Contrast 80000E8C above — the UNROLLED array-scan of the same table IS crackable; this NON-unrolled pointer-walk is not._
@@ -17362,6 +17363,55 @@ that no C shape forces and the permuter can't reach. Sibling of the "Inline
 expression keeps $t-regs / named local moves to $v" family, but the lever here
 is specifically about freeing ARGUMENT regs for GLOBAL-POINTER bases + the
 branch-delay-slot `lui %hi` hoist, not $t-vs-$v on a single value.
+
+### Compute a value AFTER a call to keep its source live in a saved reg — EVICTS a hoisted loop-invariant const (gui_func_00000D04, 2026-06-23)
+
+A per-iteration render loop near-miss whose ONLY structural defect was a
+systematic saved-register-number cascade: a loop-invariant literal (the space
+char `' '`=32, used once per iteration in `if (c != ' ')`) was hoisted into a
+SAVED register (`li s8,32`), so it occupied `$s8` and pushed every other
+saved-reg local DOWN by one (`i`→`$s7` not `$s8`, `p`→`$s6` not `$s7`, …). The
+target denies the const a saved home (it emits a per-iteration `li at,32`
+temp) because it has enough genuinely-live saved values to fill the saved-reg
+file.
+
+**Rule used to recreate the pressure:** a value only gets pinned to a
+callee-saved register if it is used AFTER an intervening call (a value whose
+live range dies before the next `jal`/`jalr` is left in a caller-saved temp —
+see also the sibling "live range dies before the per-iter jalr" cap). So: take
+a value computed inside the loop and DEFER the computation of its dependent
+across a call. Here the masked glyph index `gi = (unsigned char)g` was used to
+build the second glyph pointer. Computing that pointer's offset BEFORE the
+first render call let IDO finish with `gi` and discard it; moving the offset
+computation to AFTER the first call forced `gi` to survive the call in a saved
+reg. The newly-pinned `gi` took the register the const wanted, evicting `32` to
+a temp and shifting all the loop regs UP to match the target. This single
+reorder was the biggest jump on the function (82→94%).
+
+Companion levers (all on the same fn):
+- **Loop bound = the per-char callback's RETURN, re-evaluated each iteration**,
+  NOT a hoisted strlen. Peel it: `i=0; if((unsigned)i<(unsigned)cb(a3)){ do{
+  …; i++; }while((unsigned)i<(unsigned)cb(a3)); }`. The `(unsigned)` casts give
+  `sltu`/`beqzl` (target uses unsigned compare); the do/while peel gives the
+  `beqzl` top-guard + `bnezl` back-edge shape.
+- **A re-derived array index masked to a byte** uses `(unsigned char)g` (target
+  `andi rX,v0,0xff`) — the FIRST lookup uses raw `g`, the SECOND the masked
+  byte. Modeling the mask defeated the held-const `multu` strength-reduction:
+  IDO emitted the inline `sll/addu/sll` ×0x14 chain (target form) instead of
+  `multu reg,heldconst`.
+- **Hold a twice-used field in a named local** (`int gw = glyph[2];` reused by
+  both calls + the redundant `(gw<<10)/gw` div) so it lands in a saved reg
+  (target `$s0`) instead of being reloaded.
+- **Keep only the OFFSET and re-derive the base per field access**
+  (`*(int*)((char*)a0[0x20/4] + goff + 12)` rather than a cached `glyph2`
+  pointer) to match the target re-reading `a0->0x20` at each access.
+
+Residual ~4% = pure as1/uopt scheduling+coloring ties (RDP-const `ori`/`lw`
+order, `move s8,zero` delay-slot placement, char read into `v0` + `move a0,v0`
+vs target's `lbu a0`, glyph[0]/[1] stack-store schedule). Left NM at 95.74%,
+128/128 insns. Generalizes: a saved-reg-number cascade caused by a hoisted
+loop-invariant CONST (not a real local) is crackable — find a real loop value
+whose live range you can extend across a call to outbid the const for the reg.
 
 ### goto/while shared-tail merge + store-target hoist (kernel func_80002250, 2026-06-23)
 
