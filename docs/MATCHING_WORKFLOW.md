@@ -9253,3 +9253,17 @@ but on a call-heavy whale it's necessary-not-sufficient for a land.
 1. **Halfword READ via `lh`, not `lwl/lwr`.** m2c read a struct s16 field (e.g. `*(p+0x10)` then `+0x20`/`+0x22`) as a misaligned `*(s32*)` → `lwl/lwr` pair; target is a single `lh` (sign-extended s16). Narrow the read cast to `*(s16 *)`. Same rule as the store side above, but easy to miss on the LOAD side because the subtract that follows still type-checks.
 2. **A float global used as `(s32)(255.0f * Gfloat)` must read `*(f32*)&G` (lwc1), NOT `*(s32*)&G` (lw+cvt.s.w).** m2c emitted `lui;lw;cvt.s.w` (integer→float convert) where the target does `lui 0x0; lwc1 $f,0(at); mul.s; trunc.w.s`. The `D_00000000+off` reloc target is f32 constant data. Cast the deref to `*(f32 *)((char*)&D_00000000 + off)`. ALSO: do NOT hoist the constant into a local — the target re-emits a distinct `lui/lwc1` per call site, so inline the `255.0f * *(f32*)&D_00000000` expression at each site (a CSE'd local collapses them to one load and desyncs everything downstream).
 3. **`obj->field` compared/divided by FLOAT (c.lt.s / c.le.s / div.s), not int.** m2c rendered `if (m1CC < m1D0)` as integer `slt`; target is `c.lt.s`/`bc1f` (FP compare). Likewise the divide block was `div.s`. If the same offset is loaded with `lwc1` elsewhere, it's f32 everywhere — change the compare operands to `*(f32 *)`. These fixes are correctness wins (right opcodes/control-flow/widths) and lift the normalized opcode-stream alignment a lot, but the RESIDUAL on this fn was the same regalloc+scheduling cap (correct logic, divergent IDO coloring; minimal-local frame -168 vs target -200 implies extra named locals in the original) — permuter territory, not C-fixable from the outside.
+
+## Reloc-aware objdump diff masks dest-register diffs in reloc'd loads — gate promotions on `make verify`, not the diff
+
+The common reloc-aware diff helper (filter out offsets that carry a reloc, since the
+immediate is patched at link time) ALSO hides a real mismatch: when a `lui rX,%hi; lw
+rY,%lo(rX)` pair differs only in the DEST register (`t5` vs `t6`) or the reused-vs-fresh
+base, those instruction words carry the reloc so the filter drops them — the diff shows
+"~0 real diffs" while the function is NOT byte-exact. Burned a promotion attempt on
+func_00012818 (a documented -O0 value-load reg-reuse cap): reloc-aware diff said 0, but
+`make verify` failed (ROM mismatch) the moment the NM wrap was removed. RULE: a near-0
+reloc-aware diff is a *hint*, never a green light. Before promoting an NM wrap to a real
+def, run `make verify` (ROM cmp) — it's the only gate that sees the dest-register/base
+bytes. (For non-promotion measurement, prefer report.json fuzzy / objdiff-cli, which score
+register operands properly.)
