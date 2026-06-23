@@ -13458,6 +13458,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [-O1 STATEMENT-REORDER coloring levers: flag-set-LAST + increment-before-decrement collapse a whole-body t-register cascade (kernel func_800062F0 97.6%→byte-exact)](#feedback-ido-o1-statement-reorder-coloring-levers) — _At -O1 (cfe→ugen, no uopt) a "pure register-coloring" near-miss whose diffs are all same-offset same-opcode register RENAMES is often a first-use-order PHASE rotation, fixable by reordering trailing statements in a block — no register kw, no spill. THREE levers, applied to a ring-buffer packer with 39 such diffs: (1) write a pointer+int address as a FLAT add `*(char*)(idx + base)` not `*((char*)base + idx)` → loads the int index first (matches target load order in copy loops); (2) move a `flag = 1;` const-store to AFTER the value-using statements in the same block (`arg1-=sp2C; sp18=sp2C; flag=1;`) so the loaded values color into lower temps before the constant materializes (36→9 diffs — the single biggest mover); (3) move `globalCtr += 1;` BEFORE `arg1 -= sp2C;` in the loop tail so the global is loaded into the low temp ahead of the subtract (9→0). Recognition: diffs cluster at the TAIL of if/loop blocks, every reg shifted by a consistent amount (the free-list phase), offsets+opcodes identical. Try trailing-statement permutation of const-stores and increments FIRST — cheaper than register kw / live-range split, and permuter-blind (it won't reorder whole statements). Verified byte-exact in the LINKED ELF (real jal targets + extern symbols resolved), 2026-06-20._
 - [LICM hoists per-block `addiu sp,N` stack-temp addresses into saved regs — dominant int-save-count cap on big -O2 geometry grafts; inline/name/if(1)/-O1 all NEGATIVE; needs per-block source RE](#feedback-ido-licm-stack-temp-address-hoist-cap) — _A large geometry graft saves 9 int regs (s0-s8) where the target saves 3 (s0,s1,s2)+3 FP; the 6 excess all hold `addiu sN,sp,K` (stack-Vec3-temp addresses) that IDO LICM-hoists once into callee-saves, while the target re-materializes each into a SCRATCH reg per use. Verified 2026-06-16 on game_uso_func_00007C1C: remove-local-recompute is CSE/LICM-immune (the address is live across each idiom's malloc-fallback jal → forced saved reg regardless of naming), naming the swizzle-scratch as one pointer REGRESSES (target re-addiu's it per block, not a held pointer), if(1)-collapse deletes the dead malloc branch the target keeps, and -O1 under-promotes (1 int save, drops the f20/f22/f24 the target has). Genuine residual = reconstruct the inlined-helper loop body block-by-block so each temp address is computed locally (defeat the LICM hoist); mechanical m2c-graft transforms can't. Recognition: excess saved regs all hold `addiu sN,sp,CONST` for the same sp-offsets the target reaches via v/t/a regs._
 - [Confirm a GENUINE stolen-prologue cap (C-unreproducible) with 3 checks: setup-insns-before-`addiu sp`, UND caller symbol, orphan gap in expected.o](#feedback-ido-genuine-stolen-prologue-diagnostic) — _A near-miss whose target function begins with register-setup instructions (`or a2,a0,0`; `lui/addiu a0=&base`; `lw v1,off(a0)`) placed AHEAD of the frame `addiu sp,sp,-N` is a stolen-prologue split, NOT a regalloc cap, and is unmatchable from C: IDO always emits the stack-frame prologue FIRST, so it cannot put the setup insns before `addiu sp`. Three-part confirmation: (1) the `.s` body reads a register (e.g. $v1) that is never set inside the symbol; (2) the real caller `jal`s an ADDRESS 0x10ish BEFORE the symbol's glabel (e.g. `jal func_00001BD4` for symbol `func_00001BE4`); (3) `objdump -t expected/<unit>.c.o` shows that earlier address as a `*UND*` symbol with a 4-word unnamed gap (the orphan `.s`) between the predecessor's end and this symbol's start. When all three hold it's permanent NM — merging the orphan into the symbol does NOT help (the setup-before-prologue ordering is still unreachable). SUFFIX/PROLOGUE_STEALS forcing banned. Verified 2026-06-21 mgrproc_uso_func_00001BE4 (real entry 0x1BD4, reads caller-set $v1, tables import_802649C0/CC)._
+- [-O1 LOCAL-DECL order pins stack slots in REVERSE (last-declared = lowest slot); use it to fix a frame-SIZE diff, not just naming — plus `register` flags -> s0/s1 + accumulator reuse (kernel func_80006790 ~84.5%->byte-exact)](#feedback-ido-o1-decl-order-reverse-slot-pin) — _An -O1 rmon handler near-miss whose frame was 8-16 bytes too big with a scrambled/reversed local slot layout: at -O1 IDO assigns sp-resident locals to stack slots in REVERSE declaration order (the LAST-declared spilled local gets the LOWEST offset). When the target slot order low->high is A,B,C,...,decl them HIGH->LOW (`...; C; B; A;`) — this both reorders the slots AND can shrink the frame to match (here decl `p; sp38; sp34; sp30(arg0); sp2C(ub); addr;` produced target order addr=0x28,ub=0x2C,arg0=0x30,sp34=0x34,sp38=0x38,p=0x3C, frame 0x50->0x40). Combine with: (1) `register s32 flagA, flagB;` to force two short-lived if/else validity flags into callee-saved s0/s1 (target saves both) — and route a later loop accumulator through `flagA = call(); counter += flagA;` so it REUSES s0 after the flags die instead of promoting a 3rd s-reg (frame stays tight); (2) write a commutative `addr+len` SP-window bound as `FW(0x14)+FW(0x10)` (load-order operand) to flip IDO's addu operand order; (3) order `buf = len+0x10;` BEFORE `p = &buf;` so the len reload fills the token-loop load-delay slot instead of the p-store; (4) INLINE field reads (drop named `temp` locals that live across a `||` short-circuit branch) to kill spurious cross-branch spills. Took func_80006790 ~84.5%->byte-exact (49->14->6->0 diffs), LANDED full-ROM cmp-clean 2026-06-23 agent-b. Permuter floored here (base score 285, random mode never beat it) — these are all source-shapeable, do them by hand. Sibling of the line-13458 statement-reorder levers; this adds the decl-order=reverse-slot rule + register-flag/accumulator-reuse._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -17131,3 +17132,57 @@ and keeps `s3`-setup in the later block; likewise the `lw 0x218(s3)` deref is
 re-materialized as a fresh `lui` in our build. Same-symbol/same-offset
 CSE-vs-recompute scheduler choice — permuter moved 1210->760 only via noise
 mutations (base++/base--, if(1){}), not clean source. Left NON_MATCHING at 94%.
+
+## -O1 local-decl order pins stack slots in REVERSE; `register` flags -> s0/s1 + accumulator reuse (kernel func_80006790 byte-exact 2026-06-23) {#feedback-ido-o1-decl-order-reverse-slot-pin}
+
+rmon read-memory handler (kernel_018_b, IDO 7.1 -O1, 127 insns). Started
+from a verified structural NM decode (~84.5%) whose residual was a bigger
+frame (0x50 vs 0x40) + scrambled stack-slot layout + a few operand-order /
+scheduling diffs. Four source-only levers took it 49 -> 14 -> 6 -> 0 diffs,
+byte-exact; full `make clean && make` ROM cmp-clean. Levers, in order of
+impact:
+
+1. **`register` on the two validity flags pins them to s0/s1, and routing
+   the loop accumulator through the same var reuses s0.** The handler sets
+   two short-lived if/else flags (`var_s0`, `var_s1`) for the SP IMEM/DMEM
+   range checks. Plain `s32` locals got SPILLED to stack (extra slots,
+   bigger frame, only 1 s-reg saved). `register s32 var_s0, var_s1;` forces
+   both into callee-saved s0/s1 (target saves both; frame 0x40). BUT a naive
+   `register` decl then made IDO promote a THIRD s-reg (s2) for the token-poll
+   loop's `func()` return accumulator. Fix: route the accumulator through the
+   now-dead flag var — `var_s0 = func_800066F0(...); sp38 += var_s0;` — so IDO
+   REUSES s0 after the flags die (matching target's `move s0,v0`), no s2.
+
+2. **Decl order pins slots in REVERSE (last-declared = lowest offset).** At
+   -O1 IDO numbers sp-resident locals so the LAST declared spilled local lands
+   at the LOWEST sp offset. Target slot order low->high was
+   addr,ub,arg0,sp34,sp38,p; declaring them HIGH->LOW
+   (`char *p; s32 sp38; s32 sp34; void *sp30; char *sp2C; u32 addr;`) produced
+   exactly addr=0x28, ub=0x2C, arg0=0x30, sp34=0x34, sp38=0x38, p=0x3C and
+   shrank the frame 0x50->0x40. This single reorder dropped 47->14 diffs. (A
+   FORWARD decl order gave the mirror-image layout — every slot reversed.)
+
+3. **Commutative `addu` operand order = source operand order.** The SP-window
+   bound `addr + len` emitted `addu ,len,addr` (wrong) from
+   `FW(0x10) + FW(0x14)`. Writing it `FW(0x14) + FW(0x10)` flipped IDO to
+   `addu ,addr,len` (target). The earlier load (for the preceding `sltu`)
+   still fixes WHICH value loads first; only the addu's operand order tracks
+   source. This fixed BOTH range-check addus and cascaded 14->6.
+
+4. **Statement order controls load-delay-slot fill.** Target loaded `len`
+   right after reloading the base ptr, filling the load-delay slot, THEN
+   stored `p`. Writing `buf = len+0x10;` (the load) BEFORE `p = &buf;` (the
+   store) put the len reload in the delay slot instead of the p-store. 6->0.
+
+Also: INLINING the field reads (dropping named `temp_t0`/`temp_t4` locals that
+were live across a `||` short-circuit branch) removed two spurious
+cross-branch spills (`sw tN,off(sp)` in branch delay slots where target had
+`nop`).
+
+Permuter is NOT the tool here: imported clean, base score 285, random mode
+never beat it over hundreds of iterations (no perm macros, and these are
+whole-statement / decl-order shapes the randomizer doesn't explore). Do them
+by hand. Sibling of the line ~13458 "-O1 STATEMENT-REORDER coloring levers"
+entry; the new rules this adds are (a) decl-order == REVERSE slot numbering as
+a FRAME-SIZE fix, and (b) register-flag s-reg pinning + dead-flag accumulator
+reuse to avoid a 3rd s-reg.
