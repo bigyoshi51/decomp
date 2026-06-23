@@ -21,6 +21,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Base-pin cap is C-FIXABLE: held-base-pointer + `s32`-typed-base $s-coloring lever + `for`-comma-init as1-schedule lever](#base-pin-cap-game_libs-d_0--off-held-s32-not-char-flips-s-coloring-for-comma-init-flips-as1-prologue-schedule) — _game_libs &D_0+off "base-pin cap": held `char *g=&D` reproduces structure+base materializations. To land 0: (1) declare a VALUE-ONLY held base as `s32` (its int value) not `char *` → colors it into the LOWER saved reg ahead of a co-live const (char* form mis-colors; complement of the UCODE-reorder lever); (2) rewrite the loop as `for(a=0,b=arg; cond; a+=k,b+=k)` — comma-init flips the as1 prologue tie (base-addiu scheduled ahead of the zero-cost init moves). gl_func_0002A6C0 byte-exact (9→3→0). STILL BLOCKED: single-symbol collapse (N distinct globals all at D_0+0; needs data-symbol split) + FP multi-divide coloring. Diagnose by histogramming `lui rN,0x0` + `or aN,sN,zero`; require placeholder jals (0x0C000000) only._
 - [Param-direct beats separate-local: spill the PARAMETER to its own incoming-arg home (frame +8 "cap" is not a cap)](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19) — _Pointer-passthrough constructor frame 8 bytes too big? Thread the PARAMETER through (no `T *p=a0`) so IDO spills it to its own incoming-arg home. gl_func_0005FCC4 99.91->100._
 - ["8-byte dead slot BELOW a stack buffer" cap is often a `&buf[N]` array-index offset, NOT a pad](#8-byte-dead-slot-below-a-stack-buffer-cap-is-often-a-bufn-array-index-offset-not-a-pad-problem) — _Target passes scratch buf at sp+K+8, build at sp+K, dead 8 bytes below it, frame same? Don't add volatile pad — the buffer is over-sized and the code passes `&local_buf[2]` (a pointer into the middle). Declare buf frame-correct, pass `&local_buf[N]`. Cracked gl_func_0005FE7C (the "needs INSN_PATCH on 6 sp-offset insns" cap)._
+- [Separate-cursor INVERSE of param-direct: a SECOND copy `p=param` keeps the loop-resident pointer in its OWN slot distinct from the param's arg-home (+8 frame is REAL here); pair with decl-order = high→low slot numbering and per-loop distinct tmps](#separate-cursor-keeps-loop-pointer-distinct-from-arg-home-decl-order-slot-numbering-func_800070a0-2026-06-23) — _Opposite of "param-direct beats separate-local": when the target homes the pointer param at its arg-home AND keeps a working copy in a separate loop slot (frame genuinely +8), introduce a `char *p = param` cursor and use `p` everywhere in the loops. Decl order `p, n, tmp, tmp2` reproduces IDO -O1's high→low slot numbering (first-declared gets the highest sp offset); two distinct `int tmp` (one per loop) force the target's two scratch slots. `p += 4; func(p - 4)` hoists the increment above calls (avoids post-call reload). Cracked func_800070A0 frame -0x30→-0x38 (84%→92.3%). Residual = pure `move oldreg` vs `addiu newreg,-4` regalloc tie._
 - [A "register-coloring cascade" residual can be a MISSING INNER DEREF — classify the temp renumber's root before conceding](#a-register-coloring-cascade-residual-can-be-a-missing-inner-deref--classify-the-temp-renumbers-root-before-conceding-gl_func_00057104-2026-06-22) — _gl_func_00057104 sat at ~96% with a "12-diff coloring tie" (const t1 vs t2, OR result cascaded). Root cause was a missing `[0]` deref: slot base used `dl + count*8` but target re-loads AND derefs `a0->0xC` (`lw t9,12(a3); lw t0,0(t9)`) — base lives at `dl[0]`. Writing `(*(int**)((char*)a0+0xC))[0] + count*8` added the extra `lw`, fixing address math AND shifting the const/OR allocation to match (t2/t3). Byte-exact. Lesson: a "shifted one register" cascade is often downstream of ONE missing/extra insn; diff opcode COUNT in the window, not just operands, before conceding a coloring cap._
 
 - [Frame-size correctness unblocks "regressing" code-motion rewrites (2026-06-16)](#frame-size-correctness-unblocks-regressing-code-motion-rewrites-2026-06-16) — _Fix stack-frame size byte-exact FIRST (sweep pad local to match `addiu sp,sp,-N`); then m2c-faithful code-motion that "regressed" with a wrong frame now gains. Diagnose via jal-segment counts (equal jal count + matching per-segment sizes = control structure matches). game_uso 591C +3.66pp._
@@ -16332,6 +16333,60 @@ bloat" family (e.g. the alloc-or-offset constructor functions): collapse the
 working local back onto the incoming param where the dataflow allows.
 Permuter can't find this (it mutates the existing local; it won't delete it and
 re-thread the param), so it's a HAND lever the permuter misses.
+
+<a id="separate-cursor-keeps-loop-pointer-distinct-from-arg-home-decl-order-slot-numbering-func_800070a0-2026-06-23"></a>
+## Separate-cursor (INVERSE of param-direct): keep the loop pointer in its OWN slot distinct from the param's arg-home; decl order = high→low slot numbering (func_800070A0, 2026-06-23)
+
+The MIRROR case of param-direct above. Sometimes the target genuinely homes the
+pointer parameter at its incoming-arg slot AND keeps a *separate* working copy in
+a loop-resident local slot — so the frame is genuinely +8 (two slots: the
+arg-home and the cursor). Here you WANT the separate local, not the param-direct
+collapse. func_800070A0 (rmon word-streamer, kernel `-O1`) target frame -0x38:
+a0/a1 homed at sp+0x38/0x3C, plus addr@0x34 and n@0x30 as loop-resident copies.
+The natural `while(n--){ ... addr += 4; }` operating on the param `addr` reuses
+the a0-home slot for the cursor → frame only -0x30 (8 bytes short). The fix:
+
+```c
+void f(char *addr, int len) {
+    char *p = addr;                       /* decl FIRST → highest slot (0x34) */
+    unsigned int n = ((unsigned)len+3)>>2;/* decl 2nd  → next slot   (0x30) */
+    int tmp;                              /* decl 3rd  → 0x2C (loop A scratch) */
+    int tmp2;                             /* decl 4th  → 0x28 (loop B scratch) */
+    ...
+    while (n--) { ...; p += 4; func(p - 4, &tmp); ... }   /* loop A uses tmp  */
+    ...
+    while (n--) { func(&tmp2, p, 4); ...; p += 4; }       /* loop B uses tmp2 */
+}
+```
+
+Three coupled levers, all needed to hit the target's exact -0x38 layout:
+1. **Separate cursor `char *p = addr`** keeps the param's arg-home (0x38) distinct
+   from the loop-resident pointer (0x34) — the legit +8. (Don't param-direct here.)
+2. **Declaration order = high→low slot numbering at -O1.** IDO assigns local stack
+   slots in *source declaration order*, first-declared getting the HIGHEST sp
+   offset. Declaring `p, n, tmp, tmp2` reproduced `addr@0x34, n@0x30, tmp@0x2C,
+   tmp2@0x28` exactly; any other order permutes the slots. (Reorder the decl list
+   to match the target's slot map read off the disasm — it's a permuter-blind
+   class because it's pure declaration order, not statements.)
+3. **One distinct `int tmp` PER loop**, not a shared scratch. The target keeps two
+   separate scratch slots (one per aligned/unaligned loop body); a single shared
+   `tmp` folds them into one slot and shrinks the frame.
+
+Plus the increment idiom: `p += 4; func(p - 4, ...)` HOISTS the pointer increment
+above the call so the arg is `p-4` from a still-live register (no post-call
+reload). The natural `func(p, ...); p += 4;` defers the increment past the call
+→ IDO reloads p from the slot afterward (+2 insns; 59 diffs vs 6). Verified the
+`p - 4` form against every alternative (load-first `*p; p+=4`, temp-ptr `q=p`,
+do-while, natural) — all strictly worse, and a temp-ptr/value local re-introduces
+the spill the cursor was avoiding (frame regrows to -0x40).
+
+Result: 84.0%→92.3% (frame -0x30→-0x38, slot map + body all exact). Residual 6 =
+pure `-O1` regalloc/schedule ties no C shape resolves: `move a0,t2` (keep old-p
+reg) vs `addiu a0,t3,-4` (recompute from new-p); `lw a0,0(t4)` vs `lw a0,-4(t5)`
+(pre vs post-increment load base); and a loop-bottom delay-slot store-order tie
+(`sw addr` vs `sw n` as the branch filler). Permuter (2 runs, tuned
+temp_for_expr/refer_to_var/reorder weights, ~1500s) never flipped them — genuine
+coloring cap, stays NON_MATCHING.
 
 ## A documented "FP/register coloring cap" is often a FRAME-LAYOUT diff in disguise — check sp-offsets before conceding (game_uso_func_00003ED4 LANDED 2026-06-20)
 
