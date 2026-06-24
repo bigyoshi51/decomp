@@ -9267,3 +9267,16 @@ reloc-aware diff is a *hint*, never a green light. Before promoting an NM wrap t
 def, run `make verify` (ROM cmp) — it's the only gate that sees the dest-register/base
 bytes. (For non-promotion measurement, prefer report.json fuzzy / objdiff-cli, which score
 register operands properly.)
+
+## Flip side: don't chase reloc'd-load IMMEDIATE diffs — objdiff reloc-resolves them
+
+Complement to the gotcha above. Raw `objdump` shows a reloc'd load's in-place immediate
+(addend), so a distinct-extern `D_00000179` (valued 0x179 in undefined_syms) disassembles
+as `lbu rX,0(rX)` while the target's `D_00000000+0x179` shows `lbu rX,377(rX)` — looks like
+a 0-vs-377 diff. But objdiff RESOLVES both relocs to the same address 0x179 and scores them
+MATCHING. So that immediate "diff" is already fine. Burned a tick on gl_func_00009100
+"fixing" it via `(char*)&D_00000000 + 0x179`, which replaced the clean distinct-extern reloc
+with a base-materialization (`lui;addiu;lbu`) — a REAL new diff that dropped 93.5%->74%.
+RULE: before re-spelling a D-relative access, check report.json/objdiff fuzzy, not the raw
+objdump immediate. The distinct-extern-valued-at-offset idiom (one extern per offset, valued
+in undefined_syms_auto.txt) is the CORRECT form for per-read folded `lui` bases at -O0.
