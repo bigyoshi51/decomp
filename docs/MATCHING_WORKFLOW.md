@@ -9295,3 +9295,17 @@ broke the ROM; reverted). RULE: before promoting any USO NM-wrap, the gl_func_00
 placeholder calls must be resolved to their REAL callee symbols/addresses (map each baked
 jal addr). A high isolated-diff score on a placeholder-call body is NOT promotion-ready.
 make verify (full link + ROM cmp) is the only gate that sees baked-jal address mismatches.
+
+## CORRECTION to the above: gl_func_00000000 CALLS are fine for USO promotion — D+offset READS are the blocker
+
+The preceding entry overclaimed. Re-checked against the MATCHED arcproc_uso_o0_50 (a promoted
+-O0 real-def): it calls `gl_func_00000000` and matches fine — the jals are `jal 0`
+(0x0C000000, USO-relocated), and the USO machinery resolves them. So placeholder CALLS do NOT
+block promotion. The actual blocker for arcproc_uso_func_000005C8 was the D+OFFSET READS
+(D_00000148/14C/68): the matched o0_50 has none; 5C8 reads three. Distinct-externs valued at
+the offset FOLD + score matching in objdiff (reloc-resolved) but emit a different USO
+reloc-table entry than the target's base(D_00000000)+offset -> ROM mismatch; while
+`&D_00000000+offset` gives the right reloc but MATERIALIZES at -O0 (extra addiu) -> wrong
+.text. So: USO -O0 fns with D+offset reads resist promotion (fold-vs-reloc tension); fns
+whose only D-ref is the bare base `&D_00000000` (like o0_50) promote cleanly. Diagnose by
+which the candidate has, not by the calls.
