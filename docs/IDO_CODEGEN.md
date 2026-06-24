@@ -17677,3 +17677,16 @@ stack) when the target keeps it in a saved reg across calls; inline when the tar
 re-derives it. Residual control-flow shape (shared single return-0 reached by all early
 exits, values computed directly in v0) is a separate axis — multi-return-no-var duplicates
 the return-0, a result-var spills it; neither matched func_00011E00 exactly (still 6w over).
+
+## -O0 frame-slot sharing: reuse ONE local for two non-overlapping values (don't declare two)
+
+At -O0 every named local gets its own stack home, so two locals whose live ranges DON'T
+overlap still consume two slots and inflate the frame vs the -O0 target, which reuses one
+slot. If the asm shows the same stack offset written for two logically-distinct values
+(e.g. `sw v0,36(sp)` appearing twice for two separate saved results), use ONE variable and
+re-assign it, not two. arcproc_uso_func_000005C8: `saved1` + `saved2` (used in disjoint
+call-pairs) -> ONE `saved` re-assigned -> frame -40 not -48, and the -O0 build went to
+0-real-diffs. This is the slot-level dual of the register-encounter-order and
+inline-don't-cache levers: register when the target keeps it in an s-reg across calls;
+inline when re-derived each use; share one named local when two non-overlapping temps map
+to the same -O0 home slot.
