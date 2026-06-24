@@ -17690,3 +17690,25 @@ call-pairs) -> ONE `saved` re-assigned -> frame -40 not -48, and the -O0 build w
 inline-don't-cache levers: register when the target keeps it in an s-reg across calls;
 inline when re-derived each use; share one named local when two non-overlapping temps map
 to the same -O0 home slot.
+
+## USO D+offset read promotion: STRUCT-CAST-FOLD relocs to the base symbol AND folds (vs distinct-extern / &D+offset)
+
+To PROMOTE a USO -O0 NM-wrap (real def) whose body reads `D_00000000+offset`, the read's USO
+reloc must point to the module base `D_00000000` (the USO reloc table is keyed on it) AND the
+.text must fold the offset into the lw/sw (lui base; lw off(base)), like the target. Two naive
+forms each fail ONE half:
+- distinct-extern valued at offset (`extern int D_00000148; ... D_00000148`): FOLDS (lui;lw)
+  and scores matching in objdiff (reloc-resolved), but relocs to D_00000148 -> WRONG USO
+  reloc-table entry -> ROM mismatch on promotion.
+- `&D_00000000 + 0x148`: right reloc (D_00000000) but MATERIALIZES at -O0 (lui;addiu;lw) ->
+  extra word, wrong .text.
+SOLUTION (validated on arcproc_uso_func_000005C8: relocs to D_00000000, 48w/48w): declare the
+base AS a struct and access a field — `struct DBlk{char _a[0x68];int f68;char _b[0x148-0x6C];
+int f148,f14C;}; extern struct DBlk D_00000000; ... D_00000000.f148`. The struct-field offset
+folds into the lw AND the reloc is to D_00000000. (Use a DIRECT `extern struct DBlk
+D_00000000` — an inline cast `((struct*)&D_00000000)->f` MATERIALIZES instead. If other fns in
+the TU use `char D_00000000`, isolate the struct-typed fn in its own split file.) This is the
+F954 struct-fold lever applied to USO base-relative reads. CAVEAT: it only unblocks the
+D-read half — a residual -O0 TEMP-SLOT cap (e.g. saved-slot position) can still block (5C8
+hit one). And: a reloc-aware diff that filters sw/lw immediates MASKS stack-slot diffs
+(stack offsets aren't reloc'd) — gate promotions on make verify, not the isolated diff.
