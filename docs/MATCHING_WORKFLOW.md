@@ -9280,3 +9280,18 @@ with a base-materialization (`lui;addiu;lbu`) — a REAL new diff that dropped 9
 RULE: before re-spelling a D-relative access, check report.json/objdiff fuzzy, not the raw
 objdump immediate. The distinct-extern-valued-at-offset idiom (one extern per offset, valued
 in undefined_syms_auto.txt) is the CORRECT form for per-read folded `lui` bases at -O0.
+
+## Promoting an NM fn with gl_func_00000000 placeholder calls FAILS — isolated reloc-aware diff masks it
+
+A USO NM-wrap whose body calls `gl_func_00000000` (the generic placeholder) can score high
+fuzzy AND pass an isolated reloc-aware -O0 diff (0 "real" diffs), yet FAIL `make verify` the
+moment it's promoted to a real def. Why: USO jals are BAKED target addresses (the expected
+.o has NO ELF reloc on them — `objdump -r` over the fn's range is empty), so a real-def's
+`gl_func_00000000` jal resolves to the placeholder's linked address, NOT the target callee
+-> wrong jal word -> ROM mismatch. The reloc-aware diff scores jal-vs-jal as matching
+(ignores the target symbol), so it MASKS the mismatch entirely. Burned the arcproc_uso_func
+_000005C8 -O0 front-carve (carve infra was correct, sizes 0x508/0x2238, but the promotion
+broke the ROM; reverted). RULE: before promoting any USO NM-wrap, the gl_func_00000000
+placeholder calls must be resolved to their REAL callee symbols/addresses (map each baked
+jal addr). A high isolated-diff score on a placeholder-call body is NOT promotion-ready.
+make verify (full link + ROM cmp) is the only gate that sees baked-jal address mismatches.
