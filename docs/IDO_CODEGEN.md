@@ -97,7 +97,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
 - [Counter-loop tail with reloaded loop-header pointer: IDO prefers `bnezl` + delay-slot-hoist of next-iter `lw` over target's `bne` + addiu-in-delay — counter-loop "addiu wins the delay" variant is unreachable from C when a hoistable load exists](#feedback-ido-counter-loop-vs-load-hoist-tail) — _Target `do { items=v0->[K]; i++; ...; v0=a0->[J]; n=v0->[L]; off+=0xC; } while ((u32)i < n)` emits `sltu/bne/addiu-in-delay`. The "obvious" do-while form (verified across 6 variants: vanilla, goto+label, for-loop, broader-scope, narrower-scope, separate-decl) emits `sltu/bnezl/lw-in-delay` — IDO chooses the hoistable next-iter loop-header `lw $X, off($vN)` as more valuable than the increment for delay-slot fill (latency hiding). The choice is cost-model driven and not flippable by C restructuring — distinct from `feedback-ido-circular-list-do-while-natural-bnel` (which is for list-walk-emit; this is counter-emit on a reloaded-base). Standalone-cc caps at ~71% on this shape. Path forward = permuter. Verified 2026-05-27 game_libs_func_0003C7A4 (28-insn loop body)._
 - [Annulled `bnel`/`beql` needs test-reg ≠ delay-load-base-reg — the enabler is IDO double-reloading a spilled pointer param into two regs; single reload (test==base) forces plain `bne`](#feedback-ido-branch-likely-needs-distinct-test-and-delay-base-regs) — _When target has `lw t8,off(sp); lw t9,off(sp); bnel t8,zero,L; lw t1,0(t9)` (same spilled param reloaded into TWO regs — t8 tests, t9 is the delay-slot load base), GCC reorg can annul-fill only because the branch-test reg ≠ the delay load's base reg. C that reloads the param once (test and deref share one reg) makes reorg emit a plain `bne` + no annul → exactly 1 insn short. The double-reload is an IDO regalloc/reorg artifact, NOT reachable by C restructuring (verified ineffective: EQUAL-in-if arm-swap, pointer-local CSE). Path forward is permuter or force-SAME-LEN-then-INSN_PATCH the bne→bnel. Verified 2026-05-16 gl_func_0003D7F8._
-- [Multi-case literal-dispatch bnel chain (sparse `if (c == X) c = Y` ladder) needs "modify-c-in-place + single masked return" + separate `int v` for the compare source](#feedback-ido-bnel-dispatch-modify-c-mask-return) — _`int v; c &= 0xFF; v = c; if (v == X1) c = Y1; else if (v == X2) c = Y2; ...; return c & 0xFF;` produces the bnel-chain pattern with `bne+move v0,a0` first compare and per-case `addiu a0; jr ra; andi v0,a0,0xFF` hit-handlers (matches USO entry-glyph dispatchers). Per-case `return CONST` form emits a shorter 4-insn-per-case chain without the `or v0,a0,$0` default-save. Cap ~95 % via the chain-source-register picker (a0 alias vs target's v0)._
+- [Multi-case literal-dispatch bnel chain (sparse `if (c == X) c = Y` ladder) needs "modify-c-in-place + single masked return" + separate `int v` for the compare source](#feedback-ido-bnel-dispatch-modify-c-mask-return) — _`int v; c &= 0xFF; v = c; if (v == X1) c = Y1; else if (v == X2) c = Y2; ...; return c & 0xFF;` produces the bnel-chain pattern with `bne+move v0,a0` first compare and per-case `addiu a0; jr ra; andi v0,a0,0xFF` hit-handlers (matches USO entry-glyph dispatchers). Per-case `return CONST` form emits a shorter 4-insn-per-case chain without the `or v0,a0,$0` default-save. Cap ~95 % via the chain-source-register picker (a0 alias vs target's v0). **2026-07-02: picker cap = uopt copypropagate rewriting branch uses of the plain copy (proven: -Wo,-zcopy:0 → 81/81 exact); pure-C best = subsumed-mask `(c & 0x1FF)` compares → 80/81, residual = temp def andi-vs-move; USO entry-0 trampoline is 1 word — the `sw a0,0(sp)` is the &param-lever home. See section update.**_
 - [IDO -O2 sparse-case switch (case 0 + case 1) compiles to 3-arm beql dispatch with delay-slot pre-loads — unreachable from C if-else; switch is also rejected (.rodata jumptable)](#feedback-ido-sparse-switch-beql-preload-unreachable) — _When target asm shows `addiu $at,zero,1; beql v0,zero,caseA; <lw delay>; beql v0,$at,caseB; <lw delay>; b end; <lw ra delay>` (3-arm beql dispatch with each delay slot pre-loading the case body's first lw), this is a…
 - [bc1fl with target=epilogue and `lw ra,X(sp)` in delay slot is a CONDITIONAL-CALL marker, not a clamp — the if-block guards a `jal` between here and the epilogue](#feedback-ido-bc1fl-skips-jal-to-epilogue) — _Diagnostic for misreading IDO -O2 trailing FP conditionals: when target's last bc1fl jumps to the epilogue with `lw ra,X(sp)` in the delay slot, it's NOT a clamp/store guard; it's `if (!cond) jal()` where the jal sits between the bc1fl and the epilogue. Decode the C as `if (cond_complement) func();`._
 
@@ -952,6 +952,37 @@ structural shape is locked.
 
 Discovered 2026-05-06 promoting `gui_func_00000000` from 4.1% (varargs
 form) to 95.30% (this recipe).
+
+**2026-07-02 UPDATE (gui_func_00000000, 80/81 + mechanism proof):** three
+corrections/levers that supersede parts of the above:
+
+1. **The USO entry-0 "trampoline" is ONE word, not two.** Only the
+   `b <loader>` word (0x1000736F) is loader glue (same 1-word PREFIX_BYTES
+   class as boarder5_uso). The second word `sw a0,0(sp)` (0xAFA40000) is the
+   function's own frameless K&R param home — C-emittable via the **&param
+   lever**: `unsigned char *pa = (unsigned char *)&c;` (unused otherwise,
+   zero other emission at -O2; reads stay register-cached). True C body = 81
+   words starting at the `sw`.
+2. **Subsumed-mask expression compares beat the a0-picker.** Writing every
+   chain compare / range check / case-arithmetic read as `(c & 0x1FF)` after
+   `c &= 0xFF` (same value, different expr hash than the ret `c & 0xFF`)
+   binds them all to ONE CSE temp in v0 that copy-prop can't rewrite to a0
+   and that doesn't collapse into the 4-insn return-const form. In-tree:
+   80/81 words. The single residual is the temp's def: `andi v0,a0,0x1FF`
+   vs target `or v0,a0,$0` — an expr temp emits its op; only a plain copy
+   emits the move, and a plain copy's Ufjp/slti uses always get rewritten.
+3. **The cap is precisely uopt copypropagate, proven:** the naive
+   `m = c;` form compiles **81/81 EXACT** with `-Wo,-zcopy:0`. Per
+   uoptcopy.c `find_replacements`: branch (Ufjp/Utjp) uses of a plain copy
+   substitute to the source var (suppressor = loopfirstbb successor, real
+   loops only — dead while(0)/for(;;)break marks do NOT survive to
+   copypropagate); isop-source defs (`c|0`, `c<<0`, …) block the branch
+   substitution but the case-body store uses then rebind to a split
+   simplified temp (+1 move, 82 words); `is_incr` (param±const) suppression
+   is unreachable (cfe folds every ±0 spelling). K&R `unsigned char c` param
+   emits the sw-home+conversion-blocked compares but narrows off-place (v0)
+   and renames the whole chain. ~40 variants, IDO 5.3 identical. Landing
+   route: per-file flag split with `-Wo,-zcopy:0` + 1-word PREFIX_BYTES.
 
 ---
 
@@ -9628,6 +9659,8 @@ mine:    lw v0, 0x28(sp);  b ep;  nop;  b +1;  nop;  <ep>   # 2 branches (extra 
 **Verified** the extra branch is independent of: combined-vs-separate local init, comma-expression `return (store, val)`, a union/scalar alias for the returned element, and `-g`/`-g1`/`-g2`/`-g3` (all `-O0` variants emit 2; `-O1` emits 0). Minimal repro: `int f(int*a,int n){int s=0,i; for(i=0;i<n;i++) s|=g(a[i]); return s;}` builds 2 branches; the analogous original target has 1. The **void** `-O0` functions match fine (no `lw v0` → just the single end-marker) — which is why every landed `-O0` match (accessors, `mgrproc_uso_func_000009A8`, `_00000504`) is void.
 
 **How to apply:** if an `-O0` Yay0-USO target is **value-returning** and your build is exactly 1 insn long with an extra `b; nop` before the epilogue, it's this cap — leave it `INCLUDE_ASM`. Confirmed on `mgrproc_uso_func_00000A14` (got to 50 vs 48 insns via the union-alias trick for `buf[0]` direct-load, but the value-return branch is the irreducible residual). Suspected IDO patch-level codegen divergence vs the game's compiler; no C construct found to fold it. (If a value-returning `-O0` function is ever matched, revisit this.)
+
+**2026-07-03 re-probe (agent-e, arcproc `0xB4`/`0x12C` + mgrproc `A14`) — cap re-confirmed, compiler-version lever also dead:** IDO **5.3** at `-O0` emits **byte-identical** output to 7.1 on the minimal repro (double branch intact), so a per-file `IDO53_DIR` CC override (the contpfs.c recipe) does NOT fold it. `-g` **alone** (no `-O0`) DOES fold the tail to the target's single branch, but enables assembler reorg (jal delay slots get filled) — wrong scheduling shape everywhere else, so unusable. `-O0 -Wab,-O1` / `-O0 -Wb,-O1` / `-O0 -Wf,-XNd5000`: no effect. ~20 additional C shapes (dead-tail `if(1){}` / `while(0);` / `;` / unused label / duplicate `return` / dead assign; `do{return 0;}while(0)` / `switch(0)` / `while(1)` / `for(;;)` / `goto L; L:` wrappers; inner-block `register`) all keep the marker. Don't re-sweep any of these.
 
 ---
 
