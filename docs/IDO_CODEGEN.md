@@ -37,6 +37,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Dual-back-edge loop shape (`do{}while(perma-0 flag); <dead tail>; goto top;`) unlocks saved-reg PROMOTION of loop-invariant data-template pointers; plain `do{}while(1)` re-materializes them inline (gl_func_00034EB4 53.84->94.01% 2026-06-23)](#dual-back-edge-loop-shape-dowhileperma-0-flag-tail-goto-top-unlocks-saved-reg-promotion-of-loop-invariant-data-template-pointers-gl_func_00034eb4-5384-9401-2026-06-23) — _A raw-word USO (re-)init orchestrator loops over a bank of fixed data-seg template ptrs (`&D + 0x1E484..0x1E508`, + base `&D+0`), each passed once/iter to a callback; target promotes the 4 templates to s5-s8 + base to s3 (9-saved-reg / 0x40 frame). Two levers: (1) ref templates as `(char*)&D_00000000 + off` NOT raw `(char*)0x1E484` — symbol form gives the target `lui 0x2 + signed addiu` with R_MIPS_HI16/LO16 relocs (raw-int = reloc-blind `lui 0x1 + ori`, never matches relocatable USO); (2) plain `do{}while(1)` leaves each template used once/iter and IDO RE-MATERIALIZES inline (small frame, no promotion) — give the loop the target's dual-back-edge shape `int s4=0; loop_top: <peel>; do{...}while(s4==0); <dead 0x6C tail>; goto loop_top;` so IDO rotates it into `beqzl s4` + never-taken fall-through, which raises perceived pressure enough to promote templates->s5-s8 + base->s3 and grow the frame exactly. Word count 144->167 (exact), 70->94% in one edit. RESIDUAL (cap): the &D_0 flag read CSE-folds onto base/s3 in our build vs target's throwaway `lui t6; lw t6,0(t6)`; same-symbol CSE-vs-recompute scheduler choice, permuter 1210->760 only via noise. Left NM at 94%._
 - [Struct-by-value at the CALL SITE requires a K&R callee definition](#feedback-ido-struct-by-value-knr-callee-prereq) — _cfe rejects struct arg vs int-typed ANSI callee; convert callee def to K&R (byte-neutral for int params). + two-homes-no-reload forwarding; if(1){} blocks copy-prop hoist._
 - [Before accepting a "scheduler cap": check per-jal arg-register loads](#feedback-ido-scheduler-cap-check-arg-arity) — _missing aN setups = fewer call args (AA28); sw v0 in delay = result spill not arg (66210). Re-derive arity before lever-grinding._
+- [NAMED-LOCAL COUNT governs frame size — "phantom slot / irreducible min-frame" caps are false](#feedback-ido-named-local-count-frame) — _uopt homes every named local at frame top (decl order); spill temps stack below in decl-need-order. Delete names (inline their exprs) to shrink the home block; reorder decls to place temps. 69688/685C0 lands._
 
 ## Quick reference by sub-topic
 
@@ -336,6 +337,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO -O0 — `++j < N` keeps j in register across back-edge slt; `j++; while(...)` spills+reloads](#feedback-ido-o0-pre-increment-keeps-register) — _For do-while loops at IDO -O0, `do {...} while (++j < N)` keeps the incremented j in $t8 across the loop-end `slt at, j, N` test.
 - [IDO -O0 respects `register` for $s0 and inline-callable exprs avoid stack spills](#feedback-ido-o0-register-and-inline) — At -O0, IDO normally assigns every local to a stack slot and reloads on every use.
 - [IDO -O0 with two `register` locals — declaration order flips which gets $a2 vs $a3 (later-declared gets HIGHER-numbered $a-reg)](#feedback-ido-o0-register-decl-order-flips-a-alloc) — When matching an -O0 function that uses two `register` locals filling the unused $a-slots (e.g., $a2 and $a3 when only a0/a1 are real args), the order you DECLARE them controls which gets which slot.
+- [-O0 named-local slots are DECL-ORDER top-down and `register` locals RESERVE slots in the same sequence — declare the home-slot local FIRST; pair with plain-home + `register`-alias object shape (8C3C 92/92 EXACT 2026-07-03)](#ido-o0-decl-order-slot-lever-register-reserve-plain-home-alias) — _An -O0 slot residual ("temp-pool artifact, not C-steerable") can be a decl-order effect: `register` vars consume slot positions, so a plain local declared after them lands N slots lower — permute the FULL decl list. And a target that sw-homes a ctor result + lw-reloads into s1 + returns-from-home = TWO variables (plain `obj` declared first + `register` alias), not one. Plus: distinct base-0 alias extern busts -O0 same-call &D arg CSE (restores dual lui/addiu + temp-reg phase). Cracked gl_func_00008C3C (exact) + 8FFC/9100/8E48 (to the dead-double-b toolchain gap)._
 - [IDO -O0 reserves a 4-byte backup stack slot for EACH `register`-typed local — adds frame overhead beyond what target needs](#feedback-ido-o0-register-locals-reserve-backup-stack-slots) — _At -O0, IDO honors `register T *p` hints to save callee-save s-regs (s0/s1/s2/s3) — but ALSO reserves a 4-byte backup stack slot per register-typed local.
 - [IDO register keyword for $s0 allocation](#feedback-ido-register) — IDO respects 'register' as a strong hint — required to match libultra interrupt-bracket functions
 - [IDO `register` keyword promotes to $s-class but doesn't pin the $s-number](#feedback-ido-register-promotes-class-not-number) — _Adding `register T x;` on locals forces IDO to allocate them to callee-saved $s-regs instead of caller-saved $t/spills.
@@ -18488,3 +18490,33 @@ cap). Key mechanics, each verified in-tree on build/non_matching/src/game_uso/ga
    EXTRA args yields `addiu a1/a2,base,K` + 0x10-offset lwc1 exactly. A K&R
    def with a declared-but-unused extra param is NOT neutral (+1 `sw a1,4(sp)`
    home store) — keep the callee's param list unchanged, pass extras only.
+
+<a id="ido-o0-decl-order-slot-lever-register-reserve-plain-home-alias"></a>
+## -O0 named-local slots are DECL-ORDER top-down and `register` locals RESERVE slots in the same sequence — declare the home-slot local FIRST (cracks "-O0 temp-pool artifact" slot caps); pair with the plain-home + `register`-alias object shape
+
+**Verified 2026-07-03 (agent-e) on the game_libs_mid -O0 alloc-cascade family: gl_func_00008C3C 92/92 reloc-resolved EXACT (void fn, promotable), gl_func_00008FFC / 00009100 / 00008E48 to target+dead-double-b (the toolchain-binary gap).**
+
+Two mechanisms, both pure decl-order:
+
+1. **Slot assignment**: at -O0, ALL locals — plain AND `register` — get frame slots assigned top-down in declaration order (first-declared = highest sp offset, -4 each). `register` locals never touch their slot (it's the 4-byte backup reserve, see the sibling entry) but they still CONSUME a position in the sequence. So a plain local declared AFTER three `register` vars lands 3 slots lower than the same local declared first. gl_func_00008C3C's `call_root` home was documented for months as an "-O0 temp-allocator artifact, NOT C-steerable" (mine sp+0x28 vs target sp+0x34, everything else exact): moving `int *call_root;` to the TOP of the decl list (before `register root/mid/child`) put it at 0x34 = byte-exact. The old negative test "function scope vs inner-block is score-neutral" had kept it after the register decls — that's why it never moved. **When an -O0 slot residual survives, permute the FULL decl list including the `register` vars.**
+
+2. **Plain-home + register-alias object shape**: when an -O0 target stores a ctor/call result to a home slot (`sw v0,OFF(sp)`), reloads it into an s-reg (`lw s1,OFF(sp)`), derefs via the s-reg, and RETURNS from the home (`lw v0,OFF(sp)`), the original is TWO variables: `int obj;` (plain, declared first → top slot) plus `register int *o;` — `obj = ctor(...); base = &D; o = (int*)obj; ...; return obj;` (note the base materialization BETWEEN home-store and alias-reload, matching the target order). A single `register` obj gives `move s1,v0` (no home, 85-93%); a single plain obj loses the s-reg derefs. Cracked the "obj home-spill -O0 cap" on all three 8FFC-family siblings in one edit each.
+
+Bonus (same session): -O0 CSEs `&D_00000000` between two args of the SAME call (`f(&D_00000000, *(int*)((char*)&D_00000000+8))` emits `move a0,t6` off the shared base; target re-materializes both). A distinct base-0 alias extern (`D_8FFC_base = 0x00000000;` in undefined_syms_auto.txt) for the +offset read restores the two independent lui/addiu pairs AND the downstream temp-reg phase (t6 consumed → next RMW uses t7/t8). Same-value distinct-extern, byte-honest.
+
+Value-returning -O0 fns in this family still carry the dead `b epilogue; nop` pair (+2 words + live-b offset 10000003-vs-10000001) — the proven TOOLCHAIN-BINARY GAP; void fns (like 8C3C) are unaffected and can land.
+
+## NAMED-LOCAL COUNT governs frame size — the "phantom slot / irreducible min-frame" cap class is false <a name="feedback-ido-named-local-count-frame"></a>
+
+2026-07-03 (gl_func_00069688 79/79 + gl_func_000685C0 55/55 lands; uopttemp.c gettemp +
+zdbug:6-verified). uopt homes EVERY named local at frame top in decl order, even at -O2 and
+even when the value never touches memory; anonymous spill temps stack BELOW the named-home
+block, and their need-order follows declaration order. Consequences:
+- Frame "+8/+16 over-allocation caps" are usually just extra NAMES: delete locals by spelling
+  their values inline (j/k as i*2/i*6 — strength reduction recreates the IVs byte-identically;
+  pointer locals as inlined base+off) until the name count matches the target's home block.
+- Spill-slot offsets follow: with N homes above, the temp block starts at frame_top - 4N;
+  reorder DECLS (not statements) to place specific temps (key_h before key_l -> key_h higher).
+- Rounding pads land inside the temp block ("reserved unused" slots are alignment, not homes).
+Combine with the register-home interleave (-O0: register vars also reserve slots) — together
+these two rules explain most historic "frame-layout not C-reachable" verdicts.
