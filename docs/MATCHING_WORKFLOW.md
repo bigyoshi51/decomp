@@ -9309,3 +9309,71 @@ reloc-table entry than the target's base(D_00000000)+offset -> ROM mismatch; whi
 .text. So: USO -O0 fns with D+offset reads resist promotion (fold-vs-reloc tension); fns
 whose only D-ref is the bare base `&D_00000000` (like o0_50) promote cleanly. Diagnose by
 which the candidate has, not by the calls.
+
+## Stale raw-.word .s can mask an under-decode (reconstruct against expected/.o, not .s)
+
+For raw-.word USO segments (game_uso etc.), the committed `asm/nonmatchings/.../<fn>.s` can be
+STALE — out of sync with the real function in `expected/src/.../<unit>.c.o`. Symptom: the NM C
+body matches the .s shape and builds clean, but report.json fuzzy is stuck low and `scripts/
+disasm-func.py` (which reads the .s) shows a smaller/different function than the target.
+
+Example (2026-06-24): `game_uso_func_00001DDC` — committed .s was 238 insns / -200 frame; the
+expected .o was 382 insns / -384 frame. The C matched the stale 238-insn shape → fuzzy capped at
+42%. Reconstructing against the EXPECTED .o disasm (the true two-armed homing structure + the
+missing FALSE-arm extra-scale chains) jumped it to 55.82%.
+
+DETECT: compare `mips-linux-gnu-objdump -t` SIZE of the symbol in `build/non_matching/.../X.c.o`
+vs `expected/.../X.c.o` — a large mismatch means the .s/current-C is stale. ALWAYS disasm the
+expected .o (`objdump -dr expected/.../X.c.o`) as the ground truth for raw-.word reconstructions,
+never trust the .s alone. (Migrating USO disasm to spimdisasm proper would remove the staleness.)
+
+## Spine reconstruction via parallel subagents + auto-revert (productive for large raw-word fns)
+
+For large under-decoded raw-word functions (game_uso spine), a productive multi-agent workflow:
+(1) fan out read-only reconstruction subagents — each disassembles the EXPECTED .o, traces the
+logic, drafts improved C (NO edits/builds, avoids worktree races); (2) apply each draft SERIALLY
+with backup → build the single .o → check report.json fuzzy → AUTO-REVERT if not improved. NM
+bodies don't touch ROM (build path is INCLUDE_ASM), so testing is safe. 2026-06-24 run: 4 of 6
+spine drafts improved (+2.5 to +13.8pp each); 1 regressed (auto-reverted), 1 was a verified cap.
+
+## USO reloc-form (HI16-only/baked-LO16) is NOT a matching blocker — debunked 2026-06-24
+
+Recurring subagent claim: "game_uso fns can't match because expected/.o has R_MIPS_HI16 with
+zero R_MIPS_LO16 (511/0 for game_uso.c.o) while IDO C emits HI16+LO16 pairs." Investigated and
+DEBUNKED:
+- 174 game_uso fns ARE matched at 100%, incl. 69 with %hi(game_uso_D_*) global refs (e.g.
+  game_uso_func_000044F4 has HI16=104, LO16=0 in its expected .o — IDO C DID emit HI16-only).
+  So IDO C reproduces the baked-LO16 form fine when the fn otherwise matches.
+- The reloc-form does NOT change the linked ROM: a C `lw %lo(sym)(r)` (immediate 0 + LO16 reloc)
+  links to the same byte as the .s's baked `lw 0x680(r)` — the LO16 reloc fills to the same %lo.
+  So it's invisible to `make verify` (ROM gate) and largely to objdiff (which reloc-resolves).
+- Scanned all 70-99% game_uso NM fns for ones whose ONLY diff is immediate/reloc-form: ZERO.
+  Every capped fn has dominant structural/regalloc diffs (00003AC0: 7 reloc-form vs 222
+  regalloc/opcode, and 237w-built vs 261w-target). The reloc-form is noise, not the cap.
+CONCLUSION: game_uso lands require the SAME per-fn regalloc/structure matching as everywhere
+(permuter / exact-structure RE) — there is NO reloc/tooling shortcut. Don't attribute a cap to
+"reloc-form"; measure the real diff (per-symbol-address objdump; the build .o orders symbols
+differently than expected, so disassemble each fn at ITS OWN symbol address, not the expected
+address — comparing at the wrong address fabricates 100% "regalloc" diffs).
+
+## USO units BAKE all relocs — objdiff-100% is NOT a land gate; make verify is (2026-06-25)
+
+CRITICAL for landing USO functions (game_libs, game_uso, mgrproc, gui, *_uso): the INCLUDE_ASM
+.s files BAKE every jal target and global address into the raw `.word` — the expected/.c.o has
+ZERO relocs (game_libs.c.o: 0 R_MIPS_26, 0 HI16/LO16 across the whole unit). A C function with
+ANY call (`jal`→R_MIPS_26) or global ref (`&sym`→HI16/LO16) compiles to an object WITH those
+relocs. objdiff RELOC-RESOLVES them and can score the function 100% — but `make verify` (link →
+ROM vs baserom) FAILS, because the linked/USO-built bytes from the reloc'd object differ from the
+baked original. PROVEN 2026-06-25: gl_func_0005AB84 cracked to objdiff 100.0% (byte-exact text,
+0 non-reloc diffs) via frame-shrink; promoting it → ROM MISMATCH (12 R_MIPS_26 jals to
+gl_func_00034458 vs expected's 0 relocs). REVERTED.
+CONSEQUENCE: in a USO unit, ONLY a pure-LEAF-NO-GLOBAL-REF function (0 relocs in its own range)
+can be landed via C promotion. Functions with calls/refs are UNLANDABLE regardless of objdiff %.
+The honest land gate is ALWAYS `make verify` (ROM), never objdiff. Kernel (regular ELF, real
+relocs in expected) does NOT have this problem — kernel C relocs match.
+LANDABLE near-miss pool = (a) kernel fns crackable to byte-exact, (b) USO pure-leaf-no-ref fns
+crackable to byte-exact. As of 2026-06-25 the 99%+ near-misses in BOTH are register-coloring/
+spill-slot/scheduling caps (sweep: gl_func_00007FF4 spill-slot [pads+permuter fail], 5 reg-swaps
+[coupled-v0/a2, ugen-temploc, lowest-free-reg, temp-numbering], func_80000D2C/00056580 frame-
+over-split, func_8000969C/80007698 -O1 homing, game_libs_func_00031784 leaf t5/t9 coloring-tie).
+All permuter-immune. No new 100% lands available from the near-miss band.
