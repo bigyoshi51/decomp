@@ -46,6 +46,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [**Dead single-var `if (v) {}` = emission-free priority boost; PLACEMENT decides winners vs span-hit losers (a7b4 49/49 + d418 CRACKED)**](#dead-empty-if-priority-boost-placement-is-everything-a7b4-d418-cracked-2026-07-03) — _Empty single-var if is deleted pre-emission but its condition-use refs + new bb survive into compute_save: tested var +loop-weight refs; everything live-through the bb takes a +1 span hit. Place it where the vars you must NOT demote are already dead (a7b4: after the loop's last call — masks dead, a1 boosted → exact). EQ_INEQ folds it if the var is value-known; multi-var conditions emit. The dead-while(0) body-ref variant did NOT count refs in these shapes._
+- [**Subsumed `& 0xFFFF` on a byte-ranged value = EXACTLY-ONE ucode temp-ring slot burn (zero emission) — the "+1 temp-ring offset" cap killer (2A55C 27/27 + 2A740 38/38 CRACKED, agent-b allocno cap DISPROVEN)**](#subsumed-mask-single-ring-slot-burn-2a55c-2a740-cracked-2026-07-03) — _When the ONLY residual is a uniform +1 shift of the $t temp ring (lbu t8→t9, ori t0→t1, ...): wrap the byte-ranged subexpression in a subsumed mask — `(*p & 0xFF7F) & 0xFFFF` or `(*p & 0xFFFF) | 0x80` — uopt range-folds it to 0 insns but the folded candidate consumes one rotation slot. Quantum is exactly 1; a long-long mask (`& 0xFFFFFFFFFFFFFFFF`) burns FIVE (both candidate-land and temp-land), 32-bit `& 0xFFFFFFFF` and identity ops (|0, +0, x&x) fold in cfe/ccom = 0. Bitfield-clear and compound-assign forms = 0 here. Placement: burn lands inside the masked statement's temp sequence; on 2A740 masking the LOAD shifted the lbu itself (+ everything after)._
 - [**Param resident in $a2: e-split + dead kill + EXPRESSION arg1 flips arg-slot copy death order (d418 76/76, "$a2 cap" DISPROVEN)**](#param-to-a2-web-e-split-kill-plus-expression-arg1-flips-slot-copy-death-order-d418-2026-07-03) — _4 coupled zero-emission levers: multi-def cur reuse (blocks copyprop → tmp=cur survives as or a1,v0), dead if(tmp){} at join (alt→a0), e-split `e=arg0; arg0=0;` (entry read stays a0, kill const-propped away), and arg1 spelled `(int *)((int)e | (int)arg0)` with arg0 known-zero — op-node arg1 makes the a2-slot copy e's death point → e coalesces $a2; the | folds to the exact per-call `or a0,a2`. Plain cb(e,tmp,e) → a2 forbidden → e=a3 +4 words._
 - [**DEAD `while(0)` LOOP = emission-free compute_save ref-multiplier: promotes ONE contested LR above the base-address LR (titproc 0C0 whole-rotation coloring cap CRACKED, 3-lever recipe)**](#dead-while0-loop-emission-free-ref-multiplier-titproc-0c0-cracked-2026-07-02) — _A whole-function coloring rotation (base v1↔a1, param-counter a1↔a0, index a0↔v1, temp pool −2) needed THREE coupled levers: (1) copy-def entry `*P=*P+1; counter=*P;` un-coalesces the load to `lw t6` + its folded-sum candidate consumes the t7 rotation slot (whole temp pool shifts +2 to target); (2) reuse the dead param for the call arg (`counter=*(D+0x148)+4; v=f(counter);`) — emission-neutral refs lift counter's priority so it colors FIRST → param home $a0; (3) `while (0) { idx = counter*4; }` before the real `idx = counter*4;` — analoop weights the dead body as a loop BEFORE controlflow deletes it (ZERO emission), multiplying idx's LR refs so it outranks the &SYM base LR → idx=$v1, base falls to $a1. Every conventional boost (dup-assign, non-const identities x|x/x−x, register-kw, named-vs-inline, Quad-struct, volatile) was folded/DCE'd pre-alloc or emitted. Diagnose with zdbug:6 constrained order (colors 2/3/4=v1/a0/a1). 51/51 words, size+relocs exact, in-tree verified._
 - [Dead `a0 = 0;` param-kill pins the alias-copy or-at-entry + stops p→a0 copy-prop; residual v0↔v1 const-vs-copy rank wall (game_libs_func_00003FF8, 94.4%)](#param-kill-pins-alias-copy-at-entry-3ff8-2026-07-03) — _Return-the-pointer-arg leaf: dead `a0=0;` after field1 makes downstream p→a0 prop illegal (DCE'd, zero emission) → `or vX,a0,zero` lands at word 1, later bases via vX. 1/25→11/25 words, length-exact. Const-web keeps rank-1 $v0 over the copy web (while(0) boosts deleted pre-analoop; named consts canonicalize) — cap stands, upgraded. Dead 4th param reassigned = MEMORY home, not $a3._
@@ -136,6 +137,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [A SINGLE named float local in tight FPU code globally restructures IDO's entire FPU schedule — not just the immediate computation](#feedback-ido-named-float-local-globally-shifts-fpu-schedule) — _In tightly-scheduled FPU code (dot products, vector reductions), introducing ANY named `float` local — even just to name an intermediate sum — shifts IDO's FPU register allocation and instruction order across the WHOLE…
 - [IDO -O2 needs named float locals to load-batch all loads before stores; inlined float derefs interleave load/store](#feedback-ido-named-float-locals-enable-load-batching) — When asm shows `lwc1 f14; lwc1 f12; lwc1 f2; lwc1 f0; swc1 f14; swc1 f12; swc1 f2; swc1 f0` (4 loads then 4 stores), the C source MUST have 4 named float locals.
 - [A target base-register-adjust (`v1 += 0x2C`, then small-offset loads) IS C-reachable by MUTATING the pointer (`p += N`), NOT `q = p + N` (which folds back to full offsets)](#feedback-ido-pointer-mutate-forces-base-register-adjust) — _When target does `addiu base,base,N` then loads at small offsets where you emit full offsets, mutate the pointer in place: `p += N;`. `q = p + N;` folds the constant back to the original base. Cracked game_libs_func_0005FE14's "base-adjust not C-reachable" note → 26/26 opcodes exact (also fixed bnel→bne). Re-check any such note._
+- [game_uso W4 2026-07-03 lever trio: if(1)-wrapped pointer mutation materializes `addiu rd,base,K`; &&-ternary keeps the phi `move` + plain branches (bnezl cap cracked); `volatile`-qualified loads break uopt CSE/PRE + temp-pool phase cascade](#game-uso-w4-lever-trio-2026-07-03) — _(1) `t = base; if (1) { t += K; }` = the RELIABLE per-def base-materialization form when the target has `addiu rd,base,K` + small-offset accesses off a SHARED base reg (plain `t=base+K` folds; goto/do-while barriers materialize only one def; volatile-cast/int-typed/register/while(0)-refs all no-ops) — 7448. (2) A "bnezl branch-likely hard cap" where the target has `lw v0; bnez v0,L; move a0,v0 / bnez t8,L; nop / b L; li a0,K` is the &&-TERNARY emission `idx = (x==0 && y==0) ? K : x;` — the ternary result reg is a real phi home, as1 steals the arm's move into the first delay and retargets branch 2 with nop delay; every if/goto/dead-kill form coalesces back to bnezl (BFDC 32/32). (3) When the target RELOADS a pointer/flag field per use (incl. beqzl-annulled delay-slot reload dups) and your build CSEs them into one long-lived reg — worse, phase-shifting the ENTIRE t6..t5 temp pool (t0-start vs t6-start cascade) — qualify the loads `*(char * volatile *)(obj+K)` / `*(volatile unsigned *)(p+K)`: uopt honors load volatility (unlike the offset-folder), killing VN/PRE availability; named fresh-reload vars, dead kills, goto forms are all value-numbered away (EAF4 25/126 -> 125/125 in ONE edit). Bonus recipe: comma-embedded arg init `arg = (arg = *(char**)(a0+4), arg) + pair[0];` gives single-expr load ORDER + the lw landing in arg's home + addu rs=textual-second, where the two-statement and snapshot forms each get only 2 of 3._
 - [Inline a re-used base expression (don't name it) to force a fresh reload per access; a named local CSEs to one load](#feedback-ido-inline-base-forces-reload-per-access) — _When the target reloads the same base each time it's used inside a loop (e.g. two `lw base,0(a0)` per iteration before two different accesses through it), do NOT cache it in a named local — IDO will CSE that to a single load (N insns short). Write the base expression inline at each use site: `*(T*)((char*)a0[0] + off)` repeated, not `b = (char*)a0[0]; ... b+off ... b+off+4`. The inline form reloads the base for each access, matching. (Inverse of the named-float-locals load-batching rule.) Verified 2026-05-23 game_libs_func_00060CB8 (per-entry array reset: named base → 18/20, inline a0[0] twice → 20/20 byte-exact)._
 - [Force a SECOND zero FP reg (defeat the 0.0f CSE): store INT `0` through a `float*` variable](#feedback-ido-int-zero-through-float-ptr-forces-second-zero-reg) — _When the target materializes two zero FP regs (e.g. `mtc1 zero,$f0` for most float stores + `mtc1 zero,$f4` for one hoisted into a `jr` delay slot), plain `0.0f` everywhere CSEs to ONE reg (1 insn short), and `float z=0.0f` CSEs too. For the store needing the distinct reg, assign through a `float*` variable and store INT `0` (not `0.0f`): `float *p = ...; *p = 0;` — the int-0→float conversion doesn't CSE with the `0.0f` constant, forcing the 2nd `mtc1`. Cracked timproc_uso_b5_func_00003890 (7/8 → byte-exact, permuter-found). Disproved its "0.0f CSE not C-controllable" cap._
 - [**FP-pseudo register numbering follows C STATEMENT ORDER, not asm schedule — move a const-store statement EARLIER to give its value the LOW $f reg (+ move int stores before FP stores to fix the store interleave)**](#feedback-ido-fp-pseudo-source-order-store-order) — _Generalizes float-const-by-source-order to ALL FP pseudos (arith results too), and pairs it with a store-order lever. A "ugen FP-scheduling cap" near-miss where the asm shape is already byte-identical except (a) the FP store interleave and (b) which $f reg each value lands in. Two source-order moves: (1) if the target emits some INTEGER stores before some FP stores, put those int statements before the FP-store statements in source — the as1 scheduler then matches the interleave; (2) if a constant (e.g. `1.0f`) must color a LOW $f reg while arith results go higher, place that constant's STORE statement before the arith stores in source — IDO numbers FP pseudos by statement order, so the const's pseudo is created first → low $f reg, pushing the arith results up. Both are pure reorderings (no value change). Cracked mgrproc_uso_func_00002324 2026-06-21 (12→6 via int-store-first, 6→0 via const-store-first) — a documented "FP-scheduling cap" that was really C-steerable._
@@ -191,6 +193,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [`float four = 4.0f;` named local pins the FP constant to one $fN across multiple uses](#feedback-ido-named-float-const-pins-fp-reg-across-body) — _For FP literals used 2+ times in a function body, declare `float NAME = LITERAL;` as a named local — IDO -O2 pins one $f-reg and reuses, vs re-materializing `lui at, IMM; mtc1 at, $fN` per use. Different from the `register int N = 1;` constant-fold trap because FP literals need lui+mtc1 setup. Verified 2026-05-16 on game_libs_func_000086A0 (parallel) and gl_func_0000871C (this tick) — both 4.0f-pinning under `float four = 4.0f;`._
 - **INVERSE (2026-06-02): drop a spurious unused TRAILING param to free its arg-reg and ELIMINATE a stack spill the target avoids.** If the target keeps an arg in a register across a jal (`or $a3,$a0,$0` — reuses a free arg-reg to hold original-a0) but your build SPILLS it to stack (`sw a0,off(sp)` + bigger frame), check whether your C signature declares an unused trailing param (e.g. `f(a0,a1,a2,arg3)` where arg3 is never referenced). That unused param OCCUPIES `$a3`, so the allocator can't reuse it and spills original-a0 to the stack instead. **Drop the unused param** → `$a3` is free → IDO reuses it (matches the target's `or $a3,$a0`) and the spill + extra frame vanish. Verified `gl_func_00067084` 2026-06-02 (85→94% from this alone, part of an 85→99.4% run). Pairs with dropping spurious `(char)`/`(signed char)` casts (each forces a redundant `andi`/`sll;sra`).
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
+- [Dead `if (a1) {}` elides the unused-leading-a1 caller-slot home (a0-only-spill targets now reachable; F444+F4F0 EXACT)](#feedback-ido-unused-arg-save) — _2026-07-03: empty-if ref marks a1 used, zero emission; kills the documented "no C lever / permuter-class" a1-spill cap. `a1=0;`/`(void)a1;` do NOT work. Re-pad frame after (volatile-pad sandwich)._
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
 - [Pre-load arg field into named local to force field-load BEFORE `&D` materialization clobbers the arg-register](#feedback-ido-preload-field-into-local-forces-load-before-clobber) — _When target reads `lw aN, K(a0)` BEFORE `lui a0, %hi(D_X)` (load via original arg-pointer, then clobber it), the inline `func(&D, arg->field)` form emits clobber-then-reload-via-spill (+1 insn). Fix: `int val = arg->field; func(&D, val);` — named local creates a sequence point that forces field-load first. 2026-05-10: unlocked gl_func_00054668 (75.62% → byte-exact)._
 - [Place `volatile int local = arg;` INSIDE the if-non-zero block to flip early-exit from `bnel-likely+delay-load` to `beqz+nop`](#feedback-ido-volatile-local-scoped-to-if-block-flips-early-exit-shape) — _Declaring a volatile-spilled local at function top emits the spill BEFORE the early-exit branch, letting IDO's scheduler hoist the first-iter loop-load into the branch's likely-delay slot (mismatching target's `beqz+nop` pattern). Scoping the volatile decl INSIDE the if-non-zero block pushes the spill AFTER the branch, removing IDO's hoist opportunity. Verified 2026-05-08 on `gl_func_0003EA98` — same-tick fix as the volatile-pointer caller-slot trick._
@@ -8761,6 +8764,8 @@ nop
 **How to apply:** when the target has unexplained `sw a0, FRAME(sp)` at entry and nothing that reads it back, your C needs an unused `int a0` parameter. Don't try to make the parameter "do something" — IDO spills it regardless.
 
 **Multiple-unused-leading-params wrinkle (2026-05-16, `gl_func_0003F444`):** with `f(int a0, int a1, int a2, int a3)` where a0 AND a1 are unused but a2/a3 are used, IDO spills BOTH unused leading params (`sw a0,FRAME(sp)` AND `sw a1,FRAME+4(sp)`). If the target spills only a0 (not a1), there is NO C lever to suppress the a1-only spill — dropping a `(void)a0;` cast does not change it; the count of homed unused-leading-params is fixed by IDO's prologue logic. Such a one-extra-`sw a1` residual is LEN-DIFF +1 (so INSN_PATCH, which is same-length-only, cannot remove it) and is genuinely permuter-class — don't grind C shapes for it. **`register int a1` also fails** (tested 2026-05-16 on the same function — built remained 176B / 44 insns; the `register` keyword doesn't suppress the unused-arg caller-slot spill under -O2, consistent with the general `register`-keyword-honored-narrowly rule documented elsewhere in this doc).
+
+**2026-07-03 CORRECTION — the a1-only-spill cap FALLS to a dead `if (a1) {}` (agent-e, gl_func_0003F444 43/43 + gl_func_0003F4F0 48/48 EXACT):** the "NO C lever" claim above is wrong. An empty `if (a1) {}` placed at the top of the body gives the unused a1 a REF, so IDO's defensive unused-leading-param homing no longer treats it as unused → the `sw a1,FRAME+4(sp)` disappears, while the empty if itself emits ZERO instructions (empty-body if is deleted by controlflow) and a0's home `sw a0,FRAME(sp)` stays, matching targets that home a0 only. Notes: (1) `a1 = 0;` param-kill does NOT work — the dead def is DCE'd and the home remains; (2) `(void)a1;` also does nothing (long documented); the ref must be a *read in a deletable construct*, `if (a1) {}` is the shape that works; (3) after the spill disappears the locals shift — re-do the frame with the volatile-pad sandwich (F444 needed `int buf58[38]; volatile int gap; int buf50; volatile int pad2[2];` for buf58@0x58/buf50@0x50/frame 0xF0). Both functions had permuter-151k/register/void-ptr/K&R negative histories; this was a one-line fix. **When the only LEN+1 residual is an extra unused-aN caller-slot home, try `if (aN) {}` first.**
 
 **When not to apply:** if the target asm has NO `sw a0` or `sw a0` is followed by a clear `lw a0` later, then a0 genuinely IS used — write C that uses it.
 
@@ -18395,3 +18400,91 @@ only a0. Diagnostic: for every jal in the target, list which arg registers are a
 setups mean more (incl. stack args). Same family as the zero-arg-2nd-call misdecode
 (gl_func_00066210, sw v0 delay = result spill not an arg). The sub-94%-fuzzy band hides
 logic bugs behind coloring noise — always re-derive arity before lever-grinding.
+
+<a id="subsumed-mask-single-ring-slot-burn-2a55c-2a740-cracked-2026-07-03"></a>
+## Subsumed `& 0xFFFF` on a byte-ranged value = exactly ONE ucode temp-ring slot burn (zero emission) — kills "+1 temp-ring offset" caps (gl_func_0002A55C + gl_func_0002A740 CRACKED, 2026-07-03)
+
+**Lever:** when a function's only residual is a UNIFORM +1 (or +N) shift of the
+$t ucode temp ring (e.g. build lbu t8/ori t0/andi t1 where target wants
+t9/t1/t2), add a **subsumed mask** to a value uopt can range-prove: for a
+byte-ranged expression (`lbu` result, or `x & 0xFF7F` of one), `& 0xFFFF`
+folds to ZERO emitted instructions but its folded candidate consumes exactly
+ONE rotation slot, shifting every later ring temp +1. Both crack sites in
+game_libs_post.c (-O2, agent-e, in-tree word-verified + objdiff 100.0):
+
+- `gl_func_0002A55C` tail: `obj[0] = (obj[0] & 0xFF7F) & 0xFFFF; obj[0] |= 0x40;`
+  moved andi/sb/ori/sb from t6/t8/t9 to the target t6/t9/t0 (27/27). The
+  natural both-store RMW pair (31784 entry) supplies the first burn (folded
+  reload); the subsumed mask supplies the second.
+- `gl_func_0002A740`: `*o = (*o & 0xFFFF) | 0x80;` shifted the WHOLE ring
+  +1 including the lbu itself (t8→t9, ori t0→t1, andi t1→t2, loop lw
+  t2→t3 incl. its beqzl use) → 38/38. This DISPROVES the 2026-06-20
+  "uniform +1 temp-ring offset / genuine allocno-numbering cap (permuter 38k
+  iters)" verdict — the permuter never generates subsumed masks.
+
+**Burn quanta (measured, both candidate-land and temp-land):**
+- subsumed 16-bit `& 0xFFFF` on byte-ranged value: **+1** slot.
+- long-long `& 0xFFFFFFFFFFFFFFFF` anywhere near the value: **+5** slots
+  (quantum is 5-or-0 — you cannot get +2 from LL masks; chains of 1/2/5 LL
+  masks all give the same +5).
+- 32-bit `& 0xFFFFFFFF` on int, `| 0`, `+ 0`, `x & x`, `(uchar)` cast of an
+  already-byte value at a store: **0** (folded in cfe/ccom before candidates).
+- bitfield-clear (`->b7 = 0`) and compound-assign (`&=`/`|=`) spellings: **0**
+  extra here (the 22398 bitfield burn needs the variable 2-bit INSERT form).
+- CAUTION: `(uchar)` casts can NARROW the mask (`& 0xFF7F` → `andi 0x7f`)
+  when cfe proves byte range — check the immediate survived.
+
+**Also cracked with it (same session):** `gl_func_0002D014` 20/20 — but that
+one needed no burn, just the natural both-store RMW (`field = field - 1;
+while (field > 0)` re-read CSE-folds onto the stored temp) instead of a named
+`n` local (named → candidate → $v0; natural → ring t7/t8).
+
+**Where it does NOT work:** fn-A-style CANDIDATE-land single-slot moves.
+gl_func_0002A4D0 needs raw@t6+val@t9+set@t0 (2 junks above raw, 2 between
+raw/val); the raw-def LL mask moves raw v1→t6 (its 2 junks land at v0/v1)
+but then val's junk block collapses/overshoots (5-or-0) — 18 variants, two
+stable attractors (13/15 and 12/15), CAP stands at 13/15.
+
+
+<a id="game-uso-w4-lever-trio-2026-07-03"></a>
+## game_uso W4 lever trio (2026-07-03, agent-e): if(1)-mutation materialization, &&-ternary phi-move, volatile CSE/PRE breaker
+
+Full session detail lives in the per-function comments of the winning bodies
+(BFDC 32/32, F424 30/30, EAF4 125/125 exact; 7448 24/36 length-exact coloring
+cap). Key mechanics, each verified in-tree on build/non_matching/src/game_uso/game_uso.c.o:
+
+1. **if(1)-wrapped pointer mutation** `t = base; if (1) { t += K; }` is the
+   general per-def form of the `p += N` mutation lever: the if(1){} BB blocks
+   the copyprop merge that otherwise turns it back into foldable `t = base+K`,
+   yet blockmerge dissolves the block before scheduling so the addiu still
+   schedules/interleaves freely. Materializes `addiu tN,base,K` + small-offset
+   loads for EVERY def (goto/do-while(0) barriers only materialize ONE def per
+   base web — asymmetric, unexplained). Load-based defs
+   (`t = *(char**)(a0+0x30) + K`) self-add and never fold (74D8/751C recipe).
+
+2. **&&-ternary phi-move**: target shape `lw v0; bnez v0,L; move a0,v0 /
+   lh t8; bnez t8,L; nop / b L; li a0,0x28; L:` (plain branches, one move in
+   the first delay) = `idx = (sel == 0 && pair[0] == 0) ? 0x28 : sel;`.
+   The ternary makes idx a genuine phi home so the copy survives; as1 then
+   steals the single-move arm into branch 1's delay and retargets branch 2
+   with a nop delay (A9C rule-1 shape). Nested ifs, gotos, dead kills,
+   while(0) uses, |0: all coalesce -> lw direct + bnezl (the old "hard cap").
+
+3. **volatile load qualifier kills uopt CSE/PRE where nothing else does**:
+   when the target re-reads the same field per test/block (with beqzl-annulled
+   reload dups) and the build caches it — or PRE unifies cross-path loads into
+   one long-lived candidate, visibly PHASE-SHIFTING the temp pool (build's
+   temps start t0 instead of t6 and every downstream temp number cascades) —
+   `*(char * volatile *)` / `*(volatile unsigned int *)` casts restore
+   per-use loads byte-exactly. Note the asymmetry: the offset-FOLDER ignores
+   cast volatility (7448 negative), but VN/CSE/PRE honor it (EAF4 winner).
+   Named per-level reload vars, dead kills after use, goto chains: all
+   value-numbered away.
+
+4. **K&R + unchecked extra args materialize call-arg bases** (F424): a
+   single-use held base folds into an offset unless it gets a call-arg use;
+   converting the (already-matched) callee's def to K&R with its SAME params
+   (byte-IDENTICAL — verified vs expected/) and passing the bases as unchecked
+   EXTRA args yields `addiu a1/a2,base,K` + 0x10-offset lwc1 exactly. A K&R
+   def with a declared-but-unused extra param is NOT neutral (+1 `sw a1,4(sp)`
+   home store) — keep the callee's param list unchanged, pass extras only.
