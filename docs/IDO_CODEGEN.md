@@ -51,6 +51,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [**Param resident in $a2: e-split + dead kill + EXPRESSION arg1 flips arg-slot copy death order (d418 76/76, "$a2 cap" DISPROVEN)**](#param-to-a2-web-e-split-kill-plus-expression-arg1-flips-slot-copy-death-order-d418-2026-07-03) — _4 coupled zero-emission levers: multi-def cur reuse (blocks copyprop → tmp=cur survives as or a1,v0), dead if(tmp){} at join (alt→a0), e-split `e=arg0; arg0=0;` (entry read stays a0, kill const-propped away), and arg1 spelled `(int *)((int)e | (int)arg0)` with arg0 known-zero — op-node arg1 makes the a2-slot copy e's death point → e coalesces $a2; the | folds to the exact per-call `or a0,a2`. Plain cb(e,tmp,e) → a2 forbidden → e=a3 +4 words._
 - [**DEAD `while(0)` LOOP = emission-free compute_save ref-multiplier: promotes ONE contested LR above the base-address LR (titproc 0C0 whole-rotation coloring cap CRACKED, 3-lever recipe)**](#dead-while0-loop-emission-free-ref-multiplier-titproc-0c0-cracked-2026-07-02) — _A whole-function coloring rotation (base v1↔a1, param-counter a1↔a0, index a0↔v1, temp pool −2) needed THREE coupled levers: (1) copy-def entry `*P=*P+1; counter=*P;` un-coalesces the load to `lw t6` + its folded-sum candidate consumes the t7 rotation slot (whole temp pool shifts +2 to target); (2) reuse the dead param for the call arg (`counter=*(D+0x148)+4; v=f(counter);`) — emission-neutral refs lift counter's priority so it colors FIRST → param home $a0; (3) `while (0) { idx = counter*4; }` before the real `idx = counter*4;` — analoop weights the dead body as a loop BEFORE controlflow deletes it (ZERO emission), multiplying idx's LR refs so it outranks the &SYM base LR → idx=$v1, base falls to $a1. Every conventional boost (dup-assign, non-const identities x|x/x−x, register-kw, named-vs-inline, Quad-struct, volatile) was folded/DCE'd pre-alloc or emitted. Diagnose with zdbug:6 constrained order (colors 2/3/4=v1/a0/a1). 51/51 words, size+relocs exact, in-tree verified._
 - [Dead `a0 = 0;` param-kill pins the alias-copy or-at-entry + stops p→a0 copy-prop; residual v0↔v1 const-vs-copy rank wall (game_libs_func_00003FF8, 94.4%)](#param-kill-pins-alias-copy-at-entry-3ff8-2026-07-03) — _Return-the-pointer-arg leaf: dead `a0=0;` after field1 makes downstream p→a0 prop illegal (DCE'd, zero emission) → `or vX,a0,zero` lands at word 1, later bases via vX. 1/25→11/25 words, length-exact. Const-web keeps rank-1 $v0 over the copy web (while(0) boosts deleted pre-analoop; named consts canonicalize) — cap stands, upgraded. Dead 4th param reassigned = MEMORY home, not $a3._
+- [**8-byte `&GLOBAL+K` pair copy = STRUCT COPY — kills the LO16-placement fold + the coupled $t renumber; comma-embed a neighbor store in the copy's LHS to pin it after the address pair (gl_func_000519A4 63→71/77, 2026-07-03)**](#global-pair-struct-copy-kills-lo16-fold-519a4-2026-07-03) — _Target `lui;addiu %lo(D+K); [neighbor sw]; lw 0(t1); sw; lw 4(t1); sw` with base in $t and temps t3/t2: scalar `h[0]/h[1]` spellings re-base to `lw K(base)` (LO16 cap) or color base $v0. `*(Pair*)(dst) = *(Pair*)((char*)&D+K)` snaps address+all 4 regs in one edit (no named Pair tmp — that emits). A neighbor store between addiu and first lw must be COMMA-EMBEDDED in the copy's LHS (`*(Pair*)((v1[1]=x, v1)+2) = ...`) — as separate statement as1 splits the lui/addiu pair with it._
 - [Shared-tail vs both-arms: phi-move vs beql debris tension; store-before-compare tail lever (game_libs_func_00003F08, 94.4%)](#both-arms-beqzl-vs-shared-tail-phi-move-3f08-2026-07-03) — _Target beql+dup'd-shared-store: shared-tail C keeps the phi `move v1,a3` + as1 steals the addiu (no beql); both-arms kills phi + gets beqzl but +3 debris (b + dead else sw + per-arm li remat). Landed: `a0[N]=(a0[N]+1)&3;` BEFORE `if(a0[M]==a0[N])` → store fills bne delay, load CSEs to v0. 31→34/60. CAP._
 - [Bitfield-struct assignment = manual mask-RMW + one burned ucode temp (t9-skip); `|` evaluates its RIGHT operand first (game_libs_func_00022398 CRACKED)](#bitfield-struct-assignment-burns-ucode-temp-t9-skip-22398-cracked-2026-07-02) — _2-bit field insert: manual `((x<<2)&0xC)|(*p&~0xC)` misses twice (or-operand eval order + all temps one slot early). True bitfield-struct assignment `((B*)p)->f = v` burns the t9 ucode slot AND orders lb-side-first → byte-exact; split-shift `(x<<1)<<1` on the a1side-LEFT manual spelling is byte-identical. 17/17 in-tree._
 - [`(a0[1] += (int)f)` index subexpression keeps acc in $t temps; sole named idx local colors v1 (game_libs_func_00029934 CRACKED)](#compound-assign-subexpression-keeps-acc-in-t-temps-29934-cracked-2026-07-02) — _named acc → v0 (wrong); fully-inline → idx in temps (wrong). Compound-assign inside the index expr + ONE named idx local = acc stays t9 (sw t9 folded), idx colors v1 (`andi v1,v1`). 17/17 in-tree._
@@ -141,6 +142,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [game_uso W4 2026-07-03 lever trio: if(1)-wrapped pointer mutation materializes `addiu rd,base,K`; &&-ternary keeps the phi `move` + plain branches (bnezl cap cracked); `volatile`-qualified loads break uopt CSE/PRE + temp-pool phase cascade](#game-uso-w4-lever-trio-2026-07-03) — _(1) `t = base; if (1) { t += K; }` = the RELIABLE per-def base-materialization form when the target has `addiu rd,base,K` + small-offset accesses off a SHARED base reg (plain `t=base+K` folds; goto/do-while barriers materialize only one def; volatile-cast/int-typed/register/while(0)-refs all no-ops) — 7448. (2) A "bnezl branch-likely hard cap" where the target has `lw v0; bnez v0,L; move a0,v0 / bnez t8,L; nop / b L; li a0,K` is the &&-TERNARY emission `idx = (x==0 && y==0) ? K : x;` — the ternary result reg is a real phi home, as1 steals the arm's move into the first delay and retargets branch 2 with nop delay; every if/goto/dead-kill form coalesces back to bnezl (BFDC 32/32). (3) When the target RELOADS a pointer/flag field per use (incl. beqzl-annulled delay-slot reload dups) and your build CSEs them into one long-lived reg — worse, phase-shifting the ENTIRE t6..t5 temp pool (t0-start vs t6-start cascade) — qualify the loads `*(char * volatile *)(obj+K)` / `*(volatile unsigned *)(p+K)`: uopt honors load volatility (unlike the offset-folder), killing VN/PRE availability; named fresh-reload vars, dead kills, goto forms are all value-numbered away (EAF4 25/126 -> 125/125 in ONE edit). Bonus recipe: comma-embedded arg init `arg = (arg = *(char**)(a0+4), arg) + pair[0];` gives single-expr load ORDER + the lw landing in arg's home + addu rs=textual-second, where the two-statement and snapshot forms each get only 2 of 3._
 - [Inline a re-used base expression (don't name it) to force a fresh reload per access; a named local CSEs to one load](#feedback-ido-inline-base-forces-reload-per-access) — _When the target reloads the same base each time it's used inside a loop (e.g. two `lw base,0(a0)` per iteration before two different accesses through it), do NOT cache it in a named local — IDO will CSE that to a single load (N insns short). Write the base expression inline at each use site: `*(T*)((char*)a0[0] + off)` repeated, not `b = (char*)a0[0]; ... b+off ... b+off+4`. The inline form reloads the base for each access, matching. (Inverse of the named-float-locals load-batching rule.) Verified 2026-05-23 game_libs_func_00060CB8 (per-entry array reset: named base → 18/20, inline a0[0] twice → 20/20 byte-exact)._
 - [Force a SECOND zero FP reg (defeat the 0.0f CSE): store INT `0` through a `float*` variable](#feedback-ido-int-zero-through-float-ptr-forces-second-zero-reg) — _When the target materializes two zero FP regs (e.g. `mtc1 zero,$f0` for most float stores + `mtc1 zero,$f4` for one hoisted into a `jr` delay slot), plain `0.0f` everywhere CSEs to ONE reg (1 insn short), and `float z=0.0f` CSEs too. For the store needing the distinct reg, assign through a `float*` variable and store INT `0` (not `0.0f`): `float *p = ...; *p = 0;` — the int-0→float conversion doesn't CSE with the `0.0f` constant, forcing the 2nd `mtc1`. Cracked timproc_uso_b5_func_00003890 (7/8 → byte-exact, permuter-found). Disproved its "0.0f CSE not C-controllable" cap._
+- [Defeat the 0.0f CSE via LITERAL FORM: `(float)0` for the delay-slot store vs `0.0f` for the bulk stores — differing literal form = distinct pseudo → the 2nd `mtc1 zero` schedules into the `jr` delay slot (companion to the float*-store lever)](#game-libs-64124-distinct-f4-zero-via-cast-2026-07-03) — _Same target shape as the float*-store note (bulk float stores share `mtc1 zero,$f2`, but one store — typically the last, at a high offset — needs a DISTINCT `mtc1 zero,$f4` that fills the `jr ra` delay slot). A cleaner crack than the float*-store form: spell the odd store's zero as `(float)0` (cast) while the bulk stores use `0.0f` (literal). IDO hashes the two literal FORMS differently → creates a separate 0.0 pseudo → distinct `$f4` that as1 schedules into the delay slot. The prior "named `float zero2=0.0f`" attempt fails because same-literal CSE merges it; the differing cast is the trick. **PAIR WITH register-numbering-by-source-order**: to also match WHICH $f reg each const lands in (target 1.0→$f0, bulk 0.0→$f2, odd 0.0→$f4), write the `1.0f` stores FIRST in C source so the 1.0 pseudo is created first (gets $f0); IDO still regroups emission by store offset so the 0.0 stores emit first. Cracked game_libs_func_00064124 2026-07-03 (documented "distinct-$f4 0.0 multi-blocker" cap → 19/19 byte-exact + ROM verify). Try this literal-form crack before the float*-store form for any 2-zero-reg near-miss where the distinct reg fills a delay slot._
 - [**FP-pseudo register numbering follows C STATEMENT ORDER, not asm schedule — move a const-store statement EARLIER to give its value the LOW $f reg (+ move int stores before FP stores to fix the store interleave)**](#feedback-ido-fp-pseudo-source-order-store-order) — _Generalizes float-const-by-source-order to ALL FP pseudos (arith results too), and pairs it with a store-order lever. A "ugen FP-scheduling cap" near-miss where the asm shape is already byte-identical except (a) the FP store interleave and (b) which $f reg each value lands in. Two source-order moves: (1) if the target emits some INTEGER stores before some FP stores, put those int statements before the FP-store statements in source — the as1 scheduler then matches the interleave; (2) if a constant (e.g. `1.0f`) must color a LOW $f reg while arith results go higher, place that constant's STORE statement before the arith stores in source — IDO numbers FP pseudos by statement order, so the const's pseudo is created first → low $f reg, pushing the arith results up. Both are pure reorderings (no value change). Cracked mgrproc_uso_func_00002324 2026-06-21 (12→6 via int-store-first, 6→0 via const-store-first) — a documented "FP-scheduling cap" that was really C-steerable._
 - [Float-const register choice ($f0 vs $f2) follows C SOURCE order of the constants' first use, not asm store order — reorder to flip](#feedback-ido-float-const-reg-by-source-order) — _A multi-const float-init (e.g. identity matrix: 1.0f on the diagonal, 0.0f elsewhere) where the target puts one constant in $f0 and the other in $f2. IDO assigns $f0 to whichever constant's stores appear FIRST in C source, then reorders the actual stores during scheduling. So if the target has 1.0f in $f0 but stores 0.0f first in asm, write the 1.0f stores first in C — IDO still emits the 0.0f stores first but keeps 1.0f in $f0. Flips the "float-register-swap (f0 vs f2)" cap. Verified 2026-05-23 game_libs_func_0005E83C (3x4 identity init, 14/16 → byte-exact)._
 - [Float→narrow-int store: cast through `(int)` for `trunc.w.s`, NEVER directly to `(char)`/`(short)` (which pulls the soft-float-to-int range-check helper)](#feedback-ido-float-to-int-cast-via-int-not-char) — _For `byte = (T)(f * k)` where T is char/short, `(char)(float)` or `(short)(float)` emits a giant inlined float→int conversion routine (range checks + helper, ~100 insns). The target is just `mul.s; trunc.w.s; mfc1; sb`. Write `(int)(f*k)` and assign to the narrow lvalue — the (int) maps directly to `trunc.w.s`, the store narrows. Verified 2026-05-23 game_libs_func_00047AD8 (Vec3→3 bytes ×127.0f): (char) cast → 111 insns, (int) cast → 20-insn byte-exact._
@@ -177,6 +179,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [`lui+addiu` (reloc) vs `lui+ori` (literal) for a ≥0x10000 constant: the target's `addiu`-form is ALWAYS a `&SYM + N` address, never a paddable integer literal](#lui-addiu-reloc-vs-lui-ori-literal-the-addiu-form-is-a-sym-n-address-not-an-integer-literal-gl_func_0004d468-2026-06-22) — _A near-miss where the target materializes a ≥0x10000 constant as `lui rN,%hi; addiu rN,rN,%lo` (HI16/LO16 relocs) but your build emits `lui rN,HI; ori rN,rN,LO`? IDO emits `lui+ori` for EVERY bare integer literal ≥0x10000 (`0xNU`, `(char*)0xN`, `(int)0xN`, `(void*)0xN` — ALL ori; verified standalone). The ONLY C form that yields `lui+addiu` is a relocated `(char*)&D_00000000 + N` address. So a target `addiu`-form constant is NOT a literal — it's an address into the global data section; rewrite the arg/store as `(char*)&D_00000000 + N`. Conversely, leave true ori-form literals (e.g. magic `0x12345678`, packed `0xB0000B70`, `*(int*)0x3CB00` absolute pokes that the target ITSELF emits as ori) as plain literals. Classify each constant by the target's lui-pair mnemonic (addiu→reloc, ori→literal) BEFORE editing. gl_func_0004D468 76.1→78.6 (2026-06-22)._
 - [Function that never sets or spills a0 is forwarding caller's a0 to a callee](#feedback-ido-arg-passthrough) — If asm body shows a0 is never touched (no `sw a0, N(sp)`, no `or a0, ..., zero`, no `addiu a0, ..., N`) but a jal still uses it, the C takes a0 as a parameter and passes it through unchanged
 - [IDO picks $a1 (not $a3) to save an arg across a jal — CRACKED 2026-07-02 via pass-through call-arg precoloring](#feedback-ido-arg-save-reg-pick) — _When a function spills its incoming `a0` to survive a `jal`, IDO -O2 consistently allocates $a1 as the holding register: `or a1, a0, zero; sw a1, N(sp); ...jal...; lw a1, N(sp)`. If the target uses $aN instead: pass the arg to the callee in ARG POSITION N+1, with the middle arg slots filled by pass-through dummy params (`void f(void *obj, int d1, int d2) { n = g(0, d1, d2, obj); ... }`) — d1/d2 coalesce with incoming a1/a2 (zero emission), obj precolors to $a3. func_00001F78 20/20 EXACT._
+- [Dead $v0 def from an unused K&R int call-return excludes $v0 from a call-spanning rematerialized &D base — CRACKED with a distinct VOID-returning callee extern (func_000082F8 54/54, 2026-07-03)](#feedback-ido-void-callee-kills-dead-v0-def) — _Base-in-$v1-vs-$v0 residual on a CSE'd &D base that spans a call (with post-call lui/addiu rematerialization): the call's UNUSED int return still defines $v0, and the base candidate's interference with that dead def forces $v1 (zdbug:6 "R=1 reserved"). Declare a DISTINCT void-returning extern for that call (`extern void func_00000000_XXXX_v(...)`, wire `= 0x00000000` in undefined_syms_auto.txt; jal word stays 0x0C000000) — dead def gone, base colors $v0. 8→1 diffs in one edit on bootup_uso func_000082F8; cracked the documented "caller-saved renumber / not-C-reachable" cap note._
+- [SINGLE-INT struct by-value arg = the 1-word Pair2 crack: emits the dead outgoing arg-shadow `sw a1,0x4(sp)` in the jal delay + fixes the spill-source reg and downstream renumber (func_000050A0 33/33, 2026-07-03)](#feedback-ido-single-int-struct-shadow-store) — _When the target has a dead `sw a1,0x4(sp)` (outgoing a1 shadow slot) in a call's delay AND you've been faking it with a `tmp = val` embedded volatile store (lands at a LOCAL slot, not 0x4): pass the value as a 1-word struct by value — `typedef struct {int v;} S; f(p, *(S*)&saved, ...)`. The by-value struct forces the caller-slot home store (PATTERNS Pair2-crack generalizes down to 1 word), and fixing that ALSO flipped the p-spill to the target's `sw v0,HIGH` form and killed the t7→t8 renumber. Pair with an OVERSIZED buffer + `&buf[1]` (the "&buf[N] dead-slot" lever) to claim layout gap words: `float buf[5]`, zero buf[1..4], pass &buf[1] — decl order buf,p,pad,saved lands every slot + frame exact._
 - [Pre-call `or aN, aM, zero` (move) plus a stack spill is 3rd-arg marshalling, not a defensive register-save](#feedback-ido-precall-move-is-arg-marshal) — When asm shows `or aN, aM, zero; sw aN, off(sp); addiu aM, aM, K; jal; sw aP, off(sp) [delay]` before a call where `aN > aM` (e.g. `or a2, a0` then `addiu a0, a0, 0x10`), the `or` is materialising a 3rd argument register, not preserving aM across the jal. Decoded C should be `f(aM+K, aP, aM)` (3 args), not `f(aM+K, aP)` (2 args). Mistaking it for a save makes you wrap NM at ~80% with no available C lever; the fix is just adding the missing argument.
 - [IDO schedules arg-save `or sN, aN, zero` into bne delay slot when an immediate `if (aN == 0)` test follows the prologue](#feedback-ido-arg-save-to-sreg-in-bne-delay) — When function body starts with `if (a0 == 0)` after prologue, IDO -O2 schedules `or s0, a0, zero` (the s-reg copy of a0) into the bne delay slot rather than into the inter-spill gap.
 - [IDO -O2 hoists `move sN, aM` above adjacent jal when no data dependency; source order `jal; p = a0;` doesn't keep them in source order](#feedback-ido-hoists-save-reg-init-above-jal) — When you write `func(...); p = a0;` in C, IDO -O2 schedules the `move sN, aM` (the p=a0 emit) BEFORE the jal because there's no data dep.
@@ -18305,6 +18309,44 @@ anchor). Const-web-outranks-copy-web appears hardwired here; the 2026-05-23
 in-body gets a MEMORY home (`sw a3,12(sp)` entry dump + spill) — it does
 NOT give an $a3 register home (probed on 3F08 for the delta local).
 
+<a id="global-pair-struct-copy-kills-lo16-fold-519a4-2026-07-03"></a>
+## 8-byte GLOBAL pair copy = STRUCT COPY: kills the LO16-placement offset-fold AND the coupled $t renumber; comma-embed a neighbor store in the copy's LHS to pin it after the address pair (gl_func_000519A4, 2026-07-03)
+
+Target idiom: `lui t1,%hi(D+0x20630); addiu t1,%lo(D+0x20630); [sw s0,4(v1)];
+lw t3,0(t1); sw t3,8(v1); lw t2,4(t1); sw t2,0xC(v1)` — two adjacent words
+copied from a `&D+K` block into an object, with (a) the FULL offset in the
+%lo (no `lw K(base)` fold), (b) base in a $t reg, (c) loaded temps in the
+non-sequential t3-then-t2 order, and (d) an unrelated neighbor store sitting
+BETWEEN the addiu and the first lw.
+
+Scalar spellings (`v1[2]=h[0]; v1[3]=h[1];` with h named or folded) hit the
+documented LO16-placement cap: IDO re-bases to `addiu base,0; lw 0x630(base)`
+(or with the if(1) `h += K` mutation lever, materializes the addiu but colors
+the base $v0 and numbers the temps t1/t2 sequentially — 3-reg cascade).
+
+**Fix 1 — struct copy.** `*(Pair *)(v1+2) = *(Pair *)((char*)&D + 0x20630)`
+(`typedef struct { int a, b; } Pair;`): the block-copy machinery takes the
+source ADDRESS as an operand (no offset-folder pass), so the lui/addiu keeps
+the full %lo addend, the base gets a fresh $t (t1), and the copy's paired
+temps come out t3/t2 — the whole 6-word register cascade snaps in one edit.
+(Extends the 2026-06-13 "copy adjacent fields as a STRUCT" entry from
+struct-field pairs to `&GLOBAL+K` source blocks; also supersedes the
+"pointer-mutate p+=N costs a frame slot" workaround — the struct copy needs
+no extra local.) Do NOT route it through a named `Pair tmp` intermediate —
+that emits a real sp-resident temp copy (+5 words), it is not elided.
+
+**Fix 2 — comma-embedded LHS store.** If the target has another store (here
+`sw s0,4(v1)`) between the addiu and the first lw: writing it as a separate
+statement (either side of the copy) lets as1 hoist/sink it INTO the lui/addiu
+pair (as1 splits a dependent lui;addiu with any adjacent independent insn —
+2-word swap). Embed it in the copy's LHS: `*(Pair *)((v1[1] = (int)self, v1)
++ 2) = *(Pair *)(...)` — cfe evaluates the source address first, ucode order
+becomes [lui][addiu][sw][lw...], and as1 leaves it (it won't hoist the sw
+past the addiu once they're already adjacent). RHS-comma placement works
+identically. 63/77 -> 71/77 on gl_func_000519A4; residual = its temploc-slot
+cap (frame = M3+0x40 invariant there; temp block pinned; ~28-variant sweep
+of pads/nesting/constant-locals/dead-ifs documented in the wrap).
+
 <a id="both-arms-beqzl-vs-shared-tail-phi-move-3f08-2026-07-03"></a>
 ## Shared-tail if vs both-arms else: phi-move vs beql debris tension (game_libs_func_00003F08, 2026-07-03)
 
@@ -18520,3 +18562,53 @@ block, and their need-order follows declaration order. Consequences:
 - Rounding pads land inside the temp block ("reserved unused" slots are alignment, not homes).
 Combine with the register-home interleave (-O0: register vars also reserve slots) — together
 these two rules explain most historic "frame-layout not C-reachable" verdicts.
+
+
+## Dead $v0 def from unused K&R call return excludes $v0 from a call-spanning base — distinct VOID callee extern cracks it <a name="feedback-ido-void-callee-kills-dead-v0-def"></a>
+
+2026-07-03, bootup_uso func_000082F8 (agent-e), 8 diffs -> 1 (reloc-class) in one edit.
+
+Shape: a CSE'd `&D_00000000` base candidate live from entry to a late call's arg
+build, REMATERIALIZED (fresh lui/addiu) right after an intermediate call on the
+taken path. Target colors it $v0; build colors $v1 (everything else identical).
+zdbug:6 showed the base candidate "assigned R=2, R=1 reserved" — previously
+classed as a not-C-reachable caller-saved renumber cap.
+
+Mechanism: the intermediate call was the K&R int-returning `func_00000000`
+placeholder with its RETURN VALUE UNUSED. The call still defines $v0; that dead
+def interferes with the base candidate (which spans the call as one candidate
+despite the remat), excluding $v0.
+
+Fix: declare a DISTINCT extern for that call with VOID return type
+(`extern void func_00000000_082F8_v(int, int);`), wire it
+`func_00000000_082F8_v = 0x00000000;` in undefined_syms_auto.txt (same style as
+the existing typed-alias externs). No $v0 def at the jal -> base takes $v0.
+The jal word remains 0x0C000000 (zero-target R_MIPS_26), byte-identical.
+
+Recognition: base-reg-only $v0/$v1 diff cluster + an unused-return call inside
+the base's span. Check BEFORE accepting a "v0 reserved" coloring cap.
+
+## Single-int struct by-value arg emits the dead outgoing arg-shadow store (1-word Pair2 crack) <a name="feedback-ido-single-int-struct-shadow-store"></a>
+
+2026-07-03, bootup_uso func_000050A0 (agent-e), 8 real diffs -> 0 (33/33
+post-link). Cracked the wrap's documented "spill-slot-coloring cap".
+
+Target signature: `lw a1,SPILL(sp)` then dead `sw a1,0x4(sp)` (the OUTGOING
+call's a1 shadow slot, arg-build area) in the jal delay. A `new_var = saved`
+embedded-volatile-assign emulation produces the dead store but at new_var's
+LOCAL home (e.g. 0x20) — unfixable by decl permutation since locals never home
+in the arg-build area.
+
+Fix: pass the value as a ONE-WORD struct by value:
+    typedef struct { int v; } S50A0;
+    func_00000000(p, *(S50A0*)&saved_a0, ..., &buf[1]);
+The by-value struct makes IDO emit the caller-slot home store `sw a1,0x4(sp)`
+(the PATTERNS "Pair2-by-value" crack — feedback-game-uso-precall-spill-family —
+works at width 1). Side effects here were all CORRECT: p's spill flipped to the
+target's `sw v0,HIGH(sp)` source reg and the t7->t8 temp renumber resolved.
+
+Layout companion: remaining uniform -8 frame/slot shift was closed with the
+"&buf[N] dead-slot" lever — `float buf[5]` zeroing/passing `buf[1..4]`/`&buf[1]`
+claims the gap word below the buffer; decl order `buf, p, pad[16],
+volatile saved_a0` lands buf@0x38, p@0x30, pad 0x20-0x2F, saved@0x1C, align
+word 0x18 -> frame -0x48 exact.
