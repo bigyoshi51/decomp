@@ -17712,3 +17712,236 @@ F954 struct-fold lever applied to USO base-relative reads. CAVEAT: it only unblo
 D-read half — a residual -O0 TEMP-SLOT cap (e.g. saved-slot position) can still block (5C8
 hit one). And: a reloc-aware diff that filters sw/lw immediates MASKS stack-slot diffs
 (stack offsets aren't reloc'd) — gate promotions on make verify, not the isolated diff.
+
+## No-reloc absolute address → literal-address cast (folds offset into the load)
+
+For a USO load from a SMALL absolute address with NO HI16/LO16 reloc (check `objdump -r` — the
+.word has no reloc at that offset), use a literal-address cast `*(float*)0x94` / `*(int*)0x28`
+instead of `*(float*)((char*)&D_00000000 + 0x94)`. The literal form folds the offset directly
+into the load (`lwc1 $f0,148(zero)`), matching the target; the `&D_00000000 + off` form forces a
+real HI16/LO16 symbol reloc and emits an extra `lui;addiu` base-materialization. (game_uso_func_
+000043D8 FP-pool seeds, 2026-06-24, +3pp.) Related: docs §literal-address-0-materialization.
+
+## LANDING USO near-misses: 0-reloc functions + eval/operand-order levers (2026-06-25, 2 lands)
+
+The ONLY USO (game_libs/game_uso/*_uso baked-reloc unit) functions landable via C are those
+whose C compiles to ZERO relocs — pure computation, NO jals (R_MIPS_26) and NO global refs
+(HI16/LO16). Check: `objdump -r build/non_matching/<unit>.c.o` filtered to the fn's range == 0.
+(Functions WITH calls/refs: C emits relocs, expected bakes them, make verify ROM-MISMATCHes even
+at objdiff-100% — see MATCHING_WORKFLOW "USO units BAKE all relocs".)
+
+For 0-reloc near-misses, residuals that are EVAL-ORDER / OPERAND-ORDER (not ugen-scratch coloring)
+ARE crackable to byte-exact:
+- **addu operand-order** (`addu rd,rs,rt` rs/rt swapped): `a + b` emits the LATER-offset load as
+  `rs`. To force the other order, use a store-then-accumulate: `*p = a; *p += b;` makes IDO hold
+  the stored value in a reg and reuse it as `rs` (`addu rd, a_reg, b_reg`). (game_libs_func_0001FE88)
+- **load-order** (two `lw`s at different offsets in swapped order): INLINE the expression (no named
+  `int x = ...` locals for the operands) so the reads happen in C source order AND IDO colors the
+  transients from the top of the temp file — resolves the whole register cascade. (game_libs_func_0001FDF4)
+DISTINGUISH from caps: if the residual is same-opcode-same-order but a register RENUMBER with no
+eval-order root (ugen local-scratch, `numlu>0` in uoptlist), it's a cap — don't grind. as1
+branch-likely delay-fill (beq->beql duplication) is also a cap (func_00000A9C).
+LAND procedure: crack to objdiff 100 in the NM wrap -> PROMOTE (strip #ifdef NON_MATCHING/#else
+INCLUDE_ASM/#endif, keep plain C) -> `make verify` (ROM, the honest gate) -> log-exact-episode
+--source-file -> commit. Promote ONE fn per python pass (line shifts corrupt multi-promote).
+
+## Inline struct block-copy lever — debunks "v0-base preference not C-overridable" (2026-06-25 land)
+When a 0-reloc near-miss is a UNIFORM register shift where a pointer base colors $v0 (build) vs a
+mid-temp $t6 (target), with X/Y/X result-register alternation: write the copy as an INLINE struct
+block-copy with the source base computed INSIDE the cast (no named `int *p` local):
+  `*(struct S3*)(a0+0x80) = *(struct S3*)((char*)*(int**)(a0+0x44) + 0x20);`  (struct S3 = 3 ints)
+Naming the base `p` (or inline-deref of the 3 individual reads) CSEs it into $v0 (the cap); the
+inline struct-copy keeps it off $v0 (-> $t6) AND supplies the $t8/$t7/$t8 result alternation.
+LANDED game_libs_func_00029C80 (97.27->100). Generalizes the docs "LANDING USO near-misses" vein.
+
+## Length-diff near-miss triage (2026-06-26): genuine-op cracks vs codegen-artifact caps
+A 1-word length diff (build vs expected) can be a CRACKABLE genuine missing/extra operation OR a
+codegen-artifact CAP. Distinguish before grinding:
+- CAP "missing move a1,t0" = -O1 routes a product through a homeless temp + copy-back to the arg
+  reg; in-place shift drops it. Not C-reachable. (func_80007564)
+- CAP "ghost spill slot" (build 1 LONG) = a named local got a stack home+spill. FIX (decode-
+  progress, not always a land): reuse an already-allocated local (e.g. the loop counter) for the
+  value -> slot/frame/insn-count match; residual may be an AND->temp coloring cap. (func_80009474
+  97.72->99.16)
+- CAP "-O2 DSE of first store" (build 1 SHORT) = target stores a field twice (raw then masked);
+  plain -O2 dead-store-elims the first. `*(volatile int*)` keeps both but cascades temp numbering
+  (decode-progress). (game_libs_func_0003183C 93.26->97.39)
+- CAP "inherited $f0" (build 1 LONG = extra mtc1 zero,$f0) = the fn relies on $f0=0.0 arriving from
+  the PREDECESSOR's tail; isolated C always materializes its own. Boundary/link cap, not C. (gl_func_00064174)
+- CAP "redundant `b` to forward-join present in target, dropped by build" (target 1 LONG) = the target's
+  conditional guards are PLAIN `bnez`/`beq` and keep an unconditional `b <next-label>` (delay holds a
+  real op) over the join; the project's -O2 folds the SAME guards into BRANCH-LIKELY (`bnezl`/`beql`),
+  which speculates the join-block's first load into the delay slots and ELIMINATES the redundant `b`.
+  Smoking gun: grep the segment's `.s` — if some siblings have `bnezl`/`beql` and THIS fn has none, it's
+  an -O1/-g sub-region that as1 didn't branch-likely-convert (but still got -O2 register allocation: no
+  stack spills). No -O2 source form suppresses the likely for a FORWARD JOIN (always speculatable) — the
+  inverted-skip+goto lever only works before a `b end`/return, not a join. Standalone -O1 / -O2 -g1 give
+  the plain-bnez+redundant-b branches but spill every local (wrong body). CAP, not C. (func_00007BF4,
+  bootup_uso: build matches every reg/op except 2 `bnezl`->`bnez`+`b`; 67/359 bootup sibs use likely.)
+A GENUINE crackable length-diff is a real dropped side-effect / field write the C optimized away
+(add it) or a real redundant op (CSE/fold it) — NOT one of the above artifacts.
+
+## CORRECTION: IDO cc coalesces same-%hi stores (the as1-vs-gas claim was WRONG, 2026-06-26)
+Earlier this session I wrote a "gas-vs-as1" cap section — it is INCORRECT. The C is compiled by
+IDO cc (`$(CC) -c`, the recompiled ido-static-recomp toolchain) which assembles internally; a
+direct test (two adjacent `extern char` byte stores) shows IDO cc emits ONE shared `lui $at` for
+both at BOTH -O1 and -O2. So a "duplicate lui per store" in a build is a C-STRUCTURE issue (the C
+isn't written so IDO recognizes the two stores as same-%hi-page-adjacent) — POTENTIALLY CRACKABLE
+by writing the stores adjacently/simply — NOT an assembler cap. (Re-examine func_80004E50 etc.)
+The branch-likely (bnezl-vs-bnez) differences ARE real but are -O1/-O2/-g region effects, not as1.
+
+## Float-return-typing lever: entry-gate mtc1+cvt.s.w means the callee returns float (2026-06-26)
+If a reconstructed body's entry shows `mtc1 v0,$fN; cvt.s.w $fN,$fN; c.lt.s ...` (int return-value
+converted to float for a compare) but the TARGET shows `mtc1 zero,$f4; c.lt.s $f0,$f4` (a direct
+float compare against 0.0), the called function RETURNS FLOAT, not int — your C typed it int so IDO
+emitted the int→float conversion. Re-declare the callee `float game_uso_func_X(...)` and compare
+its result directly (`if (game_uso_func_X(p) < thresh)`). Fixed game_uso_func_00006FA8 entry gate,
+contributed to +7.5pp. General: a spurious int→float cvt at a call result = mistyped float-return callee.
+
+## Boolean-return-cascade lever: sltu-materialize chain = a single &&/|| return expr (2026-06-26)
+If target asm computes a boolean return via the `sltu rd,zero,rs` materialize-then-short-circuit
+idiom (a chain of `sltu`/`bnez`/`beqz` building a 0/1 result, no separate `li v0,1` blocks), the
+original C is ONE chained boolean return expression, NOT a sequence of if/return statements. IDO
+compiles `if(a)return 1; if(b)return 0; return c;` to branch chains with explicit li v0,0/1; but
+`return (a) && (b || c);` compiles to the sltu-materialize short-circuit form. Rewriting if/return
+cascades as a single `return (cond) && (cond || (cond && cond));` expression matched the target's
+branch shape — game_uso_func_00006F38 41.8->58.6% (+16.85pp). Recognize: many small flag-test
+wrappers returning 0/1 are single boolean expressions, not statement cascades.
+
+## -O0 volatile-local removal lever (2026-06-26)
+In -O0 USO files (mgrproc/arcproc o0 splits), a prior agent's `volatile` locals (added to force
+some shape) BACKFIRE: at -O0, `volatile char *arg0 = a0;` forces an extra stack-copy slot and
+prevents the K&R params from staying in their home slots. The target reloads params straight from
+home slots (sp+0x80/0x84). FIX: drop the volatile locals, use the K&R params (a0/a1) directly.
+Combined with `register int sN;` to force callee-saved s0/s1/s2 allocation matching the target
+prologue. mgrproc_uso_func_0000019C 76.3->82.1%. (-O0 codegen is literal: locals = stack slots.)
+
+## Distinct-externs lever: defeat &D CSE to force per-store lui (2026-06-26)
+When the target emits a SEPARATE `lui at,%hi(D)` + store for each of N stores to the same/adjacent
+&D_00000000+offset slots (no shared base register), but your C CSEs them into one GPR base (one lui,
+N stores off it), use N DISTINCT extern symbols — one per store site — so IDO materializes a fresh
+`lui tN` per store. This unlocks get-or-create passthrough cascades whose `obj->0x28 = &D` stores at
+each level must each have their own lui. arcproc_uso_func_0000199C 59.9->77.8% (+17.85pp): the
+fresh-alloc nested-if was wrong; the real shape is `l2=s0?:alloc(212); l3=l2?:alloc(80); l4=l3?:
+alloc(44)` get-or-create passthrough, and ONLY with 4 distinct externs (not one CSE'd base) does the
+per-level lui match. CAUTION: in-file "passthrough RULED OUT / don't re-try" notes can be WRONG —
+they often reflect a prior attempt that collapsed the stores onto one CSE'd base; re-test with
+distinct externs before trusting a ruled-out comment.
+
+## LAND via array-decay + switch-polarity: "coloring caps" can be C-reachable (2026-06-26)
+n64proc_uso_func_00000014 LANDED 75%->100% (make verify ROM byte-identical), superseding 30+ prior
+"register-renumber + indexed-load coloring cap" attempts. TWO stacked levers, BOTH required:
+1. ARRAY-DECAY BASE: `extern char SYM[]; char *base = SYM;` (array decay) instead of
+   `char *base = &D_00000000` (scalar address). IDO -O2 CONSTANT-FOLDS the scalar `&D` form, re-
+   materializing `lui;lw` at every `base+off` reload (the documented "inevitable rematerialization
+   cap"). Array-decay keeps the base in a register -> the target's single `lw rX, off(base)`.
+2. SWITCH-VS-IF/GOTO POLARITY: `switch(key){case 0:...; case 1:...}` instead of an if/goto chain.
+   The if/goto chain emits inverted bnez/bne fall-through polarity; switch gives the target's
+   beqz/beq case polarity AND fixes saved-reg ($s2/$s3/$s4/$s5) renumbering.
+LANDABILITY: the data base resolved to 0x0 (`SYM = 0x0;` in undefined_syms_auto.txt), so its
+HI16/LO16 are 0x0000 = baked-equivalent, and a no-call switch function emits no other relocs ->
+make verify passes. IMPLICATION (important): a "coloring cap" verdict on a HIGH-FUZZY function is
+NOT final — re-test with array-decay base + switch dispatch before trusting it. Some are real lands.
+
+## Alignment-union lever (2026-06-26): force an 8-aligned -O0 stack slot
+At -O0, to pin a local at an 8-byte-aligned frame offset (e.g. target places `raw` at sp+0x48,
+8-aligned, but plain C puts it at sp+0x40), declare it as `union { double _a; struct { int a,b,c; } v; } raw;`
+— the double member forces 8-alignment so `&raw` materializes at the aligned slot. CAVEAT: it only
+RELOCATES the alignment; in gl_func_00008A40 it pinned raw@0x48 exactly but pushed `tmp` off its
+target slot (net 2 diffs unchanged) — the target's 8-byte gap below tmp can't coexist with the
+0x58 frame in any C decl/type. Worth trying when a SINGLE local's alignment is the only residual.
+
+## Jump-table-width lever: match the switch sltiu bound (2026-06-26)
+If the target's switch dispatch is `sltiu at,key,N; beq at,zero,<default>; sll;lui;addu;lw;jr` with
+bound N, but your C switch emits a SMALLER bound (sltiu key,M where M=highest-case+1 < N), the
+emitted jump table is too short. FIX: add empty `case M: case M+1: ... case N-1: break;` arms so IDO
+widens the table to N entries and emits `sltiu ...,N` matching the target. ALSO remove any spurious
+duplicate range guard (`if((unsigned)key>=N) return;` BEFORE the switch makes IDO emit TWO sltiu +
+a split table; the target folds ONE sltiu into the switch dispatch). Register-independent — moves
+fuzzy on baked-reloc game_libs. gl_func_0002A080 47->48.3%.
+
+## volatile-real-local-spill: defeat s-reg promotion to match target frame+beqzl (2026-06-26)
+DISTINCT from the volatile-PAD lever (which adds an unused pad for a phantom slot). Here you mark a
+REAL existing local `volatile` to force ITS stack spill. WHEN: a logic-complete body is stuck (~47%)
+and the ONLY diff is s-register promotion — build frame is LARGER (e.g. 0x40) with the local in
+$s1 + a plain `beqz`/`bnez`, while the TARGET spills that local to a stack slot (smaller frame e.g.
+0x38) AND schedules the loop/finalizer tail as a BRANCH-LIKELY (`beqzl`/`bnezl` with the shared store
+in the taken delay slot). FIX: `volatile int count1;` on the promoted local. This (a) removes the
+spurious $s-save/restore + shrinks the frame to match, and (b) relieves register pressure so IDO
+picks the target's branch-likely finalizer shape. gl_func_00068C14 47.6->80.3% (+32.7pp) from this
+single cast. RESIDUAL/CAUTION: volatile reloads the local on EVERY read, so if the target holds it in
+a reg through some block and spills only at the branch, volatile over-spills there (scheduling cap) —
+net still a big win when the frame+beqzl shape dominates. Verify in-tree (can regress if the body
+needs reg-residency more than spill — see gl_func_0006D6F4 where volatile-dst REGRESSED).
+
+## division-collapse: reuse ONE quotient for / and % via multiply-back (2026-06-26)
+m2c writes `x/D`, `x%D`, `(x%D)%E` as SEPARATE expressions -> IDO emits the `x/D` divide TWICE
+(once `div;mflo` for the quotient, once `div;mfhi` for the remainder) plus a fresh `div;mfhi` for
+the inner `%E`. The TARGET computes each modulo as `dividend - quotient*divisor` (multiply-back),
+reusing a SINGLE quotient register. FIX: introduce explicit quotient locals and derive remainders by
+hand: `q = x/D; r = x - q*D; q2 = r/E; r2 = r - q2*E;`. This recreates the target's `div;mflo` (one
+per real divide) + `multu q,D; subu` shape and removes the duplicate `mfhi` divides. Register-
+independent — moves fuzzy on baked-reloc game_libs. game_libs_func_00000B94 48.7->70.4% (+21.6pp).
+Pairs with strength-reduction (×1000 -> shift/add) which IDO does automatically once the multiply-
+back is explicit. Related: [[feedback_remove_local_recompute_inline_lever]].
+
+## prefetch-rotated list-walk loop (key-temp form) (2026-06-27)
+A list-walk where the target reads BOTH the next-pointer AND the dispatch key at the TOP of each
+iteration, runs the body keyed on that value, THEN advances + re-prefetches — vs the naive
+`while (node && node[0]) { body; node = node[1]; }`. FIX: rotate to `next = node->4; key = node->0;
+while (key) { body(key); node = next; next = node->4; key = node->0; }` (an explicit KEY TEMP tested
+as the continuation). gl_func_00069B94 52.5->60.0% (+7.4pp). IMPORTANT CORRECTION: a prior note said
+"the rotated form REGRESSES" — that was for a DIFFERENT shape (`next=cursor->4; obj=*cursor;
+if(!obj)break` with no key temp). The KEY-TEMP rotated form IMPROVES; the broad "don't try rotated"
+verdict is superseded — distinguish by whether a dispatch KEY (not just the obj ptr) is tested.
+CAUTION: do NOT add a `next=0` reset between iterations (regresses). Residual is usually the
+node/next saved-reg-vs-stack-spill regalloc cap.
+
+## fn-ptr-cast promotes float args to double (2026-06-27)
+A float helper called through an UNPROTOTYPED function-pointer cast `((f32(*)())gl_func_X)(angle)`
+promotes EVERY float argument to double — IDO emits `cvt.d.s $f12; sdc1/ldc1` before each call (none
+in the target) AND uses indirect `lui/addiu;jalr` instead of direct `jal`. FIX: declare the callee
+with a single-precision prototype `extern f32 game_libs_func_C400(f32);` and call the SYMBOL directly
+— keeps args single-precision (`swc1`/`lwc1`) and emits `jal`+R_MIPS_26. game_libs_func_0006F684
+59.1->84.3% (+25.2pp). Distinct from the K&R-varargs float-promotion: here it's the fn-ptr CAST that
+forces promotion. Related: [[feedback_knr_direct_call_vs_fnptr_cast_jal]]. Watch: if the same callee
+is also called with INT args elsewhere you can't single-proto it — use the ...Nf prototyped-variant
+trick instead.
+
+## snapshot-pointer-vs-post-increment in compare loops (2026-06-27)
+In strcmp/strlen-like byte-compare loops, if the target derefs through a SEPARATE snapshot pointer
+(`move v1,a0; lbu t,(v1)`) while a DISTINCT pointer is post-incremented for the walk, the m2c form
+`x = *p; p++;` (deref+increment on the SAME pointer) collapses to one register and diverges. FIX:
+take snapshot locals BEFORE the increment — `p = arg0; q = arg1; ... if (*q != *p) ...; arg0++; arg1++;`
+— so IDO keeps the deref base distinct from the walk base, reproducing the `move v1,a0`/`move v0,a1`
+snapshot + post-increment shape. game_libs_func_00067B04 61.4->92.1% (+30.7pp). Residual is usually
+v0/v1 result-coloring + beqz-vs-beqzl. A pointer-aliasing variant of [[over-indirection]].
+
+## arg-stack-reload via &arg: match reload-heavy load shape (2026-06-27)
+When the target spills an arg to its stack home (`sw a0,40(sp)`) and RE-READS it from memory before
+every use (`lw t,40(sp); andi ...` per flag-test / per-block), but IDO -O2 keeps your C's arg
+register-resident (`andi a0,X` directly), force the spill+reload by taking the arg's ADDRESS and
+dereferencing through it: `s32 *ap = &arg0; ... if (*ap & X) ...`. The `&arg0` forces arg0 to a stack
+home and each `*ap` becomes a fresh `lw` reload, reproducing the target's reload-heavy shape.
+gl_func_00071144 62.9->71.4% (+8.49pp, 8 reloads recovered). Simpler cousin of VARARGS-ARG-HOME (use
+this when only ONE arg needs homing, not the whole a0-a3 block). Residual usually = beqzl branch-like
++ frame/s0 coloring. CAUTION verify: if the body needs the value reg-resident elsewhere it can regress.
+
+## FP local-vs-global pool coloring: empty-if BB boundaries steer f0/f2/f12/f14 assignment (2026-07-02)
+Cracked the timproc_uso_b5 BB88/C1B4/CC74 "FP register renumber cap" (4-float field-copy +
+tail jal; target colors 25C->f0, 260->f2, 264->f12, 294->f14 while loads emit descending
+294-first). Rules observed (IDO 7.1 -O2, float locals feeding stores + no FP math):
+1. Named float locals draw from pool {f0, f2, f12, f14} (f4-f10 reserved for expression
+   temps — direct `*dst = *src` copies pair load/store with f4/f6/f8/f10 instead).
+2. SINGLE-BB local pseudos color from the pool START in DEF (load) order; use-count breaks
+   ties upward (an `if (!x) {}` branch condition inside the same BB bumps x to f0).
+3. BB-CROSSING pseudos ("globals") color from the pool END, in order of first crossing.
+   An EMPTY `if (cond) {}` still creates the BB boundary for live-range analysis even
+   though the branch itself folds away to zero instructions.
+4. The as1 schedule emits loads in decl order and REORDERS stores to match load order —
+   source store order only affects coloring, never the emitted schedule.
+Recipe for target order d,c,b,a (= colors f0,f2,f12,f14) with loads declared a,b,c,d:
+`store c; store d; if (!d) {} store b; if (b) {} store a; call();` — c,d stay local
+(d bumped over c by the branch use -> f0), b crosses first boundary -> f12, a crosses
+second -> f14. All three fns 16/16 byte-exact. Diagnose this cap class by tabulating
+which pseudos cross an if-boundary in each variant, not by permuting decls.
