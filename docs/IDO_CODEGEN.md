@@ -44,7 +44,11 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
+- [**Dead single-var `if (v) {}` = emission-free priority boost; PLACEMENT decides winners vs span-hit losers (a7b4 49/49 + d418 CRACKED)**](#dead-empty-if-priority-boost-placement-is-everything-a7b4-d418-cracked-2026-07-03) — _Empty single-var if is deleted pre-emission but its condition-use refs + new bb survive into compute_save: tested var +loop-weight refs; everything live-through the bb takes a +1 span hit. Place it where the vars you must NOT demote are already dead (a7b4: after the loop's last call — masks dead, a1 boosted → exact). EQ_INEQ folds it if the var is value-known; multi-var conditions emit. The dead-while(0) body-ref variant did NOT count refs in these shapes._
+- [**Param resident in $a2: e-split + dead kill + EXPRESSION arg1 flips arg-slot copy death order (d418 76/76, "$a2 cap" DISPROVEN)**](#param-to-a2-web-e-split-kill-plus-expression-arg1-flips-slot-copy-death-order-d418-2026-07-03) — _4 coupled zero-emission levers: multi-def cur reuse (blocks copyprop → tmp=cur survives as or a1,v0), dead if(tmp){} at join (alt→a0), e-split `e=arg0; arg0=0;` (entry read stays a0, kill const-propped away), and arg1 spelled `(int *)((int)e | (int)arg0)` with arg0 known-zero — op-node arg1 makes the a2-slot copy e's death point → e coalesces $a2; the | folds to the exact per-call `or a0,a2`. Plain cb(e,tmp,e) → a2 forbidden → e=a3 +4 words._
 - [**DEAD `while(0)` LOOP = emission-free compute_save ref-multiplier: promotes ONE contested LR above the base-address LR (titproc 0C0 whole-rotation coloring cap CRACKED, 3-lever recipe)**](#dead-while0-loop-emission-free-ref-multiplier-titproc-0c0-cracked-2026-07-02) — _A whole-function coloring rotation (base v1↔a1, param-counter a1↔a0, index a0↔v1, temp pool −2) needed THREE coupled levers: (1) copy-def entry `*P=*P+1; counter=*P;` un-coalesces the load to `lw t6` + its folded-sum candidate consumes the t7 rotation slot (whole temp pool shifts +2 to target); (2) reuse the dead param for the call arg (`counter=*(D+0x148)+4; v=f(counter);`) — emission-neutral refs lift counter's priority so it colors FIRST → param home $a0; (3) `while (0) { idx = counter*4; }` before the real `idx = counter*4;` — analoop weights the dead body as a loop BEFORE controlflow deletes it (ZERO emission), multiplying idx's LR refs so it outranks the &SYM base LR → idx=$v1, base falls to $a1. Every conventional boost (dup-assign, non-const identities x|x/x−x, register-kw, named-vs-inline, Quad-struct, volatile) was folded/DCE'd pre-alloc or emitted. Diagnose with zdbug:6 constrained order (colors 2/3/4=v1/a0/a1). 51/51 words, size+relocs exact, in-tree verified._
+- [Dead `a0 = 0;` param-kill pins the alias-copy or-at-entry + stops p→a0 copy-prop; residual v0↔v1 const-vs-copy rank wall (game_libs_func_00003FF8, 94.4%)](#param-kill-pins-alias-copy-at-entry-3ff8-2026-07-03) — _Return-the-pointer-arg leaf: dead `a0=0;` after field1 makes downstream p→a0 prop illegal (DCE'd, zero emission) → `or vX,a0,zero` lands at word 1, later bases via vX. 1/25→11/25 words, length-exact. Const-web keeps rank-1 $v0 over the copy web (while(0) boosts deleted pre-analoop; named consts canonicalize) — cap stands, upgraded. Dead 4th param reassigned = MEMORY home, not $a3._
+- [Shared-tail vs both-arms: phi-move vs beql debris tension; store-before-compare tail lever (game_libs_func_00003F08, 94.4%)](#both-arms-beqzl-vs-shared-tail-phi-move-3f08-2026-07-03) — _Target beql+dup'd-shared-store: shared-tail C keeps the phi `move v1,a3` + as1 steals the addiu (no beql); both-arms kills phi + gets beqzl but +3 debris (b + dead else sw + per-arm li remat). Landed: `a0[N]=(a0[N]+1)&3;` BEFORE `if(a0[M]==a0[N])` → store fills bne delay, load CSEs to v0. 31→34/60. CAP._
 - [Bitfield-struct assignment = manual mask-RMW + one burned ucode temp (t9-skip); `|` evaluates its RIGHT operand first (game_libs_func_00022398 CRACKED)](#bitfield-struct-assignment-burns-ucode-temp-t9-skip-22398-cracked-2026-07-02) — _2-bit field insert: manual `((x<<2)&0xC)|(*p&~0xC)` misses twice (or-operand eval order + all temps one slot early). True bitfield-struct assignment `((B*)p)->f = v` burns the t9 ucode slot AND orders lb-side-first → byte-exact; split-shift `(x<<1)<<1` on the a1side-LEFT manual spelling is byte-identical. 17/17 in-tree._
 - [`(a0[1] += (int)f)` index subexpression keeps acc in $t temps; sole named idx local colors v1 (game_libs_func_00029934 CRACKED)](#compound-assign-subexpression-keeps-acc-in-t-temps-29934-cracked-2026-07-02) — _named acc → v0 (wrong); fully-inline → idx in temps (wrong). Compound-assign inside the index expr + ONE named idx local = acc stays t9 (sw t9 folded), idx colors v1 (`andi v1,v1`). 17/17 in-tree._
 - [`move v0,v1` in final jr delay vs hoisted-after-def = placement cap; v1+move mechanism reachable via increment-chain multi-def (game_libs_func_0002831C)](#move-in-final-jr-delay-vs-hoisted-move-placement-cap-2831c-2026-07-02) — _single-def ptr local always copy-props to v0; `p=a0+8; ...; p+=16; ...; return p` keeps a real v1 candidate with duplicated/specialized exits — but IDO hoists the exit move next to the def whenever v0 is dead across the branch (delay gets nop, +1 word). 28 variants + permuter (floor 60) — CAP._
@@ -18266,3 +18270,117 @@ two-homes-no-reload (address-taken via `*(One1*)(int*)&x` copy forwards the relo
 one temp for both `sw` incl. the branch delay; `volatile` blocks forwarding = +1 lw), and
 `if(1){}` around a pointer reassignment blocks the copy-prop that otherwise hoists a fresh
 prologue temp for a late `addiu rd,sp,K` materialization.
+
+<a id="param-kill-pins-alias-copy-at-entry-3ff8-2026-07-03"></a>
+## Dead `a0 = 0;` param-kill pins the alias-copy `or vX,a0,zero` AT ENTRY and stops p→a0 copy-prop (game_libs_func_00003FF8, 2026-07-03)
+
+For `p = a0; <field1 via a0>; <fields 2..N via p>; return p;` uopt normally
+copy-props p→a0 (natural 24-insn form: a0-base throughout + `move v0,a0` in
+the jr delay) or, with `p = (int*)((int)a0 | 0)`, sinks the surviving `or`
+to p's first non-prop'd use (mid-function) and still props the earlier uses
+to a0. **Lever: insert a dead `a0 = 0;` after the last a0 use.** The param
+redefinition makes p→a0 rewriting illegal downstream at prop-decision time
+(the store is later DCE'd — zero emission), so the copy materializes as
+`or vX,a0,zero` at WORD 1 and every later base goes through vX. Combined
+with the |0-free plain `p = a0`, this took 3FF8 from 1/25 to 11/25 exact
+words (24→25, length-exact, 90.6→94.4 fuzzy). RANK WALL (still NM): the
+residual is a pure v0↔v1 swap — uopt's constrained coloring gives rank-1
+($v0) to the 112-const web and rank-2 ($v1) to the copy web, target has
+them swapped. Probed and NEUTRAL: while(0) ref-multipliers on p (bare-copy,
+|0, multi-store, dead `return p` bodies — all deleted pre-analoop, unlike
+titproc's arithmetic `idx=counter*4` form), register kw, named c1/c2 consts
+(canonicalized back), dual-return (+2 words, li a1), signature-swap
+(q-alias folds back to 24-form), if(1){} barriers (no preceding code to
+anchor). Const-web-outranks-copy-web appears hardwired here; the 2026-05-23
+"preemptive set + nop delay" cap entry stands, upgraded to the 25-word
+94.4% form. Related negative: a dead 4th param (ANSI or K&R) reassigned
+in-body gets a MEMORY home (`sw a3,12(sp)` entry dump + spill) — it does
+NOT give an $a3 register home (probed on 3F08 for the delta local).
+
+<a id="both-arms-beqzl-vs-shared-tail-phi-move-3f08-2026-07-03"></a>
+## Shared-tail if vs both-arms else: phi-move vs beql debris tension (game_libs_func_00003F08, 2026-07-03)
+
+Target middle idiom: `beql at,zero,MERGE+4; sw 160,0xAC(v1)` (shared store
+dup'd into the likely slot), cur def'd DIRECTLY in v1 both times (no move),
+`addiu nextbc` ABOVE the branch. Neither C shape reaches it at -O2:
+(1) shared-tail `if (delta<15){0xBC=...; cur=recompute;} cur[0xAC]=160;`
+keeps the phi copy `move v1,a3` (uopt splits cur into temp-web a3 for
+pre-merge uses + phi-home v1; they overlap at the branch so never coalesce)
+AND sinks the nextbc addiu into the arm where as1 STEALS it into a plain
+beqz delay (steal outranks the rule-3 likely-copy). (2) both-arms
+`if {...cur2[0xAC]=160;} else {cur[0xAC]=160;}` kills the phi (def1 emits
+`addu v1,a0,tN` directly — target-exact) and hoists the addiu, and as1
+rule-3 fires (beqzl + else-store in delay) — but leaves +3 debris: `b MERGE`
++ unreachable else-sw + a per-arm remat'd second `li 160` (uopt remats
+const webs per arm; naming the const does not unify them). The two arm
+stores can't become byte-identical because same-variable split webs /
+separate cur2 color rank-distinct (a3+v1 or v1+v0, never v1+v1). Tail
+lever that DID land: write `a0[0x7C]=(a0[0x7C]+1)&3;` BEFORE
+`if (a0[0x80]==a0[0x7C])` — the store fills the bne delay slot and the
+0x80 load CSEs into $v0 (store-forwarding makes the compare reuse the
+stored temp chain t7→t8→t1). 31→34/60 exact words, 90.7→94.4 fuzzy. CAP
+after 15 variants (barriers/while(0)/register/>=-flip/n160 all neutral).
+
+<a id="dead-empty-if-priority-boost-placement-is-everything-a7b4-d418-cracked-2026-07-03"></a>
+## Dead single-var `if (v) {}` = emission-free priority boost; PLACEMENT decides who wins and who takes the span hit (gl_func_0000A7B4 + gl_func_0000D418 CRACKED, 2026-07-03)
+
+**Lever:** an empty `if (v) {}` on a single plain variable is deleted before
+emission (0 insns, byte-identical count) but SURVIVES into uopt's CFG long
+enough that (a) `v` gains the condition-use refs at the bb's loop weight, and
+(b) every OTHER live-range that is live-through the new bb gains a span (+1
+denominator in compute_save priority = savings/span). So one dead-if both
+BOOSTS the tested var and DEMOTES everything live across its position.
+Placement is everything:
+
+- **a7b4** (49-insn loop, 3-reg cyclic s-reg renumber a1/c2/c3 wanted s3/s4/s5):
+  `if (a1) {}` placed AFTER the last call in the loop body, BEFORE `p += 0x30`
+  — a point where the hoisted char-masks are already DEAD (last use = call
+  args), so the masks keep their span (11/3=3.67) while a1 gets +10 in-loop
+  refs → (10+10)/4 = 5.0. Result order flags(6.67) > a1 > masks > bound8(3.33)
+  = target. 49/49 EXACT.
+  - Same dead-if INSIDE the flags-set block: masks live-through → span-hit →
+    they fall BELOW the loop-bound constant (bound8 lands s3). Wrong.
+  - Pre-loop: a1 takes an entry-weight span hit → falls to LAST + i/obj flip.
+  - Inside an inner conditional (w11): completely neutral.
+- **Gotchas:** EQ_INEQ constant-folds the dead-if if `v` is null-tested or
+  otherwise value-known on that path (`if (cur) {}` after `if (cur == 0)
+  return;` does NOTHING — pick a var with unknown value). Multi-var conditions
+  (`if (a && b) {}`) EMIT +4 insns; only the single-var empty-if is free. The
+  dead-WHILE(0) body-refs variant (titproc entry above) did NOT count refs in
+  these -O2 game_libs shapes — the dead-IF condition-use form is the one that
+  counts. In-loop dead-while(0) reshuffles by pure BB-structure regardless of
+  body (bound8 promoted, tested-var demoted).
+
+<a id="param-to-a2-web-e-split-kill-plus-expression-arg1-flips-slot-copy-death-order-d418-2026-07-03"></a>
+## Param resident in $a2: e-split + dead kill + EXPRESSION arg1 flips the arg-slot copy death order (gl_func_0000D418 76/76, "entity-ptr-in-$a2 cap" DISPROVEN, 2026-07-03)
+
+`gl_func_0000D418` was wrapped as the "entity-ptr-in-$a2 cap — not
+C-reachable". FALSE. Target keeps the single param in $a2 the whole function
+(`lw v1,0x44(a0)` entry read, then `or a2,a0`, rereads + call arg3 via a2,
+per-call `or a0,a2` arg1 copies). Four coupled zero-emission levers:
+
+1. **Multi-def reuse blocks copyprop and funds a real copy insn:** reuse `cur`
+   for the next-node loads in both arms (`cur = mgr[0x16]`); a `tmp = cur`
+   defined BEFORE cur's last use then survives as its own web (`or a1,v0`) —
+   tmp carries the dispatch arg (colors $a1 via arg-2 slot), cur stays $v0,
+   mgr $v1. Single-def copies (named locals, inner scopes, if(0)-defs, casts)
+   are ALL re-merged by copyprop — only a genuine later redefinition sticks.
+2. **Dead `if (tmp) {}` after the arms' join** boosts tmp above alt → alt
+   falls to $a0 (see previous entry).
+3. **e-split the param:** `e = arg0; arg0 = 0;` — the entry `mgr` load stays
+   on the arrival reg (lw ...,0x44(a0)); all later uses go through `e`. The
+   dead kill blocks copyprop from folding e back into the param web and is
+   itself const-propped away (0 insns).
+4. **Expression arg1 flips the death order of the ugen arg-slot copies:**
+   plain `cb(e, tmp, e)` orders the slot copies a2-first/a0-last, so e is
+   still live at the a2-slot def → $a2 FORBIDDEN → e lands $a3 (+4 words of
+   or a2,a3 copies). Spell arg1 as an op node with a KNOWN-ZERO variable:
+   `cb((int *)((int)e | (int)arg0), tmp, e)` (arg0==0 from lever 3) — the
+   position-1 value becomes an expression, the a2-slot copy becomes e's death
+   point, e coalesces into $a2, and the |-known-zero folds to exactly the
+   per-call `or a0,a2`. Identity spellings without the known-zero var
+   ((int)(int*), char*, +0, ^0, &x[0]) all fold in ccom and change nothing.
+
+Diffs: 72/76 → 40/76 (levers 1+2) → 0/76 (levers 3+4). All in-tree
+(game_libs_tail.c whole-TU builds). Sibling recognition: entry
+`or a2,a0` + `lw vX,0x44(a0)` BEFORE it + per-call `or a0,a2` = this recipe.
