@@ -422,7 +422,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO -O2 multi-arg setters — put register-only stores LAST in source order to keep stack-arg lw/sw pairs adjacent](#feedback-ido-reg-only-store-ordering) — For 6+arg setters where stack args (sp+0x10, sp+0x14) go to struct fields, IDO's scheduler hoists cheap register-only stores (`sw aN, N(a0)`) into load-use gaps.
 - [IDO picks $v0 (not $v1) when a literal flows to the return register — unflippable](#feedback-ido-return-flowing-v0-unflippable) — _When asm has `addiu $v1, $zero, N` preloaded into a branch delay slot + `or $v0, $v1, $zero` at shared return block, IDO cannot reproduce this from C.
 - [For IDO functions whose asm sets BOTH v0 and v1 as outputs, signature is s64 — return `((s64)hi << 32) | (u32)lo`](#feedback-ido-s64-pack-return-via-lo-hi) — _When asm shows distinct values flowing into both v0 (return-low) and v1 (return-high) at the function epilogue (e.g. `or v0, ret_lo, zero; or v1, ret_hi, zero; jr ra`), the function signature is `long long`/s64 (o32…
-- [IDO -O2 leaf with `addiu sp,-8` but no stack use is unreachable from standard C](#feedback-ido-sp-frame-without-stack-use) — When target has a leaf function with stack frame adjust (`addiu sp, sp, -8` / `addiu sp, sp, +8`) but NO sw/lw using the frame, no standard C idiom produces this at IDO -O2.
+- [IDO -O2 leaf with `addiu sp,-8` but no stack use is unreachable from standard C](#feedback-ido-sp-frame-without-stack-use) — When target has a leaf function with stack frame adjust (`addiu sp, sp, -8` / `addiu sp, sp, +8`) but NO sw/lw using the frame, no standard C idiom produces this at IDO -O2. **2026-07-07: if the fn ALSO has plain-bne/unfilled-delays/no-copy-prop, it's an `-O1 -g3` island, not a cap — `int pad;` gives the frame and `if (0) argN = 0;` kills the unused-arg home store with zero emission (gl_func_0006AF0C exact 14/14 standalone).**
 - [64-bit-add helper: `long long` PARAM matches the add carry-chain but can regress the whole function via call-convention reshaping](#feedback-ido-64bit-add-param-vs-manual) — _A target whose body shows `lo=glob+a1; t8=0; hi=carry+t8+a0` (literal-0 hi word + `or` copy before the add) is a 64-bit add where one operand arrives as a `long long` param in a0:a1 (hi:lo). Switching the C signature to `unsigned long long X` and writing `(u64)glob + X` reproduces the add EXACTLY (no shift helper — the value is already register-split). BUT if the function then passes only the low word to a downstream call and spills the dead hi word, the long-long form reshapes the call convention + global-store ordering and nets LOWER than a manual `lo=glob+a1; hi=(lo<a1)+a0` form (gl_func_0006FDE8: 63% long-long vs 74% manual). Use long-long only when the 64-bit value flows straight through; keep the manual pair when the callee takes split 32-bit args. NEVER construct the operand via `((u64)a0<<32)|a1` — the `<<32` emits a 64-bit shift helper (regressed 6FDE8 to 43%)._
 - [kernel/func_80008030 (SP_STATUS & 3 check) not reproducible from C at -O1 or -O2](#feedback-ido-sp-status-check-unreachable) — _Simple `if ((SP_STATUS & 3) == 0) ret |= 1;` function (0x24 = 9 insns, no stack frame, ret in $v0 with `or v0,zero,zero` + `ori v0,v0,1`) is not reachable from IDO C. -O1 spills ret to stack (adds 4 insns); -O2 routes…
 - [IDO -O2 picks the lowest-available spill slot when the frame has unused space; can't force a higher slot without bloating the frame](#feedback-ido-spill-slot-picks-low-offset) — When IDO -O2 needs to spill a $aN/$tN register across a jal, it picks the LOWEST available slot above the ra-save (e.g. if ra=sp+0x14, it picks sp+0x18). **CRACK (2026-06-21): if YOUR spill is one slot TOO HIGH (gap below it, same frame size), a leading `volatile int pad;` claims the top slot and pushes the spill DOWN for free (push-down=free, push-up=bloat). + reloc-form integer-literal args are often a missing `&D_00000000(+off)` address — pass it to recover count-short jal args. Both: gl_func_00006900 88.8%→100% ROM-exact land.**
@@ -7629,6 +7629,21 @@ GCC (and IDO) emit this 4-instruction sequence for every signed `/2` because the
 
 <a id="feedback-ido-sp-frame-without-stack-use"></a>
 ## IDO -O2 leaf with `addiu sp,-8` but no stack use is unreachable from standard C
+
+**2026-07-07 UPDATE (gl_func_0006AF0C): an empty-frame leaf that ALSO shows plain
+bne (no branch-likely), unfilled beq/bne delay nops, and un-copy-propagated bases
+(`move a2,a3; lw a3,0(a2)` instead of `lw a3,0(a3)`) is not an -O2 cap at all —
+it is `-O1 -g3` code (an -O1 island inside an -O2 file; needs a per-function
+file split to land, game_libs_ido_75264 pattern). Proven EXACT 14/14 standalone
+with two zero-emission levers:
+(1) unused `int pad;` local = the addiu sp,-8/+8 bracket (-O1 allocates it,
+    -O2 drops it — see the -O1 empty-frame entry);
+(2) `if (0) argN = 0;` dead overwrite of an UNUSED arg kills IDO -O1's
+    unused-arg home store (`sw a0,K(sp)`) with zero emitted code — cfe drops the
+    dead if, but the assignment still marks the arg defined so ugen skips the
+    home. (A live `argN = 0;` emits `or aN,zero,zero`; naked `argN;` / `(void)argN`
+    do NOT suppress the home.) Without -g3 the prologue addiu sinks into the
+    entry-beq delay slot; `-g3` pins it first, leaving the target's nop delay.**
 
 _When target has a leaf function with stack frame adjust (`addiu sp, sp, -8` / `addiu sp, sp, +8`) but NO sw/lw using the frame, no standard C idiom produces this at IDO -O2. Unused `char pad[N]`, `int foo[2]`, `register`, and `(void)x` are all DCE'd away (no frame). `volatile int x = expr` creates the frame AND gets the right branch direction, but forces 2 extra insns (sw+lw) for the volatile materialization — so you're always +2 insns over target. Cap around 40-50% match. Likely needs permuter or hand-asm._
 
