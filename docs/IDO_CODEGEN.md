@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [branch-into-adjacent-return-leaf-cap DISCRIMINATOR: branches into the leaf's MID-BODY or delay-slot-carried return values = the parent's OWN tail — MERGE matches (timproc 1D1C+1DA4 37/37 byte-exact 2026-07-07)](#branch-into-adjacent-return-leaf-cap) — _The cap only holds when branches hit the leaf's ENTRY. 1D1C's branches hit 1DA4 AND mid-leaf 1DA8 with `li v0,1` in beql/bnel delay slots → own shared return-1 tail, not a neighbor. Merged fn exact via: fallthrough guard `if(==2){body} return 1;`, switch KEEPING redundant case 2/4 compares, nested case-1 sharing one return-0 block, unnamed second compare operand (colors $t2), and all three defs ON ONE SOURCE LINE (same-line as1 tie-break flips BOTH lw-pair emission orders). Dismantled the 1DA4 -g3 TRUNCATE splice unit; tail emits at plain -O2. Decode branch landing offsets before accepting this cap._
+- [W33 game_libs multi-jr sweep levers: store-forward temp demotion (233A0), (i=0)+base fused init + dead-reload slt-keeper (21D2C), if(1) DSE-bust (3183C), 275F4 full reverse-merge, interleaved-return exit-steal trigger (2F1B8)](#w33-game-libs-multi-jr-sweep-levers-2026-07-08) — _Five results from the game_libs_post multi-jr sweep (3 EXACT, 2 refined caps): (1) `*out = load; if (*out == 0)` store-to-load-forwarding form keeps the loaded byte a scheduler TEMP ($t9) — naming it or `if ((*out = load))` assignment-in-if promotes it to a candidate ($a2) and rotates the base's color; base-0 ARRAY extern referenced directly in BOTH derefs materializes the base once ($a2 lui;addiu) — 233A0 17/17. (2) A DEAD bound-reload inside the loop (`n = *(D+K);` with no stores in loop) costs ZERO insns (CSE'd) but blocks uopt's i<n→i!=n counted-loop conversion (keeps hoisted slt + bottom bnez) AND defeats the x4 unroller in do-while form; `cursor = (i = 0) + BASE;` fused init orders the guard block so as1 sinks i=0 (not the base addiu) into the blez delay; distinct base-0 externs bust the n-load/cursor lui CSE; `b = a1; a1 = 0;` e-split + `while(0){a0+=1;}` ref-boost finish the coloring — 21D2C 22/22 (prior "regalloc/rotation hybrid" verdict retracted). (3) `if (1) { store1; }` BB-barrier defeats -O2 DSE of a redundant double store WITHOUT volatile (retracts "only volatile keeps both", 3183C) — but any DSE-defeat promotes the crossing values to candidates ($a1/$v1 vs target temps) = residual coupling cap. (4) 275F4+276B8+276D0+276D8 was ONE function (0xF0): srl-form `!(x>>31)` sign tests share a goto-ret0 beql tail, `(flags<<3<<1)` split-shift phantom re-phases the temp FIFO, q-reuse multi-def (`q = *(q+0xC0)`) materializes the target's `move v1,a0` range split, second goto label AFTER the tail = out-of-window plain bne+nop — 60/60; retracts the "adjacent MATCHED leaves / interior-entry" analysis and the 276D0 trivial-leaf episode. (5) probe-isolated: loop-exit branches to a same-value merge stay PLAIN+nop with [jr; move] tail UNTIL an interleaved OTHER return exists inside the loop — then as1/uopt always steals the merge move into likely exit delays (beql/bc1fl + copy, +1 debris word); real multi-value phis keep preds plain but any second def emits or VN-folds — 2F1B8 41/52 cap._
 - [Pre-branch `addiu` before a bc1fl = the ELSE-ARM'S OWN pointer hoisted with its delay-slot load; per-arm `if(1){}` pointer-mutation cracks the whole timproc fade/slew-limiter family (CD24/B850/C710/CB40 all byte-exact 2026-07-07)](#branch-into-adjacent-return-leaf-cap) — _Shared pre-if `v=(T*)(base+K)` colors $a1+move (B850's mis-documented "address-reg coloring cap"); plain recompute-per-arm CSEs back to `K(base)`. Exact form: compare derefs `*(float*)(st+K)` DIRECTLY, each arm does `v=(float*)st; if(1){ v=(float*)((char*)v+K); } *v += step;` → both arms color $v1, else's addiu hoists above the bc1fl with its load in the delay slot, then-arm re-materializes in-arm. Distinct float externs for step consts fold into lwc1 %lo (undefined_syms = linked in-USO offsets). Retracts CD24 "<80 FP cap" + B850 coloring-cap; transfers across siblings on first try._
 - [Compute a value AFTER a call so its source stays live in a saved reg — EVICTS a hoisted loop-invariant constant from the saved-reg file (gui_func_00000D04 71→95.74% 2026-06-23)](#compute-a-value-after-a-call-to-keep-its-source-live-in-a-saved-reg--evicts-a-hoisted-loop-invariant-const-gui_func_00000d04-2026-06-23) — _A per-char render loop stuck with a loop-invariant literal (`' '`=32) hoisted into a SAVED reg (`li s8,32`), shifting every other saved-reg down by one (`i`→s7 not s8, `p`→s6 not s7) = systematic coloring cascade. The target has higher saved-reg pressure that denies the const a saved home (uses `li at,32` per-iter instead). To recreate the pressure: take a value derived inside the loop (here the masked glyph index `gi=(unsigned char)g`) and compute its DEPENDENT (the masked offset / pointer) AFTER an intervening call rather than before — that forces `gi` to be saved across the call (a value only gets pinned to a callee-saved reg if it's used AFTER a call). The newly-pinned saved value occupies the reg the const wanted, evicting the const to a temp and shifting all the loop regs up to match (single biggest jump on this fn, 82→94%). Companion levers on the same fn: (a) loop bound = per-char callback's RETURN re-evaluated each iter (peeled `if(c){do{}while(c);}`, `(unsigned)` cmp → sltu/beqzl); (b) a re-derived array index masked to a byte uses `(unsigned char)g` (target `andi 0xff`) — first lookup raw, second masked; (c) hold a twice-used field in a named local (target s0); (d) keep only the OFFSET and re-derive the base per field access (matches target's re-read). Residual ~4% = pure as1 scheduling/coloring ties (RDP-const ori/lw order, delay-slot move placement, `lbu` dest + `move a0,v0`). NM at 95.74%, 128/128 insns._
 - [`goto`+two `return 0;` → `do/while` MERGES the loop-skip and loop-exit into ONE shared epilogue tail (kills a +2-word structural diff); pair with `new_var=&p->field` store-target hoist (kernel func_80002250 56→23 words 2026-06-23)](#gotowhile-shared-tail-merge--store-target-hoist-kernel-func_80002250-2026-06-23) — _A loop guarded by `if (count>0){ loop... ; return 0; } return 0;` written with a `goto loop;` body emits TWO `or v0,$0` + a `b` (the count<=0 skip jumps to the outer return; the loop-completion has its own return) = +2 words vs target. Rewriting as `if (count>0){ do{...}while(cond); } return 0;` makes BOTH the `blez` skip and the loop-bottom fall through to ONE shared `v0=0; epilogue` tail — size snaps to exact and the diff collapses (56→25). Then hoisting a write's address into a named pointer BEFORE the write (`p=&v1->4; *v=...; *p=load;`) trims 2 more (25→23) by reordering the store-target materialization. Residual 23 = a genuine candidate-creation-order coloring cap: arg0(read-only param) vs the loop counter(IV passed as 4th call-arg) contesting the single saved $s0; target keeps arg0 in $s0 (frees $a0 for the index `lh`) + counter in $a3 (nop call-delay), our build reverses it. Permuter (>18k iters, reseeded) finds NO clean zero — its only sub-23 hit corrupts the counter (rejected). FAILED levers (don't re-try on this shape): decl-order swap, `register`/plain `void*self=arg0` alias (forces a copy, worse), `register` on the counter, counter-copy for the call arg._
@@ -18687,3 +18688,46 @@ Four coupled levers for byte-scanner (`lbu`-walk) loops:
 4. **Goto-loop with early sign-continue keeps the branch-likely dead-dup.** `dec: ...; if (minus == c) { sign = 1; goto dec; } accum...; goto dec;` reproduces `bnel t0,a3,accum+4` (delay = dup'd first accum insn) + inline `b dec; li v0,1` + the **orphaned dead `lbu`** between them. An `if/else { sign = 1; }` form loses the likely-conversion (plain beq, no dup); `for(;;)/while(1)` head forms invite the load-PRE of lever 1.
 
 Sibling crack (67B04, walk-two-strings compare): dead in-guard `q = arg1;` reassignment (counter-sink family) flips which pointer coalesces with the char var in `$v0`, which in turn legalizes filling the second guard's delay with `move v1,a0` (plain `beq` instead of `beqzl`+`sltu` dup = the extra word); `int r = 0;` dead initializer makes the epilogue bool color `$v1` (sharing with the loop-dead pointer) instead of `$a0`.
+
+
+<a id="w33-game-libs-multi-jr-sweep-levers-2026-07-08"></a>
+## W33 game_libs multi-jr sweep levers (2026-07-08, agent-e)
+
+Sweep of the six remaining multi-jr .s functions in game_libs_post.c.
+Full match-key commentary lives on each function in
+src/game_libs/game_libs_post.c; this entry records the transferable
+mechanisms. See the Index entry for the summary. Highlights:
+
+- **Store-to-load-forwarding demotion**: `*out = <load>; if (*out == 0)`
+  — uopt forwards the just-stored value (no reload) and the value stays
+  an expression temp. Any NAMED local or `(*out = x) != 0`
+  assignment-in-if form promotes it to a colored candidate. Use when the
+  target tests/stores through a $t reg where your build burns $a2/$v1.
+  (game_libs_func_000233A0 EXACT.)
+- **Dead bound-reload = slt keeper + unroll defeat**: re-assigning the
+  loop bound from the same global inside a store-free loop is CSE'd to
+  zero instructions but pessimizes uopt's trip analysis: `while (i < n)`
+  keeps `slt/bnez` (instead of converting to `bne i,n`) and the counted
+  do-while no longer x4-unrolls. (game_libs_func_00021D2C EXACT.)
+- **Fused `(i = 0) + BASE` init**: embedding the counter init inside the
+  pointer-init expression puts the `move rD,zero` between the base lui
+  and addiu in the guard block, so as1's blez delay fill takes the move
+  (statement-order variants take the addiu or hoist the move above the
+  branch). (21D2C.)
+- **`if (1) { store; }` DSE-bust**: keeps a provably-dead first store to
+  the same address without volatile (controlflow folds the block after
+  DSE ran). Caveat: like volatile, it makes values live across the
+  barrier and PROMOTES them to candidates — if the target keeps them in
+  scheduler temps, that residual is a coupling cap.
+  (game_libs_func_0003183C structure-exact RISE.)
+- **Interleaved-return exit-steal trigger** (probe-isolated, probes
+  4/5/6/7/8 in scratchpad w33 session): conditional loop exits to a
+  same-value merge emit PLAIN branches + nop with the merge move sunk
+  into the jr delay — UNTIL the loop body also contains a different
+  `return X;`. Then every exit gets rule-3 likely-copy (beql/bc1fl with
+  `move v0,v1` in the annulled delay, retargeted past the block head,
+  +1 dead-move word). No C form found that both keeps the interleaved
+  return and suppresses the steal: identity ops fold, a second merge def
+  either emits a word or VN-folds, while(0)/if(0)/decl-order inert.
+  (game_libs_func_0002F1B8 41/52 RISE cap; also the residual class of
+  game_libs_func_00023B98's case-2 `lw v1; jr; move v0,v1` tail.)
