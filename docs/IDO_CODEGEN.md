@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [**cfe COMMUTATIVE-OPERAND RANK: register-rooted cast-deref chains evaluate FIRST regardless of textual order; a TWO-LEVEL TYPED MEMBER CHAIN restores textual order (4-way ctor-family crack: arc 199C + timproc 16F8/1660 + mgr 2940, all EXACT 2026-07-09)](#cfe-commutative-operand-rank-typed-member-chain-2026-07-09) — _For `(global_chain) | (ptr_chain)` where the target's temp ring shows the GLOBAL chain created first (id=t6,t7,t8 / ptr=t9,t0,t1 + or rs=sll): cfe re-ranks commutative operands and always evaluates a CAST-DEREF chain rooted at a register var (`*(int*)(*(char**)(p+K1)+K2)`) before a global-load chain — BOTH textual orders, volatile, unsigned, hoisted-local (colors a candidate, wrong), comma, while(0) anchors, IXA form, split-shift/cvt phantoms (consume ring slots but attach mid-chain) all FAIL. Spelling the SAME access as a two-level typed member chain `((A*)p)->b->v` (A has typed ptr member at K1, B has int at K2) makes cfe follow TEXTUAL order — identical bytes, chains swap creation order. ONE `->` (`(*(B**)(p+K1))->v`) does NOT flip; two levels do. Corollary rank: `*(int*)(D_arr + 0x68)` (array extern + offset deref) ALSO outranks a plain int-global load — spell it as extern-struct member `D_q.v` (struct-cast-fold) to restore textual order. Probes: `a2*0` is NOT cfe-folded when ≥2 appear in an additive chain (each = +1 phantom ring slot, zero emission — measurable FIFO shifter, but always leaves 1 slot between ld and add = can't phase a dense chain). Diagnose with the -zdbug:6 itab dump: entry order = ugen ucode order = temp creation order._
 - [branch-into-adjacent-return-leaf-cap DISCRIMINATOR: branches into the leaf's MID-BODY or delay-slot-carried return values = the parent's OWN tail — MERGE matches (timproc 1D1C+1DA4 37/37 byte-exact 2026-07-07)](#branch-into-adjacent-return-leaf-cap) — _The cap only holds when branches hit the leaf's ENTRY. 1D1C's branches hit 1DA4 AND mid-leaf 1DA8 with `li v0,1` in beql/bnel delay slots → own shared return-1 tail, not a neighbor. Merged fn exact via: fallthrough guard `if(==2){body} return 1;`, switch KEEPING redundant case 2/4 compares, nested case-1 sharing one return-0 block, unnamed second compare operand (colors $t2), and all three defs ON ONE SOURCE LINE (same-line as1 tie-break flips BOTH lw-pair emission orders). Dismantled the 1DA4 -g3 TRUNCATE splice unit; tail emits at plain -O2. Decode branch landing offsets before accepting this cap._
 - [W33 game_libs multi-jr sweep levers: store-forward temp demotion (233A0), (i=0)+base fused init + dead-reload slt-keeper (21D2C), if(1) DSE-bust (3183C), 275F4 full reverse-merge, interleaved-return exit-steal trigger (2F1B8)](#w33-game-libs-multi-jr-sweep-levers-2026-07-08) — _Five results from the game_libs_post multi-jr sweep (3 EXACT, 2 refined caps): (1) `*out = load; if (*out == 0)` store-to-load-forwarding form keeps the loaded byte a scheduler TEMP ($t9) — naming it or `if ((*out = load))` assignment-in-if promotes it to a candidate ($a2) and rotates the base's color; base-0 ARRAY extern referenced directly in BOTH derefs materializes the base once ($a2 lui;addiu) — 233A0 17/17. (2) A DEAD bound-reload inside the loop (`n = *(D+K);` with no stores in loop) costs ZERO insns (CSE'd) but blocks uopt's i<n→i!=n counted-loop conversion (keeps hoisted slt + bottom bnez) AND defeats the x4 unroller in do-while form; `cursor = (i = 0) + BASE;` fused init orders the guard block so as1 sinks i=0 (not the base addiu) into the blez delay; distinct base-0 externs bust the n-load/cursor lui CSE; `b = a1; a1 = 0;` e-split + `while(0){a0+=1;}` ref-boost finish the coloring — 21D2C 22/22 (prior "regalloc/rotation hybrid" verdict retracted). (3) `if (1) { store1; }` BB-barrier defeats -O2 DSE of a redundant double store WITHOUT volatile (retracts "only volatile keeps both", 3183C) — but any DSE-defeat promotes the crossing values to candidates ($a1/$v1 vs target temps) = residual coupling cap. (4) 275F4+276B8+276D0+276D8 was ONE function (0xF0): srl-form `!(x>>31)` sign tests share a goto-ret0 beql tail, `(flags<<3<<1)` split-shift phantom re-phases the temp FIFO, q-reuse multi-def (`q = *(q+0xC0)`) materializes the target's `move v1,a0` range split, second goto label AFTER the tail = out-of-window plain bne+nop — 60/60; retracts the "adjacent MATCHED leaves / interior-entry" analysis and the 276D0 trivial-leaf episode. (5) probe-isolated: loop-exit branches to a same-value merge stay PLAIN+nop with [jr; move] tail UNTIL an interleaved OTHER return exists inside the loop — then as1/uopt always steals the merge move into likely exit delays (beql/bc1fl + copy, +1 debris word); real multi-value phis keep preds plain but any second def emits or VN-folds — 2F1B8 41/52 cap. (6, W38) nested 6-byte-table lookup `&tbl60[(tbl70+i)->h0]`: inner access spelled flat ptr-add deref (NOT `tbl70[i].h0` IXA) allocates the outer base lw as the FIRST temp (t6) + lhu in t9 + final addu base-first; named `idx` colors $a1 (BB-granular interference) and injects `move a2,a1` — 5313C 78%→EXACT._
 - [Pre-branch `addiu` before a bc1fl = the ELSE-ARM'S OWN pointer hoisted with its delay-slot load; per-arm `if(1){}` pointer-mutation cracks the whole timproc fade/slew-limiter family (CD24/B850/C710/CB40 all byte-exact 2026-07-07)](#branch-into-adjacent-return-leaf-cap) — _Shared pre-if `v=(T*)(base+K)` colors $a1+move (B850's mis-documented "address-reg coloring cap"); plain recompute-per-arm CSEs back to `K(base)`. Exact form: compare derefs `*(float*)(st+K)` DIRECTLY, each arm does `v=(float*)st; if(1){ v=(float*)((char*)v+K); } *v += step;` → both arms color $v1, else's addiu hoists above the bc1fl with its load in the delay slot, then-arm re-materializes in-arm. Distinct float externs for step consts fold into lwc1 %lo (undefined_syms = linked in-USO offsets). Retracts CD24 "<80 FP cap" + B850 coloring-cap; transfers across siblings on first try._
@@ -18760,3 +18761,50 @@ mechanisms. See the Index entry for the summary. Highlights:
   ADDU-operand-order/array-IXA rule: the inner spelling, not just the
   outer one, selects the ucode shape. Found by permuter (iter ~111)
   after the manual form-space plateaued.
+
+<a id="cfe-commutative-operand-rank-typed-member-chain-2026-07-09"></a>
+## cfe commutative-operand RANK: cast-deref chains first; typed member chains restore textual order (199C 4-way family crack)
+
+Shape: final packed-id call `gl(p+0xF0, ((D_id + 0x23) << 16) | (ptr_chain + 7))`
+where the target's temp numbering proves the GLOBAL (id) chain was ucode-created
+FIRST (id gets t6[lui+lw shared],t7[add],t8[sll]; ptr chain t9,t0,t1; `or` rs =
+the sll result), but every plain-C spelling creates the ptr chain first.
+
+Root cause (probe-isolated, itab-dump-confirmed): cfe re-ranks the operands of a
+commutative op before ugen emits ucode. A deref chain rooted at a REGISTER
+variable spelled with casts (`*(int *)(*(char **)(p + 0xD4) + 0x6B4)`) always
+outranks a global-load chain — at ANY depth (single deref too), for both textual
+orders. Two plain global chains keep textual order.
+
+THE LEVER: spell the register-rooted chain as a two-level TYPED MEMBER CHAIN —
+`typedef struct B { char pad[0x6B4]; int v; } B;`
+`typedef struct A { char p0[0xD4]; B *b; } A;`  then  `((A *)p)->b->v`
+— cfe then follows textual order (write the global chain first). Bytes are
+identical; only ucode creation order (= temp ring numbering + or operand order)
+changes. A SINGLE typed deref `(*(B **)(p + 0xD4))->v` does NOT flip; the
+two-level typed chain does.
+
+Corollary (mgr 2940): `*(int *)(D_arr + 0x68)` — array-extern + offset deref —
+also outranks a plain int-global load. Spell it as an extern-struct member
+(`extern struct { char pad[0x68]; int v; } D_q;` → `D_q.v`) to make both
+operands plain global loads → textual order holds.
+
+Levers that FAILED on this class (don't re-grind): operand swap (canonicalized),
+volatile derefs, unsigned casts, block-local hoist `int hi = ...` (becomes a
+CANDIDATE, colors $v0 and steals it from a multi-use const web), comma forms,
+assignment-in-arg, while(0)/if(0) dead anchors (deleted-bb itab entries don't
+CSE-anchor), IXA/array-index form, split-shift `<<8<<8` / `(short)` cvt
+phantoms (consume +1/+2 temp-ring slots with zero emission, but attach BETWEEN
+the chain's load and add — can never produce a dense chain), `a2*0` mpy
+phantoms (NOT cfe-folded when ≥2 appear in one additive chain; each surviving
+mpy = +1 ring slot at its itab position; single ones fold). These phantom
+carriers ARE usable as measured FIFO shifters where density doesn't matter.
+
+Family recipe (4-level alloc-cascade ctor, arc 199C / tim16F8 / tim1660 exact
+twins; mgr 2940 = 111-insn variant with 5-call registration tail): head must
+REASSIGN arg0 itself in the short-circuit cascade
+`if ((arg0 != 0) || (arg0 = (char *)alloc(N), (arg0 != 0)))` — a named `s0 = arg0`
+copy shifts the `move s0,a0` out of the store block and drops a word. Store
+`p->0xD4 = arg1` right after `p->0x60 = arg2` (before the const block) so the
+arg1 reload creates t1 BEFORE the 0x1D/0x82/0x69 consts (t2,t3,t4); as1 hoists
+the reload and sinks the store into the jal delay on its own.
