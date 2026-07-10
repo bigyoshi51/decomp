@@ -18,6 +18,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [branch-into-adjacent-return-leaf-cap DISCRIMINATOR: branches into the leaf's MID-BODY or delay-slot-carried return values = the parent's OWN tail — MERGE matches (timproc 1D1C+1DA4 37/37 byte-exact 2026-07-07)](#branch-into-adjacent-return-leaf-cap) — _The cap only holds when branches hit the leaf's ENTRY. 1D1C's branches hit 1DA4 AND mid-leaf 1DA8 with `li v0,1` in beql/bnel delay slots → own shared return-1 tail, not a neighbor. Merged fn exact via: fallthrough guard `if(==2){body} return 1;`, switch KEEPING redundant case 2/4 compares, nested case-1 sharing one return-0 block, unnamed second compare operand (colors $t2), and all three defs ON ONE SOURCE LINE (same-line as1 tie-break flips BOTH lw-pair emission orders). Dismantled the 1DA4 -g3 TRUNCATE splice unit; tail emits at plain -O2. Decode branch landing offsets before accepting this cap._
 - [-O1 loop-bottom store order: FOR-loop shape puts sw-counter before the bne and sinks the pointer-advance store into the delay slot](#feedback-ido-o1-for-loop-store-order) — _Memory-homed ptr+counter loop at -O1: `for(i=0;i<N;i++){...;ptr+=1;}` = sw-i then bne with sw-ptr in the delay; every do-while/comma spelling emits the mirror (2-word floor). Constant bound folds the for's entry guard. Cracked 6C1B8 59/59 + 6D0F4 95/95 (both IDO 5.3 -O1, $at copy-scratch discriminator)._
 - [TU-DEFINED global (not extern) = shared-lui $at store cluster; splice imports it as UNDEF](#feedback-ido-tu-defined-global-shared-at-cluster) — _One `lui $at` + several `sw rN,addend($at)` with batched values = the symbol is DEFINED in-TU (`T x = {0};`), reproducible by NO extern spelling. Donor-splice safe: replace-function-body imports the reloc as global undef → undefined_syms resolves. Identified 6DA74 = osCreatePiManager (libreultra pimgr.c) 98/98; 74EFC = osCreateSiManager sibling (71/98 open). Run decomp-search on manager-shaped fns FIRST._
+- [-O1 statement-granular reload kit: struct-member locals + if(1) body barrier + block-scope index + register->s0](#feedback-ido-o1-statement-reload-kit) — _Homed-and-reloaded-per-statement pointers with SUNK div-break checks = plain -O1 + source shape, not -g/-O0. Kit: local STRUCT for the pointers (sp-resident), `if(1){}` first body statement (kills cross-BB forwarding -> body-entry reloads), plain block-scope local for the div index (single home store + reg reuse), `register` cross-call temp (s0, no slot). kernel func_800044CC 59/59 EXACT (5.3==7.1 -O1, no donor); 56EC live-body exact (7-nop dead-tail cap)._
 - [W33 game_libs multi-jr sweep levers: store-forward temp demotion (233A0), (i=0)+base fused init + dead-reload slt-keeper (21D2C), if(1) DSE-bust (3183C), 275F4 full reverse-merge, interleaved-return exit-steal trigger (2F1B8)](#w33-game-libs-multi-jr-sweep-levers-2026-07-08) — _Five results from the game_libs_post multi-jr sweep (3 EXACT, 2 refined caps): (1) `*out = load; if (*out == 0)` store-to-load-forwarding form keeps the loaded byte a scheduler TEMP ($t9) — naming it or `if ((*out = load))` assignment-in-if promotes it to a candidate ($a2) and rotates the base's color; base-0 ARRAY extern referenced directly in BOTH derefs materializes the base once ($a2 lui;addiu) — 233A0 17/17. (2) A DEAD bound-reload inside the loop (`n = *(D+K);` with no stores in loop) costs ZERO insns (CSE'd) but blocks uopt's i<n→i!=n counted-loop conversion (keeps hoisted slt + bottom bnez) AND defeats the x4 unroller in do-while form; `cursor = (i = 0) + BASE;` fused init orders the guard block so as1 sinks i=0 (not the base addiu) into the blez delay; distinct base-0 externs bust the n-load/cursor lui CSE; `b = a1; a1 = 0;` e-split + `while(0){a0+=1;}` ref-boost finish the coloring — 21D2C 22/22 (prior "regalloc/rotation hybrid" verdict retracted). (3) `if (1) { store1; }` BB-barrier defeats -O2 DSE of a redundant double store WITHOUT volatile (retracts "only volatile keeps both", 3183C) — but any DSE-defeat promotes the crossing values to candidates ($a1/$v1 vs target temps) = residual coupling cap. (4) 275F4+276B8+276D0+276D8 was ONE function (0xF0): srl-form `!(x>>31)` sign tests share a goto-ret0 beql tail, `(flags<<3<<1)` split-shift phantom re-phases the temp FIFO, q-reuse multi-def (`q = *(q+0xC0)`) materializes the target's `move v1,a0` range split, second goto label AFTER the tail = out-of-window plain bne+nop — 60/60; retracts the "adjacent MATCHED leaves / interior-entry" analysis and the 276D0 trivial-leaf episode. (5) probe-isolated: loop-exit branches to a same-value merge stay PLAIN+nop with [jr; move] tail UNTIL an interleaved OTHER return exists inside the loop — then as1/uopt always steals the merge move into likely exit delays (beql/bc1fl + copy, +1 debris word); real multi-value phis keep preds plain but any second def emits or VN-folds — 2F1B8 41/52 cap. (6, W38) nested 6-byte-table lookup `&tbl60[(tbl70+i)->h0]`: inner access spelled flat ptr-add deref (NOT `tbl70[i].h0` IXA) allocates the outer base lw as the FIRST temp (t6) + lhu in t9 + final addu base-first; named `idx` colors $a1 (BB-granular interference) and injects `move a2,a1` — 5313C 78%→EXACT._
 - [Pre-branch `addiu` before a bc1fl = the ELSE-ARM'S OWN pointer hoisted with its delay-slot load; per-arm `if(1){}` pointer-mutation cracks the whole timproc fade/slew-limiter family (CD24/B850/C710/CB40 all byte-exact 2026-07-07)](#branch-into-adjacent-return-leaf-cap) — _Shared pre-if `v=(T*)(base+K)` colors $a1+move (B850's mis-documented "address-reg coloring cap"); plain recompute-per-arm CSEs back to `K(base)`. Exact form: compare derefs `*(float*)(st+K)` DIRECTLY, each arm does `v=(float*)st; if(1){ v=(float*)((char*)v+K); } *v += step;` → both arms color $v1, else's addiu hoists above the bc1fl with its load in the delay slot, then-arm re-materializes in-arm. Distinct float externs for step consts fold into lwc1 %lo (undefined_syms = linked in-USO offsets). Retracts CD24 "<80 FP cap" + B850 coloring-cap; transfers across siblings on first try._
 - [Compute a value AFTER a call so its source stays live in a saved reg — EVICTS a hoisted loop-invariant constant from the saved-reg file (gui_func_00000D04 71→95.74% 2026-06-23)](#compute-a-value-after-a-call-to-keep-its-source-live-in-a-saved-reg--evicts-a-hoisted-loop-invariant-const-gui_func_00000d04-2026-06-23) — _A per-char render loop stuck with a loop-invariant literal (`' '`=32) hoisted into a SAVED reg (`li s8,32`), shifting every other saved-reg down by one (`i`→s7 not s8, `p`→s6 not s7) = systematic coloring cascade. The target has higher saved-reg pressure that denies the const a saved home (uses `li at,32` per-iter instead). To recreate the pressure: take a value derived inside the loop (here the masked glyph index `gi=(unsigned char)g`) and compute its DEPENDENT (the masked offset / pointer) AFTER an intervening call rather than before — that forces `gi` to be saved across the call (a value only gets pinned to a callee-saved reg if it's used AFTER a call). The newly-pinned saved value occupies the reg the const wanted, evicting the const to a temp and shifting all the loop regs up to match (single biggest jump on this fn, 82→94%). Companion levers on the same fn: (a) loop bound = per-char callback's RETURN re-evaluated each iter (peeled `if(c){do{}while(c);}`, `(unsigned)` cmp → sltu/beqzl); (b) a re-derived array index masked to a byte uses `(unsigned char)g` (target `andi 0xff`) — first lookup raw, second masked; (c) hold a twice-used field in a named local (target s0); (d) keep only the OFFSET and re-derive the base per field access (matches target's re-read). Residual ~4% = pure as1 scheduling/coloring ties (RDP-const ori/lw order, delay-slot move placement, `lbu` dest + `move a0,v0`). NM at 95.74%, 128/128 insns._
@@ -18864,3 +18865,63 @@ gl_func_00074EFC is the sibling osCreateSiManager (no public reference
 source; 71/98 floor: its 4-store cluster batches value materializations in an
 order not yet reproduced — msgs {13,0,0}/{14,0,0} @0x45260/0x45278,
 siThread@0x44080, stack@0x44230+0x1000, q@0x45230, main@0x896E8).
+
+**Second confirmation — kernel func_80005520 = KMC osCreatePiManager, 115/115
+EXACT (2026-07-10, w48 sweep).** The kernel's 2-worker variant (two
+__osDevMgrMain spawns, stacks +0x1000/+0x400, second at pri-1, dma/edma =
+func_80004A50/func_800056F0) fell to the identical recipe: TU-defined
+`PiDevMgr D_8000A450 = {0};` in a 7.1 -O1 donor
+(src/kernel/kernel_006_o1_5520.c), spliced into kernel_006.c.o. Two extra
+notes: (a) the donor's `%lo(D_8000A450)+0x4/0x8/...` relocs resolve
+byte-identically to the .s's per-field `D_8000A454/8/C/60/64/68` relocs
+(undefined_syms carries D_8000A450 = 0x8000A450) — RELOCSYM name mismatches in
+a word-compare are fine; (b) the last coloring residual (t3/t4 swap between
+the homed-arg reload and a bss-address materialization) is fixed by FIELD
+ASSIGNMENT ORDER — assign the register-arg field (f8=cmdQ) BEFORE the
+address-constant field (fC=&thread); as1 still emits the stores in the
+target's 0/4/C/8 order. Also: when the host TU promotes the (wrong-bytes) C
+body from an NM wrap, the splice shrinks the fn back to the .s size but can
+leave a 4-byte .text align-pad tail — clean with TRUNCATE_TEXT (kernel_006 =
+0x500).
+
+
+## -O1 statement-granular reload kit: struct-member locals + if(1) body barrier + block-scope index local + register->s0 (kernel func_800044CC 59/59, func_800056EC live-body) <a name="feedback-ido-o1-statement-reload-kit"></a>
+
+Target tell (sub-O2 kernel/libultra code at -O1): user pointer locals are
+HOMED to sp slots and RELOADED once per statement (`lw t1,0x28(sp)` at each
+statement head, fields then read off the cached reg), the reload also
+reappears right after any store through a pointer (aliasing kills the cached
+copy), yet trap checks (div break 7/6) still SINK below the following store —
+i.e. plain -O1 optimization with per-statement memory residency. No flag
+reproduces this mix (-g homes per-statement but pins the trap checks early;
+-O0 emits store/reload echo pairs; plain -O1 keeps everything live in regs;
+-Wo,-zscm:0/-zcopy:0 change nothing here). It is SOURCE shape, four levers:
+
+1. **Struct-member locals**: put the homed pointers in one LOCAL struct
+   (`struct { OSMesgQueue *mq_; __OSEventState *es_; } v;`) — struct locals
+   stay sp-resident at -O1 (assign+home-store lands in the branch delay slot),
+   while a scalar local would be register-promoted. (Array-of-void* instead
+   emits addiu-materialized base pointers — worse.)
+2. **`if (1) {}` as the FIRST body statement** after the guarding condition:
+   kills uopt's cross-BB forwarding of the condition's loaded temps, forcing
+   the body-entry reloads (this was the last 2-insn gap: without the barrier
+   the body reuses the condition's t8/t6).
+3. **Index/accumulator as a PLAIN local in its own block** (`{ s32 last;
+   last = ...%...; mq->msg[last] = ...; }`): emits exactly one home store
+   (`sw t7,0x24`) with the register copy reused for the index (fn-scope plain
+   = double store; struct member here = double store; `register` here =
+   recolors the mfhi temp into s-regs; combined-into-index expression =
+   mfhi->s1). Block scope also drops the slot ordering right (block local
+   below the struct, hole at 0x20).
+4. **`register` on the cross-call temp** (`register void *t;` at fn scope):
+   colors s0 with NO frame slot (`or s0,v0` / `or a1,s0`), reproducing the
+   s0 save/restore + 0x30 frame.
+
+Cracked kernel func_800044CC (KMC PI-event send_mesg, kernel_000_b.c)
+59/59 — 5.3 and 7.1 -O1 emit IDENTICAL bytes, so the -O1 host TU needed no
+donor. Same kit took func_800056EC's whole live body byte-exact (53/53); its
+remaining NM residual is 7 nop words between the infinite loop's back-branch
+and the dead epilogue, which no flag/source combo emits (matrix: 5.3/7.1 x
+-O0/-O1/-O2/-g/-g3). Recognition cue for the whole family: per-statement
+`lw` reloads of the same sp slot + filled jal delays (rules out -O0) +
+sunk div-break checks (rules out -g).
