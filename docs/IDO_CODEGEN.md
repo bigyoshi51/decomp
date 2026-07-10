@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [-O0 island kit II: register PARAMS kill arg homing; leaf register local colors t0/a2; dead jr/b blocks truncatable only frameless+file-terminal; empty fn -O0 = +1 dead pair (bootup 1034C+10AB0 EXACT)](#feedback-ido-o0-island-kit-2) — _register params = unhomed a0-a3; leaf register local -> free a-reg then t0 (non-leaf -> s0); framed fn ending in value-return = dead b-before-epilogue = 11B5C double-b cap generalized (11E00 triplet/FEE8 capped at 6 offset diffs); frameless value-return tails + empty-fn extra pair clip via TRUNCATE only at file end; array-form indexed access = base-first addu at -O0. 2026-07-10._
 - [Two-s-reg get-or-create constructor kit: arg0-as-self + ONE reused register node ptr + phantom-pad hole map (timproc b5 478 81.87->97.52)](#feedback-ido-two-sreg-constructor-kit-478) — _Family: titproc 1E9C / timproc 994/97C. arg0-as-self kills the phantom home; one reused node var colors s0 (07ACE0 RETURN-use is a decode error — read the registered node); decl-order + volatile pads punch the exact hole map; residual = spill-vs-copy pair order (allocator-internal cap). 2026-07-10._
 - [-O0 switch-temp register CLASS = toolchain-binary gap: 7.1/5.3 always s-reg-promote a beq-chain switch temp; some 1080 targets keep it in the t rotation (mgrproc 700 cap)](#feedback-ido-o0-switch-temp-class-gap) — _+2 words (save/restore) + whole-switch t-renumber; ~25 C/flag/version axes probed, none flip; s-reg exhaustion spills the temp instead (wrong shape). Family of the -O0 double-b gap. Take the NM rise._
 - [-O0 dispatcher kit: register-var decl position reserves dead home slots (-0xC column shift); $at-fused struct-member for int globals; within-statement DAG sharing; no-default switch (mgrproc 019C EXACT+PROMOTED)](#feedback-ido-o0-dispatcher-kit-19c) — _Plain locals FIRST then register vars, else 3 dead words shift every slot; extern struct{pad;int v} at per-offset import syms = baked-%lo $at-fused sw/lw (sb/lbu via u8 member, IXA via arr member); one-statement field chains share loads with no homes; default: break emits an extra b arm. 82.08->100, 218/218, ROM byte-identical. 2026-07-10._
@@ -19013,3 +19014,46 @@ temp, +1 word). Also: a 9-case dense C switch inside a USO unit needs the
 local .rodata jumptable pinned at the module's table offset via a NOLOAD ld
 section (zero ROM bytes, bakes %hi/%lo of the real table addr) — see
 tenshoe.ld `.bootup_uso_10FEC_jtbl 0xC20 (NOLOAD)`.
+
+## -O0 island kit II: register PARAMS suppress arg homing; leaf register local colors t0/a2 (not s-regs); trailing dead jr/b blocks truncatable ONLY frameless+file-terminal; empty fn at -O0 emits +1 dead jr pair (bootup 1034C 125/125 + 10AB0 47/47, 2026-07-10) <a name="feedback-ido-o0-island-kit-2"></a>
+
+2026-07-10, agent-g, bootup_uso tail3a carve (both EXACT, ROM byte-identical).
+
+- **`register` on PARAMETERS kills -O0 arg homing.** Plain params get
+  `sw a0..a3, frame_top(sp)` homes; `register char *a0, register int a1...`
+  uses the arg regs directly. This is how "-O0-flavored but unhomed-args"
+  islands (bootup 10AB0, 11D78/11DBC/11E00 family) are reached. Frameless
+  no-locals compound-expr forms are ALSO unhomed without `register` (11D40).
+- **Leaf fns color register locals into caller-saved regs, not s-regs:**
+  first free arg reg (a2 when a0/a1 taken — 11E00 target), then t0
+  (all four a-regs taken — 10AB0's `or t0,a0,zero`). Non-leaf register
+  locals get s0+ as usual (1034C).
+- **register-only local still reserves a dead home slot** (register-first
+  decl-order rule): 10AB0 frame 0x8 with nothing stored; 1034C frame 0x28.
+- **-O0 dead-block geometry** (our cc emits dead code the original didn't;
+  see the 11B5C double-b cap entry):
+  - frameless fn ending in `return expr`: dead `jr ra; nop` pairs land
+    AFTER the live code -> clip with TRUNCATE_TEXT, but ONLY when the fn is
+    file-terminal (o0_11D40 precedent; bootup 11D78/11DBC land the same way:
+    `if (x==0) { return *p; return; } return 0.0f;` — the dead bare
+    `return;` reproduces the target's interior dead pair, bytes 0..0x3C
+    exact, trailing 2 pairs truncatable).
+  - FRAMED fn ending in `return expr`: the dead `b epi` sits BEFORE the
+    epilogue block = inside the fn = NOT truncatable. This is the 11B5C
+    double-b cap generalized: bootup 11E00/11ED4/11FA8 triplet decodes to 6
+    branch-offset diffs (all from that one extra word) — otherwise-exact C
+    is `if(guard==0){ if(idx==-1){ i=0; if(n>0) do{...}while(++i<n); goto
+    ret0; } check-arm } ret0: return 0;` with register params + `register
+    int *p`. Probed dead-label/dead-while tails: no effect. FEE8/FC28/FD4C
+    same family. Check the TAIL before decoding: framed + terminal
+    value-return = capped; void or frameless = landable.
+  - EMPTY fn at -O0 emits TWO jr pairs (target has one) -> empty stubs
+    cannot sit interior in an -O0 file; keep them in -O2 neighbors.
+- **Slot/record indexed access via ARRAY FORM** `((Row*)(a0+0x88))[idx].v`
+  gives base-first `addu t,BASE,scaled` + folded displacement at -O0 too
+  (pointer-arith spelling emits offset-first addu and cascades temp
+  rotation for the rest of the fn). Multi-field: one view struct at the
+  lowest offset (((Rec*)(a0+0x84))[i].f88 etc.), sizeof = stride.
+- **Nonzero-offset extern-struct-member does NOT flip -O0 value-load base
+  reuse** (12818 cap): `lui t5; lw t5,off(t5)` reuse persists for struct
+  members at any offset; only array form gives a fresh dest (+1 insn).
