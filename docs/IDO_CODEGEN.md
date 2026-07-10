@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [**Proc-USO big-fn kit III (agent-h 2026-07-10): 5-label jumptable threshold NEUTRALIZES the external-jumptable cap's ring cascade; m2c-local removal = the master un-coalescing lever; int-vs-char** load typing draws CSE/reload boundaries** (1F14 84.2 / 1C68 95.1 / 116C 93.5)](#proc-uso-big-fn-kit-3-2026-07-10) — _(1) `case N: break;` semantically-dead 5th label emits sltiu N+1 + LOCAL jumptable = 2-word head diff vs the C-irreproducible %hi(import) table AND re-syncs the whole-body ugen temp ring (was -1 = most of the deficit). (2) Drop m2c locals (flag/bc/sub40/anim/n): direct derefs make the load-CSE web THE candidate — no or-copy, const-first bne operands, and the web inherits call-arg precolors (bc→a0 via gl(*(arg0+0xB8)) args; cupcosts lu->reg discount). Shared helper var across sites colors an a-reg with copies; PER-SITE vtN locals color v0 block-temps like target. (3) `*(int*)(p+K)` vs `*(char**)(p+K)` = DISTINCT ichains: type the arm loads int to force per-arm reloads, keep the join/gate loads char** to stay in the a0 web. (4) `x |= 1` right after `x = 0` store-forwards to `ori tN,zero,1`. (5) Compound RMW `*(p+K) = *(p+K) - 1` = un-coalesced two-reg lw/addiu/sw; a named temp coalesces to one reg. NEGATIVE: whole-fn const call-arg web (2→a3, 40→v0) splits into compare-web + arg-web, prices the arg reg by the GENERIC phi cost, ties to t0/a1 — no C spelling merges the webs (phantom-arg, unsigned splits, named var, register, while(0), dead-if, switch, coloring-search depth-1 all probed); como-hoist of a single-arm addiu/&D materialization steals v0/v1 with knock-on colors — also probe-immune._
 - [m2c PHANTOM SPILL-SLOT VAR + var-first decl-order frame fix + merge/split FP-var flip: the D9CC big-miss kit (game_uso_func_0000D9CC 90.8->98.96, 2026-07-10)](#feedback-ido-d9cc-phantom-spill-var-kit) — _(1) A write-only m2c `spXX` whose every `spXX=N` shadows a `var=N` of a call-live var is the SAME stack slot read twice (var's spill home) — DELETE it. (2) A 4-word frame hole = the call-spilled var homed in the SPILL pool below the named locals; declare that var FIRST so its spill uses a top home slot (frame -80 -> -56, every sp offset snaps). (3) $fN pair-swap cascades flip by MERGING the result-side vars (one abs-result var) while keeping the source-side vars SPLIT (temp_f2/temp_f2_2) — decl-order alone is immune. (4) `goto join` label placement: INSIDE the enclosing if = arm gets its own reload dup'd into the b-delay (blocks cross-jump); OUTSIDE = new BB barrier perturbs the next block's lui/mtc1 hoists. (5) volatile pure-read CSE-bust: put the volatile deref as the FIRST mul operand or the paired field load emits swapped. (6) float-looking compares that are really INT (lw/li/bne vs c.eq.s 1.0f; bnezl vs c.eq.s 0.0f) and a 1.0f loaded from a GLOBAL (+addend USO spelling `&D_x+0xNNN`) — check the target's opcode class before trusting m2c float types._
 - [-O0 island kit II: register PARAMS kill arg homing; leaf register local colors t0/a2; dead jr/b blocks truncatable only frameless+file-terminal; empty fn -O0 = +1 dead pair (bootup 1034C+10AB0 EXACT)](#feedback-ido-o0-island-kit-2) — _register params = unhomed a0-a3; leaf register local -> free a-reg then t0 (non-leaf -> s0); framed fn ending in value-return = dead b-before-epilogue = 11B5C double-b cap generalized (11E00 triplet/FEE8 capped at 6 offset diffs); frameless value-return tails + empty-fn extra pair clip via TRUNCATE only at file end; array-form indexed access = base-first addu at -O0. 2026-07-10._
 - [Two-s-reg get-or-create constructor kit: arg0-as-self + ONE reused register node ptr + phantom-pad hole map (timproc b5 478 81.87->97.52)](#feedback-ido-two-sreg-constructor-kit-478) — _Family: titproc 1E9C / timproc 994/97C. arg0-as-self kills the phantom home; one reused node var colors s0 (07ACE0 RETURN-use is a decode error — read the registered node); decl-order + volatile pads punch the exact hole map; residual = spill-vs-copy pair order (allocator-internal cap). 2026-07-10._
@@ -19143,3 +19144,72 @@ tenshoe.ld `.bootup_uso_10FEC_jtbl 0xC20 (NOLOAD)`.
 6. **INT compares masquerading as float in m2c:** target `lw/li 1/bne` for `FW(0x114)==1` (m2c wrote `FF(...)==1.0f`) and `lw/bnezl` for `FW(0x9CC)==0` (m2c wrote float ==0). And a `1.0f <=` gate whose constant is a GLOBAL load `*(f32*)(&game_uso_D_807FF68C+4248)` (USO explicit-addend spelling, like the Pair2 args `&D_807FF478+0xE88`). Always check the target opcode class (lw vs lwc1 / bne vs bc1x) before trusting m2c's float types — three separate float-literal fabrications in one function.
 
 Residual 31 insns = documented tie classes only: beqzl/bc1fl-vs-plain+nop at 2 head gates (as1 branch form), one c.lt.d/lui adjacent-pair swap, $f12<->$f14 (temp_f14/var_f12, merge/split immune here), a3-spill-vs-store pre-jal order, zeros-vs-1.0f mtc1/swc1 emission order, andi-temp coalescing (u16 cast + var split both coalesce).
+
+## Proc-USO big-fn kit III: jumptable-threshold cascade fix, m2c-local removal, typed-load CSE boundaries (timproc b5 1F14 / b3 1C68 / titproc 116C, 2026-07-10) <a name="proc-uso-big-fn-kit-3-2026-07-10"></a>
+
+Three big proc-USO NM wraps pushed 83.6->84.2, 84.0->95.1, 86.4->93.5 with one
+coherent lever family (agent-h). All verified by objdiff fuzzy + full ROM cmp.
+
+1. **5-label jumptable threshold neutralizes the external-jumptable cap's
+   cascade (titproc 116C).** The documented PERMANENT cap (dispatch through
+   `%hi/%lo(import_XXXX+0x30)`, PATTERNS.md) had been treated as a whole-body
+   ceiling because the 4-case compare-chain fallback desyncs the ugen temp
+   ring for EVERY following block. Adding `case 4: break;` (semantically dead:
+   state 4 exits either way) crosses IDO's 5-label jumptable threshold: emits
+   `sltiu at,t6,5` + a LOCAL .rodata table. Only 2 head words differ (sltiu
+   imm, guard beq offset; the local table's %lo even matched 0x30 here), and
+   the jumptable form consumes t6 exactly like the target = whole-body ring
+   re-sync. Generalizes: when an irreproducible head desyncs the ring, look
+   for a semantically-dead source change that restores the head's TEMP
+   CONSUMPTION even if 1-2 words stay wrong.
+
+2. **m2c-local removal is the master un-coalescing/coloring lever.** m2c loves
+   `flag = *(int*)(p+0x3C); if (flag==1)...` — the local becomes an M-var
+   candidate whose init load does NOT coalesce (extra `or aN,vN` copy, split
+   webs, wrong colors: b3 1C68's `bc` v1+a0-copy, b5 1F14's flag v1+a0).
+   Spelling direct derefs everywhere makes the load-CSE web itself the
+   candidate: one register, no copy, const-first bne operand order, natural
+   reload placement after aliasing stores, and the web inherits CALL-ARG
+   PRECOLORS — passing `*(char**)(arg0+0xB8)` as a0-arg twice colored the
+   whole bc web a0 (cupcosts `lu->reg != reg` discount). Related: a helper
+   var SHARED across N sites (`vt` in 8 constructor-call idioms) is one
+   LR colored an a-reg with copies; per-site names (vt2..vt8) give
+   block-local webs that each color v0 like the target.
+
+3. **int-vs-char** load typing draws CSE/reload boundaries.** `*(int*)(p+K)`
+   and `*(char**)(p+K)` are DISTINCT ichains. 1C68's ramp arms must RELOAD
+   the bc pointer per-arm (fresh t-temps) while the gates/join reuse the held
+   a0: typing the arm loads `*(int*)(arg0+0xB8)` and the gate/join loads
+   `*(char**)` reproduces exactly that split. (An int STORE also doesn't kill
+   a char**-load's availability — the alias classes differ — which is why the
+   all-char** spelling CSE'd where the target reloaded.)
+
+4. **Store-forwarded `|=` emits ori-from-zero.** After `*(p+0x3C) = 0` (sw
+   zero in a branch delay), `*(p+0x3C) |= 1` CSEs the load to the known zero
+   and emits `ori tN,zero,1` (0x34xx0001) — the addiu form comes from `= 1`.
+
+5. **Compound RMW = un-coalesced two-reg shape.** `*(p+K) = *(p+K) - 1;
+   if (*(p+K) < 0)` emits lw tA / addiu tB,tA,-1 / sw tB with the compare
+   CSE-ing tB. A named temp (`t = *(p+K) - 1; *(p+K) = t`) coalesces to one
+   register. Same for `+= 1` state bumps (titproc case-0's `= 1` is really
+   `+= 1`: lw/addiu/sw).
+
+6. **NEGATIVE results (documented caps, don't re-probe):**
+   - Whole-function constant with call-arg affinity (1F14's `2`->a3, 116C's
+     `40`->v0): the ichain splits into a compare/store web + per-call arg
+     webs; the compare web prices the arg reg by cupcosts' GENERIC phi
+     shortcut (reg not in used_by_func) and the tie breaks by enumeration to
+     t0/a1. The target's merged web carries precolored liveunits and wins the
+     arg reg. Probed exhaustively: phantom 4th-arg (still worth adding when
+     the target remats aN=K after calls — emission-neutral and matches), 
+     unsigned web-splits (moved the color but target keeps ONE web: no
+     `addiu at,zero,2` in target = candidate serves compares too), named
+     `two` (copy-propped inert), register-kw, while(0){x=4}/dead-if ref
+     boosts (deleted pre-analoop), switch reshape, coloring-search depth-1:
+     SPACE EXHAUSTED. Take the t-ring +1 cascade as one cap.
+   - como-hoist of a single-arm cheap def (addiu ptr+32, lui/addiu &SYM,
+     addiu 720) above its guarding branch: steals v0/v1 there and knocks on
+     (r->a0, a1-var->a2+copy). fl2-split/cast/folded-arm probes inert.
+   - Conditional-call arg-pair scheduling (or a0,s0 vs addiu a1,1 in the
+     cond-block load-delay slot): as1 pick, probe-immune (casts, 1u, order).
+
