@@ -6801,6 +6801,25 @@ and `_00000188` (both raw-diff=3 at `-O2`, the delay-slot order).
   self-contained stubs (`0x15C`, `0x188`) is safe (donor bytes == target, no
   caller depends on their epilogue); the surrounding functions need per-function
   analysis. Do the whole region in one deliberate pass, not piecemeal.
+- **A `switch` jumptable BLOCKS the splice (2026-07-10).** `REPLACE_FUNC_BODY`
+  copies only `.text`. A donor whose function contains a dense `switch` compiles a
+  `.rodata` JUMPTABLE plus `.text`→`.rodata` `R_MIPS_HI16/LO16` relocs and
+  `.rodata`→`.text` `R_MIPS_32` case-label relocs. The splice imports the `.text`
+  but the jumptable `.rodata` is discarded → link dies with
+  `` `.rodata' referenced in section `.text' … defined in discarded section ``.
+  Worse, even if the jumptable were imported, a linked jumptable bakes a NONZERO
+  `%hi/%lo`, whereas a relocatable-USO ROM stores the dispatch as raw
+  `lui $at,0; lw $at,0($at)` (runtime-patched by the USO loader — the same reason
+  `jal 0` / `D_xxxx=0` symbols stay 0). So a switch function's `.text` can be
+  100% byte-exact in isolation yet remain unlandable by donor-splice until there
+  is USO-jumptable-reloc infra (emit the jumptable `.rodata` 0-relative + resolve
+  the `.text` HI16/LO16 to 0; cf. `scripts/extract-uso-jumptable.py` and the
+  `D_arc240_*=0` undefined-syms pattern). Live example held for that infra:
+  `arcproc_uso_func_00000240` — donor `arcproc_uso_o0_240.c` is verified 226/226
+  words exact but stays INCLUDE_ASM. The 5C8/688/748 arcproc donors splice cleanly
+  precisely because they have NO switch. (Episodes ARE logged for donor matches —
+  5C8/688/748 each have `episodes/*.json`; the older "no episode by precedent"
+  note above is stale.)
 
 **Donor functions that touch a `D_xxxx` data global cap at ~99.9% (reloc-blind
 residual — NOT crackable, do not re-attack).** `replace-function-body.py` *drops*
