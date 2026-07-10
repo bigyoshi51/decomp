@@ -7,7 +7,7 @@ _10 entries. Auto-generated from per-memo notes; content may be rough on first p
 ## Index
 
 - [Kernel rmon switch fns (func_8000858C / func_80001EC8) reference jumptables that DON'T EXIST in the retail ROM — splat-auto `jtbl_*` symbols resolve to audio/string data; NOT C-fixable](#kernel-rmon-jumptable-resolves-to-data-not-table) — _The `lui;addu;lw;jr` dispatch in these dead rmon-disassembler fns hardcodes an ABSOLUTE address (0x8000AA90 etc.) which in the retail link holds audio coefficients / panic strings, not code pointers. No run of case-target words (0x800085F0..0x800087C0) exists anywhere in the kernel region. A C `switch` always emits a LOCAL PC-relative table in its own TU's .rodata — it can neither hardcode the foreign absolute address nor reproduce bytes that aren't a table. Permanent INCLUDE_ASM cap; not a splat-relayout fix._
-- [bootup_uso FP literal pool is splat-folded into func_0000098C — 3 mis-attributed f32/f64 consts block func_0000E270/D900/E2D0](#bootup-uso-fp-literal-pool-folded-into-func-0000098C) — _splat disassembled the bootup_uso FP constant region (vram 0x990-0x9A8) AS code because the USO segment has no literal-pool symbol; `func_0000098C + {0x4,0xC,0x14}` are really f64/f32/f64 constants. Fix = splat-config literal-pool break-out + re-extract (deferred, multi-file)._
+- [bootup_uso FP literal pool is splat-folded into func_0000098C](#bootup-uso-fp-literal-pool-folded-into-func-0000098C) — _RESOLVED 2026-07-10 (agent-f) against the USO reloc table: the FP loads reference symIdx=1 = the RoData SECTION base (774 loads; immediate = pool offset), NOT func_0000098C. func_0000098C/940 are GENUINE twin functions (0x99C has a live R_MIPS_26 jal); constants are f32 π / f64 0.1 / f64 0.2 in the already-separate rodata section (data @ ROM 0xD9FE44). NO re-extract / break-out needed — the func_0000098C+N rendering just reproduces ROM placeholder bytes. func_0000E270/D900/E2D0 are blocked by file-split-gated fold + FP-body reconstruction, NOT a pool bug._
 
 - [1080's RSP ucode blob (assets/game_libs_ucode.bin) is NOT F3DEX2/F3DZEX — no upstream public reference matches](#feedback-1080-rsp-ucode-not-f3dex2) — Spiked 2026-05-04.
 - [game_libs absolute-address data refs use `extern T *gl_ref_XXXXXXXX` + undefined_syms](#feedback-game-libs-gl-ref-data) — _For `lui $rN, %hi(SYM); lw $rN, %lo(SYM)($rN)` pairs in game_libs (USO) that load a pointer from a fixed absolute address, declare `extern T *gl_ref_ADDR;` in game_libs.c and add `gl_ref_ADDR = 0xADDR;` to…
@@ -612,11 +612,58 @@ the GfxCtx struct) and keep INCLUDE_ASM. Do not log an episode.
 <a id="bootup-uso-fp-literal-pool-folded-into-func-0000098C"></a>
 ## bootup_uso FP literal pool is splat-folded into func_0000098C
 
+> **RESOLVED / CONFIRMED AGAINST THE USO RELOC TABLE (2026-07-10, agent-f).**
+> The long theory-accretion below (esp. the 2026-05-17 "splat emitted a
+> SPURIOUS code symbol func_0000098C — delete it and re-extract the rodata
+> pool" recipe) is **DISPROVEN and must NOT be acted on.** Ground truth from
+> parsing the bootup.uso module (magic 0x12345678 @ ROM 0xD9FE28) TextReloc
+> table (ROM 0xE620E8, 0x2D894 bytes, 15547 entries; kind 1=R_MIPS_26,
+> 2=LO16, 3=HI16; symIdx = field1>>4):
+>
+> - **The FP loads reference symIdx=1, which is the module's RoData SECTION
+>   base symbol** (symnames names it `RO_000054`; it is used by **774 loads**
+>   with a wide spread of immediates 0x50/0x58/0x60/0x4F0/0x524/0x988/0x990/
+>   0x998/0x9A0…). The 16-bit LO16 immediate IS the pool offset. It has NOTHING
+>   to do with func_0000098C — splat renders `func_0000098C + 0xC` only because
+>   it flat-disassembles the module at VRAM=0 with text symbols only, and the
+>   placeholder immediate 0x998 collides numerically with text symbol space.
+> - **func_0000098C (and its twin func_00000940) are GENUINE, complete
+>   functions**, NOT a data pool mis-disassembled as code. func_00000940 is
+>   0x940–0x98C, func_0000098C is 0x98C–0x9D8 — byte-identical twin wrappers
+>   differing only in one immediate (`addiu $a2,0x3` vs `0x1`). Decisive: text
+>   offset **0x99C carries a live R_MIPS_26 (jal) reloc → func_000A9C** — the
+>   assembler only emits R_MIPS_26 for real jal/j in .text, so 0x98C-0x9D4 is
+>   executing code. D_00000988 is just func_00000940's tail `nop` delay-slot.
+> - **The actual constants** (RoData section DATA begins at ROM **0xD9FE44** =
+>   walk pointer 0xD9FE40 + a 4-byte length word):
+>   `func_0000E270` lwc1 @+0x998 = **f32 π (3.1415927)**; `func_0000D900` ldc1
+>   @+0x988 = **f64 0.1** and @+0x990 = **f64 0.2**; `func_0000E2D0` ldc1 @+0x9A0
+>   = **f64 0.1**. Real FP literals, in a real rodata pool.
+> - **Nothing to break out / re-extract.** The rodata pool is ALREADY a
+>   separate extracted section (the `bootup_uso_pre_head` bin). The
+>   `func_0000098C + N` rendering is the CORRECT way to reproduce the ROM's
+>   *placeholder* text bytes (lui imm 0 / l{w,d}c1 imm 0xNNN): any symbol =0 at
+>   flat 0xNNN gives identical `%hi`/`%lo` bytes, so the rendering is cosmetic
+>   for byte-matching. This upgrades the 2026-05-25 "mechanism not yet confirmed
+>   against the USO reloc table" caveat (below) to CONFIRMED, and the 2026-05-25
+>   "MATCHABLE NOW, no re-extract" breakthrough is the correct disposition.
+> - **The real blocker for the trio** (func_0000E270 0x60 / func_0000E2D0 0x20C
+>   / func_0000D900 0x4C4): the fold form needs func_0000098C declared as
+>   `extern struct{...}`, which clashes because func_0000098C is DEFINED in the
+>   same bootup_uso.c → a **file-split is required** (see the 2026-05-25 CAVEAT
+>   below), and on top of that these are FP-heavy dispatchers (D900 = 305 insns)
+>   needing full FP-body reconstruction + FP-register coloring. NOT a
+>   pool/symbolization/re-extract blocker. Left NON_MATCHING; not a cheap win.
+
 _The bootup_uso USO segment has no rodata/literal-pool symbol, so splat
 disassembled the FP constant region (vram 0x990–0x9A8) AS code, folding
 it into the nearest preceding code symbol `func_0000098C` (real code,
 0x4C @ 0x98C). Any `lui %hi(func_0000098C + N); l{w,d}c1 %lo(func_0000098C + N)`
-reference is actually an FP constant load, not a read into a function body._
+reference is actually an FP constant load, not a read into a function body.
+(NOTE: the "vram 0x990–0x9A8 disassembled AS code" premise in this original
+paragraph is WRONG — see the CONFIRMED block above; those addresses are real
+func_0000098C instructions, and the constants live in the separate RoData
+section, not in the text.)_
 
 **The 3 mis-attributed constants** (enumerate with
 `grep -rho 'func_0000098C + 0x[0-9A-Fa-f]\+' asm/nonmatchings/bootup_uso/`):
@@ -729,9 +776,12 @@ collision (a `.rodata` pool at module-offset 0xC10 resolved against the
 independent module offsets). For this sub-class the corrective action is
 the OPPOSITE of the func_0000098C recipe: KEEP the `.text` func_ symbol,
 and add/route the reloc to a separate `.rodata` pool symbol. Mechanism
-not yet confirmed against the USO reloc table — verify which section the
-reloc's symIdx actually targets before acting (offset +0 at a valid
-function prologue is the tell that "delete the spurious symbol" is wrong).
+CONFIRMED against the USO reloc table (2026-07-10, agent-f — see the RESOLVED
+block at the top of this section): the reloc's symIdx targets the RoData
+SECTION base (symIdx=1 for bootup_uso), never the .text func_ symbol; the LO16
+immediate is the pool offset. So "delete the spurious symbol" is ALWAYS wrong
+here — there is no spurious symbol; keep the .text func_ and treat the load as
+a placeholder-byte-reproducing rodata reference.
 **BREAKTHROUGH 2026-05-25 — these pool loads are MATCHABLE NOW, no
 symbolization / re-extract needed. func_0001016C LANDED (56/56 byte+reloc
 exact, count 1555→1556).** The whole "deferred splat-config pass" framing
