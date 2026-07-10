@@ -639,6 +639,25 @@ declares the bootup_uso literal pool (`.rodata`/`.late_rodata`) and emits
 `D_0000098C..D_000009A8` (or breaks func_0000098C's tail), then re-extract.
 After that the three callers get proper f32/f64 consts and can byte-match.
 
+**SCOPE CORRECTION (2026-07-10, agent-f): this pool bug is LIMITED to the
+func_0000098C family (func_0000E270/D900/E2D0). Most bootup_uso functions
+annotated "blocked by the FP-literal-pool bug" are MIS-diagnosed.** Folded FP
+loads that reference OTHER code symbols — `lui %hi(func_XXXX + N); l{w,d}c1
+%lo(func_XXXX + N)` where func_XXXX is a real preceding function — are NOT the
+098C pool bug; they are ordinary addend-relocs and ARE matchable: reference the
+constant in C as a memory load `*(T*)((char*)&func_XXXX + off)` (or a
+D_-symbol), and IDO emits a byte-matching HI16/LO16 addend-reloc (objdiff is
+reloc-aware, so it counts as matched). Verified on func_00007328 (its only
+float is `lui 0x3F800000; mtc1` inline — no pool at all; 24→69% via full
+decode) and confirmed the folds in func_000063B4 (`func_0000057C+0x34`) and
+func_00004948 (`func_000003F8+0x15C/+0x160`, `K0` at `D_00000000+0`) are this
+matchable class. Those two remain non-exact for a DIFFERENT reason — the FP-math
+body itself is only partially reconstructed (15–23% fuzzy, structurally wrong,
+multi-hour per-function FP RE) PLUS the usual FP-register coloring ceiling — NOT
+a pool/reloc blocker. Before deferring any bootup_uso FP function to "the pool
+bug," check whether its folded loads reference func_0000098C specifically; if
+not, the blocker is reconstruction accuracy or coloring, both C-side work.
+
 **NOT a single-symbol fold (added 2026-05-17):** the same bug recurs at
 `func_00000044 + 0xC` (an f32 literal folded into func_00000044, the
 f32-reader @ vram 0x44; referenced by func_000003F8 lwc1 @ 0x518/0x534).
