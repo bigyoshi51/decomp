@@ -13701,6 +13701,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [-O1 LOCAL-DECL order pins stack slots in REVERSE (last-declared = lowest slot); use it to fix a frame-SIZE diff, not just naming — plus `register` flags -> s0/s1 + accumulator reuse (kernel func_80006790 ~84.5%->byte-exact)](#feedback-ido-o1-decl-order-reverse-slot-pin) — _An -O1 rmon handler near-miss whose frame was 8-16 bytes too big with a scrambled/reversed local slot layout: at -O1 IDO assigns sp-resident locals to stack slots in REVERSE declaration order (the LAST-declared spilled local gets the LOWEST offset). When the target slot order low->high is A,B,C,...,decl them HIGH->LOW (`...; C; B; A;`) — this both reorders the slots AND can shrink the frame to match (here decl `p; sp38; sp34; sp30(arg0); sp2C(ub); addr;` produced target order addr=0x28,ub=0x2C,arg0=0x30,sp34=0x34,sp38=0x38,p=0x3C, frame 0x50->0x40). Combine with: (1) `register s32 flagA, flagB;` to force two short-lived if/else validity flags into callee-saved s0/s1 (target saves both) — and route a later loop accumulator through `flagA = call(); counter += flagA;` so it REUSES s0 after the flags die instead of promoting a 3rd s-reg (frame stays tight); (2) write a commutative `addr+len` SP-window bound as `FW(0x14)+FW(0x10)` (load-order operand) to flip IDO's addu operand order; (3) order `buf = len+0x10;` BEFORE `p = &buf;` so the len reload fills the token-loop load-delay slot instead of the p-store; (4) INLINE field reads (drop named `temp` locals that live across a `||` short-circuit branch) to kill spurious cross-branch spills. Took func_80006790 ~84.5%->byte-exact (49->14->6->0 diffs), LANDED full-ROM cmp-clean 2026-06-23 agent-b. Permuter floored here (base score 285, random mode never beat it) — these are all source-shapeable, do them by hand. Sibling of the line-13458 statement-reorder levers; this adds the decl-order=reverse-slot rule + register-flag/accumulator-reuse._
 - [Thread the live arg-register variable into a tail call to suppress a spurious `move a1,zero` and reproduce the caller-saved save/restore pair (game_uso_func_00006CF0, 2026-06-23, NM 77.75->82.40)](#thread-the-live-arg-register-variable-into-a-tail-call-to-suppress-a-spurious-move-a1zero-and-reproduce-the-caller-saved-saverestore-pair-game_uso_func_00006cf0-2026-06-23-nm-7775-8240) — _A dispatch flag (`register int flag`) computed once early, passed as a1 to two mutually-exclusive mid-body calls AND needed by the tail call: pass the SAME variable to the tail (`tail_fn(a0, flag)`), not a fresh `0`. a1 already holds it → tail emits only `move a0,a2; jal` (no new `li/move a1`), AND the allocator now keeps flag live across each mid-call, reproducing the target's a1+a2 spill/restore pair around every jal. Passing `0` instead emits a trailing `move a1,zero` and drops the a1-spill (~7pp cost). Mid-call to a 1-arg-defined fn that target passes 2 args: use implicit K&R `void fn();` decl so the call stays a direct jal+R_MIPS_26 (a fn-ptr cast → lui/jalr). Residual = pure IDO scheduling/coloring, left NM._
 - [Natural both-store RMW pair (`field++; field &= K;`) beats the temp+volatile lever kit — the folded reload burns a temp-rotation slot (andi t9-reuse -> fresh t5) (game_libs_func_00031784 25/27->27/27 EXACT)](#natural-both-store-rmw-pair-beats-the-tempvolatile-lever-kit-the-folded-reload-burns-a-temp-rotation-slot-andi-t9-reuse---fresh-t5-2026-07-02) — _When the only residual is the RESULT reg of the 2nd statement of a two-statement RMW on one field (fresh $t wanted, reuse built) and your C routes it through `t = f + (long long)1; volatile-store; (t&K)&0xFFFF`: write BOTH statements naturally on the field (`a0[N]=a0[N]+1; a0[N]=a0[N]&0xF;`). The 2nd statement's reload keeps store 1 live (no volatile) and CSE-folds onto t3 AFTER dead-store elim — the folded reload candidate consumes the t4 rotation slot so the andi lands t5; load/incr come out fresh t2/t3 for free. Target keeping both stores at -O2 IS the tell the original re-read the field. 96-cell add-form x mask-form sweep proved no expression tweak moves the andi in the temp form._
+- [-O0 scalar-vs-deref ==/!= eval order is a toolchain-binary gap: 7.1/5.3 always deref-first; two 1080 USO sites are scalar-first (bootup 10FEC/10540 cap) + assignment-operand-hoist `+` lever + NOLOAD jumptable pin](#feedback-ido-o0-eq-eval-order-gap) — _cfe canonicalizes scalar ==/!= deref so the deref side always evaluates first (both compiler versions, ~25 spellings + flag matrix, all deref-first; `<`/`>` stay left-first). Value-first `lw HOME;lw HOME;lw K(t);beq` blocks are unreachable = cap; FIFO t0/t1 swaps downstream are knock-ons of the one block. Lever: in `A + B` where B contains an embedded assignment, put A FIRST or cfe snapshots the assignment value into an s-reg. USO C-switch jumptables: pin unit .rodata at the module table offset with a NOLOAD ld section._
 - [Char-scanner kit: `p=str;str++;c=*p` increment-between kills load-PRE + offset-fold; repeated `*p` = the CSE-temp/var pair (NOT two vars); NAMED int consts win beq rs slot + t0/t1/t2; goto-loop + early sign-continue keeps bnel dead-dup (game_libs 67D8C 92/92 EXACT 2026-07-07)](#feedback-ido-char-scanner-kit-67d8c) — _Merged strtol-lite (hex+decimal). FOUR coupled levers for byte-scanner loops: (1) cursor idiom `p = str; str++; c = *p;` — increment BETWEEN copy and load keeps `move a1,a0` alive; `p=str;c=*p;str++` lets uopt fold to `lbu N(a0)`+combined addiu AND load-PRE the loop-head char into entry (back-edge reload insertion, `lbu` into a candidate not a temp). (2) When target tests some ranges on \$a2 and others on \$a3 with `move a3,a2` in a branch delay: that is repeated `*p` (CSE temp \$a2) + ONE named `c = *p` (\$a3) — writing two vars c/c2 coalesces them (a3 freed, const steals it, t-file cascades). (3) `beq t0,a3`/`multu v1,t2` with const-side-first: consts must be NAMED int locals (`minus='-'; dot='.'; ten=10;`) — they color t0/t1/t2 in first-use order, win the rs slot, and `value *= ten` emits multu+mflo (literal 10 strength-reduces); literal compares emit var-first regardless of source operand order (8-perm sweep). (4) infinite scan loop as `dec: ... goto dec;` with EARLY `if (minus == c) { sign=1; goto dec; }` — reproduces bnel + orphaned dead `lbu` dup; if/else form loses the likely-conversion; while/for forms invite the PRE. Also: 29w sibling 67B04 cracked by dead in-guard `q = arg1;` (flips p/q↔c0 coalesce, legalizes guard-delay fill, kills beqzl+sltu dup) + `int r = 0;` dead init (r colors v1 not a0)._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -18968,3 +18969,47 @@ For the cross-USO constructor family (timproc_b5 0x478, titproc 0x1E9C, timproc_
 3. **Producer-call results**: `resultN = call(...); node = (int*)resultN; 07ACE0(slot, resultN);` — resultN gets a plain stack home (reloaded later as the 18B4 arg), node gets the `move s0,v0` copy, and copyprop passes a1 from v0.
 4. **Slot/hole layout**: named-local homes follow DECL ORDER top-down; block-scoped arm locals get DISTINCT slots per arm (no cross-arm reuse) with a natural 1-word gap above each arm block; unused `volatile int` pads place AT their decl position (usable to punch target holes); a register-colored plain local (and each `register` ptr var) still reserves ONE phantom top word — count these when mapping. Iterate: dump both slot columns (`grep -oE '(sw|lw)\s+\S+,[0-9]+\(sp\)'`), align decl order first, then punch holes with pads, then fix the frame with a bottom pad.
 5. **Residual cap class**: the pre-call `[sw aN,slot-spill][move s0,v0]` pair order — IDO 7.1 emits copy-before-spill; some targets spill-before-copy. Statement order, same-line join, if(1) barrier, +0 disguise, slot-inlining, decl swaps ALL invariant. 2-insn-pair allocator-internal cap; take the rise.
+
+## -O0 scalar-vs-deref ==/!= eval order is a toolchain-binary gap: 7.1/5.3 always evaluate the memory-deref side first; some 1080 USO targets evaluate the scalar first (bootup 10FEC 94.5% cap + 10540 while-head, 2026-07-10) <a name="feedback-ido-o0-eq-eval-order-gap"></a>
+
+_2026-07-10, agent-g, bootup_uso func_00010FEC (439w -O0 jumptable dispatcher,
+415/439) and func_00010540 (while-loop head)._
+
+Target guard: `lw t0,0x44(sp)` (arg1) ; `lw t1,0x40(sp)` ; `lw t2,0x38(t1)` ;
+`beq t0,t2` — the SCALAR is loaded first. Our IDO 7.1 AND 5.3 -O0 emit
+`lw base; lw deref; lw scalar; beq deref,scalar` — memory-deref side first —
+for EVERY spelling of a scalar ==/!= memory-deref compare. cfe canonicalizes
+the operand order (A != B and B != A compile byte-identically), then ugen
+orders heavy-tree-first with ties going RIGHT-first; no C source reaches
+scalar-first. Probed exhaustively (all deref-first): operand swap; u32/int/
+short/float/char*/long types on either side; explicit casts; `(void)&arg1`
+address-taking; `*(&arg1)` (folds back to var); `*(int*)&arg1` (unfolds to
+addiu+lw, still second); volatile on either side; struct/union-typed param
+`.i`; `(a1=a1)` and `(c=a1)` assignment hoists (s-reg + extra sw); `(0,a1)`
+comma hoist (s-reg); `!(==)`, `==`-with-else, `==`-goto (adds b), while/do/
+for heads, &&/|| first-clause; -cckr/-ansi/-signed/-mips1/-mips3/-KPIC/-G8/
+-g0..3; 5.3 and 7.1. NON-commutative compares (`<`,`>`) DO evaluate
+left-first (slt shape) — only ==/!= canonicalize.
+
+Recognition: a `lw tA,HOME(sp); lw tB,HOME(sp); lw tC,K(tB); beq tA,tC`
+value-first block in -O0 USO asm. These were the ONLY two such sites in all
+1080 USO -O0 asm; every matched -O0 fn lacks the shape, so the gap was
+invisible until now. Knock-on: the 4-word block seeds the t-reg FIFO
+recycle order (free order t1,t0,t2 vs our t0,t1,t2), so ~20 additional
+words of t0/t1 swaps cascade through later case bodies — count them as ONE
+cap, not independent diffs. Same family as the -O0 switch-temp-class gap
+(mgrproc 700): the ROM's cc binary orders/classes -O0 temps differently in
+narrow cases our 5.3/7.1 binaries cannot reproduce.
+
+Companion POSITIVE lever from the same fn: cfe hoists an ASSIGNMENT-bearing
+operand of binary `+` ahead of the other operand. For a call arg of the form
+`*(short*)((p = <chain>) + 8) + *(int*)(arg0+0x30)`, spell the ADDEND FIRST:
+`*(int*)(arg0+0x30) + *(short*)((p = <chain>) + 8)` emits the target order
+[p-assign chain, lh via p, addend reload] with the arg0 home-lw DAG-shared
+across both loads and NO temp copy. The lh-first spelling makes cfe snapshot
+the assignment VALUE into a fresh s-reg (`lw s4; move/lh via s4`, frame
++0x10); a separate `p = ...;` statement loses the home-lw DAG share (fresh
+temp, +1 word). Also: a 9-case dense C switch inside a USO unit needs the
+local .rodata jumptable pinned at the module's table offset via a NOLOAD ld
+section (zero ROM bytes, bakes %hi/%lo of the real table addr) — see
+tenshoe.ld `.bootup_uso_10FEC_jtbl 0xC20 (NOLOAD)`.
