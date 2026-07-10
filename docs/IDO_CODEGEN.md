@@ -16,6 +16,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 ### large-body matching
 - [-O0 island kit II: register PARAMS kill arg homing; leaf register local colors t0/a2; dead jr/b blocks truncatable only frameless+file-terminal; empty fn -O0 = +1 dead pair (bootup 1034C+10AB0 EXACT)](#feedback-ido-o0-island-kit-2) — _register params = unhomed a0-a3; leaf register local -> free a-reg then t0 (non-leaf -> s0); framed fn ending in value-return = dead b-before-epilogue = 11B5C double-b cap generalized (11E00 triplet/FEE8 capped at 6 offset diffs); frameless value-return tails + empty-fn extra pair clip via TRUNCATE only at file end; array-form indexed access = base-first addu at -O0. 2026-07-10._
 - [Two-s-reg get-or-create constructor kit: arg0-as-self + ONE reused register node ptr + phantom-pad hole map (timproc b5 478 81.87->97.52)](#feedback-ido-two-sreg-constructor-kit-478) — _Family: titproc 1E9C / timproc 994/97C. arg0-as-self kills the phantom home; one reused node var colors s0 (07ACE0 RETURN-use is a decode error — read the registered node); decl-order + volatile pads punch the exact hole map; residual = spill-vs-copy pair order (allocator-internal cap). 2026-07-10._
+- [Two-s-reg kit II — the 3 named targets cracked: INVISIBLE 4th-arg a3 precolor; bltzl/bgezl annulled-slot dead-copy is the GUARD body (not a registration else); volatile-slot arg-fold vs split-to-bottom-slot (titproc 1E9C 99.2 / timproc b3 994 + b1 97C 97.8)](#feedback-ido-two-sreg-kit-2-1e9c-994-97c) — _(1) A lone `lui a3/addiu a3` + `lw a1,0(a3)` before a K&R call = &SYM passed as an INVISIBLE EXTRA ARG (every held-ptr/if(1)/goto/array-decay/volatile spelling folds or t-rings; same trick precolors a flag-block node a3 via a trailing 4th arg). (2) m2c's `else { p[X]=0; }` on these constructors is really the enclosing guard's zero-store arm executed in the bltzl/bgezl ANNULLED delay slot with a DEAD COPY left at the arm join — registrations are unconditional-backlink; put the zero arm in the C else so the big arm falls through. (3) `int * volatile slot` + def folded into the call arg (`f(slot = ..., n)`) pins the spill to the DECL-ORDER home; a plain local's a0-constrained web splits and spills to a fresh BOTTOM slot instead (uoptlist: `assigned (constrained) 3` + split-out chain). Residual class: 1-3 adjacent pair-order picks (delay-fill store-vs-load, copy-vs-store, hi-temp reg) — as1/ugen-internal, probe-immune. 2026-07-10._
 - [-O0 switch-temp register CLASS = toolchain-binary gap: 7.1/5.3 always s-reg-promote a beq-chain switch temp; some 1080 targets keep it in the t rotation (mgrproc 700 cap)](#feedback-ido-o0-switch-temp-class-gap) — _+2 words (save/restore) + whole-switch t-renumber; ~25 C/flag/version axes probed, none flip; s-reg exhaustion spills the temp instead (wrong shape). Family of the -O0 double-b gap. Take the NM rise._
 - [-O0 dispatcher kit: register-var decl position reserves dead home slots (-0xC column shift); $at-fused struct-member for int globals; within-statement DAG sharing; no-default switch (mgrproc 019C EXACT+PROMOTED)](#feedback-ido-o0-dispatcher-kit-19c) — _Plain locals FIRST then register vars, else 3 dead words shift every slot; extern struct{pad;int v} at per-offset import syms = baked-%lo $at-fused sw/lw (sb/lbu via u8 member, IXA via arr member); one-statement field chains share loads with no homes; default: break emits an extra b arm. 82.08->100, 218/218, ROM byte-identical. 2026-07-10._
 - [**cfe COMMUTATIVE-OPERAND RANK: register-rooted cast-deref chains evaluate FIRST regardless of textual order; a TWO-LEVEL TYPED MEMBER CHAIN restores textual order (4-way ctor-family crack: arc 199C + timproc 16F8/1660 + mgr 2940, all EXACT 2026-07-09)](#cfe-commutative-operand-rank-typed-member-chain-2026-07-09) — _For `(global_chain) | (ptr_chain)` where the target's temp ring shows the GLOBAL chain created first (id=t6,t7,t8 / ptr=t9,t0,t1 + or rs=sll): cfe re-ranks commutative operands and always evaluates a CAST-DEREF chain rooted at a register var (`*(int*)(*(char**)(p+K1)+K2)`) before a global-load chain — BOTH textual orders, volatile, unsigned, hoisted-local (colors a candidate, wrong), comma, while(0) anchors, IXA form, split-shift/cvt phantoms (consume ring slots but attach mid-chain) all FAIL. Spelling the SAME access as a two-level typed member chain `((A*)p)->b->v` (A has typed ptr member at K1, B has int at K2) makes cfe follow TEXTUAL order — identical bytes, chains swap creation order. ONE `->` (`(*(B**)(p+K1))->v`) does NOT flip; two levels do. Corollary rank: `*(int*)(D_arr + 0x68)` (array extern + offset deref) ALSO outranks a plain int-global load — spell it as extern-struct member `D_q.v` (struct-cast-fold) to restore textual order. Probes: `a2*0` is NOT cfe-folded when ≥2 appear in an additive chain (each = +1 phantom ring slot, zero emission — measurable FIFO shifter, but always leaves 1 slot between ld and add = can't phase a dense chain). Diagnose with the -zdbug:6 itab dump: entry order = ugen ucode order = temp creation order._
@@ -18970,6 +18971,53 @@ For the cross-USO constructor family (timproc_b5 0x478, titproc 0x1E9C, timproc_
 3. **Producer-call results**: `resultN = call(...); node = (int*)resultN; 07ACE0(slot, resultN);` — resultN gets a plain stack home (reloaded later as the 18B4 arg), node gets the `move s0,v0` copy, and copyprop passes a1 from v0.
 4. **Slot/hole layout**: named-local homes follow DECL ORDER top-down; block-scoped arm locals get DISTINCT slots per arm (no cross-arm reuse) with a natural 1-word gap above each arm block; unused `volatile int` pads place AT their decl position (usable to punch target holes); a register-colored plain local (and each `register` ptr var) still reserves ONE phantom top word — count these when mapping. Iterate: dump both slot columns (`grep -oE '(sw|lw)\s+\S+,[0-9]+\(sp\)'`), align decl order first, then punch holes with pads, then fix the frame with a bottom pad.
 5. **Residual cap class**: the pre-call `[sw aN,slot-spill][move s0,v0]` pair order — IDO 7.1 emits copy-before-spill; some targets spill-before-copy. Statement order, same-line join, if(1) barrier, +0 disguise, slot-inlining, decl swaps ALL invariant. 2-insn-pair allocator-internal cap; take the rise.
+
+
+## Two-s-reg kit II: invisible 4th-arg a3 precolor, annulled-slot dead-copy guard decode, volatile-slot arg-fold (titproc 1E9C / timproc b3 994 / b1 97C, 2026-07-10) <a name="feedback-ido-two-sreg-kit-2-1e9c-994-97c"></a>
+
+Applying the 478 kit to its three named targets landed titproc_uso_func_00001E9C at 243/245
+(99.2%, from 81.3) and timproc_uso_b3_func_00000994 / timproc_uso_b1_func_0000097C (near-twins,
+3 words apart) both at 225/230 (97.8%, from 65.7/59.7). New levers beyond the 478 kit:
+
+1. **INVISIBLE EXTRA-ARG PRECOLOR.** When a K&R call is preceded by a full `lui a3/addiu a3`
+   materialization of `&SYM` feeding only `lw a1,0(a3)`, the original passes `&SYM` as an
+   extra (4th) argument: `gl(node, (*(int*)&SYM + 3) << 16 | K, -1, &SYM)`. No C spelling of a
+   held/barriered/volatile/array-decay pointer reproduces it (uopt copyprops the constant
+   address and either %lo-fuses the load or t-rings the temp). Generalizes: a flag-block node
+   living in `a3` with no visible setup = the node passed as a trailing extra arg to the next
+   call (`gl(*(int**)(&D+0x190), 1, 0, nd2)` colored the whole registration read web a3).
+   Byte-honest: the callee is K&R and never reads it.
+2. **ANNULLED-SLOT DEAD-COPY GUARD DECODE.** m2c renders these constructors' guards as
+   `if (nd[5]) {...} else { p[X] = 0; }`. The real structure: the zero-store is the ENCLOSING
+   `(a1<<6)/(a1<<8)`-guard's short arm, executed entirely in the `bltzl/bgezl` ANNULLED delay
+   slot, with the original arm body left as DEAD CODE at the arm join (b .Ljoin; backlink in
+   delay; dead `sw zero,X`). Registrations themselves are unconditional-backlink
+   (`if (nd[5]) nd[1]=1; nd[5]=self;`). Write the guard with the zero-store in the C ELSE so
+   the big arm is the fall-through; IDO reproduces the dead copy by itself.
+3. **VOLATILE-SLOT ARG-FOLD vs SPLIT-TO-BOTTOM.** A `slot = self+0x10` local reloaded per
+   registration call: as a plain local it becomes an a0-constrained candidate
+   (uoptlist `assigned (constrained) 3`) whose split ranges spill to a FRESH bottom slot —
+   the decl-order home goes phantom and the column is off by one. `int * volatile slot` with
+   the def folded into the first call arg (`gl(slot = (int*)((char*)self+0x10), node)`) emits
+   `addiu a0; sw a0,<decl home>` (or the sw in the jal delay) + `lw a0,<home>` per later use.
+   Fold `node = rtemp` into the call arg too when the target orders [sw v0][lw a0][or s0,v0]
+   — a separate `node = ...;` statement emits the copy before the volatile reload.
+4. **DELAY-FILL PICK IS STATEMENT-ORDER-STEERABLE (sometimes).** b3/b1 want the volatile slot
+   store in the jal delay with the a1 load hoisted; folding both args picked the lw for the
+   delay. PRELOADING the a1 value as a statement (`vt = (int*)self[0x6A8/4];
+   gl(slot = ..., vt);`) reorders ucode so as1 picks the sw — at the cost of an adjacent
+   addiu/lw order swap (took it: 2 words vs 4).
+5. **Cascade coloring falls out of role separation:** 4-level get-or-create with
+   `arg0`-as-self colors s0/s1; sub-levels n1/n2/n3 color a2/v1/a0 (b3) or s0/v1/a0 (titproc)
+   with homes in decl order; REUSING a cascade var for later node-temp roles rotates the
+   whole assignment (keep dedicated `sub`/`vt`/`nd2` vars and map their PHANTOM homes into
+   the target's hole column instead).
+
+Residual class on all three (1-3 adjacent instruction pairs): as1 delay-fill/tie-break picks
+([or s0,a0] vs [sw a3,arg-home] in the prologue bne; [addiu %lo] vs [lw reload] after a call
+return; hi-temp register a1-vs-a3 for a fused global load). Immune to named-temp, goto-label,
+if(1), volatile-store, deref-spelling, +0-disguise probes — same allocator/scheduler-internal
+family as the 478 spill-vs-copy residual. Take the 97-99% rise.
 
 ## -O0 scalar-vs-deref ==/!= eval order is a toolchain-binary gap: 7.1/5.3 always evaluate the memory-deref side first; some 1080 USO targets evaluate the scalar first (bootup 10FEC 94.5% cap + 10540 while-head, 2026-07-10) <a name="feedback-ido-o0-eq-eval-order-gap"></a>
 
