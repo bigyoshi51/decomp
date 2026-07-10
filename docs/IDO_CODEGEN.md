@@ -834,6 +834,8 @@ above — all "C source order controls IDO scheduling of independent ops."
 
 Prefer the array form when the target has base-first operand order.
 
+**Addendum (2026-07-10, -O0, bootup_uso func_00010B6C 72/72):** At **-O0** the discriminating site is the **address-as-VALUE** position (call arg `&rec->sub`, address returned/assigned) — store/load addresses fold the constant into the sw/lw offset and emit base-first under EVERY spelling, so they can't tell you which form the source used. For the value site, only the **struct MEMBER-ARRAY form on a typed container** (`&a0->recs[a0->count].sub`, array-of-struct member at the right offset) emits `addu a0, <base>, <idx>` base-first. All of these emit idx-first (`addu a0, t7, t2`), probed exhaustively: flat ptr-arith (`a0 + idx*0x28 + 0x94` in either association/order), `(int)` casts of it, cast-array element (`&((Rec*)a0)[idx].f94`), cast-array of the offset base (`((Rec*)(a0+0x94))[idx]`), and `&((Rec*)(a0 + idx*0x28))->f94`. I.e. the -O2 rule "cast-array gives base-first" does NOT carry to the -O0 value site — the member array must hang off the pointed-to struct type.
+
 ---
 
 ---
