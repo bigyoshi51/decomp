@@ -19090,6 +19090,30 @@ local .rodata jumptable pinned at the module's table offset via a NOLOAD ld
 section (zero ROM bytes, bakes %hi/%lo of the real table addr) — see
 tenshoe.ld `.bootup_uso_10FEC_jtbl 0xC20 (NOLOAD)`.
 
+**TWO USO C-switch jumptable pin forms — check the target's lw %lo field to
+pick the VMA (2026-07-10, agent-g, arcproc_uso_func_00000240 226/226 land):**
+The pin VMA is NOT always the module table offset. Disassemble the target's
+dispatch `lui at,X; addu; lw t,Y(at); jr`:
+- **Offset-baked form (bootup 10FEC):** the lw %lo field Y = the module table
+  offset (e.g. `8C390C20`, Y=0xC20). The loader relocates only the HI16 (or the
+  table is module-static). Pin the unit .rodata NOLOAD at VMA = that offset
+  (0xC20) so ld bakes `%hi/%lo(0xC20)` = the exact fields.
+- **Reloc-form (arcproc 240):** BOTH fields are ZERO — `3C010000` (lui at,0) +
+  `8C2E0000` (lw t,0(at)). The whole dispatch is runtime-patched by the USO
+  loader (a reloc entry in the baked `<module>_post` RoDataReloc), and the real
+  table lives in that baked bin. Pin the unit .rodata NOLOAD at **VMA 0x0** so ld
+  bakes `%hi(0)=0 / %lo(0)=0` (matching the zero fields) and emits zero ROM bytes
+  (the _post bin's table + reloc entry stay untouched). See tenshoe.ld
+  `.arcproc_uso_240_jtbl 0x0 (NOLOAD)`. Wire as a normal C_FILES unit (NOT
+  REPLACE_FUNC_BODY, which is .text-only and can't carry the jumptable): pull
+  `o0_240.c.o(.text)` into the segment at the fn's module offset with
+  `TRUNCATE_TEXT` = fn size, and re-derive the following unit's `TRUNCATE_TEXT`
+  (splitting a fn out of a multi-fn .c shifts 16-byte alignment → asm-processor
+  appends a few extra trailing zero words that must be clipped so the segment
+  keeps its exact ROM length). GOTCHA: a pre-existing `<file>.c.o: TRUNCATE_TEXT`
+  line later in the Makefile wins over an earlier target-specific one (last def
+  wins) — update the existing line, don't add a duplicate.
+
 ## -O0 island kit II: register PARAMS suppress arg homing; leaf register local colors t0/a2 (not s-regs); trailing dead jr/b blocks truncatable ONLY frameless+file-terminal; empty fn at -O0 emits +1 dead jr pair (bootup 1034C 125/125 + 10AB0 47/47, 2026-07-10) <a name="feedback-ido-o0-island-kit-2"></a>
 
 2026-07-10, agent-g, bootup_uso tail3a carve (both EXACT, ROM byte-identical).
