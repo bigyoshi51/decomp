@@ -19301,3 +19301,13 @@ The single highest-yield fix for under-reconstructed USO grafts (fuzzy 9-30% on 
 ### Held `f32 two = 2.0f;` local forces `mul.s` where IDO -O2 strength-reduces `expr * 2.0f` → `add.s` (2026-07-10)
 
 When the target multiplies a float by a register-held constant (`lui 0x4000; mtc1 $f,at; mul.s x,y,$f`) but your C `x = y * 2.0f;` emits `add.s x,y,y` (IDO -O2 strength-reduces multiply-by-2 to a self-add), route the literal through a single reused local: `f32 two = 2.0f; ... x = y * two;`. IDO materializes-and-holds the constant in a register, emitting the target's `mul.s` instead of the folded `add.s`. Companion to the m2c float-field width-fix; raised timproc_uso_b5_func_0000AC20 37.6→44.1%. Generalizes to any float constant the target keeps in a register across uses (declare it once as a local, reuse it).
+
+### Typed-float placeholder prototypes + Vec3 by-value struct-copy modeling (raw-word USO decode, 2026-07-10)
+
+Two levers for reconstructing raw-word USO functions with `func_00000000` placeholder calls and vector marshalling (bootup 31C0 +14pp, 8BD4 +24pp):
+
+1. **Typed-float prototypes on placeholder callees.** A bare/K&R `func_00000000(...)` call double-promotes every float arg (`cvt.d.s` + `sdc1` pairs, frame bloat) where the target passes single-precision. Declare distinct typed externs (`extern void fn_name(void*, float, float, ...)`) for each placeholder callee — this both suppresses the double-promotion (emits single `swc1`/`mtc1`) AND still produces a relocated `jal` (0x0C000000 + R_MIPS_26) matching the target. Reusable across the whole raw-word USO placeholder-call family. (Companion to the K&R→variadic single-f12 lever.)
+
+2. **Vec3 by-value struct-copy modeling.** When IDO marshals a Vec3/vector argument by VALUE, it emits word-by-word `lw`/`sw` stack copies that element-wise float copies (`lwc1`/`swc1` per component) do NOT reproduce. Define `struct { float x, y, z; }` and use plain struct assignment (`dst = src;`) — IDO then emits the target's int lw/sw marshalling. Pair with a shared negated temp (`float negamt = -amt;`) to force `neg.s`-then-`cvt.d.s` where separate negations would emit `neg.d`.
+
+Both leave the function NON_MATCHING (residual = the usual fp-regalloc/frame cap: target parks a live-across-call float in callee-saved `$f20` via sdc1/ldc1 vs the natural caller-saved reg) — decode-correctness rises, not exact. NOTE also: kernel func_800014A8 is a splat TWO-FUNCTION mis-split (concatenates the loader loop at 0x24A8 + a second init fn at 0x80001594 under one symbol) — hard-capped ~33% until a splat boundary fix at 0x80001594; out-of-scope infra.
