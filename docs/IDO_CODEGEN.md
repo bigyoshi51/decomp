@@ -44,6 +44,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
 - [POST0B 85-90 BAND WAVE (2026-07-15, agent-f): e-split fresh-reload-web + flat-deref in-place chains + first-call pass-through erases unused-param home + named-single-use dead slots + writeback same-line join + aligned-win/fuzzy-loss gotcha](#post0b-85-90-wave-2026-07-15) — _531C0 exact (e-split `i=a1;a1=0` -> reload colors a0; dead-if 2-web swap; flat u16 deref in-place *6 chain), 3F7A8+3F8E8 exact (a4 stored-not-passed; buf-to-frame-top decl-order layout; cb1(&buf,a1) pass-through; inline named r/st), 48354 exact (post-inc + store same-line join; compare must reload ctr), 5BCD4 rise (s/c destructive reuse + FP decl-order slots; caller-set-$f4 head cap), 3E238/5E138 caps (if(1) base-materialization wins aligned but LOSES fuzzy; addiu-share 1-insn tie)._
 - [POST0B 90-95 BAND WAVE: join+colors compose only in the re-assignment spelling (35A18 family x5 PROMOTED); dead-if AFTER the join; struct-shadow needs no frame room; shared vtable-ptr union warps s-reg order; delay-slot decode errors mimic scheduler ties (2026-07-15)](#post0b-90-95-wave-2026-07-15) — _7/8 crossed: `v=load; v=off+v;` ONE-LINE keeps $a1+t6 while hoisting the lh (named-short/de-name/nested-assign each break one side); dead if(param){} flips a "not C-steerable" s0<->a3 swap but placed BEFORE the join it de-names the def (frame collapses); `*(OneInt*)&a1` arg emits sw a1,4(sp) at frame 0x18 (volatile spellings grow it) + de-named fnptr frees v1; 3D3C4 h/h2 split + if(1) snapped s1<->s2 too; 34CC8 "tie" was a beq delay-slot misread (fn always returns 1); 3E1B0 copy-prop web-split cap STANDS (dead-if inert, address-escape too strong)._
+- [BLOCK-SCOPE `register float` = $f-pool value with NO fn-scope dead home; pointer/scalar decls BELOW pad[] shed phantom top-of-frame homes; de-named aggregate-copy SOURCE = ring-temp base; folded ptr-bump + zero-emission if(p){} shapes a web without emitting (game_uso 6CF0 91->97.6, 2026-07-15)](#block-scope-float-decl-below-pad-6cf0) — _fn-scope named floats (even `register`) all get dead homes — a float needed in $f0/ft with no home slot must be BLOCK-SCOPE register; fn-scope pointer locals declared FIRST claim homes ABOVE the vec block (the mystery +8 at frame top) — declare them after the last array to home below it; `base_vec = *(V3*)(*(char**)(a0+0x30)+0xB4)` inline (de-named) keeps the copy base a ring temp (t7) while a named sub shifts the whole tail t-pool phase; a VN-folded `p+=K` + `if(p){}` pair emits nothing yet re-shapes p's web (removing it costs a word + the copy-pointer colors); target a0-until-late/a2-after pairs can be uopt RANGE-SPLITTING of the param web itself — a named `self=a0` copy is byte-equivalent, and the split POINT is not source-steerable (dead if(a0) inert). Companion negative: same-name scale/rz reuse miscolors the result to $f0 (dead-reg reuse beats fresh-pool numbering)._
 - [POST0B WAVE-TRANSFER: same-line join generalizes to sw/addu pairs; "pinned templocs" = decl-position homes; arg-reg carrier => missing trailing K&R call arg; dead-if forces candidacy; pre-use dead-if kills unpassed-param home-store (5 post0b retractions 2026-07-15)](#post0b-wave-transfer-2026-07-15) — _gl_func_0003D68C/519A4/35834/3829C/4CFD4 caps retracted: (1) one-line join reorders sw and addu PAIRS (not just lui/lwc1); (2) 519A4 "temploc block pinned" was decl-order homes below name[256] — interleave a colored ptr decl above the spillers, coalesced webs (o=a2 alias) carry no home; (3) 35834 "lowest-free-reg cap" = the original passed r as a 3rd arg to the assert callee (arg-reg carrier diagnostic); (4) dead if(p){} blocks single-use copy-prop = ring-temp -> CANDIDATE class flip; (5) unpassed 4th K&R param colors $a3 with zero frame IF a pre-def if(pa){} consumes the incoming value (kills the B49C home-store leak); (6) de-named base ptr colors $v0 AND flips addu to base-first; (7) NEGATIVE: FD0 dead-$v0 exclusion needs the web to START after the call (4E37C cap stands)._
 - [-O1 loop-bottom store order: FOR-loop shape puts sw-counter before the bne and sinks the pointer-advance store into the delay slot](#feedback-ido-o1-for-loop-store-order) — _Memory-homed ptr+counter loop at -O1: `for(i=0;i<N;i++){...;ptr+=1;}` = sw-i then bne with sw-ptr in the delay; every do-while/comma spelling emits the mirror (2-word floor). Constant bound folds the for's entry guard. Cracked 6C1B8 59/59 + 6D0F4 95/95 (both IDO 5.3 -O1, $at copy-scratch discriminator)._
 - [TU-DEFINED global (not extern) = shared-lui $at store cluster; splice imports it as UNDEF](#feedback-ido-tu-defined-global-shared-at-cluster) — _One `lui $at` + several `sw rN,addend($at)` with batched values = the symbol is DEFINED in-TU (`T x = {0};`), reproducible by NO extern spelling. Donor-splice safe: replace-function-body imports the reloc as global undef → undefined_syms resolves. Identified 6DA74 = osCreatePiManager (libreultra pimgr.c) 98/98; 74EFC = osCreateSiManager sibling (71/98 open). Run decomp-search on manager-shaped fns FIRST._
@@ -20070,3 +20071,43 @@ Target preheader holds the SAME literal in TWO saved regs — `li s4,6` (feeds `
 Diagnostic: two adjacent `li sX,K` of the same K in a loop preheader = mixed-signedness uses in the original, not a duplicated variable.
 
 Companions on the same fn: out-of-line retry block (`retry: dirN += 2; if (k != kmax) goto loop_inner;` placed AFTER the call/dedup body, just before the increment label) reproduces the target's fail-forward `beqz` + end-of-fn `bne` layout; dedup scan as `do { ... break; } while (j < count)` gives the `bnezl`-backedge (plain `if/goto` form emits inverted beqz-forward + b-backward). RESIDUAL (~8%, cap for now): (a) build LICM-hoists the loop-invariant `lh recA[0]` that the target reloads per iteration; (b) target's per-group recB copies (`move v1,a1` / `move a0,a1`) copy-prop away in every C spelling tried (bb=recB per group, dead-if); (c) commutative-addu operand order base-first vs offset-first on the rec/dir address adds.
+
+
+## BLOCK-SCOPE register float + decls-below-pad frame shaping + de-named aggregate-copy source (game_uso 6CF0 91.02->97.64, 2026-07-15) <a name="block-scope-float-decl-below-pad-6cf0"></a>
+
+2026-07-15, agent-g, game_uso_func_00006CF0 (102-insn FPU update): 91.02 -> 97.64,
+95/102 aligned words, frame 0x88 + ALL homes/spills exact. Four transferable findings:
+
+1. **Block-scope `register float` = no fn-scope dead home.** At fn scope, every
+   named float (register or not) gets a dead 4-byte home in the decl-order frame
+   map. When the target frame has N-1 float homes for N float values, the extra
+   value (here `scale` -> $f0, ft operand of three mul.s) must be declared inside
+   a `{ }` block. It still colors the FP pool normally.
+
+2. **Fn-scope pointer/scalar decls placed BELOW the pad array home BELOW the
+   vec block.** Pointer locals declared FIRST (above the aggregates) claim homes
+   ABOVE the aggregate block — an unexplained +8 at the frame top that survives
+   `register` and pad resizing. Moving `char *p; int timer;` after `int pad[8]`
+   relocated their homes into the below-block region and let the aggregates sit
+   flush at the frame top (target layout). Diagnostic: build frame = target+8 with
+   all aggregate homes correct but 8 dead bytes above them.
+
+3. **De-named aggregate-copy SOURCE = ring-temp base.** `dst = *(V3*)(*(char**)
+   ((char*)a0+0x30)+0xB4);` (inline double-deref) bases the 3 lw/sw on a ring temp
+   (t7) exactly like the target; naming the intermediate pointer promotes it to a
+   candidate and shifts the whole tail t-pool phase (+1) — the old wrap-comment
+   theory blaming a dead addiu for the phase was wrong.
+
+4. **A VN-folded `p += K` + zero-emission `if (p) {}` pair shapes p's web without
+   emitting.** Both lines produce no instruction (bump folds into load offsets,
+   dead-if emits nothing) yet deleting them costs a word and flips the copy-pointer
+   colors. Cheap web-shaping knob when a pointer is multi-deffed.
+
+Negatives on the same fn: target's keep-a0-late/a2-after-calls pair is uopt
+range-splitting of the PARAM web (spill to the a0 arg slot across calls); a named
+`self = a0` is byte-equivalent, and the split POINT (stage-2 vs post-test) resisted
+dead if(a0){}, if(1){self=a0;}, and self-elimination — treat as a split-point cell.
+Same-name scale/rz web reuse miscolors the result f0 (dead-reg reuse wins over
+fresh-pool numbering) — keep the scale separate when the result needs a fresh $f.
+The dead `addiu v0,v0,0x318` post-bump stays C-unreachable (p+=0x318 DCE'd even
+with the zero-emission consumer).
