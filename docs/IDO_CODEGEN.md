@@ -17,6 +17,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
 - [Deep-clone copy runs: alternating-t8/t7 segments = BLOCK STRUCT COPIES (segment length = struct size, secondary-base runs included); 1-word struct copy through a named field-pointer keeps 0(v0) (plain *p= gets offset-folded to base+imm, volatile inert) (526D0 76.5->95.75, 2026-07-15 agent-f)](#struct-copy-runs-oneword-ptr-copy-526d0) — _Also: param-reuse accumulator = move s0,a0 at insn 3 + a2-home in bne delay; int-lvalue (f32) cast emits mtc1/cvt/trunc, use *(f32*)= for lwc1/swc1; residual = uniform -1 temp-ring phase, 6 burn probes (dup-load/multi-def/while(0)/named-vt/array-alias/if(1)) all 0-advance — suspect 2-slot &D materialization shape (adjacent lui;addiu tell)._
 - [gui dispatch/param kit: IDO sorts switch cases ASCENDING — nested-!= gives source-order beq-to-body; param-reassign-as-scratch; if(0)-address-escape un-promotes a loop-incremented param (gui 27A0 90.0->92.5, 3B80 87.3->89.7, 2026-07-10)](#feedback-ido-gui-dispatch-param-kit) — _(1) A beq-to-out-of-line-body compare chain in NON-sorted order is NOT a switch (IDO emits switch compares ascending by value) and NOT an ==-else-chain (bnel+inline arms): it's a NESTED-!= chain (default innermost); per-arm constant assignments get speculated into the beq delay slots. goto-pinned bodies get re-laid-out by uopt (order is its choice). (2) When the target reuses an arg reg (a1/a3) as scratch for halfword temps/mode/DL-cursor, REASSIGN THE PARAM in C — frees the t-ring, forces the prologue copy (move s8,a1), and the old value's survival into one late arm reproduces the spill-home reload (max = a3 in the default arm only). (3) A loop-incremented param the target keeps MEMORY-homed (lw home/addu/sw home per iter) while the build $s-promotes it: `if (0) { f(&param); }` address-escape kills the promotion (+2pp, frees the s-reg chain). (4) METRIC GOTCHA: objdiff fuzzy != aligned-insn count — fuzzy tolerates sp-offset renames but weighs block shapes; a variant can win aligned-count and LOSE fuzzy (27A0 if-chain 174-aligned/88.3-fuzzy vs switch 174/90.3). Gate every knob on the official fuzzy, not a homebrew aligned metric._
+- [Sibling block scopes NEVER slot-overlay (IDO 7.1 cfe); shared-dest struct copy scalarizes at <=7 copies, flips to memcpy-form (&dest -> s-reg) at >=8; block-scope `register char*` sheds its decl slot AND gets per-web a0 + SHARED uopt temp spill home (gl_func_00001C54 77.1->99.76, 2026-07-15 agent-h)](#sibling-scope-no-overlay-structcopy-memcpy-flip-1c54) — _The 7BC/135C struct-by-value ctor kit STOPS SHARING one function-scope t above 7 expansions: at >=8 struct copies to the same dest, cfe/uopt flips to memcpy-form (lda &u / lda &t hoisted, &t CSE'd into an s-reg, value reloaded — ring-temp double-store gone). Every scalar respelling fails one leg: `t.v=u.v`/chains DCE the rotating u-store and color $v0; CHAIN2 `u.v=(t.v=g)` keeps ring color but loses the u store; volatile u forces a reload; prototyped struct-by-value direct `ctor(m,self,u_k,1)` reads u_k's OWN home (single store, no 0x84 staging read). WORKING SHAPE at 16 expansions: per-expansion block-scoped `{ char *m; struct S t; t = u_k; ... }` — distinct low-priority webs each color a0 (same-name function-scope m amortizes the s-reg save across ranges and flips to s0 at high n), copies scalarize, sw-t lands in the bne delay. COST: cfe gives every sibling-block pair its own 8 bytes (frame 0x180 vs 0x108) and sibling scopes NEVER overlay (only inner-scope-onto-dead-outer does, cf. 4ACD4) — a SLOT-SHARING cap: all 458 insn shapes exact, residual = sp offsets. objdiff fuzzy scores it 99.76 (sp-offset arg diffs weigh light)._
 - [Constructor-family kit (4B620 86->93, 2026-07-10): macro-scoped do-while temps cost FRAME SLOTS PER EXPANSION; if(1)-barrier defeats &local-nonnull guard fold; single-mutated-pointer-temp colors s2 + flips self to s4; loop-web rank steals s-regs from straight-line webs](#feedback-ido-4b620-constructor-kit) — _(1) A `do{ T *_h; s32 _n; ... }while(0)` append macro expanded 9x reserves 9x16 bytes of -O2 frame (block-scope locals each get slots even when fully colored) — the giveaway is target frame 0xB0 vs built 0x108 with only 3 real aggregates; share FUNCTION-SCOPE temps to shrink. (2) `q = 0; if (1) { q = &local; }` reliably defeats the &local!=0 fold (plain `p=&local`, array-decay, member-&, goto-barrier all fold) — restores dead `bne &buf,zero,skip / jal alloc` guards (extends the A3C4 "unreliable" verdict: the barrier form IS reliable). (3) One `char *p` reused for alloc-fallback obj + DL-handle reloads + loop node = single candidate crossing loop calls -> colors s2 and pushes self to s4/arg1 to s0 (5-sreg prologue). Alloc-return appends read via the RETURN VALUE var (v0, no or-copy); only later appends reload through p. (4) uopt hands s0,s1,s2.. out in CANDIDATE-RANK order; loop-body webs (x10 weight) rank first — a loop-cached `sll idx` web steals s0/s1 from straight-line append webs; busting the cache (volatile per-use reload) frees them, but forcing MORE loop uses onto a var overflows the s-reg budget (6 saves, self->s5, net worse). Residual class: whole-candidate callee coloring of shared temps whose webs are dead across calls (target s0/s3 vs per-web v1/a0) + ternary-phi `or v0,zero + beq 0,0 + addu-in-delay` iterator-next shape (comma-side-effect ternaries flatten). Probe harness: standalone cc + word-aligned differ (scratchpad recipe in episode notes)._
 - [Void-alias dead-$v0 exclusion must cover EVERY jal the web touches; web piece starts at the call's ARG EVAL (gl_func_0000B0A8 99.57->objdiff-100, 2026-07-15)](#void-alias-all-jals-b0a8) — _CSE'd deref used as call arg = web crosses that jal too; void-zero-alias ALL return-discarded calls in the span, not just the obvious one. Companion negative: C28C phantom sweep (#c28c-phantom-negative-2026-07-15) — lone <<0 VN-folds outside shift chains, x*0+x promotes to candidate, fitted cast needs rangeable value._
 - [Wave-3 agent-g (2026-07-15): named-local dead-home rule (frame=names once spilled); target web-merge shared names; if(1) flips in-loop CSE web a2->v0; de-named capture = raw K(v0) reads; folded-table-offset base (7E34/7B2C/80F4 EXACT)](#return-capture-precolor-26fc) — _see the 2026-07-15 agent-g addendum at end of file: de-name via inline-CSE repeats or merge disjoint webs into one name to shed dead homes; merge flags+i/busy+off when one s-reg serves two phases; if(1){} BB-wrap is the a-reg->v0 flipper for loop CSE webs; plain spilled flag local = sltu/sltiu ring pair + delay-slot home store._
@@ -20154,3 +20155,58 @@ _Context: gl_func_000526D0 (game_libs_post0b raw-.word USO, 146 words, ~0xB0-byt
 2. **1-word struct copy defeats the base+imm offset fold.** With `s32 *p30 = (s32 *)(dst + 0x30);` live in $v0 (target `addiu v0,s0,48`), a plain `*p30 = FW(src,0x30);` still emits `sw tN,48(s0)` — uopt copy-propagates the pointer def and folds the store back to the base register + immediate (volatile on the pointee does NOT stop this; neither do multi-def splits). The RMW `*p30 |= 0x10;` keeps `0(v0)`. To get the target's `sw tN,0(v0)` on the plain copy too, spell it as a one-word struct copy: `typedef struct { int w; } S1; *(S1 *)p30 = *(S1 *)(src + 0x30);` — struct copies are never offset-folded. (Its staging temp comes out of the ring with a skip-one pattern: after t4, takes t6.)
 3. **Kit bits that transferred:** param-reuse (`arg0` as the alloc/get-or-create accumulator, no `var_s0` local) produces the `move s0,a0` AT INSN 3 prologue with the a2 home-store sunk into the `bne` delay — the separate-local form homes all args up front and puts the move in the delay slot instead. `FW(dst,0x28) = (s32)&D_00000000;` for the reloc-free `lui 0; addiu 0` vtable store. `*(f32 *)(dst+0x9C) = *(f32 *)(src+0x9C);` for lwc1/swc1 (an int-lvalue `(f32)` cast emits mtc1/cvt/trunc — wrong). Leading `volatile int pad;` + decl order put the a1-spill home at 0x24 in the 0x48 frame.
 4. **Open residual (documented cap for now): uniform -1 temp-ring phase** across the whole copy block (mine `t9,t0,...` vs target `t0,t1,...`, identical skip structure) + the &D lui/addiu emitted split around a `lw` vs target's adjacent pair. Six 0-burn probes all folded with zero ring advance: dup-load CSE, multi-def pointer, `while(0)` assign anchor, named vt local, array-extern alias, `if(1)` BB around the vtable store. Suspect the target's &D materialization is a 2-slot shape (hi temp + lo candidate, hence the adjacency); no C spelling found that reproduces it. 95.75 NM wrap (placeholder callees — not landable regardless).
+
+<a id="sibling-scope-no-overlay-structcopy-memcpy-flip-1c54"></a>
+## Sibling-scope slot stacking + the >=8 struct-copy memcpy flip: why the 7BC struct-by-value ctor kit stops byte-matching at 16 expansions (gl_func_00001C54)
+
+(2026-07-15, agent-h; gl_func_00001C54 77.09 -> 99.76 objdiff, all 458/458
+instruction shapes exact, residual = frame-slot placement only.)
+
+The 7BC/135C kit (function-scope shared `char *m; struct S t;`, per-expansion
+`u_k.v = sym; t = u_k;` + `ctor(m, self, t, 1)` struct-by-value) matches
+byte-exact at 4 and 6 expansions but BREAKS at 14-16. Standalone bisect with
+the project cc (7.1 -O2 -G0 -mips2 -32 -non_shared -Xcpluscomm) on the full
+block shape:
+
+1. **Struct-copy memcpy flip at >=8 copies to one dest.** With n <= 7
+   `t = u_k` scalarizes (one lw of the id feeds `sw rot-slot` + `sw t-home`,
+   value stays a ring temp, t-home store fills the bne delay). At n >= 8
+   cfe/uopt emit memcpy-form: `addiu tX,sp,&u_k` / `addiu s1,sp,&t` (the &t
+   CSE'd into a callee-saved reg), value RELOADED through the pointer. All
+   respellings fail one leg:
+   - `t.v = u_k.v`, `t.v = (u_k.v = g)`, two-statement scalar: u_k's rotating
+     dead store is DCE'd and the value colors $v0 (7BC note: "every scalar
+     spelling colored it $v0").
+   - `u_k.v = (t.v = g)`: ring-temp color survives, u store still DCE'd.
+   - `volatile` u_k: store survives but the copy reloads (extra lw).
+   - PROTOTYPED callee + direct `ctor(m, self, u_k, 1)`: no staging copy —
+     a2 loads from u_k's OWN rotating home, not the shared t home; only one
+     store. (So a shared-home `lw a2,X(sp)` in the target implies a real
+     second object, not arg staging.)
+
+2. **Same-name function-scope `m` flips a0 -> s0 at high n.** m's 16 disjoint
+   ranges are one candidate; the single save/restore amortizes and uopt
+   assigns s0 (plus `or a0,s0` per call) instead of the target's per-block
+   a0 + spill/reload around the ctor jal. Distinct per-block variables each
+   rank too low for an s-reg and all color a0.
+
+3. **Block-scope `register char *m` sheds the cfe decl slot** (plain
+   block-scope `char *m` keeps one slot per sibling block) **and its
+   call-crossing spill uses ONE shared uopt temp home across all
+   expansions** — the exact target shape (`sw a0,home` before jal /
+   `lw a0,home` after).
+
+4. **Sibling scopes NEVER overlay** (IDO 7.1 cfe): 16 sibling-block
+   `{char *m; struct S t;}` pairs cost 16x8 bytes (frame 0x180 vs target
+   0x108) even though webs are fully disjoint. Extends the 4B620
+   do-while-macro finding; the 4ACD4 overlay lever is inner-scope-onto-
+   DEAD-OUTER only, not sibling-to-sibling.
+
+WORKING SHAPE at 16 expansions (kept as the NM body): per-expansion
+`u_k.v = <gl_ref sym>; { char *m; struct S t; t = u_k; if ((m = self+OFF)
+!= 0 || (m = alloc(0x18)) != 0) { ctor(m, self, t, 1); ... } }` — every
+mnemonic/register byte-shape exact incl. the `sw a2,8(sp)` struct-arg slot
+store in the ctor jal delay; the only residual is target sharing ONE
+m/t home pair (0x88/0x84) across expansions. Classification: slot-sharing
+cap (frame layout), not a register/scheduler cap. objdiff fuzzy weighs
+sp-offset arg diffs lightly -> 99.76.
