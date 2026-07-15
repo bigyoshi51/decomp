@@ -19460,6 +19460,17 @@ tag load `*(int*)c` coloring $a2 (coalesced into idx's web) vs target $v0.
 3. Keep the name on the value the target holds in a reg: inlining `val` into
    the store flipped the table load into the t8 ring temp.
 
+Second confirmation same session (gl_func_0000E9C0, 99.20 -> EXACT, retracting
+a documented "not reachable from C" $a1 cap): a scratch base the target holds
+in a dead ARG REG ($a1) is the function's existing pointer local q advanced
+DESTRUCTIVELY (q = self->0x8C; q = (int*)((char*)q + 0xC4)) — q's later
+call-arg web is a1-constrained and the same-name base web inherits $a1.
+GOTCHA: reassigning the dead PARAM (`a1 = base`) does NOT work — a multi-def
+param s-promotes the whole var (move s1,a1 prologue churn); only LOCAL
+same-name reuse splits webs cleanly. Companion there: a `volatile int pad;`
+(uninitialized, unused) third named local occupies one home slot and drops a
+spilltemp from 36(sp) to 32(sp) with frame unchanged.
+
 Converse cap, same session (game_libs_func_00026B40, 2-insn residual): target
 materializes a store+call-arg shared pointer as `lui t6; addiu a0,t6` (ring hi
 temp) where the build destination-coalesces `lui a0; addiu a0,a0`. Probed
