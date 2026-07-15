@@ -19502,3 +19502,37 @@ no C grammar reaches it. Same internal class as the C28C skipped-ring-slot cap
 (and the subsumed-mask 1-slot burn does NOT apply to full-width int values —
 32-bit/identity masks cfe-fold to 0 slots, u64 masks burn 5).
 
+
+## INT-CAST address form breaks uopt address-expr CSE (arm-local addiu remat) + unnamed-entry-web coloring (timproc b5 C8AC 99.6->EXACT, 2026-07-15) <a name="int-cast-address-cse-break-c8ac"></a>
+
+2026-07-15, agent-g: timproc_uso_b5_func_0000C8AC 47/51 -> 51/51 EXACT,
+retracting a 2026-06-20 "first-pseudo register-coloring / permuter-territory"
+cap. Three independently useful pieces:
+
+1. **Unnamed entry web colors like the reload temps.** Target: entry
+   `lw v1,0x2B8(a0)` AND all post-branch reloads color $v1; build's NAMED
+   `int *v1` head local colored $a1 while inline-deref reloads colored $v1.
+   Dropping the name (spelling the head condition and the derived-pointer def
+   as inline derefs of `a0[0x2B8/4]`) lets CSE produce one compiler temp that
+   colors $v1. Converse of the 332B4 same-name-family rule: a named-local web
+   family inherits ONE color as a group — naming the reloads into `v1` dragged
+   them ALL to $a1 plus `move v1,a1` copies. If the target's color matches the
+   ring-temp choice, UN-name the web instead of naming more of it.
+
+2. **Int-cast address spelling defeats uopt expr-CSE = per-arm addiu remat.**
+   Target recomputes `addiu v0,v1,0x128` inside the taken arm (the pre-branch
+   addiu feeds only the else arm's beqzl-annulled delay slot). Any same-form
+   re-def (`(float *)((char *)p + 0x128)`, same-name re-def, if(1) barrier)
+   got CSE'd back to the head def. Spelling the arm re-def as
+   `(float *)((int)((int *)a0[0x2B8/4]) + 0x128)` — int-cast arithmetic
+   instead of char*-arithmetic — is a DIFFERENT expr tree to uopt, so the
+   addiu re-emits, byte-identical. This generalizes the (float)N cast-literal
+   CSE-break family from FP constants to ADDRESS ARITHMETIC.
+
+3. **Same-line join + compound assign fix the pair order and FP numbering.**
+   With the re-def on its own line the lui-at/addiu pair and the two lwc1s
+   emitted swapped (as1 debug-line tie-break). Joining
+   `p128 = ...; *p128 += D[0x374];` on ONE source line fixed the pair order
+   and load emission order; the compound `+=` (NOT `*p128 = *p128 + D`, which
+   leaves the D operand's pseudo created first -> f4/f6 swap) keeps *p128's
+   pseudo first so f4=*p128, f6=D as in target.
