@@ -757,6 +757,8 @@ If the function has additional uses of $a0/the array AFTER the jal, IDO might fi
 ---
 
 <a id="lui-addiu-reloc-vs-lui-ori-literal-the-addiu-form-is-a-sym-n-address-not-an-integer-literal-gl_func_0004d468-2026-06-22"></a>
+- [VOLATILE-PARAM HOME RELOAD + ZERO-ARG K&R CALL: -O1 jal-delay `lw s0` lever (kernel 969C 99.7->100 + 9584 94->100, 2026-07-15)](#volatile-param-home-reload-969c) — _Volatile-qualified pointer PARAM makes `p = msg;` a bare `lw s0,HOME(sp)` (non-volatile copy goes via t6; &msg-cast materializes addiu) that as1 hoists into the first jal delay; empty-parens K&R call drops the per-use `lw a0` param reload (-O1 homes+reloads params EVERY use). Prologue s-save order snaps as side effect. register-var DEAD HOME exists at -O1 in aggregate-bearing frames (decl-order moves the frame hole). -O2 wave (same-name web/ring burn) does NOT transfer to -O1; frame-map + delay-slot families DO. 9474 mask ping-pong (lw a1; andi t8,a1; move a1,t8) = residual -O1 cap (8 spellings probed)._
+
 ## `lui+addiu` (reloc) vs `lui+ori` (literal) for a ≥0x10000 constant: the `addiu`-form is a `&SYM + N` address, not an integer literal (gl_func_0004D468, 2026-06-22)
 
 A near-miss where the target materializes a constant ≥0x10000 as `lui rN,%hi; addiu rN,rN,%lo` (with HI16/LO16 relocs) but your build emits `lui rN,HI; ori rN,rN,LO` (no relocs) — each such constant is a 1-insn-equivalent but byte-different diff.
@@ -19615,3 +19617,55 @@ Companion levers to finish (all documented individually elsewhere):
   place it mid-map).
 Probe order for future family-swap caps: return-capture precolor FIRST — it is
 one token and flips the whole family; only then tune ring/homes/slots.
+
+## VOLATILE-PARAM HOME RELOAD + ZERO-ARG K&R CALL: the -O1 jal-delay `lw s0` lever — kernel 969C-class prologue caps cracked (969C + 9584 EXACT, 2026-07-15) <a name="volatile-param-home-reload-969c"></a>
+
+2026-07-15, agent-h: two kernel -O1 rmon handlers went EXACT (func_8000969C
+99.7->100, func_80009584 94->100), retracting years of "IDO -O1 scheduler,
+permuter-only" notes (969C alone had 19 logged failed variants + 14k permuter
+iters). The target signature: prologue `sw a0,HOME(sp)`, then the FIRST call's
+delay slot holds `lw s0,HOME(sp)` (the param reloaded into a CALLEE-SAVED reg)
+with NO `lw a0` arg reload before the jal, plus `sw s0/sw s1` prologue saves in
+ascending order. The C that reaches it:
+
+1. **Volatile-qualify the pointer param**: `s32* volatile msg` (qualifier on
+   the VARIABLE). Then `p = msg;` as a plain statement compiles to a DIRECT
+   home load `lw s0,HOME(sp)` — no temp. The two wrong spellings:
+   `p = msg` on a non-volatile param -> `lw t6,HOME; move s0,t6` (+1);
+   `p = *(s32* volatile*)&msg` -> `addiu t6,sp,HOME; lw s0,0(t6)` (address
+   temp materialized). Only the volatile-qualified param gives the bare load.
+   Since `lw s0` is callee-saved and independent, as1 hoists it into the
+   FIRST jal's delay slot — exactly the target schedule.
+2. **Zero-arg K&R call** for that first jal: the original passes the param,
+   but calling `func_80008430()` through an empty-parens extern leaves $a0
+   holding the incoming param from the prologue — removing the redundant
+   `lw a0,HOME(sp)` reload -O1 otherwise emits for EVERY param use (at -O1
+   params are homed and reloaded per use, even for the first).
+3. Side effects that snap for free: the `sw s0/sw s1` prologue order flips to
+   target order once p has a real def; downstream branch offsets re-align.
+4. On 9584 two more coupled levers finished it: `register char* s0` reserves
+   a DEAD HOME even at -O1 when the frame is aggregate-bearing (0x200 buf) —
+   moving its decl below the live scalars relocated the frame hole 0x24C->0x240
+   and snapped val/cnt/p to target slots (E04 dead-home interleave, now
+   confirmed at -O1); and hdr field stores emit in statement order (swap to
+   match).
+
+TRANSFER + LIMIT (func_80009474, 99.16->~99.4, sibling of 969C): the lever
+fixed its prologue class identically, but its LAST residual — the target's
+mask ping-pong `lw a1,0x9C(s0); andi t8,a1,0xfff; jal; move a1,t8` — is a
+distinct -O1 cap: every C spelling either collapses to in-place `andi a1,a1`
+(inline either operand order, bitfield-read: ugen copy-props the move when
+the source dies) or pays memory traffic (named local homes+spills; K&R
+phantom param is HOMED at -O1 — `register` on a param is ignored; u64 mask =
++4 pair churn; <<0/>>0 phantoms cfe-fold with no -O1 ring effect). Needs the
+loaded value live past the andi at zero cost; no -O1 form found.
+
+CLASS NOTE for the -O2 coloring-lever wave on -O1 units: same-name web reuse /
+ring burns / subsumed masks do NOT transfer (-O1 runs no uopt web split and no
+range folding); what DOES transfer is the FRAME-MAP family (decl-order dead
+homes) and the delay-slot/home-reload family above. Kernel -O2-class caps
+checked same day: func_80008030 (0|1 const-fold VN-robust vs opaque-source
+probes + t0-first ring = matches no IDO output family, likely hand-asm) and
+func_80004E50 (shared `lui $at` across two symbol stores: comma/struct/5.3/-O2
+all fail — no IDO config shares $at between separate stores) — both stand,
+sharpened as likely non-IDO/hand-touched originals.
