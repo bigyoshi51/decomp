@@ -19581,3 +19581,37 @@ freed $v0 for the immediately-following web. Zero emission change. Paired with
 332B4 same-name reuse (nested ptr named into the a1/a2-constrained `tmp` family
 -> a2) this cracked a 5-word "allocator-order artifact / uoptlist class" verdict
 to 141/141.
+
+## RETURN-CAPTURE PRECOLOR: capture an unused call return into the scratch var to precolor its whole web family $v0 — the family-swap killer (titproc 26FC EXACT, 2026-07-15) <a name="return-capture-precolor-26fc"></a>
+
+2026-07-15, agent-g: titproc_uso_func_000026FC 84/113 -> 113/113 EXACT,
+retracting a 2026-07-03 "coloring is a deterministic uopt coin-flip,
+permuter-immune" verdict. The residual was a UNIFORM v0<->v1 swap across two
+clamp blocks (base-ptr family vs derived-addr family) — the classic "swapped
+pair" coloring cap.
+
+**The lever:** the function's first (conditional) call had an unused int
+return. Capturing it into the scratch pointer — `p3c = (int*)fn(...)` — emits
+ZERO instructions (dead store, DCE'd) but joins the call's $v0 def to p3c's
+same-name web family; the family precolors $v0, and the base family then takes
+$v1. One edit flipped every swapped word at once (27 -> 7 diffs). This is the
+CONSTRUCTIVE converse of the dead-$v0-def exclusion (h2h FD0): there you
+void-alias the call to FREE $v0; here you capture the return to CLAIM it.
+
+Companion levers to finish (all documented individually elsewhere):
+- ONE shared scratch var for clamp-addr AND a mid-function pointer deref keeps
+  the deref off the t-ring, un-shifting downstream ring temps (t0/v0 for the
+  following unnamed derefs).
+- Same-name a1-drag: naming the flag-word load with the SAME variable that
+  later carries an a1-constrained call argument (2nd arg of a 3-arg call)
+  pulls the flag web to $a1 (332B4 family rule). The unpassed-extra-K&R-param
+  spelling of the same idea FAILED here — mid-function first def leaks the
+  K&R entry home-store `sw a1` (B49C gotcha) and shifts the whole body.
+- De-naming two single-use locals (a0v guard value, vt vtable base) via inline
+  CSE derefs produced byte-identical code minus two dead homes: frame
+  0x38 -> 0x30 (B49C zero-home rule, works at file scope).
+- Decl order `p3c, v1, arg, a1` ranked arg's caller-save spill at 0x24 (E04
+  decl-order slot rank; block-scoped decl ranks LAST — hoist to file scope to
+  place it mid-map).
+Probe order for future family-swap caps: return-capture precolor FIRST — it is
+one token and flips the whole family; only then tune ring/homes/slots.
