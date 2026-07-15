@@ -9409,3 +9409,28 @@ over-split, func_8000969C/80007698 -O1 homing, game_libs_func_00031784 leaf t5/t
 All permuter-immune. No new 100% lands available from the near-miss band.
 
 - **A hand-rolled near-exact scan that splits functions on `jr ra; nop` MISSES functions whose delay slot is a filled instruction — hides already-exact NM bodies (gl_func_00033880, 2026-07-11)** — _Some functions end `jr ra; addiu sp,sp,N` (the stack-restore filled into the delay slot) instead of `jr ra; nop`. A word-extractor that terminates a function at the first `jr ra; nop` will bleed past such a function into its successor, reporting phantom trailing diffs — so an already-byte-exact NM body reads as a near-miss and gets left INCLUDE_ASM with a false "deferred" note (33880 was byte-exact and mis-tagged this way for weeks). DON'T trust a hand-rolled jr;nop scan for "how close is this fn"; use `bash scripts/refresh-report.sh` + report.json's fuzzy_match_percent (authoritative, symbol-bounded), or trim the built words to the target's exact length before diffing. Worth a periodic pass: any NM wrap already at objdiff-100 should be un-wrapped to plain C (episode-eligibility) if reloc-free/placeholder-jal — it's a free episode even though the headline count already includes it._
+
+## decomp-permuter IGNORES stack-offset diffs by default — use `--stack-diffs` to crack frame-packing caps (gl_func_0000DC90, 2026-07-14) {#permuter-stack-diffs-flag-2026-07-14}
+
+The permuter's default scorer treats sp-relative offset differences (a local landing at
+`sw t3,0x24(sp)` vs target `sw t3,0x1C(sp)`) as **free** — it does not count them. So a
+function whose ONLY residual is a stack-slot-packing difference scores **0 without any
+mutation**, and `--stop-on-zero` exits instantly reporting a "match" that is NOT byte-exact.
+This exactly matches the whole "SP-LAYOUT/frame-slot" cap class other entries call
+"permuter-immune" — they were run WITHOUT the flag, so the permuter never even tried to move
+the slot.
+
+**Fix: pass `--stack-diffs`.** It makes stack-offset diffs count toward the score, so the
+randomizer's `perm_reorder_decls` / `perm_pad_var_decl` passes actually search for a
+declaration order that re-packs the frame. On gl_func_0000DC90 (99.96%, last-2-word residual =
+sp1C slot at 0x24 vs target 0x1C, hand-declared "irreducible frame-packing cap") this cracked
+to byte-exact in ~800 iters: the winning mutation moved `int sp1C;` to sit *between* the
+`char *v0;` / `char *v1;` pointer decls, so IDO packs it at 0x1C. Un-wrapped reloc-free → episode.
+
+Workflow for near-misses:
+1. Set up scratch: `python3 tools/decomp-permuter/import.py <c_file> <asm.s> RUN_CC_CHECK=0 'CPPFLAGS=-I include -I src -DNON_MATCHING'` (the `-DNON_MATCHING` is REQUIRED so import extracts the real C body, not the INCLUDE_ASM stub; PERMUTER=1 mode is auto-added and skips asm-processor).
+2. Run `python3 tools/decomp-permuter/permuter.py nonmatchings/<fn> -j4 --stop-on-zero --best-only`. If base scores 0 immediately, RE-RUN with `--stack-diffs` — the "match" was a stack-offset false-zero.
+3. Winning source lands in `nonmatchings/<fn>/output-*-*/source.c`. Apply the decl/stmt change in-tree, rebuild the non_matching object, and confirm byte-exact via objdump vs the ROM target (asm-processor pipeline, not just the permuter's plain-cc isolated build). Reloc-free → un-wrap + episode.
+
+Flag is `-j` not `--threads`. The permuter's plain-cc isolated build == asm-processor in-tree
+output for reloc-free functions, so an isolated byte-exact result promotes cleanly.
