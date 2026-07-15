@@ -13333,6 +13333,57 @@ ido-static-recomp 5.3/7.1 do not). That's a focused toolchain-acquisition task,
 not a loop tick. Until then these are honest `INCLUDE_ASM`/NM caps. Verified
 2026-05-25 (full matrix + trivial-repro on `func_00011B5C`).
 
+**2026-07-14 (agent-h) — EXHAUSTIVE `-Wo`/`-Wf`/`-Wb` FLAG SWEEP: definitive NEGATIVE + pipeline correction.**
+The hypothesis "some IDO cc option runs a light branch-merge at -O0 without
+destroying the -O0 spill body" is now closed as impossible via any flag. Two
+findings, both from `cc -show`/`cc -v` on the arcproc `0xB4` repro:
+
+1. **The pipeline correction — it is NOT uopt.** `cc -show` reveals the actual
+   IDO 7.1 phase chain is `cfe → ugen → as1` at **-O0 AND -O1** (no uopt at
+   all). uopt only appears at **-O2** (`cfe→ugen→uopt→as1`) and -O3 (full
+   ucode chain). So the double-`b` is emitted by **ugen**, and the branch-merge
+   that fires at -O1 is done by **ugen itself**, not uopt — the earlier "elided
+   only by uopt" wording above is imprecise. `-Wo,*` (uopt) flags are therefore
+   simply *dropped* at -O0/-O1 (uopt not invoked); tested inert:
+   `-Wo,-notail/-createbb/-bbopt/-docopy/-moremotion/-norlodrstropt/-noheurAB/`
+   `-docodehoist/-nordstore/-domtag/-zmark:0/-zcopy:0/-zscm:0/-zcomo:0/-zstor:0/`
+   `-no_r23` — every one leaves b=3 and the body byte-unchanged.
+
+2. **The branch-merge and the load-scheduler are the SAME ugen `-O` knob — no
+   flag decouples them.** Measured three signals on the repro (`cc -S`/objdump):
+   `b`-count, jal-delay-unfilled, and the -O0 naive load order (`lw t7; addiu
+   t8,t7,1; lw t9` — the interlocking order the target has). Full `-O`×`-g`
+   matrix:
+   - `o0-load-order=1` (target's -O0 body) appears **only** at ugen `-O0`, which
+     **always** gives `b=3` (the double-b).
+   - the moment you raise to `-O1`+ to get `b=1`, ugen reorders the loads
+     (`lw t7; lw t9; addiu`, order=0) and/or fills delays — i.e. it is no longer
+     the -O0 body. `-O1 -g3`/`-O2 -g3`/`-O3 -g3` give the closest miss
+     (`b=1`, delays unfilled) but STILL reorder the loads (order=0). No cell of
+     the 4×5 matrix yields `b=1 ∧ order=1 ∧ unfilled=1`.
+   - **No `-W` prefix reaches ugen** to hand it a custom sub-option: probing
+     bogus flags, `-Wf`→cfe, `-Wb`/`-Wa`→as1 (warns "unknown option"),
+     `-Wp`/`-Wo`/`-Wu`/`-Wl`/`-Wc`→silently dropped (their tools aren't run),
+     `-Wg`/`-Wt`→cc error. ugen receives only driver-derived flags
+     (`-G -pic2 -mips2 -EB -g{N} -O{N}`), so its behavior space is exactly the
+     `-O`/`-g` matrix above — nothing more to try.
+   - **as1 never does dead-branch elimination.** Decoupling as1's opt level
+     (`-O0 -Wb,-O0/-O1/-O2/-O3`) leaves `b=3` in every case — the unreachable
+     second branch survives the assembler untouched.
+
+   Also re-confirmed dead: `-mips1`, `-Olimit 0`, `-O0 -g0/-g1/-g2/-g3`,
+   `-Wf,-O0/-noreorder/-notail`, `-Wb,-O0/-noreorder/-Onone/-g` at -O1.
+
+**Conclusion (decisive for the whole ~10-fn class:** arcproc B4/12C, bootup
+F81C/11B5C/A14/FC28/FD4C, game_libs 8E48/8FFC/9100). The redundant trailing
+branch cannot be removed by ANY cc flag while keeping the -O0 body — branch
+merge is intrinsic to ugen's -O1 codegen, which is inseparable from its load
+scheduling/reordering. The ONLY routes remain: (a) the exact original 1080 IDO
+cc binary, or (b) a local `tools/ido-static-recomp` **ugen** patch to suppress a
+`b L; nop; b L` when the prior unconditional branch already targets `L` (the
+project already patches ido-static-recomp locally, cf. the ecvt regalloc-dump
+patch). Do NOT re-run any flag sweep on this class.
+
 <a name="feedback-ido-o0-local-offset-shift-not-c-reachable"></a>
 ## -O0 stack-offset +8 shift between mine and target: not C-reachable via decl reorder or pad locals
 
