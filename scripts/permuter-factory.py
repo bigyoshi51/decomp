@@ -251,6 +251,8 @@ class Factory:
                 f"skip {c['name']}: no #ifdef NON_MATCHING body (import.py needs one)"
             )
             return True
+        if self.args.ignore_cap_markers:
+            return False
         low = body.lower()
         return any(m in low for m in CAP_MARKERS)
 
@@ -531,6 +533,8 @@ class Factory:
             str(self.args.jobs),
             "--stop-on-zero",
         ]
+        if self.args.stack_diffs:
+            cmd.append("--stack-diffs")
         self.log(
             f"    permuting (budget {self.args.budget_secs}s, -j{self.args.jobs}) ..."
         )
@@ -777,6 +781,18 @@ def main():
     )
     ap.add_argument("--only", default="", help="comma-separated explicit function list")
     ap.add_argument("--no-commit", action="store_true", help="don't git-commit cracks")
+    ap.add_argument(
+        "--stack-diffs",
+        action="store_true",
+        help="pass --stack-diffs to the permuter (permit stack-offset-changing "
+        "mutations; cracked gl_func_0000DC90 2026-07-14)",
+    )
+    ap.add_argument(
+        "--ignore-cap-markers",
+        action="store_true",
+        help="attempt functions even if wrap comment has a cap-concession marker "
+        "(pre---stack-diffs verdicts may be stale)",
+    )
     ap.add_argument(
         "--no-rediscover",
         action="store_true",
