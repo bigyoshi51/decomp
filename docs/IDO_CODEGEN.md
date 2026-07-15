@@ -27,6 +27,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [**cfe COMMUTATIVE-OPERAND RANK: register-rooted cast-deref chains evaluate FIRST regardless of textual order; a TWO-LEVEL TYPED MEMBER CHAIN restores textual order (4-way ctor-family crack: arc 199C + timproc 16F8/1660 + mgr 2940, all EXACT 2026-07-09)](#cfe-commutative-operand-rank-typed-member-chain-2026-07-09) — _For `(global_chain) | (ptr_chain)` where the target's temp ring shows the GLOBAL chain created first (id=t6,t7,t8 / ptr=t9,t0,t1 + or rs=sll): cfe re-ranks commutative operands and always evaluates a CAST-DEREF chain rooted at a register var (`*(int*)(*(char**)(p+K1)+K2)`) before a global-load chain — BOTH textual orders, volatile, unsigned, hoisted-local (colors a candidate, wrong), comma, while(0) anchors, IXA form, split-shift/cvt phantoms (consume ring slots but attach mid-chain) all FAIL. Spelling the SAME access as a two-level typed member chain `((A*)p)->b->v` (A has typed ptr member at K1, B has int at K2) makes cfe follow TEXTUAL order — identical bytes, chains swap creation order. ONE `->` (`(*(B**)(p+K1))->v`) does NOT flip; two levels do. Corollary rank: `*(int*)(D_arr + 0x68)` (array extern + offset deref) ALSO outranks a plain int-global load — spell it as extern-struct member `D_q.v` (struct-cast-fold) to restore textual order. Probes: `a2*0` is NOT cfe-folded when ≥2 appear in an additive chain (each = +1 phantom ring slot, zero emission — measurable FIFO shifter, but always leaves 1 slot between ld and add = can't phase a dense chain). Diagnose with the -zdbug:6 itab dump: entry order = ugen ucode order = temp creation order._
 - [branch-into-adjacent-return-leaf-cap DISCRIMINATOR: branches into the leaf's MID-BODY or delay-slot-carried return values = the parent's OWN tail — MERGE matches (timproc 1D1C+1DA4 37/37 byte-exact 2026-07-07)](#branch-into-adjacent-return-leaf-cap) — _The cap only holds when branches hit the leaf's ENTRY. 1D1C's branches hit 1DA4 AND mid-leaf 1DA8 with `li v0,1` in beql/bnel delay slots → own shared return-1 tail, not a neighbor. Merged fn exact via: fallthrough guard `if(==2){body} return 1;`, switch KEEPING redundant case 2/4 compares, nested case-1 sharing one return-0 block, unnamed second compare operand (colors $t2), and all three defs ON ONE SOURCE LINE (same-line as1 tie-break flips BOTH lw-pair emission orders). Dismantled the 1DA4 -g3 TRUNCATE splice unit; tail emits at plain -O2. Decode branch landing offsets before accepting this cap._
 - [SAME-NAME WEB REUSE colors a second value without a 4th named local (+8 frame avoided) + dead `if(param){}` forbids an arg-reg coalesce — the 332B4 tag-load "coloring cap" killer (2026-07-15)](#same-name-web-reuse-plus-dead-if-param-332b4) — _When a short-lived value must color a reg that another named local's web already gets (tag needs \$v0, `val` colors \$v0), spell it through THAT SAME local: uopt splits same-var reaching-def webs and colors them independently while sharing ONE frame home — a fresh named var costs +4/+8 frame (named-local-count rule) even when fully reg-colored. Companion: a mid-block dead `if (param) { }` (zero emission) right after a def extends the param's arg-reg live range past it, forbidding the def's coalesce into that arg reg (idx->a1 blocked, idx anchors a2). Both levers together cracked gl_func_000332B4's permuter-plateaued (11k iters) "\$v0-vs-\$a2 tie". CONVERSE data point same session (26B40): ugen %hi-temp destination-coalescing (lui a0 vs lui t6;addiu a0,t6) for an a0-constrained candidate is NOT reachable by named-var/alias-sym/kill/barrier/fold spellings — that one is ugen-internal, cap._
+- [POST0B WAVE-TRANSFER: same-line join generalizes to sw/addu pairs; "pinned templocs" = decl-position homes; arg-reg carrier => missing trailing K&R call arg; dead-if forces candidacy; pre-use dead-if kills unpassed-param home-store (5 post0b retractions 2026-07-15)](#post0b-wave-transfer-2026-07-15) — _gl_func_0003D68C/519A4/35834/3829C/4CFD4 caps retracted: (1) one-line join reorders sw and addu PAIRS (not just lui/lwc1); (2) 519A4 "temploc block pinned" was decl-order homes below name[256] — interleave a colored ptr decl above the spillers, coalesced webs (o=a2 alias) carry no home; (3) 35834 "lowest-free-reg cap" = the original passed r as a 3rd arg to the assert callee (arg-reg carrier diagnostic); (4) dead if(p){} blocks single-use copy-prop = ring-temp -> CANDIDATE class flip; (5) unpassed 4th K&R param colors $a3 with zero frame IF a pre-def if(pa){} consumes the incoming value (kills the B49C home-store leak); (6) de-named base ptr colors $v0 AND flips addu to base-first; (7) NEGATIVE: FD0 dead-$v0 exclusion needs the web to START after the call (4E37C cap stands)._
 - [-O1 loop-bottom store order: FOR-loop shape puts sw-counter before the bne and sinks the pointer-advance store into the delay slot](#feedback-ido-o1-for-loop-store-order) — _Memory-homed ptr+counter loop at -O1: `for(i=0;i<N;i++){...;ptr+=1;}` = sw-i then bne with sw-ptr in the delay; every do-while/comma spelling emits the mirror (2-word floor). Constant bound folds the for's entry guard. Cracked 6C1B8 59/59 + 6D0F4 95/95 (both IDO 5.3 -O1, $at copy-scratch discriminator)._
 - [TU-DEFINED global (not extern) = shared-lui $at store cluster; splice imports it as UNDEF](#feedback-ido-tu-defined-global-shared-at-cluster) — _One `lui $at` + several `sw rN,addend($at)` with batched values = the symbol is DEFINED in-TU (`T x = {0};`), reproducible by NO extern spelling. Donor-splice safe: replace-function-body imports the reloc as global undef → undefined_syms resolves. Identified 6DA74 = osCreatePiManager (libreultra pimgr.c) 98/98; 74EFC = osCreateSiManager sibling (71/98 open). Run decomp-search on manager-shaped fns FIRST._
 - [-O1 statement-granular reload kit: struct-member locals + if(1) body barrier + block-scope index + register->s0](#feedback-ido-o1-statement-reload-kit) — _Homed-and-reloaded-per-statement pointers with SUNK div-break checks = plain -O1 + source shape, not -g/-O0. Kit: local STRUCT for the pointers (sp-resident), `if(1){}` first body statement (kills cross-BB forwarding -> body-entry reloads), plain block-scope local for the div index (single home store + reg reuse), `register` cross-call temp (s0, no slot). kernel func_800044CC 59/59 EXACT (5.3==7.1 -O1, no donor); 56EC live-body exact (7-nop dead-tail cap)._
@@ -19669,3 +19670,60 @@ probes + t0-first ring = matches no IDO output family, likely hand-asm) and
 func_80004E50 (shared `lui $at` across two symbol stores: comma/struct/5.3/-O2
 all fail — no IDO config shares $at between separate stores) — both stand,
 sharpened as likely non-IDO/hand-touched originals.
+
+## POST0B WAVE-TRANSFER: same-line join generalizes to sw/addu pairs; decl-order interleave works on POINTER homes-as-"templocs"; extra TRAILING K&R call arg explains arg-reg carriers; dead-if forces CANDIDACY; unpassed-param home-store killed by PRE-USE dead-if (5 retractions in game_libs_post0b, 2026-07-15) <a name="post0b-wave-transfer-2026-07-15"></a>
+
+2026-07-15, agent-f: applied the 07-15 lever wave to game_libs_post0b.c (largest pool,
+never lever-swept). 4 byte-exact/objdiff-100 retractions + 1 structural rise from six
+candidates. Transferable findings beyond the original lever entries:
+
+1. **SAME-LINE JOIN scope extends to any as1-schedulable PAIR, not just lui/addiu+lwc1
+   (C8AC).** gl_func_0003D68C: `s.tag = 7; s.pf = &f[0];` on ONE line keeps temp order
+   (li first) but emits `sw pf` BEFORE `sw tag` (target) — the 2026-07-03 18-variant
+   probe set varied only STATEMENT order, never LINE placement. gl_func_0004CFD4: two
+   pointer defs joined on one line swap the addu pair emission while the sll pair keeps
+   source order. Rule of thumb: computed-first-stored-second residuals on a 2-insn pair
+   = try the one-line join before any allocator theory.
+
+2. **"Pinned temploc block" may be DECL-POSITION HOMES in disguise (E04 transfer).**
+   gl_func_000519A4's documented cap-(A) "spill templocs sp+0x38/0x34 pinned, all pads
+   shift buffer/frame" fell with ZERO new locals: the spilling locals' slots are their
+   decl-order homes below the aggregate (name[256]@0x40 -> fmtSel@0x3C, next@0x38...).
+   Moving a colored never-spilled pointer decl (a0p) ABOVE the spillers dropped both
+   spill slots -4 exactly. Also: a web fully coalesced with another local (`o` = alias
+   of a2's alloc result) carries NO home — its decl position is inert; reorder the
+   OTHERS around it.
+
+3. **Arg-reg carrier of a call-crossing value = suspect a MISSING TRAILING CALL ARG
+   before "lowest-free-reg cap".** gl_func_00035834's deep-forensics verdict (uoptlist,
+   split-solve, "to force $a2, $v1 must be forbidden — no such value exists") was
+   retracted by RECONSTRUCTION: the original passed r as a 3rd K&R arg to the
+   error-report callee `func(fmt, a1, r)`. The call-arg constraint precolors r's web
+   $a2 and the `or a2,v0` carrier copy sits in the bgez delay slot at ZERO cost
+   (replaces the old `or v1,v0`). Diagnostic: the "renumber" reg is an ARG register
+   and the conditional call is a printf/assert-family callee -> try appending the
+   carried value to the call args.
+
+4. **Dead `if (p) {}` forces CANDIDACY (blocks single-use copy-prop).**
+   gl_func_0004CFD4: `pa = base + a2;` used once collapses into the ring
+   (t-temps); adding a dead `if (pa) {}` makes pa/pb COLORED CANDIDATES (a3/v1,
+   matching a target whose addu results skip the ring). Same zero-emission
+   barrier as 332B4's dead-if but used for temp-vs-candidate CLASS, not color.
+
+5. **Unpassed K&R extra-param home-store leak (B49C gotcha) is killed by a PRE-DEF
+   dead-if.** `void f(a0,a1,a2, int *pa)` with pa's first real def mid-function leaks
+   `sw a3,0x24(sp)` (B49C gotcha); `if (pa) {}` BEFORE the def consumes the incoming
+   value (zero emission) and the home-store vanishes. pa then colors natural $a3.
+
+6. **De-naming a base pointer flips addu OPERAND ORDER and its color.** 4CFD4:
+   named `int *base = (int*)a0[0x84/4]` colors $v1 and emits index-first
+   `addu rD,tIDX,base`; spelling the deref TWICE (CSE temp) colors $v0 and emits
+   base-first `addu rD,v0,tIDX` (target). Related to C8AC unnamed-entry-web but the
+   OPERAND-ORDER side effect is new (21130 array-IXA is not needed when de-naming).
+
+7. **FD0 dead-$v0-def exclusion does NOT fire when the web's first def PRECEDES the
+   call** (negative, game_libs_func_0004E37C): idx defined before the conditional
+   call and re-defined after it (one merged web) takes $v0 regardless of callee
+   return type (int / long long alias both inert). The 4E37C $v0/$v1 cap stands —
+   ll-alias, dead-if-consume, same-name-destructive, 4th-param, both de-namings all
+   probed negative.
