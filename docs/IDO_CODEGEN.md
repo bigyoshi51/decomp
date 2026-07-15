@@ -30,6 +30,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [SAME-NAME WEB REUSE colors a second value without a 4th named local (+8 frame avoided) + dead `if(param){}` forbids an arg-reg coalesce — the 332B4 tag-load "coloring cap" killer (2026-07-15)](#same-name-web-reuse-plus-dead-if-param-332b4) — _When a short-lived value must color a reg that another named local's web already gets (tag needs \$v0, `val` colors \$v0), spell it through THAT SAME local: uopt splits same-var reaching-def webs and colors them independently while sharing ONE frame home — a fresh named var costs +4/+8 frame (named-local-count rule) even when fully reg-colored. Companion: a mid-block dead `if (param) { }` (zero emission) right after a def extends the param's arg-reg live range past it, forbidding the def's coalesce into that arg reg (idx->a1 blocked, idx anchors a2). Both levers together cracked gl_func_000332B4's permuter-plateaued (11k iters) "\$v0-vs-\$a2 tie". CONVERSE data point same session (26B40): ugen %hi-temp destination-coalescing (lui a0 vs lui t6;addiu a0,t6) for an a0-constrained candidate is NOT reachable by named-var/alias-sym/kill/barrier/fold spellings — that one is ugen-internal, cap._
 - [Wave-3 addendum: struct-copy lever = CAST-copy (12B, into float[]) — dual-base + recycled-t9 block copies; de-name + eval-order carrier (5FE14/3D620 EXACT)](#switch-sort-goto-ladder-52144) — _`*(Tri3i*)tmp = *(Tri3i*)src` reproduces addiu-base + lw/sw t9/t8/t9; by-value struct locals was the wrong probe. De-named load emitting first: put it in the LEFT operand, other def as assignment-expr._
 - [Wave-3 addendum 2: same-line join on 3-stmt FP blocks (asc temps + desc emission); FP candidates f0/f2/f12 vs ring f4-f10; compound-assign de-name; scalar-volatile (void) emits lw zero; selector destructive-reuse (37D48/46B64/5256C EXACT)](#switch-sort-goto-ladder-52144) — _named float stagers take f0/f2/f12 = FP candidate class; de-name for the f4-f10 ring; `dst=(src^=1)` de-names a toggle; volatile pads must be arrays._
+- [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
 - [POST0B WAVE-TRANSFER: same-line join generalizes to sw/addu pairs; "pinned templocs" = decl-position homes; arg-reg carrier => missing trailing K&R call arg; dead-if forces candidacy; pre-use dead-if kills unpassed-param home-store (5 post0b retractions 2026-07-15)](#post0b-wave-transfer-2026-07-15) — _gl_func_0003D68C/519A4/35834/3829C/4CFD4 caps retracted: (1) one-line join reorders sw and addu PAIRS (not just lui/lwc1); (2) 519A4 "temploc block pinned" was decl-order homes below name[256] — interleave a colored ptr decl above the spillers, coalesced webs (o=a2 alias) carry no home; (3) 35834 "lowest-free-reg cap" = the original passed r as a 3rd arg to the assert callee (arg-reg carrier diagnostic); (4) dead if(p){} blocks single-use copy-prop = ring-temp -> CANDIDATE class flip; (5) unpassed 4th K&R param colors $a3 with zero frame IF a pre-def if(pa){} consumes the incoming value (kills the B49C home-store leak); (6) de-named base ptr colors $v0 AND flips addu to base-first; (7) NEGATIVE: FD0 dead-$v0 exclusion needs the web to START after the call (4E37C cap stands)._
 - [-O1 loop-bottom store order: FOR-loop shape puts sw-counter before the bne and sinks the pointer-advance store into the delay slot](#feedback-ido-o1-for-loop-store-order) — _Memory-homed ptr+counter loop at -O1: `for(i=0;i<N;i++){...;ptr+=1;}` = sw-i then bne with sw-ptr in the delay; every do-while/comma spelling emits the mirror (2-word floor). Constant bound folds the for's entry guard. Cracked 6C1B8 59/59 + 6D0F4 95/95 (both IDO 5.3 -O1, $at copy-scratch discriminator)._
@@ -19811,3 +19812,71 @@ Three sibling verdict-retractions in one session (176+194+221 words, all "permut
 - **Compound-assign chain is a de-namer** (gl_func_00046B64 EXACT, 96.46 -> 100 in 2 edits): `dst2 = (src ^= 1);` keeps the toggle in ring t6/t7; a named `toggled` local was a candidate stealing $v0 and shifting four later webs (v1->v0, a1->v1, a2->a1). Also: addu textual-operand commute — writing ptr-value + short emitted the target's short-first `addu a0,t0,v0` (source order maps INVERSELY here; just try both).
 - **`(void)pad` on a SCALAR volatile emits `lw zero,OFF(sp)`** — volatile pads must be ARRAYS (`volatile int pad[1];` + `(void)pad` is silent). Bit 3D620/37D48 both.
 - **Destructive same-name reuse cracked 5256C (96.82 -> 100, ONE edit)**: loading a va_arg value into the dispatch variable (`op = *p`) extends op's $v0 web across both switch arms, pushing p to $v1 and un-shifting the t-ring. When both arms of a dispatch load a value into the SAME target reg as the switch selector, reuse the selector variable.
+
+## Wave-3 game_uso transfer: RANK lever flips FP POOL BINDING; same-line join hoists the 1.0f-store + sinks a store past a spill into the jal delay; FD0 void-alias works on IMPORT calls (F360/D9CC/102CC, 2026-07-15) <a name="wave3-game-uso-transfer-2026-07-15"></a>
+
+2026-07-15, agent-h, game_uso wave 3. Two objdiff-100 crossings + one 99.0->99.4 rise
+(all un-landable: intra-USO real-symbol jals; baked `jal 0` in ROM). Transferable:
+
+1. **The cfe commutative-operand RANK lever (199C typed-member trick) extends to FP
+   PSEUDO POOL BINDING.** game_uso_func_0000F360 (47/49 -> 49/49): residual was the
+   classic ldc1/cvt.d.s f6<->f18 temp-binding swap in `f0 = (float)((double)f0 * D)`
+   ("permuter-immune FP candidate-numbering cap"). `(double)f0` (cast of a register
+   var) outranks a cast-deref D operand in EVERY spelling — textual swap, register-
+   rooted deref (destructive local reuse), int-cast address form (C8AC; regressed:
+   address materialized separately) all left cvt's pseudo created first (= f6). A
+   TYPED extern-struct member `extern struct { char pad[0x240]; double v; } D_thr;`
+   (base-0 alias, same relocs/bytes) makes D a PLAIN GLOBAL LOAD -> textual order
+   holds -> writing `D_thr.v * (double)f0` numbers the ldc1 pseudo first = f6, conv
+   f18, byte-exact. Probe order for FP binding swaps: de-name (E1FC) if the target
+   color is the ring choice; typed-member + textual order if the DEREF operand must
+   number first. (Named `double thr` local flips the pair but recolors the whole fn
+   f0->f2, 37/49 — don't.)
+
+2. **SAME-LINE JOIN, two new shapes** (game_uso_func_0000D9CC 493->507/524, fuzzy
+   98.96->99.40, 4 of 6 documented tie classes fell):
+   - **0/0/0/1.0f store QUADS**: target numbers the zeros first (f4/f6/f8, 1.0f f10,
+     = source order) but EMITS the 1.0f chain's swc1 FIRST. Statement reorder rotates
+     the REGISTERS with the stores (wrong); joining all four stores on ONE line in
+     original order lets as1 hoist the lui/mtc1/swc1 1.0f chain while uopt numbering
+     stays source-order. Fixed two independent blocks (8 words) incl. the adjacent
+     addiu/lui pair-swap at one site.
+   - **`store; call;` JOIN sinks the store into the jal delay PAST a spill**: target
+     had `sw a3,SPILL` before the jal and `sw zero,0x30` in the delay; build the
+     mirror. No statement order moved it (spill placement is uopt's); `sp30 = 0;
+     f(...);` on ONE line let as1 sink the sw zero past the spill. Also: de-naming
+     temp_f14 (inline the FF(a0,0x11C) deref at all 4 uses -> CSE temp numbered at
+     first use = f14 as target) + textual swap (write the CSE'd deref FIRST in each
+     mul — the CSE web outranks) fixed the f12<->f14 swap class.
+   - D9CC's remaining 17 words are real caps: 2x beqzl-vs-plain branch-form (if(1)
+     barrier inert) and the andi-into-precolored-a1 destination-coalesce + downstream
+     +2 t-ring shift (same-name redef re-coalesces/in-place; store-first + re-read
+     arg is byte-NEUTRAL; trailing &0xFFFFF NOT subsumed — uopt does not track range
+     through `|`, emits real lui/ori/and; `<<0<<0` cfe-folds on a plain var; `x*0`
+     pair burns only +1 and recolors the head candidate v0->v1).
+
+3. **FD0 dead-$v0-def exclusion + void-alias works on IMPORT calls and is the
+   first probe for v0<->v1 FAMILY swaps after return-capture.**
+   game_uso_func_000102CC (98.61 -> 79/79 = 100): `import_0010DB28(...)` (extern int
+   K&R, return unused) left a dead $v0 def that excluded $v0 from the immediately
+   following `v0 = s0[0xB4/4]` web -> whole-fn v0/v1 family swap, previously
+   "regalloc-renumber cascade". `import_0010DB28_void = 0;` alias + K&R extern void
+   decl -> 100. 26FC return-capture probed first and was INERT (capture immediately
+   redefined two statements later = web split, the documented 1C90 caveat).
+
+4. **3AC0 12-way staging-slot cap RECONFIRMED with sharper edges** (stays 253/261):
+   the >=9 same-var struct-copy pointer-flip counts SINGLE-MEMBER scalar stores
+   (`curA.v = x` canonicalizes to a struct copy — a 9th one flips ALL copies fn-wide)
+   AND source-side participation (`dM = curA`); explicit frame-pointer arithmetic
+   (`*(S*)((char*)&pad6 - 4)` to alias a neighbor slot) poisons alias info fn-wide
+   (everything pointer-based); 12 block-scoped one-shot staging vars give the exact
+   per-block shape but -g0 -O2 IDO NEVER overlays disjoint-scope homes (12 slots,
+   frame +0x30); de-named/direct struct arg reloads from the SOURCE var's home (or
+   sinks the load past the call) — no shared slot. Cap = needs 12 one-slot stagings
+   with <=8 participations per symbol + scope overlay; unreachable.
+
+5. **GOTCHA: a dead `if (ptr) {}` right after decls (gui 1EF4) leaked FOUR K&R param
+   home-stores** (`sw a0..a3` at sp+0..0xC) without fixing the &D fold it targeted —
+   the dead-if candidacy lever is not free at function head; and the held-`**dp`
+   address-pin lever (line-122) does NOT extend to the FIRST block (fold persists
+   there under temp pressure).
