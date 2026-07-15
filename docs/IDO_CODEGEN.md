@@ -19727,3 +19727,11 @@ candidates. Transferable findings beyond the original lever entries:
    return type (int / long long alias both inert). The 4E37C $v0/$v1 cap stands —
    ll-alias, dead-if-consume, same-name-destructive, 4th-param, both de-namings all
    probed negative.
+
+### Addendum (2026-07-15, agent-g sweep): family-recipe backport; multu-scaled addu commute cap; return-capture scope; full-diff-list rule
+
+- **Backport matched-sibling recipes before lever work.** timproc b5 C044 (98.98, "coloring cap") was cracked in ONE edit by copying B850's proven exact recipe (same fade-toward-target family, wrap comment even cross-referenced it) — direct field compares + per-arm if(1){} pointer-mutation. When a family member hits 100, sweep its listed siblings' wraps and re-apply verbatim before diagnosing anew.
+- **multu-scaled index addu stays mul-first in ugen** (arcproc 1170, 30/32): for `p + idx*stride` where stride is a register (multu+mflo), the addu emits (mflo, base) regardless of textual order, int-cast base (C8AC form), struct-IXA (`typedef {char x[0x28]}` — emits IDENTICAL li+multu), or swapped-term spelling. The 21130 array-IXA base-first escape works ONLY for shift-scaled indexing. 2-insn commute cap.
+- **Return-capture precolor (26FC) is NOT universal**: on mgrproc 1C90's q/w v0/v1 swap the same capture was inert (web split at immediate redef) and a dead-`if(w){}` range extension pushed q to the t-ring instead of $v1. It seems to need the capture and first real def separated by control flow. Probe it first, but expect misses.
+- **Iterating levers: ALWAYS print the FULL word-diff list, never tail -N.** On 1C90, tail-clipped output made three lever probes look effective/regressive when the visible window merely shifted — two "fixes" were misattributed before re-running with the complete list.
+- mgrproc 11A4: the 2-insn `lui at,0x20` / `addiu a1,a1,-1` as1 tie also resists the NEW wave (line-split debug-line forms, OR-reorder, `<<0` phantom). Cap reconfirmed.
