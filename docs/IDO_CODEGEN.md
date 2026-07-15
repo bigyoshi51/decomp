@@ -19568,3 +19568,15 @@ Gotchas found on the way:
   slot" is precisely the decl-order signature `live, spiller, dead, spiller`.
 - `int * volatile r1` in position 2 (1E9C arg-fold form) is also exact here but
   unnecessary when the plain spill shape already matches.
+
+### Addendum: dead-$v0-def exclusion applies to webs merely FOLLOWING the call, not just call-spanning bases (h2h FD0 EXACT, 2026-07-15)
+
+h2hproc_uso_func_00000FD0: tmp2's web (+17C..+190) starts AFTER two unused-return
+K&R `gl_func_00000000(...)` calls and spans no call itself, yet the dead $v0 defs
+from those calls still excluded $v0 (web colored $v1, pick order degraded to
+[v1,a1|v0]). Switching just those two calls to the `gl_func_00000000_void` alias
+(=0x0, identical 0C000000 jal encoding, alias precedent arcproc_uso_tail1)
+freed $v0 for the immediately-following web. Zero emission change. Paired with
+332B4 same-name reuse (nested ptr named into the a1/a2-constrained `tmp` family
+-> a2) this cracked a 5-word "allocator-order artifact / uoptlist class" verdict
+to 141/141.
