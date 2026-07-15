@@ -19468,6 +19468,18 @@ tag load `*(int*)c` coloring $a2 (coalesced into idx's web) vs target $v0.
 3. Keep the name on the value the target holds in a reg: inlining `val` into
    the store flipped the table load into the t8 ring temp.
 
+Third crack same mission (game_libs_func_00027C48, 99.24 -> EXACT): a uniform
++1 t-ring shift starting AT an lbu falls to the subsumed-mask burn, but the
+MASK POSITION picks the burn slot: `((*p) & 0xFFFF) | 2` (mask on the LOAD)
+burns before the lbu pop and shifts lbu+ori+mfc1+the bc1fl annul-dup all at
+once; `(x | 2) & 0xFFFF` (mask on the RESULT) burns between lbu and ori (only
+shifts the ori); masking a DIFFERENT statement burns inside that statement's
+own sequence and regresses it. Also: two stacked ANDs (`(x & 0xFFFF) & 0xFF7F`)
+cfe-merge the constants = 0 burn — the mask must mix AND/OR with the real op.
+Bonus lever (game_libs_func_00021130): `base + v0*4` in ANY textual order
+emits the mul chain first (addu a0,t9,base); the array-IXA spelling
+`(int)((int*)base + v0)` restores base-first operand order (addu a0,base,t9).
+
 Second confirmation same session (gl_func_0000E9C0, 99.20 -> EXACT, retracting
 a documented "not reachable from C" $a1 cap): a scratch base the target holds
 in a dead ARG REG ($a1) is the function's existing pointer local q advanced
