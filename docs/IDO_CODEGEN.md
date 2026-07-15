@@ -32,6 +32,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Wave-3 addendum 2: same-line join on 3-stmt FP blocks (asc temps + desc emission); FP candidates f0/f2/f12 vs ring f4-f10; compound-assign de-name; scalar-volatile (void) emits lw zero; selector destructive-reuse (37D48/46B64/5256C EXACT)](#switch-sort-goto-ladder-52144) — _named float stagers take f0/f2/f12 = FP candidate class; de-name for the f4-f10 ring; `dst=(src^=1)` de-names a toggle; volatile pads must be arrays._
 - [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
+- [POST0B 90-95 BAND WAVE: join+colors compose only in the re-assignment spelling (35A18 family x5 PROMOTED); dead-if AFTER the join; struct-shadow needs no frame room; shared vtable-ptr union warps s-reg order; delay-slot decode errors mimic scheduler ties (2026-07-15)](#post0b-90-95-wave-2026-07-15) — _7/8 crossed: `v=load; v=off+v;` ONE-LINE keeps $a1+t6 while hoisting the lh (named-short/de-name/nested-assign each break one side); dead if(param){} flips a "not C-steerable" s0<->a3 swap but placed BEFORE the join it de-names the def (frame collapses); `*(OneInt*)&a1` arg emits sw a1,4(sp) at frame 0x18 (volatile spellings grow it) + de-named fnptr frees v1; 3D3C4 h/h2 split + if(1) snapped s1<->s2 too; 34CC8 "tie" was a beq delay-slot misread (fn always returns 1); 3E1B0 copy-prop web-split cap STANDS (dead-if inert, address-escape too strong)._
 - [POST0B WAVE-TRANSFER: same-line join generalizes to sw/addu pairs; "pinned templocs" = decl-position homes; arg-reg carrier => missing trailing K&R call arg; dead-if forces candidacy; pre-use dead-if kills unpassed-param home-store (5 post0b retractions 2026-07-15)](#post0b-wave-transfer-2026-07-15) — _gl_func_0003D68C/519A4/35834/3829C/4CFD4 caps retracted: (1) one-line join reorders sw and addu PAIRS (not just lui/lwc1); (2) 519A4 "temploc block pinned" was decl-order homes below name[256] — interleave a colored ptr decl above the spillers, coalesced webs (o=a2 alias) carry no home; (3) 35834 "lowest-free-reg cap" = the original passed r as a 3rd arg to the assert callee (arg-reg carrier diagnostic); (4) dead if(p){} blocks single-use copy-prop = ring-temp -> CANDIDATE class flip; (5) unpassed 4th K&R param colors $a3 with zero frame IF a pre-def if(pa){} consumes the incoming value (kills the B49C home-store leak); (6) de-named base ptr colors $v0 AND flips addu to base-first; (7) NEGATIVE: FD0 dead-$v0 exclusion needs the web to START after the call (4E37C cap stands)._
 - [-O1 loop-bottom store order: FOR-loop shape puts sw-counter before the bne and sinks the pointer-advance store into the delay slot](#feedback-ido-o1-for-loop-store-order) — _Memory-homed ptr+counter loop at -O1: `for(i=0;i<N;i++){...;ptr+=1;}` = sw-i then bne with sw-ptr in the delay; every do-while/comma spelling emits the mirror (2-word floor). Constant bound folds the for's entry guard. Cracked 6C1B8 59/59 + 6D0F4 95/95 (both IDO 5.3 -O1, $at copy-scratch discriminator)._
 - [TU-DEFINED global (not extern) = shared-lui $at store cluster; splice imports it as UNDEF](#feedback-ido-tu-defined-global-shared-at-cluster) — _One `lui $at` + several `sw rN,addend($at)` with batched values = the symbol is DEFINED in-TU (`T x = {0};`), reproducible by NO extern spelling. Donor-splice safe: replace-function-body imports the reloc as global undef → undefined_syms resolves. Identified 6DA74 = osCreatePiManager (libreultra pimgr.c) 98/98; 74EFC = osCreateSiManager sibling (71/98 open). Run decomp-search on manager-shaped fns FIRST._
@@ -19880,3 +19881,64 @@ Three sibling verdict-retractions in one session (176+194+221 words, all "permut
    the dead-if candidacy lever is not free at function head; and the held-`**dp`
    address-pin lever (line-122) does NOT extend to the FIRST block (fold persists
    there under temp pressure).
+
+## POST0B 90-95 BAND WAVE (2026-07-15, agent-f): join+colors compose on the 35A18 dispatcher family (x5 promoted); dead-if AFTER the join or it de-names; struct-shadow lever needs no frame room; shared vtable-ptr union warps the whole s-reg order <a name="post0b-90-95-wave-2026-07-15"></a>
+
+Extension of the 07-15 lever wave to game_libs_post0b's 90-95% band: 7 of 8
+candidates crossed (5 BYTE-EXACT + PROMOTED with episodes: gl_func_00035A18 /
+0003A044 / 0003EBDC / 0003EC5C / 0003A0C4; 2 byte-exact NM wraps:
+gl_func_0003EAE0, game_libs_func_00034CC8; 1 rise-to-ceiling: gl_func_0003D3C4
+46/47). Transferable findings:
+
+1. **The same-line join preserves COLORS while fixing the hoist — but only in
+   the re-assignment spelling.** 35A18-family 2-word residual (`lh off` stuck
+   below `lw arg`/`addiu`): `arg = *(char**)(a0+4); arg = *(short*)(a0+8) + arg;`
+   on ONE line hoists the lh two slots (as1 debug-line tie-break) with arg still
+   $a1 and off still t6. The ALTERNATIVE spellings each break one side: block-
+   scoped `short off = ...` makes off a CANDIDATE ($v0, ring shifts -1);
+   single-expression de-name `arg = *(short*)(8) + *(char**)(4)` gets the
+   schedule but demotes the 4-load to ring t6; nested-assign
+   `arg = *(short*)(8) + (arg = *(char**)(4))` gets schedule AND colors but
+   flips the addu to (a1,a1,t6). One recipe landed all four byte-identical
+   siblings + the 3-arg clone 3A0C4.
+
+2. **Dead `if (param) {}` flips a 2-web s-reg/temp color swap (3A0C4's
+   documented "allocation-order tie-break, not C-steerable" 10-word s0<->a3
+   residual) — but PLACEMENT interacts with the join: put the dead-if AFTER
+   the join line.** Before it, the joined def de-names into the a0 web and the
+   $s0 frame collapses entirely (37->35 insns). Also negative on 3E1B0: the
+   dead-if did NOT materialize a node=elem copy (copy-prop is not candidacy),
+   and `if (0) { p = (T*)&node; }` address-escape is TOO strong (spills node,
+   frame +8). The 3E1B0 web-split cap stands.
+
+3. **Single-int struct by-value shadow store (feedback-ido-single-int-struct-
+   shadow-store) also cracks "volatile grows the frame" dead-spill caps.**
+   3EAE0's target `sw a1,4(sp)` in the jal delay at frame 0x18: every volatile
+   spelling added a LOCAL home (frame 0x20, documented as locked). Passing
+   `*(struct OneInt*)&a1` to the K&R callee emits the store into the OUTGOING
+   arg-build slot — zero frame growth — and `&a1` keeps the caller-slot a1
+   home store (the volatile-p trick retires). Compose with DE-NAMING the fn
+   pointer (call through the expression, no named `fn` local): fnptr drops to
+   ring t9 and the freed $v1 takes the call-result copy (`or v1,v0`).
+
+4. **A vtable-ptr local REUSED for two dispatches is one union web — it evicts
+   the base from $v0 (same-BB-call rule) AND warps the s-reg priority order.**
+   3D3C4: splitting `h` into per-dispatch `h`/`h2` + an `if(1){}` barrier
+   around the second dispatch restored $v0 for both bases and — without any
+   other change — snapped the s1<->s2 saved-reg swap (o->s1, counter->s2).
+   Keep the split local NAMED: de-naming h2 shrank the frame 72->64 (ghost
+   slot lost). Its residual is the 1-word baked-USO absolute `jal 0x51630`
+   (permanent cap class).
+
+5. **"Scheduler-tie" residuals near a branch can be DECODE ERRORS: check
+   whether the odd insn is a DELAY SLOT that executes on both paths.** 34CC8's
+   3-word tail (v0->a0 shuffle + dup epilogue) came from decoding
+   `addiu v0,zero,1` as the taken-arm's assignment; it is the beq's delay slot
+   — the fn ALWAYS returns 1 and the whole `else v0 = (int)t` arm was
+   fictional. One-line fix to byte-exact.
+
+Workflow gotcha (cost 3 phantom probes): the shared session scratchpad is
+written by PARALLEL agents — a diff harness reading fixed filenames
+(exp.txt/cur.txt) can silently compare another agent's function. Namespace
+per-agent (subdir) AND make the harness rebuild before diffing; verify any
+"no change" probe result actually recompiled.
