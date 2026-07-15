@@ -19537,3 +19537,27 @@ cap. Three independently useful pieces:
    and load emission order; the compound `+=` (NOT `*p128 = *p128 + D`, which
    leaves the D operand's pseudo created first -> f4/f6 swap) keeps *p128's
    pseudo first so f4=*p128, f6=D as in target.
+
+## Dead-home DECL-ORDER INTERLEAVE moves a caller-save spill slot — the "E6E8-class inverted slot ordering" verdict is beatable (h2h E04 EXACT, 2026-07-15) <a name="dead-home-interleave-spill-slot-e04"></a>
+
+2026-07-15, agent-g: h2hproc_uso_func_00000E04 41/43 -> 43/43 EXACT, retracting
+the 2026-06-10 "16-variant grind, C-side forcers exhausted, E6E8-class
+irreducible inverted slot ordering" verdict.
+
+Rule: at -O2, EVERY named local reserves a frame home slot TOP-DOWN in decl
+order, even locals that are fully colored and never touch memory (dead homes).
+A caller-save spill temp for local `x` lands in x's DECL-POSITION slot. Target
+had r1's spill at 0x28 above a hole at 0x24; build's decl order
+`slotC4, slotCC, r1, r2` mapped homes 0x2C, 0x28, 0x24, 0x20 -> r1 spill 0x24.
+INTERLEAVING the dead pointer homes — `slotC4; r1; slotCC; r2;` — maps r1 to
+0x28 (slotCC's dead home becomes the 0x24 hole), r2's spill stays 0x20. EXACT
+with zero instruction changes.
+
+Gotchas found on the way:
+- `volatile int pad;` as an EXTRA local shifts the map but grows the frame +8
+  (named-local-count rule) — don't add locals, REORDER the existing dead homes.
+- The old grind permuted pads and the r1/r2 pair but never interleaved the
+  spilling locals INTO the dead-home positions; "spill above an unoccupied
+  slot" is precisely the decl-order signature `live, spiller, dead, spiller`.
+- `int * volatile r1` in position 2 (1E9C arg-fold form) is also exact here but
+  unnecessary when the plain spill shape already matches.
