@@ -19686,6 +19686,18 @@ candidates. Transferable findings beyond the original lever entries:
    source order. Rule of thumb: computed-first-stored-second residuals on a 2-insn pair
    = try the one-line join before any allocator theory.
 
+   **BULK-APPLICATION + JOIN-ORDER RULE (2026-07-15 agent-h, gl_func_00004244):** the
+   lever scales — 4244's entire 50-word "LUI-ORDER, no C handle" class (25 unit-header
+   `lui at,%hi(float)` / `lui tN,%hi(int)` adjacent-swap pairs) fell in one pass by
+   joining each unit's int-load + float-load statements on ONE line. The JOIN ORDER is
+   shape-dependent and empirical per site: if the pair is PRECEDED by another float
+   D-load statement (which pre-seeds the $at/fp pipeline), join in ORIGINAL statement
+   order; if the pair stands alone, join REVERSED (float first) — wrong order swaps the
+   loads too (worse). Probe one site of each shape before bulk-applying. 116->66 words,
+   fuzzy 99.76->99.86; the fn's old residual-map entry "as1/ugen micro-schedule — no C
+   handle found" is retracted (the 2026-06 probes only ever swapped LINES, never joined
+   them).
+
 2. **"Pinned temploc block" may be DECL-POSITION HOMES in disguise (E04 transfer).**
    gl_func_000519A4's documented cap-(A) "spill templocs sp+0x38/0x34 pinned, all pads
    shift buffer/frame" fell with ZERO new locals: the spilling locals' slots are their
