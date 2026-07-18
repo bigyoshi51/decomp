@@ -9532,3 +9532,34 @@ refresh via temporary INCLUDE_ASM + splice-entry-removed build.
 **Sweep hint:** every remaining "caller-set `$tN`/`$vN`" cap whose predecessor
 in the .s directory is a <0x10 no-`jr-ra` orphan should be re-read as one
 function and greped against references/libreultra first.
+
+**SWEEP RESULTS (2026-07-18, agent-f — 3 more caps falsified by this rule):**
+- `gl_func_0006DC0C` 73.63→100 = **osCartRomInit** (cartrominit.c verbatim; gate
+  const `0xB0000000` = PHYS_TO_K1(PI_DOM1_ADDR2)). Orphan `game_libs_func_0006DBFC`
+  was **0x10 not 0x8**: 2 leading alignment nops (the preceding osCreatePiManager
+  donor TU pads .text 0x188→0x190) + the lui/lw head. Keep such nops as a pad
+  sidecar on the PREDECESSOR (`gl_func_0006DA74_pad.s`), merge only the real head.
+- `gl_func_000744CC` 84.3→100 = **libc ldiv** (xldiv.c) — the hoisted head isn't
+  always a load: orphan `game_libs_func_000744C4` = `div $zero,$a1,$a2; mflo $v0`
+  (div-latency hiding). The old cap read $v0 as a "caller-set quotient guess";
+  it's an o32 sret fn (`$a0`=ret-struct ptr, args `$a1,$a2`). Zero relocs, but 7.1
+  -O2 gives 29/33 (sret struct-copy scratch regs `$t9/$t8`); **IDO 5.3 -O2 picks
+  `$at/$t0` = exact**. 5.3-vs-7.1 sret-copy scratch-reg choice is a compiler
+  fingerprint. Identities are NOT only libultra — grep libc too.
+- `gl_func_0007307C` 49.44→100 = **osPiRawWriteIo** variant, write-side twin of the
+  landed 6BA7C `__osPiRawReadIo` donor (clone the donor, flip the final lw/sw).
+  Orphan head can hoist an IO read INTO AN ARG REG: `lui $t6,0xA460; lw $a2,0x10`
+  (first PI_STATUS read pre-prologue) — grep orphans for `0xA460`/`0xA480`/`0xA6`/
+  `0xB0` lui constants.
+
+**Gotcha:** pad-sidecar `.s` files consumed via `#pragma GLOBAL_ASM` must have a
+SINGLE-LINE leading comment — a multi-line `/* ... \n ... */` before `glabel`
+fails asm-processor with ".text block without an initial glabel".
+
+**Remaining candidates (checked, not yet done):** `gl_func_000669B8` — orphan
+`game_libs_func_000669AC` (0xC: `lui v1,%hi(D); addiu; lw v0,0(v1)`) resolves its
+"caller-set $v0/$v1" cap ($v1=&D, $v0=D hoisted); body is a 5-call debug-print fn
+w/ 5 baked string addrs (0x2217C..0x221AC) — donor needs gl_ref absolutes, not
+libultra. `gl_func_000601DC` — head already merged into its .s (entry 0x601D4),
+string-baked tracker fn, still unmatched. Full tiny-orphan enumeration must test
+`0x03E00008 in words` (raw-.word files defeat mnemonic `jr ra` greps).
