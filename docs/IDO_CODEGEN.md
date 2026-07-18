@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
 - [W65-70 game_libs trio (2026-07-18 agent-h): end-sentinel/slot-ptr DUAL-USE variable (24F30 frame-exact); param-as-cursor + post-inc idiom in BOTH arms tips uopt into s0 promotion where a separate local copy-props to a0+call-spill (1EE78); cached-count stale-v0 skip path kills join-beq + dup cond-load (1FAE8)](#w65-70-game-libs-trio-24f30-1ee78-1fae8) — _Also: K&R u16 reg arg = home store + re-mask per int-context use (the "redundant" andi); u16 stack arg = lhu slot+2; distinct placeholder externs for a loop bound LOSE the non-zero-trip proof (zero-trip guard + re-rotation, worse); `while(0){p+=1}` multi-def is fully DCE'd (inert as ref-boost/anti-remat); base with only %lo-foldable lw uses remats per-use (never s-reg) while a sibling address local colors an s-reg iff it has a non-foldable use (call arg/copy)._
 - [Single-int-CARRIER unification: one `q` playing loop-idx + EVERY check's pointer AND flag (int-cast reloads `q = p[k]; q = ((u32)((int*)q)[2] < (u32)((int*)q)[1]) ? 1 : 0;`) coalesces ptr+flag into $v0, pins `move v0,zero` below the sub-buffer loads, and reproduces the beql next-p delay-slot preload (57700 65.92->99.59, 2026-07-18)](#single-int-carrier-unification-57700) — _57->9 word residual in three steps: q for checks' ptr+flag, then unify blockA idx into q, then spell check1 identically (drop the named p). NEGATIVES on the final arr1/rec2/check1-ptr 3-cycle: decl orders inert; if(0) dead-ref ladder at HEAD forces the early a0->s0 split (bases flip to s0), MID/END dead BBs spill a0 and kill s0 wholesale; two-def arr1 disturbs schedule; rec2-as-q CSE-hoists the second lui const; trailing-K&R-arg carrier SPILLS p to frame (does not precolor a1 here)._
 - [Byte-RMW mask-width trichotomy: `*p &= K` direct-RMW statements keep per-step sbs with the LITERAL's andi width (~0x80 -> 0xff7f; literal 0xBF -> 0xbf); non-volatile local chain DSEs intermediate stores; volatile chain keeps stores but widens all masks to 0xffXX (2A260 69.1->87.9, 2026-07-18)](#byte-rmw-mask-width-2a260) — _also: symbol+const ptr arith can stay UN-folded (lui/addiu base + separate addiu 0x5280; base pair = stolen-prologue orphan fn); two same-page &D uses need DISTINCT placeholder externs or uopt CSEs one lui pair; sinking one RMW step below neighboring sh stores realigned downstream t-temp parity; disasm-func.py WITHOUT --obj shows the BUILD, not the target .s._
@@ -21724,3 +21725,25 @@ forward order).
 **Recognition cue:** diff shows your build hoisting `addiu sN,sN,K` once + `or a0,sN` per call
 where target has `lw s0,home(sp)` + delay-slot `addiu a0,s0,K` per call, and your build saves one
 fewer s-reg. Go straight to the two-stage pc/t respell.
+
+## Shared `ucvt` widening web of a u8 local steals a low arg-reg color; retype the local `unsigned int` to delete the web (2266C 68.2->100 byte-exact, 2026-07-18 agent-h) <a name="ucvt-widening-web-steals-color-2266c"></a>
+
+Symptom: entire diff reduces to ONE web colored one register too high (base materialization in
+$a3 vs target $a2) with $a2 never appearing in your build. `-Wo,-zdbug:6` uoptlist shows an
+invisible candidate assigned $a2 that reaches emission as zero insns: `ucvt{cd}` — the CSE'd
+u8->int WIDENING of a `unsigned char` local shared across its uses (`if (cd != 0)` test +
+`cd - 1` arithmetic). uopt allocates the cvt web a color in bitpos order even though codegen
+folds it away. FIX: declare the local `unsigned int` and keep byte semantics explicit
+(store `cd - 1` via the u8 lvalue, re-test via the store-forwarded reload `if (rec[14] == 0)`
+which supplies the andi 0xFF truncation) — identical bytes, no cvt web, every later candidate
+slides down one color. Companion levers from the same crack (all in-body, same fn):
+- store-forward reload test `rec[14] = cd - 1; if (rec[14] == 0)` keeps the decrement in
+  temps t7/t8 (naming it or reusing `cd--` coalesces destructively onto the local's reg);
+- `rec = (u8*)(i*16); rec += base_load;` mutation form flips `addu` to offset-first
+  (`addu v1,a0,t6`) where every single-expression spelling emits base-first;
+- explicit `off` induction var SWAPS v1/a0 colors vs letting uopt strength-reduce `i*16` —
+  prefer the plain `i*16` and let uopt synthesize the offset register;
+- value-only `s32 g = (s32)array` held base (the 2A6C0 lever) RECOLORED the whole fn here —
+  it is not interchangeable with array-direct reference; probe both.
+Dead `while(0){ rec = (u8*)array; }` did NOT create an early base-web occurrence (the shared
+address web's candidate bit stays late regardless); killing the competing web beat boosting.
