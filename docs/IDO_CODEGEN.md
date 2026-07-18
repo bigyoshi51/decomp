@@ -30,6 +30,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Decl-order spill-slot rank extends to jal-delay ARG-SPILL templocs (declare the spilled var FIRST, frame-neutral; volatile pads grow the frame here) (titproc 1840 94.09→97.06, 2026-07-17)](#decl-order-arg-spill-temploc-1840)
 - [Constructor registration-node kit (b1 21D4 91.54-baseline→153/200 length-exact, 2026-07-17): `char * volatile nd` arg-fold = lw a1 / jal / sw a1(delay) / lw reload with NO move; repeated-deref does NOT CSE across a call (reloads from object, never templocs); named-base + void-alias claims $v0 where capture-then-redefine only gets v1; SLOT-OVERLAY cap = target shares one stack word between volatile spill + named var home](#registration-node-volatile-argfold-slot-overlay-21d4) — _Decode tells confirmed: lh signed vtable offset; flag blocks operate on the CALL-ARG node (a1 delay-spill) not the call result; `*(int*)(d+0x184)` d-relative via v0-held base (not hardcoded 0xA000xxxx); value-form || comparand via assigned cond var (44EDC transfer). volatile char* costs an 8B ALIGNED home (frame +16 with 6 decls); overlaying it onto another var's home = not C-reachable, honest cap._ — _EE8C decl-order lever covers call-arg spill templocs; pads first/mid grew frame 0x28→0x30 (doubleword pad), pad-last elided; negatives: sw-ra-vs-move prologue bne-delay tie + 1E9C pair-order tie survive (float)0/void-alias/goto probes — pair-order ≠ post-call v-reg coloring._
 - [`A | B` source emits or rs=B,rt=A (IDO reverses commutative |) — swapping the source operands also re-rotates the coupled temp-ring; swc1-in-jal-delay = store spelled BEFORE call; void fn-PTR typedef un-poisons $v0 like jal void-alias (timproc b5 8468 91.33->exact, 2026-07-17)](#or-operand-reversal-tring-8468) — _Also: spell idx*4 inline at both use sites so CSE's sll destroys idx in-place (target reg-reuse); naming the |-operand instead moved it to $v1 and shifted the whole downstream t-ring (worse)._
+- [Tail-dup lever BOUNDARY: pure-register-copy dup web is copy-prop-immune (multi-def/ternary/if(1) spellings all fold); slot-reload of just-stored word restores downstream temp numbering (game_uso F6D4 95.32->95.41, 2026-07-18)](#pure-copy-taildup-copyprop-immune-f6d4) — _`move v0,rP` delay-dup+join web needs an ARITHMETIC def (2838 lever) to survive; for pure copies use `F8 = *(F4slot)` reload — compare load forwards, join reload stays lw, extra web fixes +1 t-renumber._
 - [Single-def-after-guarded-increment -> beql tail-dup (rematerialize-in-delay) + dup-web colors LAST; two-def if/else spelling rotates the 3-temp coloring cycle (timproc 2838/2A44 twins 86.64->exact, 2026-07-17)](#single-def-beql-taildup-coloring-2838) — _`if (f) { if(1){ v += k; } } x = v - c;` = beql with x-def duplicated into likely delay AND x demoted to last-colored web ($a0); if/else two-def spelling = same shape, rotated regs. Also: named int decls ghost-consume local slots top-down in decl order (f,v0,a2,w,x -> v0@0x2C); registration first arg &D+0 not literal 0; per-case locals split spill homes._
 - [Discarded-return call may carry EXTRA args (gate deref VALUE as arg2 + select result as arg3, `or a3,v0` in jal delay); NAMED block-local select temp = target's v0+copy shape, at 8B ghost-home cost (h2h 1360 90.04→95.12, 2026-07-17)](#extra-args-named-select-temp-1360) — _`lw a2,0(tN)` + `or a3,v0,zero` in a jal's setup = the call passes the tested value AND the ternary result (4-arg, not 3); select spelled `register int c; if(x!=1) c=115; else c=0;` keeps the v0 intermediate + copy (in-arg de-named ternary coalesces into a3 directly, arm order picks beq/bne polarity: 115-first = bne). Named val/c cost 8 ghost home bytes (frame +0x10) — de-name kills homes but regresses shape; unresolved tie. Void-alias on all 21 discarded calls realigned the whole temp ring + unspilled cross-jal derefs first._
 - [Redundant beqz-recheck dispatch = `else if (same cond)` — else kills cross-call liveness (no spill, exact frame); LIKELY-branch delay-slot stray load belongs to the branch TARGET's region, call is single-arg (mgrproc 3074 94.76→objdiff-100, 2026-07-17)](#else-if-redundant-recheck-3074) — _A provably-dead recheck branch is source-level `else if (redundant cond)`, not coloring; two independent ifs spill v1/a1 across the call. bgtzl-delay `lw a1` before a jal = taken-path hoist of the next region's reload, not arg1 — 2-arg spelling adds a jal-delay reload. Paired with void-alias dead-$v0 (which alone fixed the whole-fn v0<->v1 renumber, 94.76→96.19)._
@@ -21185,6 +21186,41 @@ Sibling levers proven in the same function (game_libs_func_00031CB8, 46/46):
   the first probe chased a bltzl/`& 0x800000` shape that only existed in the old
   NM body. Re-derive target mnemonics from the `.word` list (objdump -b binary)
   before spending probes.
+
+## Tail-dup lever BOUNDARY: a PURE-register-copy dup web (`move v0,rP` in delay + at join) is copy-prop-immune to every C spelling; slot-reload of the just-stored word buys the downstream temp numbering instead (game_uso F6D4 95.32→95.41, 2026-07-18 agent-g) <a name="pure-copy-taildup-copyprop-immune-f6d4"></a>
+
+Target tell (F6D4/E35C sibling pair, queue-advance block):
+```
+sw   t0,0xF4(s0)        # F4 = prev (BEFORE the branch)
+bne  t0,t1,L            # prev vs old F8; L = the SECOND move below
+ move v0,t0             # dup of the join def, idempotent delay fill
+sw   zero,0x100(s0)
+L: move v0,t0           # join def: a separate 2-def v0 web, prev stays $t0
+sw   v0,0xF8(s0)
+```
+Looks like the 2838 single-def tail-dup shape, but the def is a PURE register
+copy (`next = prev`), not arithmetic. Every spelling probed folds it back into
+prev's web (build keeps prev in $v0, no moves, branch-delay takes the `sw`):
+
+- multi-def if/else with `next = prev;` in BOTH arms — cross-jump merges the
+  common tail, then coalesces (same-rhs defs re-unify; the 69E8 "distinct
+  placeholder syms" escape needs *syntactically different* rhs, unavailable
+  for a local-to-local copy);
+- ternary-comma value form `F8 = (cond ? (cnt=0, prev) : prev);` — emits an
+  explicit `b` over the else arm, count-exact but scores WORSE (93.8);
+- single-def after `if (cond) { if (1) { cnt = 0; } }` (the exact 2838
+  recipe) — folds; the 2838 lever is load-bearing on the def being an
+  ARITHMETIC op (`x = v - c`), not a copy.
+
+What DOES pay: write the F8 store as a RELOAD of the just-stored F4 slot
+(`F8 = *(char **)(s0 + 0xF4);` right after `F4 = prev;` + the guarded reset).
+uopt store-to-load-forwards the DOMINATING compare read (stays in prev's reg)
+but keeps the cross-BB join reload as a real `lw` — one extra live web whose
+presence reproduces the target's entire downstream temp numbering (kills a
+uniform +1 t-reg renumber across ~70 tail insns). 95.32→95.41; the 2-insn
+move-dup web itself + commutative-addu operand order (both-order, pointer-base
+and `&base[i<<6]` IXA probes all emit shift-first) + unpaired-HI16 baked-USO
+relocs remain. If a sibling shares the shape (E35C), apply the same reload.
 
 ## Single-def-after-guarded-increment: beql tail-dup (rematerialize-in-delay) AND coloring demotion of the dup'd web; two-def if/else spelling rotates the temp coloring (timproc b1 2838 / b3 2A44, 86.64→exact, 2026-07-17 agent-g) <a name="single-def-beql-taildup-coloring-2838"></a>
 
