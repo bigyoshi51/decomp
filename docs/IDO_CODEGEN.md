@@ -28,6 +28,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [(float)0 cast-literal also flips branch-likely DELAY-SLOT FILL choice — re-probe "delay-fill pick not C-controllable" FP residuals (mgrproc 1F30 92.80→99.74 placeholder-ceiling, 2026-07-17)](#float0-cast-beql-delay-fill-1f30) — _`> (float)0` vs `> 0.0f` moved the field-load into the beql delay (+4.8pp one edit); companions: de-name single-use FP local kills mov.s copy; addend-first commutative + flips lwc1 pair order + f10/f16 numbering; `move a0,zero` arg vs target lui/addiu import pair = decode error (&extern, not 0)._
 - [Decl-order spill-slot rank extends to jal-delay ARG-SPILL templocs (declare the spilled var FIRST, frame-neutral; volatile pads grow the frame here) (titproc 1840 94.09→97.06, 2026-07-17)](#decl-order-arg-spill-temploc-1840)
 - [Constructor registration-node kit (b1 21D4 91.54-baseline→153/200 length-exact, 2026-07-17): `char * volatile nd` arg-fold = lw a1 / jal / sw a1(delay) / lw reload with NO move; repeated-deref does NOT CSE across a call (reloads from object, never templocs); named-base + void-alias claims $v0 where capture-then-redefine only gets v1; SLOT-OVERLAY cap = target shares one stack word between volatile spill + named var home](#registration-node-volatile-argfold-slot-overlay-21d4) — _Decode tells confirmed: lh signed vtable offset; flag blocks operate on the CALL-ARG node (a1 delay-spill) not the call result; `*(int*)(d+0x184)` d-relative via v0-held base (not hardcoded 0xA000xxxx); value-form || comparand via assigned cond var (44EDC transfer). volatile char* costs an 8B ALIGNED home (frame +16 with 6 decls); overlaying it onto another var's home = not C-reachable, honest cap._ — _EE8C decl-order lever covers call-arg spill templocs; pads first/mid grew frame 0x28→0x30 (doubleword pad), pad-last elided; negatives: sw-ra-vs-move prologue bne-delay tie + 1E9C pair-order tie survive (float)0/void-alias/goto probes — pair-order ≠ post-call v-reg coloring._
+- [Single-def-after-guarded-increment -> beql tail-dup (rematerialize-in-delay) + dup-web colors LAST; two-def if/else spelling rotates the 3-temp coloring cycle (timproc 2838/2A44 twins 86.64->exact, 2026-07-17)](#single-def-beql-taildup-coloring-2838) — _`if (f) { if(1){ v += k; } } x = v - c;` = beql with x-def duplicated into likely delay AND x demoted to last-colored web ($a0); if/else two-def spelling = same shape, rotated regs. Also: named int decls ghost-consume local slots top-down in decl order (f,v0,a2,w,x -> v0@0x2C); registration first arg &D+0 not literal 0; per-case locals split spill homes._
 - [Discarded-return call may carry EXTRA args (gate deref VALUE as arg2 + select result as arg3, `or a3,v0` in jal delay); NAMED block-local select temp = target's v0+copy shape, at 8B ghost-home cost (h2h 1360 90.04→95.12, 2026-07-17)](#extra-args-named-select-temp-1360) — _`lw a2,0(tN)` + `or a3,v0,zero` in a jal's setup = the call passes the tested value AND the ternary result (4-arg, not 3); select spelled `register int c; if(x!=1) c=115; else c=0;` keeps the v0 intermediate + copy (in-arg de-named ternary coalesces into a3 directly, arm order picks beq/bne polarity: 115-first = bne). Named val/c cost 8 ghost home bytes (frame +0x10) — de-name kills homes but regresses shape; unresolved tie. Void-alias on all 21 discarded calls realigned the whole temp ring + unspilled cross-jal derefs first._
 - [Redundant beqz-recheck dispatch = `else if (same cond)` — else kills cross-call liveness (no spill, exact frame); LIKELY-branch delay-slot stray load belongs to the branch TARGET's region, call is single-arg (mgrproc 3074 94.76→objdiff-100, 2026-07-17)](#else-if-redundant-recheck-3074) — _A provably-dead recheck branch is source-level `else if (redundant cond)`, not coloring; two independent ifs spill v1/a1 across the call. bgtzl-delay `lw a1` before a jal = taken-path hoist of the next region's reload, not arg1 — 2-arg spelling adds a jal-delay reload. Paired with void-alias dead-$v0 (which alone fixed the whole-fn v0<->v1 renumber, 94.76→96.19)._
 - [FP zero-web dead-$f0 reuse: reorder C so (float)0.0 stores precede the 1.0f web's last use — overlap forces fresh $f12 (546E8 96.5→99.0; register-float/BB-barrier fail)](#fp-zero-web-store-order-overlap-546e8) — _dead-reg reuse beats fresh-pool numbering; C store order is the only working lever; as1 re-sinks the 1.0f store for free._
@@ -21180,3 +21181,42 @@ Sibling levers proven in the same function (game_libs_func_00031CB8, 46/46):
   the first probe chased a bltzl/`& 0x800000` shape that only existed in the old
   NM body. Re-derive target mnemonics from the `.word` list (objdump -b binary)
   before spending probes.
+
+## Single-def-after-guarded-increment: beql tail-dup (rematerialize-in-delay) AND coloring demotion of the dup'd web; two-def if/else spelling rotates the temp coloring (timproc b1 2838 / b3 2A44, 86.64→exact, 2026-07-17 agent-g) <a name="single-def-beql-taildup-coloring-2838"></a>
+
+Context: timproc b1 2838 + byte-twin b3 2A44 (149-word HUD draw dispatchers, USO
+raw-.word), 86.64 → 149/149 words exact. Target shape in the case-1 flag block:
+
+```
+lui v1 / lw v1,(D)      # flag f
+lw   v0,0x68(s0)        # v
+beql v1,zero,L1
+ addiu a0,v0,-0x27      # x def DUPLICATED into likely delay
+addiu v0,v0,0xA         # v += 10 (fallthrough only)
+addiu a0,v0,-0x27       # x def again
+L1: beqz v1,L2
+ move a2,a0             # a2 = x (both paths)
+addiu a2,a0,-0xE        # a2 = x - 0xE (f!=0 path)
+```
+
+1. **The beql-with-duplicated-delay comes from a SINGLE source def, not an if/else.**
+   `if (f != 0) { if (1) { v0 += 0xA; } } x = v0 - 0x27;` — the `if(1){}` BB barrier
+   (44EDC) stops the increment from CSE-merging with the tail, and IDO tail-duplicates
+   the single `x = v0 - 0x27` into the beql likely-delay (rematerialize-in-delay).
+   Spelling it as a two-def if/else (`if (f==0) x = v0-0x27; else { if(1){v0+=0xA;} x = v0-0x27; }`)
+   produces the SAME shape but ROTATES the temp coloring one step
+   (f/v/x = a0/v1/v0 instead of the target v1/v0/a0): the extra source def raises x's
+   web priority so it colors FIRST; with the single def the scheduler-dup'd web colors
+   LAST and x lands on $a0. Coloring was invariant to decl order and to naming/CSE of
+   the flag — only the def-count moved it. If a rotated 3-temp cycle survives all
+   decl/order probes, recount source DEFS per web vs target.
+2. Companions that got it to length-exact first: shared `obj` local for the s0 web
+   (44EDC recipe; gives `jal; move s0,a0` delay shape); first registration arg is
+   `&D+0` (lui/addiu pair), NOT literal 0 (`move a0,zero` = decode error, same family
+   as the 1F30 import-pair tell); separate case-2 local `w` splits the spill homes so
+   case-1 v and case-2 v get DIFFERENT slots (target 0x2C vs 0x24 = two webs, two vars).
+3. Slot layout: every named int decl consumes a local slot top-down in decl order,
+   homed or not. Target homes v0→0x2C/a2→0x28/w→0x24 with top slot 0x30 unused →
+   decl order `f,v0,a2,w,x` (5 decls; f ghost-occupies 0x30). a2's second def reads
+   the SOURCE (`a2 = x - 0xE`), not `a2 -= 0xE`.
+4. Twin backport verbatim (only data addend 0x1C0→0x1D8 differs) → exact on first try.
