@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
+- [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
 - [Sparse-dispatch kit: if(1)-wrapped arm bodies defeat jump-threading (beq-chain restored, switch=binary-search, goto-chain=bnel-inline); same-var double-arg K&R precolor evicts to $a3 (2-arg keeps $a2); `*(long long*)p=KLL` = LIFO ori pair for GFX appends (56D14 72.61->89.7, 2026-07-17)](#dispatch-if1-antithread-ll-store-56d14) — _residual: last-test bne/beq trace polarity + coupled +1 temp-ring phase in final-case arms; probe polarity first._
 - [Deep-clone copy runs: alternating-t8/t7 segments = BLOCK STRUCT COPIES (segment length = struct size, secondary-base runs included); 1-word struct copy through a named field-pointer keeps 0(v0) (plain *p= gets offset-folded to base+imm, volatile inert) (526D0 76.5->95.75, 2026-07-15 agent-f)](#struct-copy-runs-oneword-ptr-copy-526d0) — _Also: param-reuse accumulator = move s0,a0 at insn 3 + a2-home in bne delay; int-lvalue (f32) cast emits mtc1/cvt/trunc, use *(f32*)= for lwc1/swc1; residual = uniform -1 temp-ring phase, 6 burn probes (dup-load/multi-def/while(0)/named-vt/array-alias/if(1)) all 0-advance — suspect 2-slot &D materialization shape (adjacent lui;addiu tell)._
@@ -20855,3 +20856,32 @@ the CSE). Companions from the same function:
 - Residual cap here: uopt live-range-SPLITS the flag web (`or s1,s7`) inside
   the heavy call arm and spills a 3-ref int web to the frame; decl-order
   permutation neutral. 9-webs-for-9-s-regs exact fit not reached.
+
+## Slot-RE pass ordering: address-CSE alias split pays only AFTER the s-reg role skeleton matches; VN folds x-x and const-locals through copies (E68 +0.27 / 6808 -3.7 fuzzy, 2026-07-17 agent-g) <a name="alias-split-order-vn-fold-e68-6808"></a>
+
+Follow-up to #dename-role-locals-base-split-e68, two results from the same
+recipe applied to two functions at different structural distances:
+
+1. **E68 (post-de-name, prologue/frame already exact): rise.** Splitting the
+   second read site of the held mgr global (`*(&func_000001FC+0x18)`) onto a
+   distinct base-0 value alias (`bu_e68_mgr = 0x214;` in
+   undefined_syms_auto.txt + `extern s32`) killed the address-spill home
+   (0x60) AND re-colored an unrelated spilled counter (var_s5, 0xD4 home)
+   into a register — one alias split freed two slots. Frame shrank 8 bytes;
+   re-close with an extra `volatile int` pad. 70.21 -> 70.48.
+2. **6808 (pre-de-name, built saves 5 s-regs vs target 9): every split LOWERS
+   fuzzy.** True-identity rewrites that provably match target reloc shape
+   (`+0x1C4` RMWs are really `func_00000188+0x3C` per-site %hi/%lo, no held
+   base; prologue mode RMW is `func_00000000+0x4`) and a gc alias for the
+   s5-class reads each dropped fuzzy (60.28 -> 58.8/57.9/56.6 cumulative)
+   despite moving insn count toward target (545->553 of 594). At that
+   distance the LCS is register-noise-dominated; do the E68-style role-local
+   de-name (obj->s7, two global bases->s4/s5, idx/mask->s6, seed->s1) FIRST,
+   then re-apply the (kept, documented) identity map.
+3. **VN-fold negative (open lead):** target emits `subu t6,t1,t1` and
+   `addiu s7,zero,0x47` (unfolded zero/const), but C `x - x`, `x - copyOfX`
+   (even through a memory-homed named local), and `g47 = 0x47; use(g47)` ALL
+   constant-fold — uopt value numbering sees through copies and memory. The
+   source form that emits a subu-of-same-reg / materialized single-use const
+   remains unidentified (suspect: loop-carried or cross-BB unprovable-equal
+   pair coalesced to one register). Do not re-burn ticks on x-x spellings.
