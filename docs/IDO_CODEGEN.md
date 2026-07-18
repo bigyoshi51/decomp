@@ -111,6 +111,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [NAMED-LOCAL COUNT governs frame size — "phantom slot / irreducible min-frame" caps are false](#feedback-ido-named-local-count-frame) — _uopt homes every named local at frame top (decl order); spill temps stack below in decl-need-order. Delete names (inline their exprs) to shrink the home block; reorder decls to place temps. 69688/685C0 lands._
 - [Runtime FP-div of const/const: `f32 inv = N;` local defeats cfe parse-time fold + `(f32)K/inv` numerator CSE-break; bitcast-store *(s32*)= crater is regime-independent (90CC 73.42->74.32, 2026-07-17)](#runtime-fp-div-inv-local-90cc) — _all-literal ratios fold at parse time in cfe; residual: byte-identical if/else arms cross-jump-merge (target keeps both, ring-phase-desynced)._
 - [Trailing init/store block source position picks FP-clamp latency fill; per-site &SYM args vs 0; trip-5 peel+4x-unroll induction remnant (4EB54 EXACT / 42F4C 99.39, agent-f 2026-07-17)](#tail-block-position-persite-sym-args-peel-unroll-4eb54) — _Tail store blocks go AFTER the last clamp; cb(&D) not cb(0) even at lo16=0 (kills move-a0-zero CSE, restores beq/nop + per-site lui/addiu); write the trip-5 loop, not 5 statements; re-measure post0b clip when an NM body grows to target size._
+- [USO-constructor sub-70 redecode kit: li->%hi/%lo reloc respell, ONE roving temp (s-reg web), shared carrier home (volatile/if(0)-escape), prototyped-f32 alias, ptr-scaling audit (b5 18B4/283C 98.7, D550 74, 2026-07-18)](#uso-ctor-sub70-redecode-kit-b5)
 
 ## Quick reference by sub-topic
 
@@ -21454,3 +21455,43 @@ Two independent single-instruction levers found on the 5EF00 Y-axis rotation-mat
 NEGATIVE (residual ~17%): blocks 2-4 of the 3x3 fill carry an FP temp-ring rotation
 (f4/f8/f10 permuted, mirrored sub.s webs, one unmatched nop) that survives paren regrouping and
 both div spellings — same eval-order/coloring residual class as 5CE68's mtc1-capture note.
+
+## USO-constructor sub-70 redecode kit: baked-addr li -> &D_00000000+off relocs, ONE roving temp var (s-reg web), one shared carrier home, prototyped-f32 alias, pointer-scaling audit (timproc b5 18B4 67.7->98.7, 283C 59.6->98.7, D550 67.2->74.1, 2026-07-18 agent-g) <a name="uso-ctor-sub70-redecode-kit-b5"></a>
+
+The b5 sub-70 constructor band's gap is DECODE ERRORS, not regalloc. Fix in this order — each is
+worth 10-30pp:
+
+1. **Every USO data address spelled as an int literal (`li a1,0x10D8`, `FW(x,0x28)=0`) is wrong**
+   when the target shows `lui/addiu` pairs: respell as `(char *)&D_00000000 + 0xOFF` (and vtable
+   stores as `(int)&D_00000000`, NOT 0). Restores both the reloc form AND the missing insn count
+   (each li -> 2 insns). Also `*(s32**)0x134`-style absolute derefs: the target's
+   `lui v0,0; addiu; lw tN,0x134(v0)` = `FW((char*)&D_00000000, 0x134)` with the BASE CSE'd in a
+   v-reg and the +0x134 load re-loaded per statement (stores to unknown ptrs block load-CSE).
+2. **One roving temp var, not per-site m2c temps.** m2c's temp_s1/temp_s1_2/temp_v0_3... one-shot
+   vars each get a caller-saved reg + spill home (`sw a1,108(sp); lw a1,108(sp)`). The original
+   used ONE variable for every child/cursor pointer -> a multi-def web colored into ONE s-reg
+   (18B4: s1 shared with the arg2 snapshot web; 283C: s0 for 5 defs). Merging the temps into a
+   single var is ALSO the frame-size fix (each merged temp = one phantom slot gone).
+3. **Shared carrier home slot** (283C v1t@108 stored/reloaded around both attach blocks; D550
+   slot 84 holding sub-record ptr, then argp1, then the owner deref): these are ONE C variable
+   reused across disjoint webs (two named vars can't share a slot). If the target shows
+   `sw v0,HOME(sp)` in a branch DELAY slot + per-statement reloads, spell it `char * volatile h`
+   or plain `h` + `if (0) { func(&h); }` escape (both give the sw-in-delay shape; escape is one
+   insn cheaper on reload granularity).
+4. **`mfc1 a2,$f0`/`swc1 $f0,16(sp)` feeding a placeholder call = ANSI-prototyped f32 params.**
+   Declare a per-site typed alias (`extern s32 *timproc_uso_b5_alias_fff(s32, s32*, f32, f32, f32);`)
+   — the K&R `alias()` spelling emits cvt.d.s+sdc1 double-promotion blocks.
+   If the f32 zeros then unify into a cross-call `$f20` web (sdc1 $f20 prologue save), split the
+   web by MIXED zero spellings per region (`0.0f` at one call, `(f32)0` at the stores) — the
+   DF98 cast-literal split applied at web granularity kills the callee-saved FP save.
+5. **Audit hand-written pointer arithmetic on typed ptrs:** `s32 *w; w + 0x2C` scales x4
+   (`addiu v1,t4,176` vs target `addiu v1,s0,44`) — a silent structural bug class in older
+   STRUCTURAL-PASS bodies. Same for int-macro stores of float zeros (`FW(p,0xDC)=0.0f` emits
+   `sw zero`; target `swc1`).
+6. **Frame/slot layout is then arithmetic** (decl-ladder rule): count target local slots between
+   memory-visible homes, fill with `volatile f32 padN;` decls; put s-reg'd/pointer decls where
+   their PHANTOM slots match the target gaps (283C: q,g above v1t; w,var_s1 moved to the
+   100/104 gap = frame 120 exact).
+Residual class after the kit: prologue `move sN,aN` delay-slot scheduling, spill-slot NUMBER
+(72-vs-76), FP-ring outer-pair store swaps, and uopt's s0-early/home-late live-range SPLIT of a
+var while a second s-reg is still free (D550 r) — these resisted all spellings probed.
