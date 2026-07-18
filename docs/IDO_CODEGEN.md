@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
 - [Sparse-dispatch kit: if(1)-wrapped arm bodies defeat jump-threading (beq-chain restored, switch=binary-search, goto-chain=bnel-inline); same-var double-arg K&R precolor evicts to $a3 (2-arg keeps $a2); `*(long long*)p=KLL` = LIFO ori pair for GFX appends (56D14 72.61->89.7, 2026-07-17)](#dispatch-if1-antithread-ll-store-56d14) — _residual: last-test bne/beq trace polarity + coupled +1 temp-ring phase in final-case arms; probe polarity first._
 - [Deep-clone copy runs: alternating-t8/t7 segments = BLOCK STRUCT COPIES (segment length = struct size, secondary-base runs included); 1-word struct copy through a named field-pointer keeps 0(v0) (plain *p= gets offset-folded to base+imm, volatile inert) (526D0 76.5->95.75, 2026-07-15 agent-f)](#struct-copy-runs-oneword-ptr-copy-526d0) — _Also: param-reuse accumulator = move s0,a0 at insn 3 + a2-home in bne delay; int-lvalue (f32) cast emits mtc1/cvt/trunc, use *(f32*)= for lwc1/swc1; residual = uniform -1 temp-ring phase, 6 burn probes (dup-load/multi-def/while(0)/named-vt/array-alias/if(1)) all 0-advance — suspect 2-slot &D materialization shape (adjacent lui;addiu tell)._
@@ -20781,3 +20782,44 @@ Target tell: a field RMW emitted as `addiu v0,a0,0x18; lw t7,0(v0); ori t8,t7,0x
   - `int **fp = &flags;` materializes but emits a dead `sw` of the pointer.
 - COST / residual: the pointer is now a named candidate whose range crosses a BB, so uopt RESERVES an 8B stack home at the frame BOTTOM (0x1C, below all memory locals) even though it never spills — every array/struct local shifts +8 (65060: tmp sp+0x1C -> sp+0x24, 4 word diffs). A phantom 2nd param (`void f(char *a0, int *flags)` reassigned in-body) homes to the CALLER arg area instead (frame clean, tmp at 0x1C exact) but IDO stores unused/reassigned params at entry (`sw a1,frame+4(sp)`) = +1 insn. Scope-overlay blocks don't overlay; decl-order swaps never move scalar homes off the bottom. A target that shows the materialized pointer in ONE BB with NO home slot is therefore still an open sub-cap (65060's last 4 words).
 - Bonus confirmations on 65060: the (float)N cast-literal CSE-break generalizes 4-way in one function — `0.0f` vs `(float)0` vs `1.0f` vs `(float)1` give four distinct const webs (f0/f2/f12/f4) and the post-call rematerialization (`mtc1 zero,$f2` after jal) follows the web whose SPELLING the post-call store uses. Tri3i aggregate copy reproduces held-base stores + sp-folded lwc1 readbacks (63884 lever) in a store-only reset function too.
+
+## De-name at scale: alpha-rename m2c temp explosion onto shared ROLE locals; evict shared placeholder-base address CSE from $s0 via TRUE per-cluster reloc identities (E68 frame 0x348->0x1D8, prologue exact, 2026-07-17 agent-g) <a name="dename-role-locals-base-split-e68"></a>
+
+bootup_uso func_00000E68 (759 insns, ~110 m2c locals, frame 0x348 vs target
+0x1D8). Three compounding levers, in order:
+
+1. **Role-local alpha-rename (zero-risk):** the ~40 repeated DL-append idiom
+   sites each carried m2c-unique temps (`temp_v1_N` header / `temp_a1_N`
+   count / pointer temp). Pure word-boundary rename onto 3 shared role
+   locals (`ga`/`gk`/`gp`, + `gw` payload) — verify live ranges are
+   per-site-disjoint first — removed 99 decls with ZERO semantic change.
+   Frame collapsed 0x348 -> 0x1C8 in one build. Scriptable (regex over the
+   fn body); much faster than folding temps into expressions one by one.
+2. **Shared-base eviction = the s-ring key:** `&D_00000000 + N` derefs at
+   MANY offsets (+0 dim reads, +0x214 mgr) made one hot address candidate
+   that uopt colored into $s0, shifting the arg ring (a1->s1/a2->s2/a3->s3
+   vs target a1->s0/a2->s1/a3->s2). Fix by splitting into the TARGET'S OWN
+   reloc identities: mgr reads became `*(void **)((char *)&func_000001FC +
+   0x18)` (the actual %hi/%lo pair in the target), and base+0 value reads
+   became a distinct base-0 alias `extern s32 bu_e68_dimB;` (direct lui+lw
+   form, no addiu, no address candidate). Result: prologue byte-exact —
+   ring aligned, s0-fp+ra saves at target offsets, and arg0 became
+   UNREGISTERED (homed at frame-top arg slot, t-reg reloads) exactly like
+   the target. A homed-arg0 shape in the target is itself a tell that the
+   build holds a stealable base in an s-reg.
+3. **Loop-bound hoist:** a global read in a call-containing loop's bound is
+   re-read per iteration; the target's $fp-held bound means the original
+   read it into a local BEFORE the loop (`dimA2 = D_00000004;`).
+
+NEGATIVE RESULT — volatile-hole frame mimicry: the target frame has a dead
+0x58-0x11C region. Declaring volatile pads/arrays to mimic it FAILS while
+the build still has residual spill temps: those spills already occupy the
+"hole" region, so pads stack on top (frame 0x1D8 -> 0x2B8). Pads only close
+a frame gap once residual spills are gone (here: single `volatile int` pad
+closed 0x1D0 -> 0x1D8 exact).
+
+METRIC NOTE: fuzzy DIPPED 70.60 -> 70.21 across all this while prologue,
+frame size, and s-ring became exact (mnemonic-LCS 586/759). Register-shift
+noise can mask large structural convergence — gate multi-hour rewrites on
+structural anchors (frame word, prologue bytes, save offsets), not on the
+per-probe fuzzy delta.
