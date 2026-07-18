@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [Old-m2c-lift fingerprint: cvt.d.s before jalr = fn-ptr-cast float promotion; typed f32 per-site aliases restore jal + single precision (5CE68 66.33->84.30, 2026-07-18)](#fnptr-cast-cvtds-fingerprint-5ce68) — _cvt.d.s feeding a jalr-through-s-reg call = unprototyped (f32(*)()) cast (double promotion + indirect call + bogus extra args); per-site `extern float ...(float)` direct aliases fixed insn count 130->123. NEGATIVE: mtc1-aN float-arg capture unreachable when the C copy coalesces to the arg home._
+- [`arg *= CONST` flips mul.s operand order vs `arg = arg * CONST`; embedded-assign `(t = 1.0f/x)` sinks div.s to target schedule (5EF00 67.85->82.94, 2026-07-18)](#compound-assign-mul-order-embedded-div-sink-5ef00) — _fd==fs self-update mul into a call-arg reg needs `*=` spelling (both plain orders emit fd==ft); reciprocal-div statement form hoists loads over the div, folding `(inv = 1.0f/len)` into the first use fixes the schedule at 1 flipped-mul cost. Composes with decl-order spill lever._
 - [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
 - [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
 - [Register-resident `&sym` ptr: MULTI-DEF w/ DISTINCT placeholder syms + call-free def placement + per-use extern split (kills %hi-CSE web-merge) + inline cross-block m2c locals = target lui;addiu web with guard re-materialization + beql tail-dup (timproc 69E8 87.60->96.01 count-exact, 2026-07-18 agent-g)](#register-resident-addr-ptr-multidef-69e8) — _Single-def or same-sym double-def copy-props back to folded lui form; def above earlier calls = spilled web (frame +8); residual = def1 %hi-temp coalesce rotation (zdbug:6 next)._
@@ -21413,3 +21414,29 @@ copy COALESCES into the incoming arg home (sw $6 + lwc1 reloads) and no spelling
 (volatile → per-use reloads regress; `register`/if(1)-def ignored — probed on sibling 4D688's
 lui-zero s7-hoist too, same negative). The coalesce shifts the FP temp ring and frame; treat
 "mtc1 aN capture of a float arg the C copies from its home" as a coloring-class residual.
+
+## `arg *= CONST` (compound assign) vs `arg = arg * CONST` flips commutative mul.s operand order; embedded-assign `(t = 1.0f/x)` inside the first-use expression sinks div.s to the target schedule (gl_func_0005EF00 67.85->82.94, 2026-07-18 agent-f) <a name="compound-assign-mul-order-embedded-div-sink-5ef00"></a>
+
+Two independent single-instruction levers found on the 5EF00 Y-axis rotation-matrix builder
+(sibling of the 5CE68 cvt.d.s family; that fingerprint fix did the bulk 67.85→~80):
+
+1. **Compound assign controls mul.s fs/ft.** Target `mul.s $f12,$f12,$f8` (spilled-arg reload as
+   fs, folded constant as ft, fd==fs) is emitted ONLY by `arg2 *= (*(f32*)(&D+0x2050));`. Both
+   `arg2 = arg2 * CONST` and `arg2 = CONST * arg2` emit the flipped `mul.s $f12,$f8,$f12`
+   (fd==ft). When a self-update mul into a call-arg register has fd==fs in the target, spell it
+   as `*=`. (Positional first/second-operand rules do NOT decide this one — both plain orders
+   produce the same flipped form.)
+
+2. **Embedded assignment sinks a reciprocal div.** Statement form `inv = 1.0f/len; out0 = expr *
+   inv;` puts the div FIRST in IR order, and the scheduler then hoists two operand loads of
+   `expr` ABOVE the 23-cycle div (target has only one load before it). Folding the definition
+   into the first use — `out0 = (f32)((expr) * (inv = 1.0f/len));` — moves the div into the
+   expression's IR position and byte-matched the whole first block, at the cost of ONE flipped
+   `mul.s` operand pair on that store (embedded-assign operand becomes fs; flipping the C
+   operands reverts the schedule instead of fixing the mul — accept the 1-insn residual).
+   Composes with the decl-order spill lever: the now-embedded temp still needs its decl placed
+   FIRST so its phantom slot sits ABOVE (0x2c) the three call-result spills (0x28/0x24/0x20).
+
+NEGATIVE (residual ~17%): blocks 2-4 of the 3x3 fill carry an FP temp-ring rotation
+(f4/f8/f10 permuted, mirrored sub.s webs, one unmatched nop) that survives paren regrouping and
+both div spellings — same eval-order/coloring residual class as 5CE68's mtc1-capture note.
