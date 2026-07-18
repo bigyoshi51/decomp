@@ -13884,6 +13884,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 - [Memory-resident iterator pair = `int *it[2]` ARRAY (struct gets SRA'd to s-regs); mat-mult "hand-unroll" caps may be memory compound-accumulate triple-fors; missing move-v0-zero = tail-call return (393B8 51.2->89.3)](#iterator-array-vs-struct-sra-393b8) — _named `float sum` local is the decode error; `res[r*4+c]+=` in-memory + trip-4 k-loop full-unroll + c-loop beql pipeline fall out of plain triple-for. Ternary-comma advance regresses. &D-publish $s4 addr-hoist vs per-site $at still unsolved._
+- [Address-taken `**pc = &local` kills a cross-call `local+K` CSE web (per-site home reload); named `t = *pc` at each call site = multi-def web spanning calls -> colored $s0 with `addiu a0,s0,K` in the jal delay slot (gl_func_00036C08 18.9->EXACT, 2026-07-18 agent-f)](#addr-taken-pc-web-kill-named-t-s0-36c08) — _plain local -> IDO hoists `ctx+0x30` into $s1 (`or a0,s1` per call); `&ctx` homes it and each `(*pc)` read reloads; the named-t respell recovers the s0-colored reload web + pushes the other global into $s1. Direct `(*pc)` reads in one BB share a single $t9 scratch. `cb += 0x70` mid-block pointer advance reproduces `addiu v0,v0,0x70` rebase with small element offsets._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -21683,3 +21684,43 @@ Residual class (both fns): name-load lands in $v0 vs target t-ring + FP zero-web
 **1EE78 (67.52 -> 83.52) — param-as-cursor + post-inc idiom forces s0.** F3D two-command emitter with one call arm. A separate `s0 = dl` local COPY-PROPS away (cursor stays in $a0, spilled around the jal). Using the PARAM as the mutated cursor is necessary but not sufficient; the tip-over is the post-increment idiom in BOTH arms — `q = dl; dl += 8; helper(q, 0x3C0);` — which yields the entry `or s0,a0,zero` split, `addiu s0,s0,8` in the jal delay, frame 32, and the per-pair `or v0/v1,s0` copy cursors. K&R defn with u16 args: u16 STACK arg reads `lhu 50(sp)` (slot+2); u16 REG arg homes (`sw a3,44`) then re-masks at each int-context use — the "redundant" second `andi` is use-site narrowing, NOT an explicit mask (int param + `a3 &= 0xFFFF` gets the in-place andi but DSEs the home store; you can't have both from ANSI). NEGATIVES: `while(0){dl+=1}` ref-boost inert; swapping pair-1 statements to chase the target's w1-before-w0 store order inverts the temp FIFO (57.6) — that store swap is scheduler noise on top of w0-first evaluation.
 
 **1FAE8 (67.02 -> 81.77) — cached-count stale-v0 skip path.** Record sweep with three callbacks. Control-flow tell: flag conds 2/3 branch to the CALL block, not the skip path — they gate only the status-byte toggle; the callbacks run for every `b33 == a0` record. The while-cond count is a CACHED local `n`, reloaded ONLY at the end of the then-arm (after the calls): the skip path reuses the stale $v0 from the previous load, which is why the target has no join branch (then-arm falls into `slt`, else jumps via the `bnel` likely-delay carrying `i++`). Also `*p &= 0xFF7F` literal (16-bit andi imm; `~0x80` promotes -129 into a hoisted in-loop s-reg const, 2A260 mask-width rule). RESIDUAL: base &D remats per-use (`lui+lw` x3) vs target s5 — every g-use is a %lo-foldable load, and uopt never s-reg-promotes an address web with only foldable uses; `tbl` colors s3 precisely because its use is a call arg (non-foldable). Target's independent s3 pair despite a live s5 = distinct real symbols conflated by the placeholder (24F30-class).
+
+
+## Address-taken `**pc = &local` + named `t = *pc` per call site: the two-stage lever for "spilled ctx, per-site `addiu a0,s0,K` in the jal delay slot" (gl_func_00036C08 18.9->100 EXACT, 2026-07-18 agent-f) <a name="addr-taken-pc-web-kill-named-t-s0-36c08"></a>
+
+**Target shape:** a pointer local (`ctx = *(o+0x14)`) homed at top-of-frame (sp+0x74), reloaded
+before EVERY call, with the call arg computed as `addiu a0,s0,0x30` IN THE JAL DELAY SLOT from a
+consistently-s0 reload; the other long-lived pointer (`o`) in $s1; NO hoisted `ctx+0x30` register.
+
+**Failure modes en route (all verified on 36C08):**
+1. Plain `char *ctx` local: IDO value-numbers `ctx+0x30` across 5 call sites into a CSE web,
+   colors it $s1 (`lw s1,home; addiu s1,s1,48` once, then `or a0,s1,zero` per call). 96/155 words off.
+2. Inlining `*(o+0x14)` everywhere (remove-local/inline-recompute): NO prologue hoist at all —
+   a load can't be CSE'd across calls, so each site reloads from `20(o)` not from a home slot. Worse.
+3. Struct-typing the +0x30 as an embedded `float pos[3]` array (array-decay recompute theory): no
+   effect — decay is value-numbered like any add.
+
+**The fix (two independent stages):**
+- Stage 1 — `S36C08 **pc = &ctx;` and read `(*pc)` everywhere: address-taken forces ctx to a
+  memory home; every read is a fresh load; the `+0x30` web can never form. Gets frame, FP-temp
+  numbering, and per-site reload shape (but reloads land in ad-hoc scratch $t5/$a0, o takes $s0,
+  only one s-reg saved).
+- Stage 2 — `S36C08 *t;` + `t = *pc;` immediately before each of the 5 calls (arg `t->pos`):
+  t is ONE multi-def web whose first-def..last-use range spans the calls, so uopt colors it
+  callee-saved $s0 even though no single def-use chain crosses a call; the scheduler then puts
+  `addiu a0,s0,0x30` in the jal delay slot (reads-after-call in uopt's linear model require the
+  callee-saved reg — an $a0/$tX reload would be before the jal). This also demotes `o` to $s1
+  (matches `or s1,a0,zero`) and adds the second s-reg save. Sites that read `(*pc)` DIRECTLY
+  (no t) in one BB share a single $t9 scratch load serving multiple uses (r-block: `cb` init +
+  call arg from one `lw t9,home`).
+
+**Sibling micro-levers that closed the rest:** `float ghost[4]` unused (4 dead frame words
+0x30..0x3F, frame -0x68 -> -0x78); `cb += 0x70` mid-block pointer advance to reproduce
+`addiu v0,v0,0x70` + subsequent `lwc1 f,0x34(v0)/0x38(v0)` (nested sub-struct base rebase — the
+plain 0xA4/0xA8 spelling folds and never rebases); vec zero-init store ORDER encodes spelling
+(reverse = `p[2]=0;p[1]=0;p[0]=0;` sharing one `mtc1 zero,$f0`; forward = same statements in
+forward order).
+
+**Recognition cue:** diff shows your build hoisting `addiu sN,sN,K` once + `or a0,sN` per call
+where target has `lw s0,home(sp)` + delay-slot `addiu a0,s0,K` per call, and your build saves one
+fewer s-reg. Go straight to the two-stage pc/t respell.
