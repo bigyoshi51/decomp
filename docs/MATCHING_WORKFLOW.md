@@ -9573,7 +9573,14 @@ spelling) lands 0x1C. Also: a trailing `/* comment */` on an INCLUDE_ASM line
 makes asm-processor silently DROP the function from the .o (caught as a
 0xA4-short expected refresh) — keep INCLUDE_ASM lines bare.
 
-**Remaining candidates (checked, not yet done):** `gl_func_000601DC` — head
-already merged into its .s (entry 0x601D4), string-baked tracker fn, still
-unmatched (90.2). Full tiny-orphan enumeration must test
+**DONE 2026-07-18 (agent-f): `gl_func_000601DC` 90.2→100** — same IDO 5.3 -O2
+-mips2 donor recipe (splice into post0b). The "spill/reload around the two
+calls" residual was the 5.3 fingerprint. Decl-order spill-rank knob is
+PER-FUNCTION: here `Rec *v1;` before `int v0;` lands the 0x1C slot — the
+OPPOSITE order from the 669AC donor; brute-force both orders. Second jal has
+NO args ($a0 hoisted above the branch serves only the conditional init call —
+don't invent an arg). And the "baked-USO-symbol lui;addiu" (`lui a0,2; addiu
+a0,0x1CA4`) IS .o-reachable: full-addend form `(char*)D_00000000 + 0x21CA4`
+bakes hi=2/lo=0x1CA4 into the imms under the HI16/LO16 relocs (the CAP is only
+for the reloc-FREE int-literal spelling, which emits lui/ori). Full tiny-orphan enumeration must test
 `0x03E00008 in words` (raw-.word files defeat mnemonic `jr ra` greps).
