@@ -20650,3 +20650,44 @@ alloc); (2) a `sw zero,X; sw reg,Y` tail pair where the target hoists the reg's
 home-reload to the label head: swap the C statement order — as1 re-emits the
 TARGET store order but moves only the lw (independent stores reorder freely,
 the load hoist follows source position).
+
+## while(0) dead loop = FP-web coloring lever for HEAD-region f2/f12/f14/f16 rotations: promotes a folded sum to a first-colored web; dead-ref ORDER steers ties; 2D-index CSE beats named locals (gl_func_0005DBB0 74.42->99.01, 2026-07-17 agent-f) <a name="while0-fp-web-coloring-dbb0"></a>
+
+Shoemake mtx->quat (0x234): whole head diverged in a 75-word FP-register
+cascade because the trace sum `m00+m11+m22` was a ring TEMP (f6) in every
+naive spelling but a first-colored WEB (f2) in the target, rotating
+m22->f16 and 1.0/0.5/add.d pair picks. Findings, all verified by probe
+ladder (18 variants):
+
+- **The lever**: `while (0) { tr = m[1][1] + m[0][0]; } tr = m[0][0] +
+  m[1][1] + m[2][2];` — analoop weights the dead body BEFORE controlflow
+  deletes it (titproc-0C0 mechanism, here applied to FLOAT webs). tr stops
+  copy-prop-folding, becomes a web, colors FIRST -> f2; the unnamed CSE
+  loads then color m00=f12, m11=f14, m22=f16 exactly. Zero emission.
+- **`if (0) { tr = 0.0f; }` does NOT work** (stripped before web build);
+  `while(0)` with a dead-store-only body (`tr=m11; tr=m00;`) loses the
+  first stmt to dead-store elim — keep every dead ref live via one expr
+  tree or chained `tr = tr + x`.
+- **Tie-steering**: with equal boosted weights, the coloring tie between
+  m00/m11 follows REVERSE dead-ref order inside the loop body — loop body
+  `m[1][1] + m[0][0]` colors m00 first (f12). Forward order colored m11
+  first. Last-listed wins.
+- **CSE-tree pollution gotcha**: a dead-loop ADD tree with reversed
+  operands does NOT unify with the real sum's tree (different operand
+  order = different node), but reassociating the REAL sum (`m22 + (m00 +
+  m11)`) flips which tree survives and swaps load schedule + fs/ft
+  operand order downstream. Keep the real code in target shape; only the
+  dead body is reversed.
+- **2D-index CSE form beats named locals**: `f32 (*m)[4]` with `m[i][i]`,
+  `(&D_00000000)[i]`, `q[i]` etc. reproduced ALL of v1/v0/a3/t0/t1/t2 and
+  the if-body constant-fold (`ri=m+0x20; mii=*(f32*)(ri+8); ci=8`)
+  as pure uopt CSE products — frame 0x60 exact with NO named-local slots.
+  Naming the rows/cols in target decl-slot order (frame-slot solver
+  spelling) scored WORSE (57 vs 25 mismatch): naming changes web class and
+  frame. Named f32 locals colored f2-first in DECL order (v2 probe),
+  which is the wrong order here.
+- Residual 25/141 (fuzzy 99.01): one add.s fs/ft pick + a coupled
+  rowj/rowk WEB-RANK swap (t1/t2 + sll t4/t5 + 5 spill-home slots + 6
+  post-call addu pairs move together). Both named and boosted spellings
+  probed; rank not source-steerable from here — likely wants the same
+  dead-ref boost aimed at the rowj web, untried (budget).
