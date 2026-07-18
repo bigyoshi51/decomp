@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Single-int-CARRIER unification: one `q` playing loop-idx + EVERY check's pointer AND flag (int-cast reloads `q = p[k]; q = ((u32)((int*)q)[2] < (u32)((int*)q)[1]) ? 1 : 0;`) coalesces ptr+flag into $v0, pins `move v0,zero` below the sub-buffer loads, and reproduces the beql next-p delay-slot preload (57700 65.92->99.59, 2026-07-18)](#single-int-carrier-unification-57700) — _57->9 word residual in three steps: q for checks' ptr+flag, then unify blockA idx into q, then spell check1 identically (drop the named p). NEGATIVES on the final arr1/rec2/check1-ptr 3-cycle: decl orders inert; if(0) dead-ref ladder at HEAD forces the early a0->s0 split (bases flip to s0), MID/END dead BBs spill a0 and kill s0 wholesale; two-def arr1 disturbs schedule; rec2-as-q CSE-hoists the second lui const; trailing-K&R-arg carrier SPILLS p to frame (does not precolor a1 here)._
 - [Byte-RMW mask-width trichotomy: `*p &= K` direct-RMW statements keep per-step sbs with the LITERAL's andi width (~0x80 -> 0xff7f; literal 0xBF -> 0xbf); non-volatile local chain DSEs intermediate stores; volatile chain keeps stores but widens all masks to 0xffXX (2A260 69.1->87.9, 2026-07-18)](#byte-rmw-mask-width-2a260) — _also: symbol+const ptr arith can stay UN-folded (lui/addiu base + separate addiu 0x5280; base pair = stolen-prologue orphan fn); two same-page &D uses need DISTINCT placeholder externs or uopt CSEs one lui pair; sinking one RMW step below neighboring sh stores realigned downstream t-temp parity; disasm-func.py WITHOUT --obj shows the BUILD, not the target .s._
 - [FP div fold-break kit: f32 numerator locals keep INEXACT literal/literal divs as runtime div.s (kills .rodata folds); the EXACT quotient (255/255) still folds through a local — `(float)N` INT-cast-literal init defeats it (distinct mtc1 + div.s); early-guard beqz may target a trailing ALWAYS-RUN block, not the epilogue (D9E4 66.15->100, 2026-07-18)](#fp-div-foldbreak-guards-fallthrough-d9e4) — _also: decl-order swap (result-ptr before sub-ptr) moved the call-spanning spill 0x28->0x2C; volatile-pad got NO slot here (lever needs addressed/live pad). Companion CB9C 21/21: `goto retzero` return-0 tail = bnel-to-label+4 with hoisted `or v0,zero` + DEAD copy at the label (not a cap); trailing-arg store `a0[k]=n; f(p,n)` colors ptr-copy->a2/n->a1._
 - [Old-m2c-lift fingerprint: cvt.d.s before jalr = fn-ptr-cast float promotion; typed f32 per-site aliases restore jal + single precision (5CE68 66.33->84.30, 2026-07-18)](#fnptr-cast-cvtds-fingerprint-5ce68) — _cvt.d.s feeding a jalr-through-s-reg call = unprototyped (f32(*)()) cast (double promotion + indirect call + bogus extra args); per-site `extern float ...(float)` direct aliases fixed insn count 130->123. NEGATIVE: mtc1-aN float-arg capture unreachable when the C copy coalesces to the arg home._
@@ -21521,3 +21522,30 @@ worth 10-30pp:
 Residual class after the kit: prologue `move sN,aN` delay-slot scheduling, spill-slot NUMBER
 (72-vs-76), FP-ring outer-pair store swaps, and uopt's s0-early/home-late live-range SPLIT of a
 var while a second s-reg is still free (D550 r) — these resisted all spellings probed.
+
+## Single-int-carrier unification: one `q` as idx + every check's ptr AND flag coalesces the whole check chain into $v0 (gl_func_00057700, 2026-07-18) <a name="single-int-carrier-unification-57700"></a>
+
+Shape: N unrolled guard-blocks `p = base[k]; if ((u32)p[2] < (u32)p[1]) call(a0);` where the
+target shows (a) `sltu; beqz/beql; b; li 1` bool-materialization diamonds, (b) the SAME register
+($v0) as both the loaded pointer and the flag in blocks 2..N (tell: `move v0,zero` sits BELOW the
+two field loads — it would clobber the pointer if hoisted), and (c) the next block's pointer load
+duplicated into the `beql v0,zero` delay slot AND after the call. The C that reproduces all
+three: ONE int variable for everything —
+
+    q = ((int *)a0)[3];                       /* block 1 spelled identically */
+    q = ((u32)((int *)q)[2] < (u32)((int *)q)[1]) ? 1 : 0;
+    if (q != 0) helper(a0);
+    q = *(int *)((char *)a0 + 0x1C);          /* blocks 2..N */
+    ...
+
+plus the append-blocks' index also folded into `q` (block A `q = rec1[1]; rec1[1] = q + 1;`).
+The many-ref single candidate wins first color ($v0) and every web lands there. Distinct named
+`arr1`/`arr2` per append-block and named `rec1`/`rec2` bases complete the exact temp rings.
+Result 57->9 diff words (65.92->99.59). Residual = one 3-cycle coloring rotation
+(arr1 a1-vs-a2 / rec2 a2-vs-v0 / check1-ptr v0-vs-a1); all rotation levers failed:
+decl orders (inert), if(0) dead-ref ladder at function head (forces the a0->s0 split point
+EARLY: every pre-call base flips to s0), dead `if(0)`/`if(p){}` blocks MID or END of a leaf-ish
+body (catastrophic: a0 spilled to frame around calls, s0 dropped entirely, +2 words), two-def
+arr1 split (reschedules the lui pair), rec2-spelled-as-q (CSE hoists the second DL-command lui
+to the head), and p-as-trailing-K&R-call-arg (spills p to a frame slot instead of precoloring
+a1 — the 35834 arg-carrier trick does NOT transfer to this shape). Coloring-multiset class.
