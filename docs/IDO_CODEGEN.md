@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
+- [Sparse-dispatch kit: if(1)-wrapped arm bodies defeat jump-threading (beq-chain restored, switch=binary-search, goto-chain=bnel-inline); same-var double-arg K&R precolor evicts to $a3 (2-arg keeps $a2); `*(long long*)p=KLL` = LIFO ori pair for GFX appends (56D14 72.61->89.7, 2026-07-17)](#dispatch-if1-antithread-ll-store-56d14) — _residual: last-test bne/beq trace polarity + coupled +1 temp-ring phase in final-case arms; probe polarity first._
 - [Deep-clone copy runs: alternating-t8/t7 segments = BLOCK STRUCT COPIES (segment length = struct size, secondary-base runs included); 1-word struct copy through a named field-pointer keeps 0(v0) (plain *p= gets offset-folded to base+imm, volatile inert) (526D0 76.5->95.75, 2026-07-15 agent-f)](#struct-copy-runs-oneword-ptr-copy-526d0) — _Also: param-reuse accumulator = move s0,a0 at insn 3 + a2-home in bne delay; int-lvalue (f32) cast emits mtc1/cvt/trunc, use *(f32*)= for lwc1/swc1; residual = uniform -1 temp-ring phase, 6 burn probes (dup-load/multi-def/while(0)/named-vt/array-alias/if(1)) all 0-advance — suspect 2-slot &D materialization shape (adjacent lui;addiu tell)._
 - [Frame-slot SOLVER: cfe assigns local slots TOP-DOWN in decl order (first decl = highest slot); cross-call spill homes in the coalesced named var's decl slot; volatile pads fill the count (40070 76.2->92.11, 2026-07-15 agent-f)](#frame-slot-topdown-decl-solver-40070) — _Turns frame/spill-offset mismatches into arithmetic. Also: f32 vec[3] keeps all 3 zero swc1s (3 scalars DSE to 1); s32*+const word-scale decode tell (offsets 4x target / -0x2C as -176); distinct baked-USO vtable aliases un-fold dead get-or-create guards (+9 words, 25C class); residual probe log (per-pred f2 remat, a2/v1 coloring)._
 - [gui dispatch/param kit: IDO sorts switch cases ASCENDING — nested-!= gives source-order beq-to-body; param-reassign-as-scratch; if(0)-address-escape un-promotes a loop-incremented param (gui 27A0 90.0->92.5, 3B80 87.3->89.7, 2026-07-10)](#feedback-ido-gui-dispatch-param-kit) — _(1) A beq-to-out-of-line-body compare chain in NON-sorted order is NOT a switch (IDO emits switch compares ascending by value) and NOT an ==-else-chain (bnel+inline arms): it's a NESTED-!= chain (default innermost); per-arm constant assignments get speculated into the beq delay slots. goto-pinned bodies get re-laid-out by uopt (order is its choice). (2) When the target reuses an arg reg (a1/a3) as scratch for halfword temps/mode/DL-cursor, REASSIGN THE PARAM in C — frees the t-ring, forces the prologue copy (move s8,a1), and the old value's survival into one late arm reproduces the spill-home reload (max = a3 in the default arm only). (3) A loop-incremented param the target keeps MEMORY-homed (lw home/addu/sw home per iter) while the build $s-promotes it: `if (0) { f(&param); }` address-escape kills the promotion (+2pp, frees the s-reg chain). (4) METRIC GOTCHA: objdiff fuzzy != aligned-insn count — fuzzy tolerates sp-offset renames but weighs block shapes; a variant can win aligned-count and LOSE fuzzy (27A0 if-chain 174-aligned/88.3-fuzzy vs switch 174/90.3). Gate every knob on the official fuzzy, not a homebrew aligned metric._
@@ -20385,3 +20386,46 @@ local to kill a `mov.s` web-copy; commutative `+` spelled addend-first flips
 lwc1 pair order AND f10/f16 pseudo-numbering (3 sites, all matched); a
 `move a0,zero` arg vs target `lui/addiu import_X` pair = decode error (arg was
 &extern, not 0), which also restored the target's bc1f+nop (non-likely) form.
+
+## Sparse-value dispatch kit: if(1)-wrapped arm bodies defeat uopt jump-threading (beq-chain-to-bodies restored); same-var-to-two-arg-slots K&R call = double-precolor pushout to $a3; `*(long long*)p = KLL` emits the LIFO ori pair for 8-byte GFX appends (56D14 72.61→89.7, 2026-07-17) <a name="dispatch-if1-antithread-ll-store-56d14"></a>
+
+Target shape: 10-way `li at,K; beq mask,at,BODY` compare chain packed with
+next-`li` delay slots (beqzl for `== 0` first), ALL bodies out-of-line after
+the chain in source order, `b default` fall, default error-call at the very
+end. Three coupled levers (gl_func_00056D14, game_libs_post0b):
+
+1. **if(1){} around EVERY arm body of an if-goto chain is the anti-threading
+   barrier.** Plain `if (m==K) goto L; ... L: body; goto end;` gets
+   jump-threaded: uopt pulls each single-pred body inline after its test and
+   inverts to bnez/bnel skip form (+nop debris). `switch` on 10 sparse values
+   = slti binary search (9 shared bodies doesn't drop it under the linear
+   threshold). Wrapping each labeled body in `if (1) { ... }` blocks the
+   threading — bodies stay out-of-line, the beq chain packs its delay slots
+   with the next comparison's `li at`, and the first `== 0` test becomes
+   beqzl with the body head duplicated (182→48 diff words in one edit).
+   Shared bodies (two case values) = two adjacent beqs to one label, written
+   as two separate `if (m==K) goto L;` statements.
+2. **Passing the SAME variable to two arg slots of a K&R call double-precolors
+   and evicts it.** `err(0x2199C, mask, mask)` wants mask in $a1 AND $a2 →
+   uopt gives up, colors mask $a3, emits two moves (+1 word). The 2-arg form
+   `err(addr, mask)` colors mask $a2 naturally with a single `move a1,a2` in
+   the jal delay — `move a1,a2`-only call setup is the 2-arg tell even though
+   a2 looks like a third argument. Companion: append-pointer spelled as the
+   dead second PARAM (`arg1 = base + n*8`) keeps it in $a1 and arg0 unspilled
+   (named local for it stole $a0 and forced `move a2,a0`).
+3. **8-byte constant GFX append = ONE `*(long long *)p = 0x<w0><w1>LL;`.**
+   Two `*(s32*)` stores emit FIFO ori order (lui0,lui1,ori0,ori1); the target
+   LIFO order (lui0,lui1,ori1,ori0 — higher temp's ori first) plus the same
+   sw/delay-slot pair comes only from the long-long store (IDO 7.1 lowers to
+   the identical 2×sw, but materializes lo-word-first). 8/8 arms snapped
+   byte-exact. Sign-extended low words fold to `li` (addiu) either way.
+   Baked-USO-address first arg: int literal 0x2199C gave lui/ORI; the
+   `(char*)&D_00000000 + 0x2199C` reloc spelling gives the target lui/ADDIU
+   %hi/%lo and bakes identically (D_00000000 = abs 0).
+
+RESIDUAL cap class (19 words): uopt flips the LAST test of the chain to
+`bne →default; b →body` (target `beq →body; b →default`); if(1)-trampoline
+on the test, if(1) around the default call, and source polarity spellings all
+converge to the flipped form — and the +1 temp-ring phase it induces drags
+the two sub-arms of the final case (t0/t1 vs t9/t0). Trace-polarity + ring
+coupling; attack the polarity first if revisiting.
