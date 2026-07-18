@@ -13824,6 +13824,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [ptr+int addu operand-order INVERTS vs spelling: `(char*)p + off` -> `addu rd,OFF,p`, `off + (char*)p` -> `addu rd,p,OFF`; loop-array element re-spelled `self[1][i]` per use (never s-reg'd across calls) + de-named owner CSE temp = the no-s3 constructor-loop shape (gl_func_000683D4 77.46->99.44, 2026-07-17 agent-h)](#addu-order-respell-element-683d4) — _Naming the element made an s3 web (wrong saves/frame); the original reloads lw t?,4(s1)+addu+lw at EVERY use because calls kill the array memory. Named parent colors v0 only when the owner ptr (self[3]) is a DE-NAMED CSE temp (colors v1, feeds the bnezl-annulled delay reload); naming both flips v0/v1. Residual class: second vtable temp a1-vs-v0, immune to naming/de-naming/decl-order/web-merge._
 - [Store-forward CSE = expression-temp global load + `move` candidate copy; uopt one-color-per-named-variable; reload-web-vs-spilled-var rank cap (43654 74.64->98.63, 2026-07-17 agent-f)](#store-forward-temp-copy-one-color-per-var-43654) — _Write early reads as FW(obj,off) after the store, named var as consumer -> lw t6 + move a3,t6; var reuse proves single color per variable (spill home follows); append-tail v0/v1 rank is spelling-invariant (7 probes)._
 - [Script-VM executor coloring-cycle kit: `*p|=x;*p&=y;` double-sb store-forward; de-named `arg1&MASK` colors $a1; named char** call arg + `ptr+=1;*cur=ptr`; hand-lowered u32->f32 = phi copy (2B5F4 75.96->94.11, 2026-07-17 agent-h)](#vm-executor-coloring-kit-2b5f4) — _Five reusable levers that resolved a full a3/t1/t0->a1/t0/a3 coloring cycle; named group=memory, block-local g=v0+home, de-named=a1; store-forward ptr variant regresses; u32 r kills the break-6 pair._
+- [USO placeholder-callee heap reset/copy front-end: per-SITE base-0 aliases (one extern per access site) beat per-WORD (multi-use symbol address gets CSE'd into s-regs) and volatile (unfolds %lo into addiu); innermost-loop single-use symbol address STILL invariant-hoists into an s-reg (unfixable by goto form/volatile cast/-g3); dead-assign `base=&D` before an if-arm call copy-propagates to `lui sX; addiu a0,sX,%lo` (33EB8 70.0->90.3, 2026-07-17 agent-h)](#per-site-alias-innermost-hoist-33eb8) — _Also: -O1+single-struct reproduces per-site `lui;lw %lo` global access AND store-before-loads scheduling exactly but stack-allocates locals; the target class pairs -O1-like memory access with -O2 regalloc — no single flag setting reaches it. De-named copy-loop byte temp -> t7 + sb -1() cursor respell; src-before-dst decl order sets the v1/v0 map._
 - [goto-mid label (or do-while(0)) blocks same-BB base+offset fold — materializes `addiu v0,a0,K; lw/sw 0(v0)` pointer shape at zero insn cost; cross-BB named ptr reserves an 8B bottom home slot (gl_func_00065060 76.76->93.10, 2026-07-17 agent-h)](#goto-mid-pointer-antifold-65060) — _`int *p=(int*)(a0+0x18); *p|=0x10;` always copy-props back to `lw/sw 24(a0)`. Inserting `goto mid; mid:` right before the use (or wrapping the use in `do{...}while(0)`) makes the def-use cross a BB boundary -> IDO materializes the exact addiu-base + 0-offset derefs with no extra insns. Cost: the pointer becomes a named cross-BB candidate and gets an 8B stack home reserved at the frame BOTTOM (below all arrays), shifting memory locals +8. All same-BB anti-fold re-spellings fail ((unsigned)/volatile/register/union/struct-field/ptr-arith); if(cond) adds beqz; &p adds a dead sw; phantom 2nd param homes to the arg area but emits `sw a1,frame+4(sp)`. Also: same-value FP-const webs split per (float)N cast-literal spelling generalize 4-way (0.0f/(float)0/1.0f/(float)1 -> four distinct mtc1 regs, post-call remat follows the web's spelling)._
 - [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
@@ -21074,3 +21075,49 @@ took 91.54-fuzzy baseline to 153/200 words exact with length exact (200/200). Fi
    call-ARG node, not the call result; `*(int*)(d+0x184)` is d-relative through the v0-held
    &D base (decode said hardcoded 0xA0000184 — wrong); value-form || second comparand via
    assigned cond var (`|| !(c = (x == K))`, 44EDC recipe) emits the target xor+sltiu pair.
+
+## USO heap reset/copy front-end: per-SITE base-0 aliases vs per-WORD vs volatile; innermost-loop symbol-address hoist cap; dead-assign base arg0 (gl_func_00033EB8 70.0->90.3, 2026-07-17 agent-h) <a name="per-site-alias-innermost-hoist-33eb8"></a>
+
+Target pattern: every global heap-control word (+0x8/+0xC/+0x10/+0x24/+0x28/+0x2C
+off USO data base 0) is accessed as a fresh `lui rX,0x0; lw rX,off(rX)` at EVERY
+site, including paired `lui t7/lui t8` double-loads feeding compares; only call
+arg0 holds a base pointer (s1). Findings from reaching 90.3 on this shape at -O2:
+
+1. **Per-SITE aliases, not per-WORD.** `extern s32 gl_d_33eb8_28a..f` (one symbol
+   per ACCESS SITE, all defined to the same address in undefined_syms) is the only
+   spelling that emits the target 2-insn access everywhere. Per-WORD symbols
+   (each used 3-6x) get their ADDRESSES CSE'd into spare s-regs (`lui sX; addiu
+   sX,sX,%lo` preamble + `lw a1,0(sX)` at sites). One struct-at-0 for all words =
+   fully held base (`lw off(s2)` everywhere), even worse.
+2. **Volatile unfolds %lo.** `extern volatile s32` (or a volatile struct/cast)
+   defeats CSE but emits `lui; addiu %lo; lw 0()` — 3 insns vs the target 2. It
+   also does NOT stop the address hoist below. Volatile is the wrong tool for
+   per-site global access shape.
+3. **Innermost-loop single-use address hoist = honest cap.** A symbol whose only
+   use sits inside an INNERMOST loop (here the flush do-while condition arg) gets
+   its address invariant-hoisted into an s-reg even when single-use. Not
+   suppressed by: goto-formed loop (uopt still finds the CFG loop), volatile
+   cast on the access, -O2 -g3, or if/do-while restructure (that just moves which
+   symbol carries 2 emissions). Cost cascades: the occupied s-reg renumbers every
+   later candidate (rem/dst/const shifted s3/s4/s5 -> s4/s5/s6).
+4. **Split rotated-loop condition emissions onto separate aliases.** `while (call
+   (base, SYM+8) != K) body;` duplicates the condition (pre-loop + bottom) — one
+   source SYM = 2 uses = address CSE. Rewriting as pre-check `if (call(base,
+   SYM_a+8) == K) goto done;` + goto loop with `SYM_b` in the bottom check gives
+   each emission its own single-use symbol.
+5. **Dead-assign base for a branch-local call arg.** Target `lui s1,0x0 / ... /
+   jal / addiu a0,s1,0(delay)`: reproduce with `if (...) { base = (u8*)&D; call
+   (base, ...); } base = (u8*)&D;` — the in-arm assignment is dead after the call
+   so uopt keeps %hi in base's home reg (s1) and folds %lo into the a0 move. A
+   DIFFERENT symbol for the arm call materializes via a scratch reg (a0) instead.
+6. **Flag-class cap (documented, unresolved):** -O1 + a single extern struct
+   reproduces the target's access shapes AND its store-before-loads program-order
+   scheduling exactly, but stack-allocates all locals. The target pairs -O1-like
+   unhoisted per-site memory access with -O2 regalloc; unreachable at any single
+   flag setting tried (-O2, -O2 -g3, -O1, volatile variants). Suspect original
+   is a different uopt build/vintage for this region; treat store/load reorder +
+   the item-3 hoist as the residual for this family.
+7. Copy-loop cursor kit (confirms 2B5F4 respell): de-name the byte temp
+   (`*(u8*)cpdst = *src; cnt+=1; cpdst+=1; src+=1;`) -> lbu into t7 with the sb
+   respelled to `-1(cpdst)` in the branch delay; declaring `u8 *src;` BEFORE
+   `s32 cpdst;` sets the v1(src)/v0(cpdst) map.
