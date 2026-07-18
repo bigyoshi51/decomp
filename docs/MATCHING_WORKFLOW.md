@@ -9558,10 +9558,22 @@ function and greped against references/libreultra first.
 SINGLE-LINE leading comment — a multi-line `/* ... \n ... */` before `glabel`
 fails asm-processor with ".text block without an initial glabel".
 
-**Remaining candidates (checked, not yet done):** `gl_func_000669B8` — orphan
-`game_libs_func_000669AC` (0xC: `lui v1,%hi(D); addiu; lw v0,0(v1)`) resolves its
-"caller-set $v0/$v1" cap ($v1=&D, $v0=D hoisted); body is a 5-call debug-print fn
-w/ 5 baked string addrs (0x2217C..0x221AC) — donor needs gl_ref absolutes, not
-libultra. `gl_func_000601DC` — head already merged into its .s (entry 0x601D4),
-string-baked tracker fn, still unmatched. Full tiny-orphan enumeration must test
+**DONE 2026-07-18 (agent-f): `gl_func_000669B8` 59.68→100** — 4th cap of the class
+falsified. Identity is NOT libultra: game-side 5-call debug-print dispatcher.
+The "gl_ref absolutes" guess was unnecessary — the 5 string refs are plain
+`(char*)D_00000000 + 0x217C..0x21AC` addend form (bakes the %lo imms; lui imm
+stays 0 under the HI16 reloc). Donor = IDO 5.3 **-O2 -mips2** splice into
+post1b. TWO fingerprint gotchas: (1) **standalone probes MUST pass `-mips2`
+(the project's default MIPSISET) — at default mips1 scheduling, 5.3 -O2 pads
+`lw $t9; jalr $t9` with a hazard nop and floats the str-addius into load gaps,
+masquerading as an unfixable scheduling cap** (32 diffs → 2 with -mips2 from
+identical C); (2) rc's cross-call spill slot (0x1C vs 0x18, frame 0x20) is
+decl-order: `int rc;` declared BEFORE the ptr alias (or no-alias direct-deref
+spelling) lands 0x1C. Also: a trailing `/* comment */` on an INCLUDE_ASM line
+makes asm-processor silently DROP the function from the .o (caught as a
+0xA4-short expected refresh) — keep INCLUDE_ASM lines bare.
+
+**Remaining candidates (checked, not yet done):** `gl_func_000601DC` — head
+already merged into its .s (entry 0x601D4), string-baked tracker fn, still
+unmatched (90.2). Full tiny-orphan enumeration must test
 `0x03E00008 in words` (raw-.word files defeat mnemonic `jr ra` greps).
