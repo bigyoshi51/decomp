@@ -31,6 +31,7 @@ _74 entries. Auto-generated from per-memo notes; content may be rough on first p
 - **ORPHAN ABSORPTION prerequisite: merge the orphan's words into the successor's .s (and trim any stolen word from the donor fn's .s) — removing just the INCLUDE_ASM breaks the BASELINE layout (island batch-2, 2026-07-09)** — _When a donor-spliced or promoted fn absorbs an adjacent orphan (stolen prologue etc.), deleting the orphan's INCLUDE_ASM from the host WITHOUT merging its words into the successor's .s leaves the real path correct (splice grows the symbol; ROM verifies) but the pure-INCLUDE_ASM expected/ baseline emits N words short → every following fn shifts → the land script refuses "not byte-exact (build vs expected disasm differs)" even though the ROM is fine. Symmetric fix per the 1D1C/275F4 merge precedent: orphan words merged into the .s header+body, orphan .s deleted; a trailing stolen-prologue word moved to the NEXT fn's .s must be TRIMMED from this fn's .s. REFINEMENT (batch-6): a LEADING PAD NOP covered by a `SUFFIX_BYTES_FORCE` on the PREDECESSOR must be SKIPPED in the merge (orphan words[1:]) or TRIMMED from the fn's own .s — the suffix emits it in both paths, so the .s must not double-emit it._
 - **PROMOTION prerequisite: graduate externs/typedefs trapped in OTHER functions' NM regions (3C8C, B8D4, 2026-07-07/08)** — _A promoted body often references externs or struct/typedef definitions that were declared inside a DIFFERENT function's `#ifdef NON_MATCHING` block (shared by the wrap-era bodies). The NM build sees them; the default build errors `'sym' undefined` / `storage size isn't known` only AFTER promotion. Fix: move the struct/typedef to unconditional file scope (careful: a duplicate struct TAG definition is an error — MOVE it, don't copy), and add plain `extern char sym;` decls above the promoted function (duplicate consistent extern decls are legal). Check both build paths after every promotion._
 - **PROMOTING a wrap in a `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` file shrinks the NM `.text` → CI-only failure (game_libs_tail CB58, 2026-07-07)** — _Files with a Makefile `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN := 0xNNNN ...` pin the non_matching object's expected `.text` size. Promoting an NM wrap replaces its (usually oversized) wrap body with the exact-sized real body, so the NM `.text` SHRINKS and `scripts/clip-elf-text-keep-align.py` hard-errors ".text smaller than requested" — but ONLY in the NM build: the default build + `make verify` stay green, so the breakage ships to CI silently if the NM rebuild's exit code is swallowed (e.g. `2>/dev/null` in a batch loop). After ANY promotion, rebuild that file's `build/non_matching/...c.o` WITH the exit code checked; if the clip guard trips, lower the Makefile constant to the new `.text` size (the guard only errors on smaller; larger is clipped). Grep `NON_MATCHING_TEXT_CLIP` in the Makefile to see which files are pinned._
+- [post0b mid-unit NM size shift corrupts offset-based replace-body tail; zero-size OOB symbol aborts report generate, stale JSON shows frozen percents (57700, 2026-07-18)](#post0b-midunit-size-shift-replacebody-tail-corruption) — _frozen percents after an edit? check report-generate stderr, objdump the tail, stash-bisect; landing needs clip re-probe + replace-body offset re-derive in one commit. Also parks 57700 bool-diamond `?1:0` + distinct-per-block locals recipe._
 - [NM clip-budget gotcha (NON_MATCHING_TEXT_CLIP_KEEP_ALIGN units, e.g. tail 0x5530): GROWING any NM body pushes later symbols past the clip -> objdiff diff AND report generate hard-fail ("Symbol data out of bounds") and refresh-report.sh TRUNCATES report.json to empty (2026-07-18)](#nm-clip-budget-symbol-oob) — _restore with `git checkout HEAD -- report.json`; the budget is zero-sum across the unit's NM bodies — rebalance by making an OVERSIZED sibling NM body exact-size (D9E4 +0xC absorbed by fixing CB9C +0xC) rather than touching the clip; per-symbol size audit: objdump -t expected vs build/non_matching, diff the .text F sizes._
 - [Clip re-measure: objdump -h on a clip-built .o returns the CLIP value, not natural size (tautology); probe via shrink hard-error or last-symbol start + expected/ size; boundary sentinel is game_libs_func_00062F08 not gl_ prefix (2026-07-15)](#clip-natural-size-tautology)
 - [replace_all bleed edits exact-matched textual twins in the TU (F948 100->99.79); agent stash-test integrity claims unreliable — bisect via `git checkout origin/main -- <file>` + rebuild; exact-set diff gates the push (2026-07-15)](#replace-all-bleed-exact-sibling-f948)
@@ -9599,3 +9600,28 @@ a0,0x1CA4`) IS .o-reachable: full-addend form `(char*)D_00000000 + 0x21CA4`
 bakes hi=2/lo=0x1CA4 into the imms under the HI16/LO16 relocs (the CAP is only
 for the reloc-FREE int-literal spelling, which emits lui/ori). Full tiny-orphan enumeration must test
 `0x03E00008 in words` (raw-.word files defeat mnemonic `jr ra` greps).
+
+## post0b tail corruption fingerprint: a mid-unit NM body size change silently shifts the offset-based replace-body patches — tail fn truncates, last symbol goes zero-size past the clip, and objdiff report generation ABORTS (57700 probe, 2026-07-18 agent-f) <a name="post0b-midunit-size-shift-replacebody-tail-corruption"></a>
+
+Probing gl_func_00057700 (INCLUDE_ASM 0x1b8-with-pad emit -> compiled C 0x1b4) shrank
+game_libs_post0b .text by 4 mid-unit. The NM pipeline's offset-addressed REPLACE_FUNC_BODY
+steps then patched the WRONG locations downstream: gl_func_00062E80 truncated 0x88->0x5c and
+sentinel game_libs_func_00062F08 became a ZERO-SIZE symbol at 0x2c past the clipped .text end.
+`objdiff-cli report generate` then hard-fails (`Failed: Symbol data out of bounds: X..X`) and
+any report JSON you read afterwards is a STALE file from the last successful run — functions
+appear frozen at their pre-edit percents (5EF00 read back 67.85 while the actual diff was
+~83%). Diagnosis order when percents look frozen after an edit:
+1. check `objdiff-cli report generate` STDERR for the out-of-bounds abort (don't trust -o output);
+2. objdump -t the NM .o: zero-size symbol past .text end + a shrunken tail neighbor = this class;
+3. bisect by stashing the new body — if HEAD regenerates clean, the size shift is the trigger.
+Landing such a body needs the full multi-step: re-probe clip AND re-derive every downstream
+replace-body offset in the same commit. A same-size body (symbol size unchanged) does NOT trip
+this — 5EF00's -0x20 DID (clip re-probe handled it) but its final -4 iteration stayed inside
+alignment slack.
+
+Positive findings parked for 57700 (retry with the offset fix): target's per-check
+`sltu; beqz/beqzl; b; li 1` diamond = bool MATERIALIZATION — spell as
+`flag = ((u32)p[2] < (u32)p[1]) ? 1 : 0; if (flag != 0) call(a0);` (plain `if (a<b) call;`
+emits no diamond); the two DL-append blocks need DISTINCT local sets (arr1/arr2 -> a2/t0, not
+one reused var), and reusing the flag var as block1's idx got the closest coloring (78-line
+residual = v0/v1/a1 3-cycle rotation, coloring-multiset class).
