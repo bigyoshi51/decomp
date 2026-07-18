@@ -58,6 +58,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Fresh-Vec3-per-site alloc-fallback fanout (7C1C 62.9->75.8): fresh address-taken Vec3 home per staging site (frame 2.5x), decl order = descending homes; `p=0;if(1){p=&X;}` anti-fold guard; int-cast `q=(f32*)((int)base+0x30)` hoisted above guard is the ONLY spelling that keeps the addiu join-CSE; objdiff fuzzy ignores sp-offset diffs so skip frame-gap pads](#fresh-vec3-fanout-intcast-q-7c1c) — _metric/3FAC dir arg = result-direction copy not segDir; lw-2312 double-deref tell._
 - [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var._
 - [NEGATIVE: C48C 32-stage template-addr %hi/%lo remat resists de-name + int-cast-literal (uopt GCSE spills 16-use address const regardless of spelling); 32 sw-a2-arg-home jal delays also open](#c48c-template-addr-gcse-negative) — _needs uoptlist, not spelling._
+- [Escaped-aggregate scratch kills f22/f24 caching of sibling fields: separate f32 locals w/ one address-taken let IDO cache the rest in FP callee-saves across jalr; single struct scratch = full escape = target reload shape; also reversed &-operand emission + *= negation webs (3C86C 71.3->100, 2026-07-17 agent-f)](#aggregate-scratch-escape-vs-f22-caching-3c86c) — _frame-tiling names the struct size; load-temps regress to f0/f2 webs; owner-store-first blocks the lwc1 hoist._
 - [while(0) dead loop = FP-web coloring lever (head f2/f12/f14/f16 rotation): promotes folded sum to first-colored web, dead-ref ORDER steers ties, 2D-index CSE beats named locals (5DBB0 74.4->99.0, 2026-07-17 agent-f)](#while0-fp-web-coloring-dbb0) — _if(0) strips, dead-store-only bodies DSE; reverse dead-ref order colors first; dead add-trees do not CSE with real sums but real-sum reassociation flips the survivor; named f32 locals color f2-first in decl order (wrong here)._
 - [Wave-3 round-2 closers (agent-g 2026-07-15): de-name expression locals = fresh-ring numbering + ghost-home kill in one move; void-alias the last jal before a CSE-temp region; pad-AFTER a lone named local re-packs spill homes (38C0 91.3->EXACT, 15FC 27->23)](#wave3-round2-38c0-15fc) — _Named OR-chain/CSE-ptr locals color in-place + cost dead homes; folding them into the call args restores t7->t8->t9->t0 fresh numbering AND the exact frame. "One CSE temp in a v-reg, the other on the ring" after a K&R int call = dead-$v0 exclusion; void-alias frees v1/v0 emission-order coloring. A lone named local + compiler CSE spills +4 with a hole below = volatile pad AFTER the local claims the stray word (frame unchanged)._
 - [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
@@ -20741,3 +20742,28 @@ ladder (18 variants):
    target puts the shared `t` at 0x2C (uopt-temp region, below the u run
    0x44..0xC0, frame 0xC8); cfe places function-scope `t` ABOVE the u run
    (frame 0xB8) — same slot-placement cap family as 1C54's sp-offset residual.
+
+## Escaped-aggregate scratch kills FP-callee-save caching of sibling fields; separate f32 locals with only one address-taken let IDO cache the others in f22/f24 across jalr calls (gl_func_0003C86C 71.27->100.00, 2026-07-17 agent-f) <a name="aggregate-scratch-escape-vs-f22-caching-3c86c"></a>
+
+Callback-scratch pattern: a function passes `&buf` to jalr'd vtable callees,
+then re-reads/negates buf fields between calls. Target reloads all three f32s
+from the stack each site (`lwc1 f4/f8/f16; mul.s f6/f10/f18` by f20=-1.0f).
+
+- **The cap that wasn't**: spelled as separate locals `f32 x,y,z; ptr hit;`
+  with only `&x` passed, IDO knows y/z/hit never escape and legally caches
+  y/z in **f22/f24 across the calls** (callee-save) — a whole-shape divergence
+  (+8 frame, sdc1 f22/f24, wrong reload pattern) that reads like a hopeless
+  regalloc cap. Fix: make the scratch ONE struct (`f32 n[3]; ...; char *other;`)
+  so `&buf` escapes the whole aggregate; every field access becomes a real
+  stack load/store and the target shape falls out.
+- **Frame math names the struct size**: two scratches at sp+0x40/sp+0x80 in a
+  0xC0 frame with the ptr field at +0x28 → size 0x40 each, tiling the local
+  region exactly (gaps are IN the struct, not between locals).
+- **`&`-operand emission is reversed**: `lh A; lh B; and` came out from source
+  `SH(B) & SH(A)` — spell mask conjunctions in reverse of desired load order.
+- **Negation-site spelling**: `other = s1; n[0] *= -1.0f; n[1] *= -1.0f;
+  n[2] *= -1.0f;` reproduces the direct-expression webs (f4→f6, f8→f10,
+  f16→f18, incl. the unfilled `sll` stall). Explicit load-temps (`x=n[0];...
+  n[0]=x*-1.0f`) regress: temps take f0/f2 webs and the frame grows +16.
+  Owner-store FIRST also stopped the scheduler hoisting `lwc1 f4` above the
+  mask beql (the last 2-insn scheduling residual).
