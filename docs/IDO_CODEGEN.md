@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Old-m2c-lift fingerprint: cvt.d.s before jalr = fn-ptr-cast float promotion; typed f32 per-site aliases restore jal + single precision (5CE68 66.33->84.30, 2026-07-18)](#fnptr-cast-cvtds-fingerprint-5ce68) — _cvt.d.s feeding a jalr-through-s-reg call = unprototyped (f32(*)()) cast (double promotion + indirect call + bogus extra args); per-site `extern float ...(float)` direct aliases fixed insn count 130->123. NEGATIVE: mtc1-aN float-arg capture unreachable when the C copy coalesces to the arg home._
 - [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
 - [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
 - [Register-resident `&sym` ptr: MULTI-DEF w/ DISTINCT placeholder syms + call-free def placement + per-use extern split (kills %hi-CSE web-merge) + inline cross-block m2c locals = target lui;addiu web with guard re-materialization + beql tail-dup (timproc 69E8 87.60->96.01 count-exact, 2026-07-18 agent-g)](#register-resident-addr-ptr-multidef-69e8) — _Single-def or same-sym double-def copy-props back to folded lui form; def above earlier calls = spilled web (frame +8); residual = def1 %hi-temp coalesce rotation (zdbug:6 next)._
@@ -21385,3 +21386,30 @@ Context: 38B0/396C twin redecode (volatile t/y carrier locals, 8-slot pad ladder
 Companion positive levers validated same session: `h = arg3;` snapshot kills the `sw a3,12(sp)`
 arg home + reload-per-use (target = single `mtc1 a3,$f12`); if(1){} wrap around a 3-store section
 stops copy-prop folding the FIRST store to `96(a1)` while stores 2/3 use the held base.
+
+## Old-m2c-lift fingerprint: `cvt.d.s` before `jalr sN` = fn-ptr-cast float promotion; typed f32 per-site aliases restore jal + single precision (gl_func_0005CE68 66.33→84.30, 2026-07-18) {#fnptr-cast-cvtds-fingerprint-5ce68}
+
+Band-[65,70) post0b bodies are old m2c lifts that spell USO-callee math calls as
+`((f32(*)())gl_func_00034458)(args)`. Three stacked artifacts, all visible in the diff:
+
+1. **`jalr $16` + `lui/addiu s0,0`** instead of the target's direct `jal 0` — the cast forces an
+   indirect call through a callee-saved fn-ptr (extra s-reg save, +frame).
+2. **`cvt.d.s $f12` feeding the call** — the CAST is unprototyped, so float args promote to
+   DOUBLE (K&R rules). Target passing `mov.s $f12`/single spills = the original callee was
+   ANSI-prototyped with f32 params. This cvt.d.s-before-call is the recognition fingerprint.
+3. **Bogus extra args** — the m2c lift passed 2 args where the target's `acos(x)`/`sin(x)` slots
+   take one (check the delay-slot/spill shape before each jal: only $f12 set = 1 float arg).
+
+Fix: per-site typed extern aliases `extern float gl_func_00000000_<fn><slot>(float);` called
+DIRECTLY (composes with #prototyped-per-site-callee-alias-single-float-abi-64588 and the
+knr-float-call entry). On 5CE68 (quaternion slerp) this alone went 130→123 insns (exact count)
+and aligned the entire tail. Companions that also moved bytes: dot-product w-term must multiply
+the spilled RE-READ copy (`sp1C`), not the still-live temp; `spin*PI`, `theta+spin*PI`, and the
+final `w + xyz` sum follow the rs=second-C-operand order rule.
+
+NEGATIVE (residual ~16%): float 3rd arg after two pointer args arrives in $a2 (int reg); target
+captures it `mtc1 $6,$f14` into a register web with its OWN spill slot. A plain `f32 t = arg2;`
+copy COALESCES into the incoming arg home (sw $6 + lwc1 reloads) and no spelling found breaks it
+(volatile → per-use reloads regress; `register`/if(1)-def ignored — probed on sibling 4D688's
+lui-zero s7-hoist too, same negative). The coalesce shifts the FP temp ring and frame; treat
+"mtc1 aN capture of a float arg the C copies from its home" as a coloring-class residual.
