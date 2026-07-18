@@ -53,6 +53,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Wave-3 agent-h addendum: ||-form retracts the constructor 'prologue scheduler tie'; loaded-store-first FP groups; carrier/branch-fold phase disjunction; inline call-arg temps take bottom spill homes (11A4 EXACT, 15FC 82->92.8, 2026-07-15)](#wave3-agent-h-addendum) — _Probe `if (x != 0 || (x = alloc(N)) != 0)` before accepting prologue/spill-slot constructor residuals; write loaded/const FP stores BEFORE their 0.0f fillers; the 23B98 return-copy coalesce cap is phase-order-proven (uncoalescing carriers keep their branch, foldable branches re-coalesce)._
 - [Folded (unsigned short) cast burns ONE ugen ring slot — de-name + fitted narrowing cast cracks a skipped-ring-slot residual (gl_func_0002A4D0 EXACT 2026-07-15)](#folded-ushort-cast-ring-slot-2a4d0) — _De-named `*a0 &= K; *a0 |= K2;` keeps values in the t-ring with store-forwarding; a FOLDED (unsigned short) cast on the store RHS (zero insns) still allocates a ring temp -> shifts andi/ori numbering by one. Skipped-ring-slot residuals ARE reachable at store RHS; (unsigned char) at natural store width folds without burning. BOUNDARY: feeding an `|`/arith op the fold materializes a move (+1) — store-RHS position only (D9CC (f) negative)._
 - [Wave-3 round-3 (agent-g 2026-07-15): 38C0-family recipe portable VERBATIM (3734 EXACT on first compile); ghost-home count = volatile-pad count; value-load vs address lui/lw tell; node-copy-spill guard; as1 addiu-vs-home-store delay tie (3734 100, 3638 95.9, 6A30 85)](#wave3-round3-3734-6a30) — _Backport family recipe before re-deriving; frame short N words with all insns exact = N scalar volatile pads after the named locals; beqz+4 alloc-fail skips only init; sw s0,0x10(sp) pre-jal = 5th K&R arg; register-float staging = candidate f0/f2/f12/f14 pool; *(V3*)&float cast-copy DSEs siblings (use struct fields)._
+- [Fresh-Vec3-per-site alloc-fallback fanout (7C1C 62.9->75.8): fresh address-taken Vec3 home per staging site (frame 2.5x), decl order = descending homes; `p=0;if(1){p=&X;}` anti-fold guard; int-cast `q=(f32*)((int)base+0x30)` hoisted above guard is the ONLY spelling that keeps the addiu join-CSE; objdiff fuzzy ignores sp-offset diffs so skip frame-gap pads](#fresh-vec3-fanout-intcast-q-7c1c) — _metric/3FAC dir arg = result-direction copy not segDir; lw-2312 double-deref tell._
 - [Wave-3 round-2 closers (agent-g 2026-07-15): de-name expression locals = fresh-ring numbering + ghost-home kill in one move; void-alias the last jal before a CSE-temp region; pad-AFTER a lone named local re-packs spill homes (38C0 91.3->EXACT, 15FC 27->23)](#wave3-round2-38c0-15fc) — _Named OR-chain/CSE-ptr locals color in-place + cost dead homes; folding them into the call args restores t7->t8->t9->t0 fresh numbering AND the exact frame. "One CSE temp in a v-reg, the other on the ring" after a K&R int call = dead-$v0 exclusion; void-alias frees v1/v0 emission-order coloring. A lone named local + compiler CSE spills +4 with a hole below = volatile pad AFTER the local claims the stray word (frame unchanged)._
 - [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
@@ -20458,3 +20459,38 @@ if(1) / explicit-goto / named-addr-temp — pair-order cap class is NOT a
 post-call v-reg coloring problem, so the void-alias retraction does not
 extend to it. mgrproc 23FC: (float)0 beql-fill lever inapplicable (no FP
 compare feeds its likely branches).
+
+## Fresh-Vec3-per-site alloc-fallback fanout (game_uso 7C1C 62.9->75.8, 2026-07-17): every `p=&local;if(p||alloc)` staging site gets a FRESH address-taken Vec3 home; int-cast pointer CSE `q=(f32*)((int)base+0x30)` is the only spelling uopt won't fold <a name="fresh-vec3-fanout-intcast-q-7c1c"></a>
+
+Shape: a 1000+-insn USO collision fn with frame 2.5x bigger than the faithful
+NM decode (0x3B0 vs 0x170) and ~55 distinct `addiu rX,sp,N` homes at 12-byte
+stride = the ORIGINAL source instantiated a fresh Vec3 temp at EVERY
+alloc-fallback/copy-stage site (the 38C0 "fresh-ring" idea applied to
+address-taken struct locals, not reg numbering). Reusing named temps
+(scratch/a/b/c) lets uopt coalesce copies and drops ~150 insns. Recipe:
+
+1. Walk the target's `addiu ...,sp,N` census; one C local per distinct home,
+   declared in DESCENDING home order (first decl = highest addr). Shared
+   homes appearing in many blocks (here sp+852/540/508) are the only reused
+   named stages; word-copy stages are `*(Tri3i*)&dst = *(Tri3i*)&src`
+   (lw/sw), element float copies (`dst = src` Vec3 assignment or per-member)
+   emit lwc1/swc1 z,y,x.
+2. Guard blocks MUST use the anti-fold spelling `p = 0; if (1) { p = &X; }`
+   before `if (p || (p = alloc(0xC)))` — plain `p = &X;` folds the null test
+   away entirely (guard + jal vanish).
+3. The `addiu v0,base,48` join-CSE (base+0x30 feeding both x and z loads)
+   only materializes from an INT-CAST spelling hoisted ABOVE the guard:
+   `q = (f32 *)((int)base + 0x30); ... p->x = *q; p->z = *(f32*)((int)q+8);`
+   Pointer-typed spellings — `(f32*)(base+0x30)`, `(f32*)base + 12`
+   (word-scaled), q-inside-guard — ALL get folded back to `48(reg)/56(reg)`
+   offsets. Hoisted int-cast q also reproduces the rematerialized second
+   `addiu` after the alloc jal.
+4. objdiff fuzzy does NOT charge sp-offset operand diffs: padding the frame
+   gaps with volatile char arrays moved 0.00pp (and overshot the frame) —
+   don't chase target frame size for fuzzy; only for byte-exact attempts.
+
+Decode-error tells fixed en route (generalize): the metric/3FAC direction arg
+uses the RESULT-DIRECTION copy (the post-scratch Vec3), not the normalized
+segDir — check WHICH sp home the `mul.s x,x` pair loads; and a `+0x908` that
+is `lw t1,2312(t0)` in a condition but feeds `addiu s0,s0,180` afterwards is a
+double-deref (`*(*(w+0x30)+0x908)+0xB4`), not address arithmetic.
