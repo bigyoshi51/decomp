@@ -13821,6 +13821,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Char-scanner kit: `p=str;str++;c=*p` increment-between kills load-PRE + offset-fold; repeated `*p` = the CSE-temp/var pair (NOT two vars); NAMED int consts win beq rs slot + t0/t1/t2; goto-loop + early sign-continue keeps bnel dead-dup (game_libs 67D8C 92/92 EXACT 2026-07-07)](#feedback-ido-char-scanner-kit-67d8c) — _Merged strtol-lite (hex+decimal). FOUR coupled levers for byte-scanner loops: (1) cursor idiom `p = str; str++; c = *p;` — increment BETWEEN copy and load keeps `move a1,a0` alive; `p=str;c=*p;str++` lets uopt fold to `lbu N(a0)`+combined addiu AND load-PRE the loop-head char into entry (back-edge reload insertion, `lbu` into a candidate not a temp). (2) When target tests some ranges on \$a2 and others on \$a3 with `move a3,a2` in a branch delay: that is repeated `*p` (CSE temp \$a2) + ONE named `c = *p` (\$a3) — writing two vars c/c2 coalesces them (a3 freed, const steals it, t-file cascades). (3) `beq t0,a3`/`multu v1,t2` with const-side-first: consts must be NAMED int locals (`minus='-'; dot='.'; ten=10;`) — they color t0/t1/t2 in first-use order, win the rs slot, and `value *= ten` emits multu+mflo (literal 10 strength-reduces); literal compares emit var-first regardless of source operand order (8-perm sweep). (4) infinite scan loop as `dec: ... goto dec;` with EARLY `if (minus == c) { sign=1; goto dec; }` — reproduces bnel + orphaned dead `lbu` dup; if/else form loses the likely-conversion; while/for forms invite the PRE. Also: 29w sibling 67B04 cracked by dead in-guard `q = arg1;` (flips p/q↔c0 coalesce, legalizes guard-delay fill, kills beqzl+sltu dup) + `int r = 0;` dead init (r colors v1 not a0)._
 - [7BC kit at 32 expansions w/ K&R callee: memcpy-form t-carrier load-bearing, ||-fallback must compare s1, per-site alias x34, val-dependent store order; 2-sw eval-order + t@uopt-slot residual (game_uso_func_0000C48C 67.09->99.74, 2026-07-17 agent-g)](#c48c-struct-arg-32x-memcpy-form) — _32x sw a2,8(sp) delay homes = struct-by-value; explicit shared `t=u` carrier required even for unprototyped callee (direct-u drops the 0(s2) staging hop); `s1 != -OFF || (obj=alloc())` keeps li/bne-s1 + stage-skip beqz; param-as-p homes at arg slot; 34 base-0 aliases bust template-addr spill-CSE; zero-val ctor stages store 0xC,0x14,0x10 vs nonzero 0xC,0x10,0x14._
 - [ptr+int addu operand-order INVERTS vs spelling: `(char*)p + off` -> `addu rd,OFF,p`, `off + (char*)p` -> `addu rd,p,OFF`; loop-array element re-spelled `self[1][i]` per use (never s-reg'd across calls) + de-named owner CSE temp = the no-s3 constructor-loop shape (gl_func_000683D4 77.46->99.44, 2026-07-17 agent-h)](#addu-order-respell-element-683d4) — _Naming the element made an s3 web (wrong saves/frame); the original reloads lw t?,4(s1)+addu+lw at EVERY use because calls kill the array memory. Named parent colors v0 only when the owner ptr (self[3]) is a DE-NAMED CSE temp (colors v1, feeds the bnezl-annulled delay reload); naming both flips v0/v1. Residual class: second vtable temp a1-vs-v0, immune to naming/de-naming/decl-order/web-merge._
+- [Script-VM executor coloring-cycle kit: `*p|=x;*p&=y;` double-sb store-forward; de-named `arg1&MASK` colors $a1; named char** call arg + `ptr+=1;*cur=ptr`; hand-lowered u32->f32 = phi copy (2B5F4 75.96->94.11, 2026-07-17 agent-h)](#vm-executor-coloring-kit-2b5f4) — _Five reusable levers that resolved a full a3/t1/t0->a1/t0/a3 coloring cycle; named group=memory, block-local g=v0+home, de-named=a1; store-forward ptr variant regresses; u32 r kills the break-6 pair._
 - [goto-mid label (or do-while(0)) blocks same-BB base+offset fold — materializes `addiu v0,a0,K; lw/sw 0(v0)` pointer shape at zero insn cost; cross-BB named ptr reserves an 8B bottom home slot (gl_func_00065060 76.76->93.10, 2026-07-17 agent-h)](#goto-mid-pointer-antifold-65060) — _`int *p=(int*)(a0+0x18); *p|=0x10;` always copy-props back to `lw/sw 24(a0)`. Inserting `goto mid; mid:` right before the use (or wrapping the use in `do{...}while(0)`) makes the def-use cross a BB boundary -> IDO materializes the exact addiu-base + 0-offset derefs with no extra insns. Cost: the pointer becomes a named cross-BB candidate and gets an 8B stack home reserved at the frame BOTTOM (below all arrays), shifting memory locals +8. All same-BB anti-fold re-spellings fail ((unsigned)/volatile/register/union/struct-field/ptr-arith); if(cond) adds beqz; &p adds a dead sw; phantom 2nd param homes to the arg area but emits `sw a1,frame+4(sp)`. Also: same-value FP-const webs split per (float)N cast-literal spelling generalize 4-way (0.0f/(float)0/1.0f/(float)1 -> four distinct mtc1 regs, post-call remat follows the web's spelling)._
 - [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
@@ -20965,3 +20966,42 @@ Residual (unsolved): working-ptr colored $a0+spill vs target $s1/$a2, and the
 whole-fn frame gap (build 0x2E0 vs target 0x178, W90 placeholder slots) keeps
 every sp-relative immediate off — the remaining 24.6pp is dominated by that
 frame problem, not this cascade.
+
+## Script-VM executor coloring-cycle kit: `*p |= x; *p &= y;` store-forward double-sb; de-named `arg1 & MASK` colors into $a1; named char** arg + `ptr += 1; *cur = ptr` = target case body; hand-lowered u32->f32 makes a phi copy (gl_func_0002B5F4 75.96->94.11, 2026-07-17 agent-h) <a name="vm-executor-coloring-kit-2b5f4"></a>
+
+Five levers that resolved a full a3/t1/t0 -> a1/t0/a3 coloring cycle in one
+function; each is individually reusable:
+
+1. **Flag toggle `lbu; ori; sb; andi(from the ori temp); sb` = `*p |= 0x20;
+   *p &= 0xFD;`** — IDO store-forwards the first sb so the andi reads the ori
+   REGISTER (no reload), emitting BOTH stores. A named `b0 = *p|0x20; *p=b0;
+   *p=b0&0xFD;` dead-store-eliminates the first sb AND leaves a ghost home.
+   The two-statement compound-assign spelling also killed a dead `or tX,a1`
+   arg copy at entry.
+2. **`andi a1,a1,MASK` recomputed per arm (delay-slot copy on the taken path,
+   `lw a1,HOME; andi` on the fallthrough) = a DE-NAMED `arg1 & 0xC0` at every
+   use.** The CSE temp then colors into $a1 (coalesces with the incoming arg
+   through the in-place andi) and gets call-site spill slots, NOT a decl home.
+   A named `group` local goes to memory (computed once, sw/lw at a home) —
+   wrong shape; a per-arm block-scoped `g` colors v0 + home — also wrong.
+3. **Reader call whose arg is reused for post-call derefs: name the char**
+   (`cur = (char**)(o+0x54); v = read(cur); ptr = *cur; ...`)** — produces
+   pre-call `addiu a0,a2,84` + a0 spill/reload and `0(a0)` accesses. Passing
+   `(char*)o+0x54` directly folds accesses to `84(a2)` and lets IDO reorder
+   the `sb` past the cursor stores (same-base no-alias proof).
+4. **Cursor bump pattern `addiu tN,v1,1; sw tN,0(a0); lbu 0(tN); sb; lw
+   reload; addiu; sw` = `ptr += 1; *cur = ptr; o->3 = *ptr; *cur = *cur+1;`.**
+   The `*cur = ptr + 1; ptr = *cur;` store-forward variant REGRESSES (92.9 vs
+   94.1) — it forces the or-copy but breaks in-place addiu coalescing.
+5. **`f32 fm = (f32)m` on a plain u32 emits IDO's own `cvt.s.w; bgez skip;
+   add.s f,f,2^32` IN PLACE.** Hand-writing the lowering (`(f32)(s32)m` +
+   `if ((s32)m<0) fm += 4294967296.0f`) makes fm a phi web -> extra `mov.s`.
+   Same family: `u32 r` for `%`/`/` emits divu with only the break-7 zero
+   check; an s32 spelling adds the break-6 0x80000000 overflow pair.
+
+Also: three `&D_00000000+off` sites all folding `lui;lw` per-site while the
+build CSE'd one materialized base -> per-site base-0 aliases (gl_d_2b5f4_f/r1/
+r2), the standard undefined_syms_auto mechanism. Residual ~6%: 8 ghost words
+of block-scope named-local homes (frame -96 vs -64), two missing `or` ptr
+copies, second-block multu operand order (spelling-swap neutral) — coloring
+noise, honest NM at 94.11.
