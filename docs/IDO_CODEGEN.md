@@ -117,6 +117,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Runtime FP-div of const/const: `f32 inv = N;` local defeats cfe parse-time fold + `(f32)K/inv` numerator CSE-break; bitcast-store *(s32*)= crater is regime-independent (90CC 73.42->74.32, 2026-07-17)](#runtime-fp-div-inv-local-90cc) — _all-literal ratios fold at parse time in cfe; residual: byte-identical if/else arms cross-jump-merge (target keeps both, ring-phase-desynced)._
 - [Trailing init/store block source position picks FP-clamp latency fill; per-site &SYM args vs 0; trip-5 peel+4x-unroll induction remnant (4EB54 EXACT / 42F4C 99.39, agent-f 2026-07-17)](#tail-block-position-persite-sym-args-peel-unroll-4eb54) — _Tail store blocks go AFTER the last clamp; cb(&D) not cb(0) even at lo16=0 (kills move-a0-zero CSE, restores beq/nop + per-site lui/addiu); write the trip-5 loop, not 5 statements; re-measure post0b clip when an NM body grows to target size._
 - [USO-constructor sub-70 redecode kit: li->%hi/%lo reloc respell, ONE roving temp (s-reg web), shared carrier home (volatile/if(0)-escape), prototyped-f32 alias, ptr-scaling audit (b5 18B4/283C 98.7, D550 74, 2026-07-18)](#uso-ctor-sub70-redecode-kit-b5)
+- [`swc1 $f0,16(sp)` in jal delay = fifth f32 stack arg (prototyped call), NOT float-return spill; fixing the one shared unprototyped decl un-doubles every sibling call site](#swc1-delay-fifth-f32-arg-prototype-0546dc) — _timproc b5 0546DC family; DF14 59.1→78.5, D884/D14C +2pp free. cfe errors on prototype-after-unprototyped-decl: edit the shared decl + audit all sites (4-arg sites need explicit fifth 0.0f). if(0) &argN escape demotes arg-first s0 promotion._
 
 ## Quick reference by sub-topic
 
@@ -21616,3 +21617,32 @@ IDO recomputes lwc1+mul.s+trunc+mfc1 per store (+48 words); chained byte assignm
 `out[C]=out[8]=out[4]=out[0]=v` computes once but SPILLS the source arg pointer to a frame
 slot with per-lane reloads. Named lane vars stay candidates (claim $v0); the target's ring
 a0/t1/t2 lane temps were not reachable — residual temp-ring parity, honest NM.
+
+## `swc1 $f0,16(sp)` in a jal delay slot = FIFTH f32 stack arg of a PROTOTYPED call, not a float-return spill; one shared unprototyped decl double-promotes every sibling call site (timproc b5 0546DC family, DF14 59.1->78.5 + D884/D14C 67->69 free, 2026-07-18 agent-g) <a name="swc1-delay-fifth-f32-arg-prototype-0546dc"></a>
+
+Fingerprint: `mtc1 zero,$f0; mfc1 a2,$f0; mfc1 a3,$f0; jal F; swc1 $f0,16(sp)`.
+The delay-slot swc1 is the compiler storing the FIFTH argument (f32, 0.0f)
+into the outgoing-arg area — the call signature is
+`F(char*, char*, f32, f32, f32)` with singles in a2/a3 via mfc1. An earlier
+pass misread this as a "K&R float-call return spill" and declared it a cap.
+Two levers in one:
+1. Prototype the callee with f32 params (cfe ERRORS on prototype-after-
+   unprototyped-decl in the same TU — you must EDIT the shared
+   `extern int F();` decl itself, then audit every call site: 4-arg sites
+   need the explicit fifth `0.0f`, and int `0` args become float converts).
+2. The fix is FILE-WIDE: every sibling constructor calling F through the
+   old unprototyped decl was promoting its `0.0f` literals to doubles
+   (`cvt.d.s` + `sdc1` pairs) — fixing the one decl moved D884 and D14C
+   +2pp each with zero body edits.
+Related DF14 findings: switch value stashed to a shared slot before the
+child alloc (`sub` var reuse), case bodies are nested
+`04DFFC(child, 05D0E0(0, desc, media, 0))` (the a0=zero is a REAL leading
+arg — m2c's 4-arg reading silently dropped it), cases 3-10 pass
+`&D_00000000` as reloc-free absolute media ptr, and
+`p=(f32*)(gc+0xB4); p[2]=p[1]=p[0]=0` reproduces a dead
+`addiu v0,v0,180` (uopt folds the offsets back to the base but still emits
+the pointer def). Open residual (coloring cap): target live-range-splits
+the result var into s0 for the head with a late `sw s0,92(sp)` home store;
+no register/block-scope/if(0)-escape variant triggers the split — the
+if(0) `&argN` escape DOES reliably demote IDO's arg-first s0 promotion
+(args stay home-resident), but the freed s0 head range stays idle.
