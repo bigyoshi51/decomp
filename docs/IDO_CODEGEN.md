@@ -29,6 +29,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Redundant beqz-recheck dispatch = `else if (same cond)` — else kills cross-call liveness (no spill, exact frame); LIKELY-branch delay-slot stray load belongs to the branch TARGET's region, call is single-arg (mgrproc 3074 94.76→objdiff-100, 2026-07-17)](#else-if-redundant-recheck-3074) — _A provably-dead recheck branch is source-level `else if (redundant cond)`, not coloring; two independent ifs spill v1/a1 across the call. bgtzl-delay `lw a1` before a jal = taken-path hoist of the next region's reload, not arg1 — 2-arg spelling adds a jal-delay reload. Paired with void-alias dead-$v0 (which alone fixed the whole-fn v0<->v1 renumber, 94.76→96.19)._
 - [FP zero-web dead-$f0 reuse: reorder C so (float)0.0 stores precede the 1.0f web's last use — overlap forces fresh $f12 (546E8 96.5→99.0; register-float/BB-barrier fail)](#fp-zero-web-store-order-overlap-546e8) — _dead-reg reuse beats fresh-pool numbering; C store order is the only working lever; as1 re-sinks the 1.0f store for free._
 - [Wave-3 agent-g (2026-07-15): named-local dead-home rule (frame=names once spilled); target web-merge shared names; if(1) flips in-loop CSE web a2->v0; de-named capture = raw K(v0) reads; folded-table-offset base (7E34/7B2C/80F4 EXACT)](#return-capture-precolor-26fc) — _see the 2026-07-15 agent-g addendum at end of file: de-name via inline-CSE repeats or merge disjoint webs into one name to shed dead homes; merge flags+i/busy+off when one s-reg serves two phases; if(1){} BB-wrap is the a-reg->v0 flipper for loop CSE webs; plain spilled flag local = sltu/sltiu ring pair + delay-slot home store._
+- [Alloc-fallback registration family: per-site &D aliases (19 sites incl. plain &D+0 args + invented common-base defeat) + block-pair copies; outer-node SPILL-with-a2-caching = probe-immune regalloc cap, 5 spellings convergent; NM-growth clip re-measure reminder (3E5E0 74.45→75.74, 2026-07-17)](#alloc-fallback-node-spill-vs-sreg-3e5e0)
 - [Wave-3 agent-g addendum 3 (2026-07-15): literal-address deref = -O0 fresh-dest lever (12818 EXACT, retracts permuter-immune cap; objdiff under-scores baked literal vs reloc expected); -O1 andi ping-pong + -O2 or-coalesce no-C-handle; 3AC0 flip counts alias/union/if(1); leaf fns exclude call-based precolor levers](#wave3-agent-g-third-pass) — _probe the literal-address spelling whenever a symbol-load needs a fresh dest at -O0; ROM cmp is the gate when the expected .o carries relocs your literal lacks._
 - [**Proc-USO big-fn kit III (agent-h 2026-07-10): 5-label jumptable threshold NEUTRALIZES the external-jumptable cap's ring cascade; m2c-local removal = the master un-coalescing lever; int-vs-char** load typing draws CSE/reload boundaries** (1F14 84.2 / 1C68 95.1 / 116C 93.5)](#proc-uso-big-fn-kit-3-2026-07-10) — _(1) `case N: break;` semantically-dead 5th label emits sltiu N+1 + LOCAL jumptable = 2-word head diff vs the C-irreproducible %hi(import) table AND re-syncs the whole-body ugen temp ring (was -1 = most of the deficit). (2) Drop m2c locals (flag/bc/sub40/anim/n): direct derefs make the load-CSE web THE candidate — no or-copy, const-first bne operands, and the web inherits call-arg precolors (bc→a0 via gl(*(arg0+0xB8)) args; cupcosts lu->reg discount). Shared helper var across sites colors an a-reg with copies; PER-SITE vtN locals color v0 block-temps like target. (3) `*(int*)(p+K)` vs `*(char**)(p+K)` = DISTINCT ichains: type the arm loads int to force per-arm reloads, keep the join/gate loads char** to stay in the a0 web. (4) `x |= 1` right after `x = 0` store-forwards to `ori tN,zero,1`. (5) Compound RMW `*(p+K) = *(p+K) - 1` = un-coalesced two-reg lw/addiu/sw; a named temp coalesces to one reg. NEGATIVE: whole-fn const call-arg web (2→a3, 40→v0) splits into compare-web + arg-web, prices the arg reg by the GENERIC phi cost, ties to t0/a1 — no C spelling merges the webs (phantom-arg, unsigned splits, named var, register, while(0), dead-if, switch, coloring-search depth-1 all probed); como-hoist of a single-arm addiu/&D materialization steals v0/v1 with knock-on colors — also probe-immune._
 - [m2c PHANTOM SPILL-SLOT VAR + var-first decl-order frame fix + merge/split FP-var flip: the D9CC big-miss kit (game_uso_func_0000D9CC 90.8->98.96, 2026-07-10)](#feedback-ido-d9cc-phantom-spill-var-kit) — _(1) A write-only m2c `spXX` whose every `spXX=N` shadows a `var=N` of a call-live var is the SAME stack slot read twice (var's spill home) — DELETE it. (2) A 4-word frame hole = the call-spilled var homed in the SPILL pool below the named locals; declare that var FIRST so its spill uses a top home slot (frame -80 -> -56, every sp offset snaps). (3) $fN pair-swap cascades flip by MERGING the result-side vars (one abs-result var) while keeping the source-side vars SPLIT (temp_f2/temp_f2_2) — decl-order alone is immune. (4) `goto join` label placement: INSIDE the enclosing if = arm gets its own reload dup'd into the b-delay (blocks cross-jump); OUTSIDE = new BB barrier perturbs the next block's lui/mtc1 hoists. (5) volatile pure-read CSE-bust: put the volatile deref as the FIRST mul operand or the paired field load emits swapped. (6) float-looking compares that are really INT (lw/li/bne vs c.eq.s 1.0f; bnezl vs c.eq.s 0.0f) and a 1.0f loaded from a GLOBAL (+addend USO spelling `&D_x+0xNNN`) — check the target's opcode class before trusting m2c float types._
@@ -20507,3 +20508,43 @@ _Context: h2hproc_uso_func_00001360 (0x290 per-frame dispatcher, USO placeholder
    - **named block-local** `register int c; if (val!=1) c=115; else c=0;` -> right polarity AND the v0-candidate + `or a3,v0` copy shape. `register`, if/else-vs-override, and function-scope sharing were all inert on the coalesce beyond this.
 3. **Ghost-home tradeoff is real and unresolved here:** the named `val`/`c` block locals cost 8 frame bytes of dead homes (0x88 vs 0x78, sibling blocks overlay); fully de-naming both (CSE'd double deref in-arg) recovers the frame (-0x80) but regresses the select to direct-a3 (95.12 -> 91.5). No spelling found that gets both.
 4. **Void-alias ripple (B0A8/3074 lever confirmed at scale):** void-aliasing ALL 21 discarded-return calls in one function realigned the entire temp ring downstream (t8/t9->t9/t0 +1 shift gone) and let seg-pointer derefs move AFTER the preceding call (kill cross-jal spill) once de-named. Also: a `char buf[N]` local's true size is readable off target frame arithmetic (frame 0x78 = 0x38 + 0x40 -> buf is 64B, comment said 80).
+
+## Alloc-fallback registration family: per-site &D aliases + block-pair copies land the const web, but the outer node's SPILL-with-a2-ugen-caching is probe-immune (3E5E0 74.45→75.74, 2026-07-17) <a name="alloc-fallback-node-spill-vs-sreg-3e5e0"></a>
+
+Context: gl_func_0003E5E0 (string-keyed registration ctor, 3 stages + retry loop,
+all calls through K&R placeholder gl_func_00034458). Landed levers, in order of
+effect:
+
+1. **Every `&D_00000000 + K` site needs its own alias extern — including the
+   plain `&D + 0` first-args.** 19 sites in one function: 7x `&D+0` a0 args CSE'd
+   into `s4` (lui/addiu once + `move a0,s4` per call), the 0x1EEC0/EEC8/EED0
+   loads merged into a `s3 = &D+0x18000` COMMON-BASE (addiu -32768 + positive
+   lo offsets — uopt invents a shared base for *different* K when lo16
+   overflows), and repeated literals (0x1F1F8) hoisted to `s2`. Per-site
+   `extern char D_00000000_e5e0a..s;` restores per-site `lui %hi/addiu %lo`
+   remat. CAVEAT: aliases do NOT stop loop-invariant hoisting of single-use
+   in-loop literals (F210/EED0 still went s4/s5 until other webs changed).
+2. **Two-word `q[0]/q[1]` reads through a pointer var emit the split-base form;
+   a block STRUCT copy emits the target base+0/+4 with interleaved lw/sw.**
+   `*(Pair*)(rec+2) = *(Pair*)(&D_alias + 0x1EEC0)` reproduced
+   `addiu t9,%lo(K); lw 0(t9); sw 8(s0); lw 4(t9); sw 0xC(s0)` exactly.
+3. **m2c's `sp2C = x, y = cb(...), x = sp2C` comma decode is LITERAL source
+   structure** (explicit saved-var restore inside the `||` fallback), and
+   reusing ONE node/rec/key set across sibling stages gives the shared spill
+   slot. Both were required to align the stage bodies.
+
+RESIDUAL CAP (documented negative): target keeps the outer `node` in **a2 with
+uopt-spill semantics** — store sunk into the jal delay slot before each
+fallback call, `lw a2,0x2C` reload after, ugen caching in a2 because the next
+use is the a2 call-arg — and gives s1 to the INNER key web. Our build always
+s-reg-promotes node (s1) instead, cascading: key→v1, loop r3→s0 (target v1),
+it/n3 shifted, `move a2,s1` materializations. FIVE spellings converge to
+byte-identical 75.04 codegen: plain saved var, `s32 * volatile saved` (worse:
+70.4, stores at wrong points + frame bloat), K&R phantom-param node (worse:
+K&R homes a1/a2 at entry), single-member-struct saved (SROA'd), per-stage
+node1/node2 split. The spill-vs-sreg *priority* decision is not reachable from
+source spelling here; next tool is the uoptlist coloring dump
+(`-Wo,-zdbug:6`, see regalloc-dump entry).
+
+Bookkeeping: NM body grew ~+0x40 natural → re-measure the unit clip
+(0x2b750→0x2b790) or the tail sentinel (62F08) silently truncates to 25%.
