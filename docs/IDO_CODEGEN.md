@@ -86,6 +86,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Struct-by-value at the CALL SITE requires a K&R callee definition](#feedback-ido-struct-by-value-knr-callee-prereq) — _cfe rejects struct arg vs int-typed ANSI callee; convert callee def to K&R (byte-neutral for int params). + two-homes-no-reload forwarding; if(1){} blocks copy-prop hoist._
 - [Before accepting a "scheduler cap": check per-jal arg-register loads](#feedback-ido-scheduler-cap-check-arg-arity) — _missing aN setups = fewer call args (AA28); sw v0 in delay = result spill not arg (66210). Re-derive arity before lever-grinding._
 - [NAMED-LOCAL COUNT governs frame size — "phantom slot / irreducible min-frame" caps are false](#feedback-ido-named-local-count-frame) — _uopt homes every named local at frame top (decl order); spill temps stack below in decl-need-order. Delete names (inline their exprs) to shrink the home block; reorder decls to place temps. 69688/685C0 lands._
+- [Runtime FP-div of const/const: `f32 inv = N;` local defeats cfe parse-time fold + `(f32)K/inv` numerator CSE-break; bitcast-store *(s32*)= crater is regime-independent (90CC 73.42->74.32, 2026-07-17)](#runtime-fp-div-inv-local-90cc) — _all-literal ratios fold at parse time in cfe; residual: byte-identical if/else arms cross-jump-merge (target keeps both, ring-phase-desynced)._
 
 ## Quick reference by sub-topic
 
@@ -20338,3 +20339,32 @@ Two decode fixes that closed mgrproc_uso_func_00003074 after void-alias dead-$v0
    a volatile second deref) emits an extra reload in the jal delay. Attribute
    likely-branch delay-slot loads to the branch TARGET's region before counting
    call args.
+
+## Runtime FP-div of const/const: `f32 inv = N;` local defeats cfe parse-time fold; `(f32)K / inv` breaks same-value numerator/divisor CSE; bitcast-store crater is regime-independent (90CC 73.42→74.32, 2026-07-17) <a name="runtime-fp-div-inv-local-90cc"></a>
+
+Target computes `117.0f/255.0f`-style constant ratios at RUNTIME (`lui 0x437F; mtc1 →$f0`
+divisor shared across a block of `div.s`). Any all-literal spelling — `117.0f/255.0f`,
+`(f32)(255.0f/255.0f)`, even `(f32)255 / 255.0f` — is folded by **cfe at parse time**
+(uopt never sees the div). Working shape (standalone-cc verified, project flags
+`-O2 -mips2 -32 -Xcpluscomm`):
+
+```c
+f32 inv = 255.0f;                       /* block-scoped; uopt keeps it in $f0 across the divs */
+dst[0] = (f32) cr / inv;                /* cr,cg,cb u32 (lbu→u32 gives the bgez+0x4F800000 unsigned-cvt fixup) */
+...
+dst[3] = (f32) 255 / inv;               /* cast-literal breaks CSE with inv's 0x437F web:
+                                           fresh lui/mtc1 numerator + div.s, exactly the target;
+                                           255.0f/inv instead reuses $f0 → div.s f,f0,f0 */
+dst[3] = 164.0f / inv;                  /* different-value numerators need no cast trick */
+```
+
+Companions from the same probe session (func_000090CC):
+- The `*(s32*)dst = temp_f2` bitcast-store shape (m2c artifact, emits trunc.w.s+sw
+  vs target swc1) STILL craters the whole 8.4KB fn when flipped to `*(f32*)`
+  (74.3→56.2) even after the stored value became a runtime div — the crater is a
+  global FP-web/coloring cascade, NOT a consequence of the folded-const regime.
+  Third confirmation; treat as load-bearing regardless of surrounding decode.
+- Residual cap in the region: two if/else arms with byte-identical bodies
+  (same RGB math, same alpha, only the source-table address differs) get uopt
+  CROSS-JUMP tail-merged (~43 insns deleted vs target, which keeps both arms with
+  different FP-ring phases). No C spelling found yet that desyncs the arms.
