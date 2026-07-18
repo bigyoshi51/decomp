@@ -100,6 +100,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Before accepting a "scheduler cap": check per-jal arg-register loads](#feedback-ido-scheduler-cap-check-arg-arity) — _missing aN setups = fewer call args (AA28); sw v0 in delay = result spill not arg (66210). Re-derive arity before lever-grinding._
 - [NAMED-LOCAL COUNT governs frame size — "phantom slot / irreducible min-frame" caps are false](#feedback-ido-named-local-count-frame) — _uopt homes every named local at frame top (decl order); spill temps stack below in decl-need-order. Delete names (inline their exprs) to shrink the home block; reorder decls to place temps. 69688/685C0 lands._
 - [Runtime FP-div of const/const: `f32 inv = N;` local defeats cfe parse-time fold + `(f32)K/inv` numerator CSE-break; bitcast-store *(s32*)= crater is regime-independent (90CC 73.42->74.32, 2026-07-17)](#runtime-fp-div-inv-local-90cc) — _all-literal ratios fold at parse time in cfe; residual: byte-identical if/else arms cross-jump-merge (target keeps both, ring-phase-desynced)._
+- [Trailing init/store block source position picks FP-clamp latency fill; per-site &SYM args vs 0; trip-5 peel+4x-unroll induction remnant (4EB54 EXACT / 42F4C 99.39, agent-f 2026-07-17)](#tail-block-position-persite-sym-args-peel-unroll-4eb54) — _Tail store blocks go AFTER the last clamp; cb(&D) not cb(0) even at lo16=0 (kills move-a0-zero CSE, restores beq/nop + per-site lui/addiu); write the trip-5 loop, not 5 statements; re-measure post0b clip when an NM body grows to target size._
 
 ## Quick reference by sub-topic
 
@@ -20885,3 +20886,40 @@ recipe applied to two functions at different structural distances:
    source form that emits a subu-of-same-reg / materialized single-use const
    remains unidentified (suspect: loop-carried or cross-BB unprovable-equal
    pair coalesced to one register). Do not re-burn ticks on x-x spellings.
+
+## Trailing init/store block source position picks which FP-clamp latency it fills; per-site &SYM args vs 0 decide beq/nop + per-site lui/addiu remat; trip-5 loop = peel+4x-unroll with li/sll/addu induction remnant (4EB54 73.10->EXACT, 42F4C 74.19->99.39, 2026-07-17 agent-f) <a name="tail-block-position-persite-sym-args-peel-unroll-4eb54"></a>
+
+Three independent levers from the game_libs_post0b [70,75) band:
+
+1. **Trailing zero/init store block: place it AFTER the last FP clamp in
+   source.** The as1 scheduler interleaves a following plain-store block into
+   the trunc.w.s->mfc1 latency of whichever clamp PRECEDES it in source order,
+   and sinks the clamp's dependent sb into the jr delay slot. 42F4C had the
+   16-byte-store header block between clamps 5 and 6 (interleaved into clamp
+   5's latency = ~40-word schedule divergence); moving it after clamp 6 made
+   the schedule target-exact in one step (74.19->99.39; residual is a temp-ring
+   cap — see the tabulated negative probes in the 42F4C NM comment: the
+   mfc1 ring start/stride is invariant under ~20 spelling classes including
+   folded ghost ops, block-scoped/register temps, and coalesced pointer copies;
+   trip-3 loops do NOT unroll at -O2 so a loop origin is excluded).
+2. **A tail of cb(&SYM) call sites must pass the SYMBOL, not 0, even when the
+   reloc lo16 is 0.** Passing literal 0 lets IDO CSE all six a0 setups into
+   `move a0,zero` (and enables a beql/hoist at the preceding if); passing
+   `(char*)&D_00000000` per site remats lui/addiu at EVERY call site (a0 is
+   call-clobbered and there is no free s-reg) and turns the guarding branch
+   into plain beq + nop delay. Companion: a `*(&D) = self` store followed by
+   `cb(&D)` CSEs into one address reg; a per-site `extern` alias for the store
+   target (per-site-aliases lever) restores the macro-form `lui at; sw s0,0(at)`
+   + independent `la a0`.
+3. **for(i=0;i<5;i++) over word-strided fields = peel + 4x unroll, induction
+   remnant survives.** IDO -O2 peels i=0 (constant base-reg offsets) then
+   4x-unrolls the rest keeping `li v,1; sll t,v,2; addu base,s0,t` — the
+   word-scaled-arithmetic decode tell. Writing the 5 statements by hand with
+   `base = self + 1*4` does NOT reproduce the li/sll/addu (folds); write the
+   loop. (Trip 3 stays a loop — this shape needs trip 5.)
+
+Worktree gotcha (belongs with the post0b clip): growing an NM body to target
+size shifts every later symbol; the NON_MATCHING_TEXT_CLIP_KEEP_ALIGN value
+must be re-measured as (last-fn start + target size) and may be non-16-aligned
+(0x2b730 -> 0x2b76c after 4EB54 grew 0x160->0x190) or the tail sentinel gets
+silently truncated and reads as a fuzzy regression.
