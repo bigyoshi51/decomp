@@ -72,6 +72,7 @@ _74 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Editing an NM comment block risks clobbering parallel-agent variant notes — always `git log <file>` first](#feedback-nm-comment-clobber-parallel-agent) — _NM wraps accumulate variant-test annotations across agents (`(1) TRIED ...`, `(2) TRIED ...`, etc.).
 - [99% NM wraps may have silently become byte-exact — try unwrapping first](#feedback-nm-wrap-99pct-may-be-silently-exact) — _Before applying complex recipes (INSN_PATCH, make-expected refresh) for a 99% wrap, just remove the wrap and rebuild — the C body may already match expected_
 - [NM-wrap body changes may not show in fuzzy until you `rm -f build/non_matching/<path>.c.o`](#feedback-nm-wrap-body-change-needs-rm-o) — _After editing the C body of an `#ifdef NON_MATCHING` wrap (substantial structural change, not just comment tweaks), `make RUN_CC_CHECK=0 build/non_matching/<file>.c.o` can re-emit the build artifact but report.json…
+- [Before grinding a near-miss, raw-word diff it against already-EXACT siblings in the region — a 1-word delta means mirror the proven body verbatim (652D8 66.85→100 in one edit, 2026-07-17)](#sibling-raw-word-diff-before-grinding) — _If word-identical to a cracked sibling modulo an immediate/base constant, copy the sibling's full lever stack (decl order, volatile pads, BB-split ifs, line grouping) and change only the constant._
 - [An NM-wrapped function with documented "X% cap" may actually match 100% — the doc rots when sibling code changes alter codegen](#feedback-nm-wrap-doc-can-be-stale) — _When picking from source 1 (existing NM wrap 80-99%), FIRST verify the current actual match% via `make build/.o CPPFLAGS="-DNON_MATCHING"` + `objdiff-cli report generate`.
 - [NM-wrap doc % drifts in either direction over time due to unrelated parallel-agent commits](#feedback-nm-wrap-doc-pct-drifts) — When picking up an NM wrap whose comment says "X% cap", re-measure the build BEFORE grinding.
 - [NM-wrap doc-comments may claim historical match % that no longer reproduces — re-verify before grinding](#feedback-nm-wrap-historical-pct-drift) — _An NM wrap's comment block may say "~95% match (date)" reflecting the % at the time it was last actively worked.
@@ -3120,6 +3121,24 @@ _After editing the C body of an `#ifdef NON_MATCHING` wrap (substantial structur
 **Companion symptom:** `objdump --disassemble=<func> build/non_matching/.../*.c.o` will show your NEW code while `report.json` reports OLD fuzzy. That mismatch is the diagnostic — if both look "unchanged", the build genuinely didn't pick up your edit (probably a syntax error in the NM-only branch that silently kept the previous .o; check `make` stderr).
 
 ---
+
+---
+
+<a id="sibling-raw-word-diff-before-grinding"></a>
+## Before grinding a near-miss, raw-word diff it against already-EXACT siblings in the region
+
+_A stuck near-miss may be a solved problem wearing a different constant. Before any lever grinding, diff its raw words against nearby functions of the SAME size that are already at 100:_
+
+```bash
+diff <(grep -o '\.word 0x........' asm/.../gl_func_A.s) \
+     <(grep -o '\.word 0x........' asm/.../gl_func_B.s)
+```
+
+_If the delta is only immediates/base offsets (addiu constants, lui/lo16 pairs), copy the exact sibling's FULL proven C — including every non-obvious lever (decl order, volatile pads, empty `if (x) {}` BB splits, one-line statement grouping, named-temp FP pool coloring) — and change only the constant(s). Do NOT re-derive the body from the old decode comment._
+
+**Case: gl_func_000652D8 (2026-07-17, agent-h).** Sat at 66.85% with a plausible-looking but wrong int-struct decode, while its neighbor gl_func_00065250 (0x88 bytes, same unit) had been cracked to 100 two weeks earlier with a 5-lever body. Raw-word diff: ONE word differed (`addiu a0,a0,0x294` vs `0x2C8`). Verbatim mirror + constant change → 34/34 exact in one edit. The old decode comment ("triple-copy chain... ptr-laundering") never mentioned the sibling despite it being 0x88 bytes away.
+
+**Scan cheaply:** same-size .s files in the same directory are the candidate pool (`wc -c asm/.../*.s | sort` or compare the `nonmatching <name>, 0xNN` headers). Pays off most in registration/dispatch/vector-math families where the game stamps out per-member wrappers.
 
 ---
 
