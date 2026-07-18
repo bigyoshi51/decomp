@@ -22,6 +22,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
 - [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
 - [Register-resident `&sym` ptr: MULTI-DEF w/ DISTINCT placeholder syms + call-free def placement + per-use extern split (kills %hi-CSE web-merge) + inline cross-block m2c locals = target lui;addiu web with guard re-materialization + beql tail-dup (timproc 69E8 87.60->96.01 count-exact, 2026-07-18 agent-g)](#register-resident-addr-ptr-multidef-69e8) — _Single-def or same-sym double-def copy-props back to folded lui form; def above earlier calls = spilled web (frame +8); residual = def1 %hi-temp coalesce rotation (zdbug:6 next)._
+- [CONVERSE cap: entry-block ONCE-materialized &sym pairs unreachable — uopt const-sinks defs to preheader + tail remat regardless of placement/distinct-syms/if(1)/inline (game_libs 23E60, 2026-07-18 agent-h)](#entry-block-const-placement-sink-cap-23e60) — _Distinct externs fuzzy-identical to folded same-sym (objdiff relaxes reloc imms); banked: a1-first capture order, drop return-0 for or-v0-less tail._
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
 - [Sparse-dispatch kit: if(1)-wrapped arm bodies defeat jump-threading (beq-chain restored, switch=binary-search, goto-chain=bnel-inline); same-var double-arg K&R precolor evicts to $a3 (2-arg keeps $a2); `*(long long*)p=KLL` = LIFO ori pair for GFX appends (56D14 72.61->89.7, 2026-07-17)](#dispatch-if1-antithread-ll-store-56d14) — _residual: last-test bne/beq trace polarity + coupled +1 temp-ring phase in final-case arms; probe polarity first._
 - [Deep-clone copy runs: alternating-t8/t7 segments = BLOCK STRUCT COPIES (segment length = struct size, secondary-base runs included); 1-word struct copy through a named field-pointer keeps 0(v0) (plain *p= gets offset-folded to base+imm, volatile inert) (526D0 76.5->95.75, 2026-07-15 agent-f)](#struct-copy-runs-oneword-ptr-copy-526d0) — _Also: param-reuse accumulator = move s0,a0 at insn 3 + a2-home in bne delay; int-lvalue (f32) cast emits mtc1/cvt/trunc, use *(f32*)= for lwc1/swc1; residual = uniform -1 temp-ring phase, 6 burn probes (dup-load/multi-def/while(0)/named-vt/array-alias/if(1)) all 0-advance — suspect 2-slot &D materialization shape (adjacent lui;addiu tell)._
@@ -21371,6 +21372,27 @@ does. Probed and inert: embedded-def `(g = &D)` expression, decl-order permutati
 def-symbol swap, if(1){} BB wrap. Same family as the 26B40 "ugen %hi-temp
 destination-coalescing is ugen-internal" converse. Next tool: `-Wo,-zdbug:6` uoptlist
 constrained-order trace.
+
+## CONVERSE cap: target materializes &sym lui/addiu pairs ONCE in the ENTRY block (no remat anywhere); uopt always const-sinks the defs into the loop preheader + remats at the tail join (game_libs 23E60, 2026-07-18 agent-h) <a name="entry-block-const-placement-sink-cap-23e60"></a>
+
+The 69E8 recipe covers targets that DO re-materialize (multi-def w/ distinct syms
+reproduces def-per-region). 23E60 is the converse: target emits the three base pairs
+(&D+0x1DD4/0x1DF0/0x2ACC0) once, straight-line, between the first jal and the loop-guard
+sltiu — live across all calls in s-regs, executed even on the guard-skip path where two
+of them are dead. uopt instead sinks the (dead-until-loop) constant defs into the loop
+preheader and re-derives s3/s6 in the tail join block (+4 insns, guard-skip path
+misaligned). ALL placement probes inert — build byte-identical under: defs above vs
+below the first call, distinct placeholder externs per pair (69E8 lever #1; also
+fuzzy-IDENTICAL to folded same-sym `g+K` because objdiff relaxes reloc'd lui/addiu
+imms — prefer the simpler same-sym spelling), if(1){} BB wrap, and per-use inline
+expressions (LICM hoists only to the preheader, never the dominator entry block).
+Coupled residual: the `(sz+0xF)&~0xF` init lands in an s-reg CSE-temp (guard reads the
+temp post-call) + `or s0,s3` copy into the loop-carried var; a two-def split
+(`s0 = sz+0xF; s0 &= ~0xF;`) does NOT break the temp. Classify as uopt const-sink
+canonicalization; no source spelling found that pins address-const defs in the entry
+block. (Did bank: a1-before-a0 capture-order swap fixed the s1/s2 role assignment, and
+dropping `return 0;` from a value-less int fn kills `or v0,zero,zero` and restores the
+`jr ra; addiu sp,sp,FRAME` tail. 68.5→71.2.)
 
 ## Per-symbol pad-struct externs kill the %hi-CSE lui/addiu pair for multi-offset baked-USO f64/f32 constant reads; single-use K&R float arg needs a PROTOTYPED extern; local-def callee bakes a nonzero jal target (1080 63F34 68.28->86.98, 2026-07-18 agent-h) <a name="per-symbol-pad-struct-hi-cse-63f34"></a>
 
