@@ -298,6 +298,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - **INVERSE (2026-06-02): drop a spurious unused TRAILING param to free its arg-reg and ELIMINATE a stack spill the target avoids.** If the target keeps an arg in a register across a jal (`or $a3,$a0,$0` — reuses a free arg-reg to hold original-a0) but your build SPILLS it to stack (`sw a0,off(sp)` + bigger frame), check whether your C signature declares an unused trailing param (e.g. `f(a0,a1,a2,arg3)` where arg3 is never referenced). That unused param OCCUPIES `$a3`, so the allocator can't reuse it and spills original-a0 to the stack instead. **Drop the unused param** → `$a3` is free → IDO reuses it (matches the target's `or $a3,$a0`) and the spill + extra frame vanish. Verified `gl_func_00067084` 2026-06-02 (85→94% from this alone, part of an 85→99.4% run). Pairs with dropping spurious `(char)`/`(signed char)` casts (each forces a redundant `andi`/`sll;sra`).
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
 - [Dead `if (a1) {}` elides the unused-leading-a1 caller-slot home (a0-only-spill targets now reachable; F444+F4F0 EXACT)](#feedback-ido-unused-arg-save) — _2026-07-03: empty-if ref marks a1 used, zero emission; kills the documented "no C lever / permuter-class" a1-spill cap. `a1=0;`/`(void)a1;` do NOT work. Re-pad frame after (volatile-pad sandwich)._
+- [Leading `or a2,a0,zero` stolen-prologue word = fn's OWN hoisted 3rd-call-arg copy (false unused-arg-save residual; 2D710 family word-exact)](#feedback-stolen-prologue-move-is-arg-copy-for-3rd-call-arg) — _One-param fn passing arg as 3rd call arg; IDO hoists a2=a0 above the stack adjust. Re-attribute the 0x00803025 boundary word forward and re-decode._
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
 - [Pre-load arg field into named local to force field-load BEFORE `&D` materialization clobbers the arg-register](#feedback-ido-preload-field-into-local-forces-load-before-clobber) — _When target reads `lw aN, K(a0)` BEFORE `lui a0, %hi(D_X)` (load via original arg-pointer, then clobber it), the inline `func(&D, arg->field)` form emits clobber-then-reload-via-spill (+1 insn). Fix: `int val = arg->field; func(&D, val);` — named local creates a sequence point that forces field-load first. 2026-05-10: unlocked gl_func_00054668 (75.62% → byte-exact)._
 - [Place `volatile int local = arg;` INSIDE the if-non-zero block to flip early-exit from `bnel-likely+delay-load` to `beqz+nop`](#feedback-ido-volatile-local-scoped-to-if-block-flips-early-exit-shape) — _Declaring a volatile-spilled local at function top emits the spill BEFORE the early-exit branch, letting IDO's scheduler hoist the first-iter loop-load into the branch's likely-delay slot (mismatching target's `beqz+nop` pattern). Scoping the volatile decl INSIDE the if-non-zero block pushes the spill AFTER the branch, removing IDO's hoist opportunity. Verified 2026-05-08 on `gl_func_0003EA98` — same-tick fix as the volatile-pointer caller-slot trick._
@@ -21121,3 +21122,27 @@ arg0 holds a base pointer (s1). Findings from reaching 90.3 on this shape at -O2
    (`*(u8*)cpdst = *src; cnt+=1; cpdst+=1; src+=1;`) -> lbu into t7 with the sb
    respelled to `-1(cpdst)` in the branch delay; declaring `u8 *src;` BEFORE
    `s32 cpdst;` sets the v1(src)/v0(cpdst) map.
+
+## <a name="feedback-stolen-prologue-move-is-arg-copy-for-3rd-call-arg"></a>Leading `or a2,a0,zero` "stolen prologue" word = the fn's OWN hoisted arg-copy — false unused-arg-save residual (2D710/2D74C/2D788 word-exact)
+
+2026-07-17 (agent-h, game_libs 0x2D710 family). Three sibling 15-insn wrappers were
+capped for a year at "unused-arg-save residual" (`sw a1` claimed unmatchable) under a
+3-param decode `f(a0, unused_a1, a2)`. Both claims were decode errors from a stale
+splat boundary:
+
+- The `or a2,a0,zero` (0x00803025) word sitting BEFORE each `addiu sp` prologue is not
+  the previous function's suffix orphan — it is THIS function's first instruction. The
+  real source is a **one-parameter** function that passes its arg as the **3rd call
+  arg**: `f(a0){ D_store=a0; cb(0x41010000, ((int*)&D_load)[a0], a0); }`. IDO -O2
+  hoists the `a2 = a0` call-arg copy above the stack adjust and copy-props the array
+  index onto a2 (`sll t6,a2,2`), while the store still reads a0. No a1 exists, so no
+  a1 spill — the "cap" evaporates.
+- Fix chained through consecutive siblings: each fn's leading move was sitting at the
+  PREVIOUS .s file's tail. Shift the 0x00803025 words one file forward (tail -> next
+  head), adjust declared sizes, ROM concatenation unchanged. All three then compile
+  15/15 word-exact (distinct-extern CSE-bust for store/load bases still required).
+
+Recognizer: raw-word USO fn whose body uses aN with no visible producer + preceding
+fn's .s ends in `or aN,a0,zero` past its `jr ra; nop` -> re-attribute the word and
+re-decode as a narrower arg list feeding a wider call. Stays NM wrap when callee is
+jal-0 placeholder.
