@@ -13812,6 +13812,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Natural both-store RMW pair (`field++; field &= K;`) beats the temp+volatile lever kit — the folded reload burns a temp-rotation slot (andi t9-reuse -> fresh t5) (game_libs_func_00031784 25/27->27/27 EXACT)](#natural-both-store-rmw-pair-beats-the-tempvolatile-lever-kit-the-folded-reload-burns-a-temp-rotation-slot-andi-t9-reuse---fresh-t5-2026-07-02) — _When the only residual is the RESULT reg of the 2nd statement of a two-statement RMW on one field (fresh $t wanted, reuse built) and your C routes it through `t = f + (long long)1; volatile-store; (t&K)&0xFFFF`: write BOTH statements naturally on the field (`a0[N]=a0[N]+1; a0[N]=a0[N]&0xF;`). The 2nd statement's reload keeps store 1 live (no volatile) and CSE-folds onto t3 AFTER dead-store elim — the folded reload candidate consumes the t4 rotation slot so the andi lands t5; load/incr come out fresh t2/t3 for free. Target keeping both stores at -O2 IS the tell the original re-read the field. 96-cell add-form x mask-form sweep proved no expression tweak moves the andi in the temp form._
 - [-O0 scalar-vs-deref ==/!= eval order is a toolchain-binary gap: 7.1/5.3 always deref-first; two 1080 USO sites are scalar-first (bootup 10FEC/10540 cap) + assignment-operand-hoist `+` lever + NOLOAD jumptable pin](#feedback-ido-o0-eq-eval-order-gap) — _cfe canonicalizes scalar ==/!= deref so the deref side always evaluates first (both compiler versions, ~25 spellings + flag matrix, all deref-first; `<`/`>` stay left-first). Value-first `lw HOME;lw HOME;lw K(t);beq` blocks are unreachable = cap; FIFO t0/t1 swaps downstream are knock-ons of the one block. Lever: in `A + B` where B contains an embedded assignment, put A FIRST or cfe snapshots the assignment value into an s-reg. USO C-switch jumptables: pin unit .rodata at the module table offset with a NOLOAD ld section._
 - [Char-scanner kit: `p=str;str++;c=*p` increment-between kills load-PRE + offset-fold; repeated `*p` = the CSE-temp/var pair (NOT two vars); NAMED int consts win beq rs slot + t0/t1/t2; goto-loop + early sign-continue keeps bnel dead-dup (game_libs 67D8C 92/92 EXACT 2026-07-07)](#feedback-ido-char-scanner-kit-67d8c) — _Merged strtol-lite (hex+decimal). FOUR coupled levers for byte-scanner loops: (1) cursor idiom `p = str; str++; c = *p;` — increment BETWEEN copy and load keeps `move a1,a0` alive; `p=str;c=*p;str++` lets uopt fold to `lbu N(a0)`+combined addiu AND load-PRE the loop-head char into entry (back-edge reload insertion, `lbu` into a candidate not a temp). (2) When target tests some ranges on \$a2 and others on \$a3 with `move a3,a2` in a branch delay: that is repeated `*p` (CSE temp \$a2) + ONE named `c = *p` (\$a3) — writing two vars c/c2 coalesces them (a3 freed, const steals it, t-file cascades). (3) `beq t0,a3`/`multu v1,t2` with const-side-first: consts must be NAMED int locals (`minus='-'; dot='.'; ten=10;`) — they color t0/t1/t2 in first-use order, win the rs slot, and `value *= ten` emits multu+mflo (literal 10 strength-reduces); literal compares emit var-first regardless of source operand order (8-perm sweep). (4) infinite scan loop as `dec: ... goto dec;` with EARLY `if (minus == c) { sign=1; goto dec; }` — reproduces bnel + orphaned dead `lbu` dup; if/else form loses the likely-conversion; while/for forms invite the PRE. Also: 29w sibling 67B04 cracked by dead in-guard `q = arg1;` (flips p/q↔c0 coalesce, legalizes guard-delay fill, kills beqzl+sltu dup) + `int r = 0;` dead init (r colors v1 not a0)._
+- [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -20581,3 +20582,39 @@ moved 62.33->76.57 and closed the size deficit 59->11 words. Deltas vs the
 5. Live-f0 compares: post-call compare chains reuse the float RETURN reg
    (7A98's f0) as the left operand of several later c.le.s — reading them as
    "vs 0.0f" is wrong; check whether f0 was clobbered since the jal.
+
+## goto-end early-exit flips the alloc-fallback join phi to $a0 (kills bnez+b, gives beqz-v0-with-delay-move + epilogue move v0,a0); struct-copy (not per-element) picks held-&tmp store base; 637BC pad-array precedent generalizes (gl_func_00063884 73.25->EXACT 56/56, 2026-07-17 agent-h) <a name="goto-end-phi-a0-struct-copy-63884"></a>
+
+Constructor shape `if (!a0) { a0 = alloc(292); if (!a0) <exit>; } init(...); ...; return a0;`
+(target head `bnez a0,body; jal alloc; beqz v0,EPILOGUE; move a0,v0(delay)` and tail
+`lw ra; addiu sp; move v0,a0; jr`). Three coupled levers, all probed standalone
+(project cc flags) to byte-exact 56/56:
+
+1. **`if (a0 == 0) return a0;` colors the post-call web $v0** (return-coalesce):
+   build emits `bnez v0,body; move; b epilogue; lw-ra-in-delay` and every base
+   reg in the body becomes $v0. Probes that DON'T flip it: early `return 0`,
+   if/else phi form, if(1) wraps, char*/int retypes, void-typed callee alias,
+   separate local. The TWO forms that flip the phi to $a0: (a) body wrapped in
+   `if (a0 != 0) { ... }` after an unconditional-assign guard (vI — but head
+   then tests a0 at the join, unthreaded), and (b) **`if (a0 == 0) goto end;`
+   with `end:` label at the final `return a0;`** — keeps the jump-threaded head
+   (alloc arm tests v0 directly, `move a0,v0` fills the beqz delay) AND the
+   a0-phi (epilogue `move v0,a0` in the pre-jr slot). The goto form is NOT
+   semantically identical to `return a0` for uopt's coalescer: the label join
+   blocks the return-value coalesce.
+2. **Vec3 int->float snapshot: use a STRUCT COPY** `tmp = *(Tri3i*)a2;` — NOT
+   three per-element int copies. The block copy loads via a fresh t-reg src
+   pointer (a2 reloaded at use, t7/t0, not hoisted into a1/a2) and stores via
+   the held `addiu v1,sp,0x2C` base; the following `*(float*)&tmp.a` reads
+   fold to sp-relative lwc1. Per-element `tmp[0]=a2[0];...` inverts the bases
+   (sp-folded stores, v1 reads) regardless of int[3]-vs-float[3] typing or
+   cast spelling — the aggregate copy is what selects the target base split.
+3. **Frame ghost words around ONE local**: target tmp@0x2C in frame 0x40 vs
+   build tmp@0x24 in 0x30 -> declare `int pad_a[2];` BEFORE and `int pad_b[2];`
+   AFTER the temp (non-volatile arrays survive -O2 DCE; same-file 637BC
+   precedent `pad_top/pad_mid/pad_bot`). Decl order maps to layout; 2+2 landed
+   tmp exactly at 0x2C.
+
+Also reconfirmed: per-site ANSI-prototyped placeholder alias (64588 lever) for
+the three single-precision 0.0f init args — second confirmed land of that
+recipe (alias `gl_init_00000000_63884 = 0x0`).
