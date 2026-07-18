@@ -21549,3 +21549,12 @@ body (catastrophic: a0 spilled to frame around calls, s0 dropped entirely, +2 wo
 arr1 split (reschedules the lui pair), rec2-spelled-as-q (CSE hoists the second DL-command lui
 to the head), and p-as-trailing-K&R-call-arg (spills p to a frame slot instead of precoloring
 a1 — the 35834 arg-carrier trick does NOT transfer to this shape). Coloring-multiset class.
+
+**45CB0 addendum (same session, 67.87->95.86):** the ghost-slot decl-order solver (entry above)
+composes with this kit — 9 named decls `out,rec,idx,cmd1,bx,by,bz,cmd2,cmd3` reproduce frame
+0x40 with spill homes 0x3C/0x20/0x1C and the unused-arg0 + a1 arg-slot home-stores exactly.
+Lane-value negatives: duplicated inline FP exprs (`(int)(f*255.0f)` written 4x) do NOT CSE —
+IDO recomputes lwc1+mul.s+trunc+mfc1 per store (+48 words); chained byte assignment
+`out[C]=out[8]=out[4]=out[0]=v` computes once but SPILLS the source arg pointer to a frame
+slot with per-lane reloads. Named lane vars stay candidates (claim $v0); the target's ring
+a0/t1/t2 lane temps were not reachable — residual temp-ring parity, honest NM.
