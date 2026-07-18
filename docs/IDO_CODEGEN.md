@@ -16,6 +16,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 ### large-body matching
 - [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
 - [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
+- [Register-resident `&sym` ptr: MULTI-DEF w/ DISTINCT placeholder syms + call-free def placement + per-use extern split (kills %hi-CSE web-merge) + inline cross-block m2c locals = target lui;addiu web with guard re-materialization + beql tail-dup (timproc 69E8 87.60->96.01 count-exact, 2026-07-18 agent-g)](#register-resident-addr-ptr-multidef-69e8) — _Single-def or same-sym double-def copy-props back to folded lui form; def above earlier calls = spilled web (frame +8); residual = def1 %hi-temp coalesce rotation (zdbug:6 next)._
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
 - [Sparse-dispatch kit: if(1)-wrapped arm bodies defeat jump-threading (beq-chain restored, switch=binary-search, goto-chain=bnel-inline); same-var double-arg K&R precolor evicts to $a3 (2-arg keeps $a2); `*(long long*)p=KLL` = LIFO ori pair for GFX appends (56D14 72.61->89.7, 2026-07-17)](#dispatch-if1-antithread-ll-store-56d14) — _residual: last-test bne/beq trace polarity + coupled +1 temp-ring phase in final-case arms; probe polarity first._
 - [Deep-clone copy runs: alternating-t8/t7 segments = BLOCK STRUCT COPIES (segment length = struct size, secondary-base runs included); 1-word struct copy through a named field-pointer keeps 0(v0) (plain *p= gets offset-folded to base+imm, volatile inert) (526D0 76.5->95.75, 2026-07-15 agent-f)](#struct-copy-runs-oneword-ptr-copy-526d0) — _Also: param-reuse accumulator = move s0,a0 at insn 3 + a2-home in bne delay; int-lvalue (f32) cast emits mtc1/cvt/trunc, use *(f32*)= for lwc1/swc1; residual = uniform -1 temp-ring phase, 6 burn probes (dup-load/multi-def/while(0)/named-vt/array-alias/if(1)) all 0-advance — suspect 2-slot &D materialization shape (adjacent lui;addiu tell)._
@@ -21240,3 +21241,46 @@ Context: b5 8468 (94-word 2-phase state handler), 91.33 → 94/94 exact. Levers 
    rotation (m/sum/elem: t8/t0/t1 vs t1/t8/t0) — operand order and web-allocation order
    are coupled; don't chase the rotation with naming (naming m moved it to $v1 and
    shifted the entire DOWNSTREAM t-ring one step — strictly worse).
+
+## Register-resident `&sym` pointer (target lui;addiu web with re-materialization): MULTI-DEF with syntactically DISTINCT placeholder syms, defs placed call-free, per-use extern split to kill %hi-CSE web-merge, cross-block m2c locals inlined (timproc b5 69E8 87.60→96.01 count-exact, 2026-07-18 agent-g) <a name="register-resident-addr-ptr-multidef-69e8"></a>
+
+Target tell: `lui rX,%hi(D); addiu rX,rX,%lo(D)` materialized into ONE reg, uses at
+several different byte offsets (`lw t6,0x44(rX); sw t6,0x40(rX)` ... later `lw 0x34(rX)`),
+and the pair RE-materialized into the same reg inside a guarded arm right after a jal —
+while the build folds every access into per-use `lui rT; lw off(rT)` (and is 1 word short:
+the missing insn is the addiu of the pair). This is an address-constant the original held
+in a register variable. Four coupled levers, each verified load-bearing on 69E8:
+
+1. **Multi-def with DIFFERENT syms.** `p = &D;` single-def always copy-props back to
+   folded form regardless of decl order/naming. Two defs of the SAME constant also
+   re-fold (uopt tracks per-def constants). Two defs of *syntactically different*
+   placeholder externs (`p = &D_A;` at top, `p = &D_B;` inside the guard — both reloc
+   to segment base, %lo imms objdiff-relaxed) block propagation and produce exactly the
+   target shape: def1 at top, def2 re-materialized in the guard arm after its jal, and
+   the join-block `lw off(p)` gets beql tail-dup'd into the guard-skip branch delay
+   automatically.
+2. **Defs must sit call-free.** If the first def is the declaration initializer above
+   earlier calls, the web crosses them → uopt SPILLS it to a stack home (frame +8,
+   sw/lw around every region) instead of re-materializing. Place def1 *after* the last
+   preceding call; the guard re-def keeps the second region call-free too. (This is why
+   the target re-materializes at all: each def-region is call-free, so a caller-saved
+   reg works.)
+3. **Split every OTHER `&D_00000000` use onto its own extern.** With a shared segment
+   sym, %hi CSE merges ALL address webs (the pointer, a folded `*g==K` counter compare,
+   `lui at`-indexed array stores, even a call-arg `&D+0x1304`) into ONE register
+   candidate — the build then holds one base reg for everything, unlike the target's
+   mix of one register web + independent folded forms. One extern per conceptual symbol
+   (counter, table, array bases, string arg) restores the folded forms exactly.
+4. **Inline cross-block m2c locals (`elem`, `C`).** A named local reassigned in every
+   block = one multi-BB web = global candidate stealing v0/v1 and re-basing every
+   element chain. Fully inlining the address chains per store returns them to
+   block-local t-ring temps (three middle blocks snapped exact in one edit).
+
+Residual cap (4% on 69E8, reg fields only, count-exact): 3-web coloring rotation.
+Target colors {a4=a1, ptr=v1 with BOTH %hi-temps destination-coalesced}; build colors
+{a4=v0 (after a dead `if(a4){}` boost; v1 without), ptr=a1, and def1's %hi-temp stays a
+SEPARATE 1-insn max-density web stealing the v-reg} — def2's %hi coalesces, def1's never
+does. Probed and inert: embedded-def `(g = &D)` expression, decl-order permutations,
+def-symbol swap, if(1){} BB wrap. Same family as the 26B40 "ugen %hi-temp
+destination-coalescing is ugen-internal" converse. Next tool: `-Wo,-zdbug:6` uoptlist
+constrained-order trace.
