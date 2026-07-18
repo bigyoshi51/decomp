@@ -57,6 +57,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Wave-3 round-3 (agent-g 2026-07-15): 38C0-family recipe portable VERBATIM (3734 EXACT on first compile); ghost-home count = volatile-pad count; value-load vs address lui/lw tell; node-copy-spill guard; as1 addiu-vs-home-store delay tie (3734 100, 3638 95.9, 6A30 85)](#wave3-round3-3734-6a30) — _Backport family recipe before re-deriving; frame short N words with all insns exact = N scalar volatile pads after the named locals; beqz+4 alloc-fail skips only init; sw s0,0x10(sp) pre-jal = 5th K&R arg; register-float staging = candidate f0/f2/f12/f14 pool; *(V3*)&float cast-copy DSEs siblings (use struct fields)._
 - [Fresh-Vec3-per-site alloc-fallback fanout (7C1C 62.9->75.8): fresh address-taken Vec3 home per staging site (frame 2.5x), decl order = descending homes; `p=0;if(1){p=&X;}` anti-fold guard; int-cast `q=(f32*)((int)base+0x30)` hoisted above guard is the ONLY spelling that keeps the addiu join-CSE; objdiff fuzzy ignores sp-offset diffs so skip frame-gap pads](#fresh-vec3-fanout-intcast-q-7c1c) — _metric/3FAC dir arg = result-direction copy not segDir; lw-2312 double-deref tell._
 - [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var._
+- [NEGATIVE: C48C 32-stage template-addr %hi/%lo remat resists de-name + int-cast-literal (uopt GCSE spills 16-use address const regardless of spelling); 32 sw-a2-arg-home jal delays also open](#c48c-template-addr-gcse-negative) — _needs uoptlist, not spelling._
 - [Wave-3 round-2 closers (agent-g 2026-07-15): de-name expression locals = fresh-ring numbering + ghost-home kill in one move; void-alias the last jal before a CSE-temp region; pad-AFTER a lone named local re-packs spill homes (38C0 91.3->EXACT, 15FC 27->23)](#wave3-round2-38c0-15fc) — _Named OR-chain/CSE-ptr locals color in-place + cost dead homes; folding them into the call args restores t7->t8->t9->t0 fresh numbering AND the exact frame. "One CSE temp in a v-reg, the other on the ring" after a K&R int call = dead-$v0 exclusion; void-alias frees v1/v0 emission-order coloring. A lone named local + compiler CSE spills +4 with a hole below = volatile pad AFTER the local claims the stray word (frame unchanged)._
 - [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
@@ -20618,3 +20619,21 @@ Constructor shape `if (!a0) { a0 = alloc(292); if (!a0) <exit>; } init(...); ...
 Also reconfirmed: per-site ANSI-prototyped placeholder alias (64588 lever) for
 the three single-precision 0.0f init args — second confirmed land of that
 recipe (alias `gl_init_00000000_63884 = 0x0`).
+
+## NEGATIVE (C48C 2026-07-17): 32-stage template-pointer %hi/%lo remat resists de-name AND int-cast-literal — uopt GCSE spills a 16-use address constant regardless of spelling <a name="c48c-template-addr-gcse-negative"></a>
+
+game_uso_func_0000C48C (67.09, 32-stage constructor): target rematerializes
+`lui;addiu %hi/%lo(D_807FF568+0xf78)` at each of 16 stages (ditto D_807FF5B0
+x16); our build GCSEs the address once and reloads a spill (`lw`) per stage
+(~64-insn deficit), plus 32 missing `sw a2,8(sp)` jal-delay arg-home stores at
+the 04A188 sites. Tried and NEGATIVE (fuzzy 67.087 unchanged / regressed):
+(1) de-naming the per-stage `tmpl` var into a direct
+`obj[3]=(int)((char*)&D+0xf78);` expression — identical codegen, GCSE still
+wins (the 38C0 de-name-fresh-ring lever does NOT generalize to a 16-use
+address constant); (2) int-cast-literal `(int)&D + 0xf78` — 66.84, slightly
+WORSE. The remat-vs-spill choice is a uopt regalloc/GCSE cost decision, not a
+spelling issue — next tool is the `-Wo,-zdbug:6` uoptlist dump (see
+regalloc-dump memo). The 32 `sw a2,8(sp)` delay stores (arg-homed a2 at a
+4-reg-arg K&R call) also remain unexplained by prototype shape — candidate:
+original passed the stage value through a type IDO homes (float-in-int-reg or
+4-byte struct); untested.
