@@ -22,6 +22,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
 - [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
 - [Register-resident `&sym` ptr: MULTI-DEF w/ DISTINCT placeholder syms + call-free def placement + per-use extern split (kills %hi-CSE web-merge) + inline cross-block m2c locals = target lui;addiu web with guard re-materialization + beql tail-dup (timproc 69E8 87.60->96.01 count-exact, 2026-07-18 agent-g)](#register-resident-addr-ptr-multidef-69e8) — _Single-def or same-sym double-def copy-props back to folded lui form; def above earlier calls = spilled web (frame +8); residual = def1 %hi-temp coalesce rotation (zdbug:6 next)._
+- [USO global at-macro: loads pair / stores don\'t; per-LOAD-SITE distinct externs + FP-local arg routing for lwc1+mfc1; volatile pairs the address AND re-types f32 loads to lw (307B0 67.8->83.3, 2026-07-18 agent-h)](#at-macro-load-store-asymmetry-307b0) — _Shared struct extern = whole-fn base web (worst); clamp = local-f single join store / store-then-cond-restore._
 - [CONVERSE cap: entry-block ONCE-materialized &sym pairs unreachable — uopt const-sinks defs to preheader + tail remat regardless of placement/distinct-syms/if(1)/inline (game_libs 23E60, 2026-07-18 agent-h)](#entry-block-const-placement-sink-cap-23e60) — _Distinct externs fuzzy-identical to folded same-sym (objdiff relaxes reloc imms); banked: a1-first capture order, drop return-0 for or-v0-less tail._
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
 - [Sparse-dispatch kit: if(1)-wrapped arm bodies defeat jump-threading (beq-chain restored, switch=binary-search, goto-chain=bnel-inline); same-var double-arg K&R precolor evicts to $a3 (2-arg keeps $a2); `*(long long*)p=KLL` = LIFO ori pair for GFX appends (56D14 72.61->89.7, 2026-07-17)](#dispatch-if1-antithread-ll-store-56d14) — _residual: last-test bne/beq trace polarity + coupled +1 temp-ring phase in final-case arms; probe polarity first._
@@ -21393,6 +21394,41 @@ canonicalization; no source spelling found that pins address-const defs in the e
 block. (Did bank: a1-before-a0 capture-order swap fixed the s1/s2 role assignment, and
 dropping `return 0;` from a value-less int fn kills `or v0,zero,zero` and restores the
 `jr ra; addiu sp,sp,FRAME` tail. 68.5→71.2.)
+
+## USO global-access at-macro form: load/store asymmetry, per-LOAD-SITE distinct externs, volatile pitfalls, FP-local arg routing for lwc1+mfc1 (1080 307B0 67.8->83.3, 2026-07-18 agent-h) <a name="at-macro-load-store-asymmetry-307b0"></a>
+
+Extends the 63F34 family. Target: a global-state tick fn where EVERY global access is
+the ephemeral-`at` %hi macro form (`lui at,%hi; lwc1/sw %lo(D+K)(at)`), the FP
+accumulator is value-reloaded before the tail call, and the f32 arg goes via
+`lwc1 $f0; mfc1 a1,$f0`. Probe ladder results:
+
+1. **STORES to `*(T*)(g+K)` (same-sym cast form) already emit at-macros** — sw and swc1
+   never build an address web. **LOADS are the problem**: a 2+-access load address gets
+   CSE'd into a lui/addiu base-reg pair. Asymmetry is load-only.
+2. **Shared struct extern is the worst spelling** — cross-BB %hi CSE builds ONE
+   whole-function lui/addiu base web (v0) + beql tail restructuring.
+3. **Per-FIELD distinct externs still pair** any field accessed 2+ times.
+4. **Winner: one distinct extern PER LOAD SITE** of the hot field (63F34 single-access
+   at-macro rule applied per USE, not per symbol); ints/singles with 1-2 uses stay on
+   the `g+K` cast form.
+5. **volatile is NOT the at-macro lever**: a volatile f32 load still hoists a
+   lui/addiu address pair AND re-types to a plain `lw` when the value feeds an int
+   destination. What volatile DID buy earlier in the ladder: blocks store-to-load value
+   forwarding (the target's pre-call reload) — but distinct load-site syms get that for
+   free (different symbol = no assumed aliasing with the cast-form stores).
+6. **f32 arg as `lwc1+mfc1`: route through the FP local** (`f = D_accC;
+   call(K, f);`). Passing the global directly — volatile or not, prototyped callee or
+   not — re-types the load to `lw a1`. The FP-typed local forces the lwc1 into the
+   local's FP reg, then mfc1 for the int arg slot.
+7. **Clamp shape**: compute in a local f, single store at the join (`if (1.0f < f)
+   f = 1.0f; STORE(f);` = add.s/c.lt.s/mov.s + one swc1 in the join delay); down-ramp
+   is store-then-conditional-restore (`STORE(f); if (f < floor) STORE(floor);`).
+   `f = acc; f += step;` lands acc directly in f\'s result reg (target lwc1 $f0 +
+   add.s $f0,$f0,$f4); the one-expression `acc + step` spelling numbers the ring wrong.
+
+Residual on 307B0: caller-set t6 arg cap, target\'s zeroing pair shares one `lui at`
+across two sw (ours emits two macros — as1-level at-reuse not reproduced), %hi hoist
+scheduling rows.
 
 ## Per-symbol pad-struct externs kill the %hi-CSE lui/addiu pair for multi-offset baked-USO f64/f32 constant reads; single-use K&R float arg needs a PROTOTYPED extern; local-def callee bakes a nonzero jal target (1080 63F34 68.28->86.98, 2026-07-18 agent-h) <a name="per-symbol-pad-struct-hi-cse-63f34"></a>
 
