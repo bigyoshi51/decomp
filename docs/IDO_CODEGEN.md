@@ -13821,6 +13821,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Char-scanner kit: `p=str;str++;c=*p` increment-between kills load-PRE + offset-fold; repeated `*p` = the CSE-temp/var pair (NOT two vars); NAMED int consts win beq rs slot + t0/t1/t2; goto-loop + early sign-continue keeps bnel dead-dup (game_libs 67D8C 92/92 EXACT 2026-07-07)](#feedback-ido-char-scanner-kit-67d8c) — _Merged strtol-lite (hex+decimal). FOUR coupled levers for byte-scanner loops: (1) cursor idiom `p = str; str++; c = *p;` — increment BETWEEN copy and load keeps `move a1,a0` alive; `p=str;c=*p;str++` lets uopt fold to `lbu N(a0)`+combined addiu AND load-PRE the loop-head char into entry (back-edge reload insertion, `lbu` into a candidate not a temp). (2) When target tests some ranges on \$a2 and others on \$a3 with `move a3,a2` in a branch delay: that is repeated `*p` (CSE temp \$a2) + ONE named `c = *p` (\$a3) — writing two vars c/c2 coalesces them (a3 freed, const steals it, t-file cascades). (3) `beq t0,a3`/`multu v1,t2` with const-side-first: consts must be NAMED int locals (`minus='-'; dot='.'; ten=10;`) — they color t0/t1/t2 in first-use order, win the rs slot, and `value *= ten` emits multu+mflo (literal 10 strength-reduces); literal compares emit var-first regardless of source operand order (8-perm sweep). (4) infinite scan loop as `dec: ... goto dec;` with EARLY `if (minus == c) { sign=1; goto dec; }` — reproduces bnel + orphaned dead `lbu` dup; if/else form loses the likely-conversion; while/for forms invite the PRE. Also: 29w sibling 67B04 cracked by dead in-guard `q = arg1;` (flips p/q↔c0 coalesce, legalizes guard-delay fill, kills beqzl+sltu dup) + `int r = 0;` dead init (r colors v1 not a0)._
 - [7BC kit at 32 expansions w/ K&R callee: memcpy-form t-carrier load-bearing, ||-fallback must compare s1, per-site alias x34, val-dependent store order; 2-sw eval-order + t@uopt-slot residual (game_uso_func_0000C48C 67.09->99.74, 2026-07-17 agent-g)](#c48c-struct-arg-32x-memcpy-form) — _32x sw a2,8(sp) delay homes = struct-by-value; explicit shared `t=u` carrier required even for unprototyped callee (direct-u drops the 0(s2) staging hop); `s1 != -OFF || (obj=alloc())` keeps li/bne-s1 + stage-skip beqz; param-as-p homes at arg slot; 34 base-0 aliases bust template-addr spill-CSE; zero-val ctor stages store 0xC,0x14,0x10 vs nonzero 0xC,0x10,0x14._
 - [ptr+int addu operand-order INVERTS vs spelling: `(char*)p + off` -> `addu rd,OFF,p`, `off + (char*)p` -> `addu rd,p,OFF`; loop-array element re-spelled `self[1][i]` per use (never s-reg'd across calls) + de-named owner CSE temp = the no-s3 constructor-loop shape (gl_func_000683D4 77.46->99.44, 2026-07-17 agent-h)](#addu-order-respell-element-683d4) — _Naming the element made an s3 web (wrong saves/frame); the original reloads lw t?,4(s1)+addu+lw at EVERY use because calls kill the array memory. Named parent colors v0 only when the owner ptr (self[3]) is a DE-NAMED CSE temp (colors v1, feeds the bnezl-annulled delay reload); naming both flips v0/v1. Residual class: second vtable temp a1-vs-v0, immune to naming/de-naming/decl-order/web-merge._
+- [Store-forward CSE = expression-temp global load + `move` candidate copy; uopt one-color-per-named-variable; reload-web-vs-spilled-var rank cap (43654 74.64->98.63, 2026-07-17 agent-f)](#store-forward-temp-copy-one-color-per-var-43654) — _Write early reads as FW(obj,off) after the store, named var as consumer -> lw t6 + move a3,t6; var reuse proves single color per variable (spill home follows); append-tail v0/v1 rank is spelling-invariant (7 probes)._
 - [Script-VM executor coloring-cycle kit: `*p|=x;*p&=y;` double-sb store-forward; de-named `arg1&MASK` colors $a1; named char** call arg + `ptr+=1;*cur=ptr`; hand-lowered u32->f32 = phi copy (2B5F4 75.96->94.11, 2026-07-17 agent-h)](#vm-executor-coloring-kit-2b5f4) — _Five reusable levers that resolved a full a3/t1/t0->a1/t0/a3 coloring cycle; named group=memory, block-local g=v0+home, de-named=a1; store-forward ptr variant regresses; u32 r kills the break-6 pair._
 - [goto-mid label (or do-while(0)) blocks same-BB base+offset fold — materializes `addiu v0,a0,K; lw/sw 0(v0)` pointer shape at zero insn cost; cross-BB named ptr reserves an 8B bottom home slot (gl_func_00065060 76.76->93.10, 2026-07-17 agent-h)](#goto-mid-pointer-antifold-65060) — _`int *p=(int*)(a0+0x18); *p|=0x10;` always copy-props back to `lw/sw 24(a0)`. Inserting `goto mid; mid:` right before the use (or wrapping the use in `do{...}while(0)`) makes the def-use cross a BB boundary -> IDO materializes the exact addiu-base + 0-offset derefs with no extra insns. Cost: the pointer becomes a named cross-BB candidate and gets an 8B stack home reserved at the frame BOTTOM (below all arrays), shifting memory locals +8. All same-BB anti-fold re-spellings fail ((unsigned)/volatile/register/union/struct-field/ptr-arith); if(cond) adds beqz; &p adds a dead sw; phantom 2nd param homes to the arg area but emits `sw a1,frame+4(sp)`. Also: same-value FP-const webs split per (float)N cast-literal spelling generalize 4-way (0.0f/(float)0/1.0f/(float)1 -> four distinct mtc1 regs, post-call remat follows the web's spelling)._
 - [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
@@ -21005,3 +21006,37 @@ r2), the standard undefined_syms_auto mechanism. Residual ~6%: 8 ghost words
 of block-scope named-local homes (frame -96 vs -64), two missing `or` ptr
 copies, second-block multu operand order (spelling-swap neutral) — coloring
 noise, honest NM at 94.11.
+
+## Store-forward CSE keeps a global load as expression temp (t6) + `move a3,t6` candidate copy; uopt colors ONE register per named variable (webs share it); reload-web-vs-spilled-var rank is spelling-invariant (43654 74.64->98.63, 2026-07-17 agent-f) <a name="store-forward-temp-copy-one-color-per-var-43654"></a>
+
+Three allocator facts from the 43654 redecode (4EB54's sibling, same file):
+
+1. **`lw tN` + `move aX,tN` head shape = de-named load + named consumer.**
+   Target: `lw t6,0x214(hi)`, `sw t6,0x64(a0)`, field reads off t6, `move
+   a3,t6`. Naming the load (`g = *(...)`) colors it a2/a3 as a candidate and
+   the copy vanishes or renumbers everything (-1 t-ring shift downstream).
+   Spelling that matches: store first (`FW(arg0,0x64) = (int)*(char **)(&D +
+   0x214);`), then `var_a3 = (char *)FW(arg0,0x64);` and ALL other early
+   reads as `FW(arg0,0x64)` — uopt store-forwards the CSE into t6, var_a3
+   becomes a pure consumer copied from it. One t-ring slot consumed by the
+   load temp realigns every later tN in the function.
+
+2. **uopt colors one register per named variable, not per web.** Probe: reusing
+   `var_a3` (head color a3) for the post-call reload slot kept the reload in
+   a3 and moved its spill home (0x34 -> 0x30) — the variable's single color
+   followed it. So a target that shows the same value in two different regs
+   across a call (v1 pre / a3 post, etc.) is two SOURCE variables, and a
+   target that shows one reg everywhere can be one variable even across
+   disconnected defs (3-web `temp_v0` = cb-result + reload + cb-result all
+   in v0 is a legal single-variable spelling).
+
+3. **Reload-web vs spilled-var rank cap (residual class).** In the Gfx-append
+   tail (`p=obj->0xC; i=p->cnt; p->cnt=i+1; e=obj->0xC->buf+i*8` — note the
+   ->0xC RELOAD after the cnt store is an aliasing tell, write the load
+   twice), target ranks the spilled owner var first (v1) and the 0x68-reload
+   web second (v0), then p/idx/e = a0/a1/a2. IDO ranks the reload web first
+   (v1) pushing the owner to a2 and shifting the else-arm's whole a/v ring.
+   Invariant under: named/de-named reload, web-merging via shared variable,
+   store-forward elimination of the producer web, decl-order and def-order
+   swaps (7 probes tabulated in the block comment). Register-number-only
+   residual, same cap class as 42F4C's temp-ring — honest NM at 98.63.
