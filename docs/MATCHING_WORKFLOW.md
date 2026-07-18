@@ -3140,6 +3140,8 @@ _If the delta is only immediates/base offsets (addiu constants, lui/lo16 pairs),
 
 **Scan cheaply:** same-size .s files in the same directory are the candidate pool (`wc -c asm/.../*.s | sort` or compare the `nonmatching <name>, 0xNN` headers). Pays off most in registration/dispatch/vector-math families where the game stamps out per-member wrappers.
 
+**0-word-differ variant (73034, same day):** the scan also surfaced gl_func_00073034 (72.62%) as raw-word IDENTICAL 16/16 to landed gl_func_0006B974 — sub-100 purely because the old wrap compiled at the TU's -O2 while the twin was an -O1-island donor splice. Port the twin's ENTIRE landing mechanism (donor unit + OPT_FLAGS + REPLACE_FUNC_BODY + filter-out entry), not just its C. A word-identical twin of an exact fn falsifies any "scheduling residual" cap verdict on the sub-100 one.
+
 ---
 
 <a id="feedback-nm-wrap-doc-can-be-stale"></a>
