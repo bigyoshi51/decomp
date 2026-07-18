@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Byte-RMW mask-width trichotomy: `*p &= K` direct-RMW statements keep per-step sbs with the LITERAL's andi width (~0x80 -> 0xff7f; literal 0xBF -> 0xbf); non-volatile local chain DSEs intermediate stores; volatile chain keeps stores but widens all masks to 0xffXX (2A260 69.1->87.9, 2026-07-18)](#byte-rmw-mask-width-2a260) — _also: symbol+const ptr arith can stay UN-folded (lui/addiu base + separate addiu 0x5280; base pair = stolen-prologue orphan fn); two same-page &D uses need DISTINCT placeholder externs or uopt CSEs one lui pair; sinking one RMW step below neighboring sh stores realigned downstream t-temp parity; disasm-func.py WITHOUT --obj shows the BUILD, not the target .s._
 - [FP div fold-break kit: f32 numerator locals keep INEXACT literal/literal divs as runtime div.s (kills .rodata folds); the EXACT quotient (255/255) still folds through a local — `(float)N` INT-cast-literal init defeats it (distinct mtc1 + div.s); early-guard beqz may target a trailing ALWAYS-RUN block, not the epilogue (D9E4 66.15->100, 2026-07-18)](#fp-div-foldbreak-guards-fallthrough-d9e4) — _also: decl-order swap (result-ptr before sub-ptr) moved the call-spanning spill 0x28->0x2C; volatile-pad got NO slot here (lever needs addressed/live pad). Companion CB9C 21/21: `goto retzero` return-0 tail = bnel-to-label+4 with hoisted `or v0,zero` + DEAD copy at the label (not a cap); trailing-arg store `a0[k]=n; f(p,n)` colors ptr-copy->a2/n->a1._
 - [Old-m2c-lift fingerprint: cvt.d.s before jalr = fn-ptr-cast float promotion; typed f32 per-site aliases restore jal + single precision (5CE68 66.33->84.30, 2026-07-18)](#fnptr-cast-cvtds-fingerprint-5ce68) — _cvt.d.s feeding a jalr-through-s-reg call = unprototyped (f32(*)()) cast (double promotion + indirect call + bogus extra args); per-site `extern float ...(float)` direct aliases fixed insn count 130->123. NEGATIVE: mtc1-aN float-arg capture unreachable when the C copy coalesces to the arg home._
 - [`arg *= CONST` flips mul.s operand order vs `arg = arg * CONST`; embedded-assign `(t = 1.0f/x)` sinks div.s to target schedule (5EF00 67.85->82.94, 2026-07-18)](#compound-assign-mul-order-embedded-div-sink-5ef00) — _fd==fs self-update mul into a call-arg reg needs `*=` spelling (both plain orders emit fd==ft); reciprocal-div statement form hoists loads over the div, folding `(inv = 1.0f/len)` into the first use fixes the schedule at 1 flipped-mul cost. Composes with decl-order spill lever._
@@ -548,6 +549,23 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ---
+
+<a id="byte-rmw-mask-width-2a260"></a>
+## Byte-RMW mask-width trichotomy + un-folded symbol+const sentinel (gl_func_0002A260 69.1->87.9, 2026-07-18 agent-h)
+
+Target: 7-step flag-clear cascade `lbu t8; andi t0,t8,0xff7f; sb; andi t2,t0,0xbf; sb; ... andi 0xfd; sb` (alternating t-temp stride-2 pairs, per-step stores, FIRST mask 16-bit, rest 8-bit).
+
+Three C spellings, three different emits (IDO 7.1 -O2):
+1. **volatile chain** (`volatile u8 *p; c = *p; c &= ~0x40; *p = c;`): stores kept, single-register v0 cascade, masks all WIDENED to 16-bit truncation (`andi 0xffbf`) — volatile kills the range-narrowing.
+2. **non-volatile local chain**: uopt range-narrows but DSEs the intermediate `*p = c` stores (one final sb).
+3. **direct RMW statements** (`*p &= K;` one per step): stores kept, t-temp stride-2 cascade, andi immediate = the literal's own width. `*p &= ~0x80` -> `andi 0xff7f` (16-bit truncation of ~K); `*p &= 0xBF` -> `andi 0xbf`. Spell the first mask as `~0x80` and the rest as positive 8-bit literals to reproduce a mixed-width target cascade.
+
+Companion findings:
+- **Un-folded symbol+const**: target computes the sentinel as full `&D` materialization (lui+addiu %lo) PLUS a separate `addiu t7,t6,0x5280` — plain `(char*)&D_00000000 + 0x5280` reproduces it (IDO did NOT fold the offset into the reloc pair here). The 2-insn base pair sits BEFORE the function label as a 2-insn stolen-prologue orphan (`game_libs_func_0002A258`) — build emits it byte-identically as its first 2 insns; the score shows 2 boundary inserts until fragments are merged.
+- **Distinct placeholder externs for same-page &D uses**: sentinel base and the `obj+0x90 = &default` store are two independent lui/addiu pairs in target; one shared `D_00000000` extern CSEs them into a single register (+base held across the body). Declaring a second extern (`D_2A260_deflt`) restored the split (+~6pp).
+- **RMW-step sink realigns temp parity**: moving `*p &= 0xFD;` AFTER the `sh 0x14/0x10/0x26` stores both sank its sb below them (target order) AND flipped the downstream lbu/andi t-temp numbering into alignment (t9/t0 vs t7/t8) — statement position, not just store order, drives the stride-2 temp phase.
+- **Loop delay-slot store**: the post-loop-looking `sb -1, 0xd0(ptr)` is INSIDE the loop after `ptr += 4` (fills the bne delay); `i += 4` first-in-body gives the counter-incr-at-top shape.
+- **Tooling gotcha**: `scripts/disasm-func.py <fn>` without `--obj` disassembles the BUILD object, not the raw target .s — diffing it against the build .o compares build-vs-build (false 100%). Get target truth from the raw `.word`s / expected .o.
 
 <a id="feedback-ido-split-shift-temp-renumber"></a>
 <a id="fp-div-foldbreak-guards-fallthrough-d9e4"></a>
