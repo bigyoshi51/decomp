@@ -13814,6 +13814,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Natural both-store RMW pair (`field++; field &= K;`) beats the temp+volatile lever kit — the folded reload burns a temp-rotation slot (andi t9-reuse -> fresh t5) (game_libs_func_00031784 25/27->27/27 EXACT)](#natural-both-store-rmw-pair-beats-the-tempvolatile-lever-kit-the-folded-reload-burns-a-temp-rotation-slot-andi-t9-reuse---fresh-t5-2026-07-02) — _When the only residual is the RESULT reg of the 2nd statement of a two-statement RMW on one field (fresh $t wanted, reuse built) and your C routes it through `t = f + (long long)1; volatile-store; (t&K)&0xFFFF`: write BOTH statements naturally on the field (`a0[N]=a0[N]+1; a0[N]=a0[N]&0xF;`). The 2nd statement's reload keeps store 1 live (no volatile) and CSE-folds onto t3 AFTER dead-store elim — the folded reload candidate consumes the t4 rotation slot so the andi lands t5; load/incr come out fresh t2/t3 for free. Target keeping both stores at -O2 IS the tell the original re-read the field. 96-cell add-form x mask-form sweep proved no expression tweak moves the andi in the temp form._
 - [-O0 scalar-vs-deref ==/!= eval order is a toolchain-binary gap: 7.1/5.3 always deref-first; two 1080 USO sites are scalar-first (bootup 10FEC/10540 cap) + assignment-operand-hoist `+` lever + NOLOAD jumptable pin](#feedback-ido-o0-eq-eval-order-gap) — _cfe canonicalizes scalar ==/!= deref so the deref side always evaluates first (both compiler versions, ~25 spellings + flag matrix, all deref-first; `<`/`>` stay left-first). Value-first `lw HOME;lw HOME;lw K(t);beq` blocks are unreachable = cap; FIFO t0/t1 swaps downstream are knock-ons of the one block. Lever: in `A + B` where B contains an embedded assignment, put A FIRST or cfe snapshots the assignment value into an s-reg. USO C-switch jumptables: pin unit .rodata at the module table offset with a NOLOAD ld section._
 - [Char-scanner kit: `p=str;str++;c=*p` increment-between kills load-PRE + offset-fold; repeated `*p` = the CSE-temp/var pair (NOT two vars); NAMED int consts win beq rs slot + t0/t1/t2; goto-loop + early sign-continue keeps bnel dead-dup (game_libs 67D8C 92/92 EXACT 2026-07-07)](#feedback-ido-char-scanner-kit-67d8c) — _Merged strtol-lite (hex+decimal). FOUR coupled levers for byte-scanner loops: (1) cursor idiom `p = str; str++; c = *p;` — increment BETWEEN copy and load keeps `move a1,a0` alive; `p=str;c=*p;str++` lets uopt fold to `lbu N(a0)`+combined addiu AND load-PRE the loop-head char into entry (back-edge reload insertion, `lbu` into a candidate not a temp). (2) When target tests some ranges on \$a2 and others on \$a3 with `move a3,a2` in a branch delay: that is repeated `*p` (CSE temp \$a2) + ONE named `c = *p` (\$a3) — writing two vars c/c2 coalesces them (a3 freed, const steals it, t-file cascades). (3) `beq t0,a3`/`multu v1,t2` with const-side-first: consts must be NAMED int locals (`minus='-'; dot='.'; ten=10;`) — they color t0/t1/t2 in first-use order, win the rs slot, and `value *= ten` emits multu+mflo (literal 10 strength-reduces); literal compares emit var-first regardless of source operand order (8-perm sweep). (4) infinite scan loop as `dec: ... goto dec;` with EARLY `if (minus == c) { sign=1; goto dec; }` — reproduces bnel + orphaned dead `lbu` dup; if/else form loses the likely-conversion; while/for forms invite the PRE. Also: 29w sibling 67B04 cracked by dead in-guard `q = arg1;` (flips p/q↔c0 coalesce, legalizes guard-delay fill, kills beqzl+sltu dup) + `int r = 0;` dead init (r colors v1 not a0)._
+- [7BC kit at 32 expansions w/ K&R callee: memcpy-form t-carrier load-bearing, ||-fallback must compare s1, per-site alias x34, val-dependent store order; 2-sw eval-order + t@uopt-slot residual (game_uso_func_0000C48C 67.09->99.74, 2026-07-17 agent-g)](#c48c-struct-arg-32x-memcpy-form) — _32x sw a2,8(sp) delay homes = struct-by-value; explicit shared `t=u` carrier required even for unprototyped callee (direct-u drops the 0(s2) staging hop); `s1 != -OFF || (obj=alloc())` keeps li/bne-s1 + stage-skip beqz; param-as-p homes at arg slot; 34 base-0 aliases bust template-addr spill-CSE; zero-val ctor stages store 0xC,0x14,0x10 vs nonzero 0xC,0x10,0x14._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -20692,3 +20693,51 @@ ladder (18 variants):
   post-call addu pairs move together). Both named and boosted spellings
   probed; rank not source-steerable from here — likely wants the same
   dead-ref boost aimed at the rowj web, untried (budget).
+
+## 7BC kit at 32 expansions with UNPROTOTYPED callee: memcpy-form staging holds; store-order splits by zero/nonzero val; eval-order 2-sw residual (game_uso_func_0000C48C 67.09->99.74, 2026-07-17 agent-g) <a name="c48c-struct-arg-32x-memcpy-form"></a>
+
+(game_uso_func_0000C48C, 0xD78, 32 unrolled ctor stages each calling K&R
+`func_04A188(obj, s1, t, 1)`.) Confirms and extends 7BC/1C54:
+
+1. **The 32x `sw a2,8(sp)` jal-delay signature = struct-by-value arg**, exactly
+   as at 7BC/64588/1C54. Working shape at 32 expansions with an UNPROTOTYPED
+   callee: function-scope `struct S { int v; } t;` + per-stage block-scope
+   `struct S u; u.v = load; t = u;` then pass `t`. This is the 1C54 memcpy-form
+   and it is the TARGET shape here: `&t` CSE'd into an s-reg once
+   (`addiu s2,sp,0x2C`), per-stage `&u_k` lda + sp-folded store + `lw` via the
+   held `&u_k` + `sw 0(s2)` copy landing in the bne delay, call reads
+   `lw a2,0(s2)` and homes it `sw a2,8(sp)` in the jal delay.
+   **Passing `u` directly (no `t`) DROPS the staging hop** (single store, no
+   0(s2) round-trip, -26 insns) — the explicit shared carrier is load-bearing
+   even though the callee is K&R (contrast 1C54's note that a PROTOTYPED direct
+   pass reads u's own home).
+2. **Alloc-fallback spelling that keeps the s1 compare:** `obj = (int*)((char*)s1
+   + OFF); if (s1 != (int*)-OFF || (obj = alloc(0x18)) != 0) { ... }` gives
+   `li at,-OFF; bne s1,at` with the copy-sw in the delay, and the alloc-fail
+   `beqz v0` skips ONLY the stage body (falls into the next stage). The
+   `if ((obj = s1+OFF) || (obj = alloc))` form tests `bnez s0` instead — wrong.
+   Mid-function alloc-fail of the CONTAINER (`s1`) jumps to the store-tail
+   (`goto tail` before `*(p+0xB4)=a2`), not to `end`.
+3. **Param reuse:** the returned/tested pointer must be the PARAMETER itself
+   (`char *p` as arg 1) so it homes at the incoming arg slot (`sw a0,FRAME(sp)`);
+   `char *p = (char*)a0;` as a local gets a frame slot instead (1-word diff).
+4. **Per-site base-0 aliases (34 of them)** bust two GCSE classes the target
+   remats per site: 16x + 16x template addresses (`&D+0xf78` / `&D+0xfc0`
+   otherwise CSE'd into a reg + SPILLED to a stack slot and reloaded) and 2
+   float-literal loads whose symbol collides with a neighboring stage's int
+   load. Block-scope `char *tmpl` carriers also cost 32 sibling-scope slots
+   (frame +0x80, cf. 1C54 no-overlay) — inline the address into the store.
+5. **Ctor-stage store order is VALUE-dependent:** nonzero-int stages want source
+   `obj[0xC]=tmpl; obj[0x10]=val; obj[0x14]=0;` (emits li after lui/addiu,
+   stores 0x10,0xC,0x14 in target... build emits 0xC,0x10 — see residual);
+   zero-val stages want `0xC; 0x14; 0x10` (matches exactly: sw t,12; sw
+   zero,20; sw zero,16). Float stages: `0xC; 0x14; *(float*)0x10=...` matches.
+6. **Residual 0.26% (2 classes, unresolved):** (a) 12 nonzero-int stages emit
+   `sw tmpl,0xC; sw val,0x10` where target has 0x10 first with the SAME reg
+   assignment (tmpl=earlier ring temp). Probed: val-first source (right order,
+   wrong regs), function-scope `char *m` carrier and block `register char *m`
+   (both: li hoisted between lui/addiu + m gets the LATER reg) — an
+   eval-vs-store scheduling shape not yet reachable from C. (b) slot layout:
+   target puts the shared `t` at 0x2C (uopt-temp region, below the u run
+   0x44..0xC0, frame 0xC8); cfe places function-scope `t` ABOVE the u run
+   (frame 0xB8) — same slot-placement cap family as 1C54's sp-offset residual.
