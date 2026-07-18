@@ -13886,6 +13886,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 - [Memory-resident iterator pair = `int *it[2]` ARRAY (struct gets SRA'd to s-regs); mat-mult "hand-unroll" caps may be memory compound-accumulate triple-fors; missing move-v0-zero = tail-call return (393B8 51.2->89.3)](#iterator-array-vs-struct-sra-393b8) — _named `float sum` local is the decode error; `res[r*4+c]+=` in-memory + trip-4 k-loop full-unroll + c-loop beql pipeline fall out of plain triple-for. Ternary-comma advance regresses. &D-publish $s4 addr-hoist vs per-site $at still unsolved._
+- [Load-type mismatch breaks CSE: `*(int*)(p+K)==0` test + `*(char**)(p+K)` chain = TWO loads (different value numbers); same-type spelling = one CSE'd load surviving the no-call path. Also: each scalar decl BEFORE a local array lifts the array's frame slot +4 (decl-split solver for array placement) (gl_func_0004EE44 81->99.9, 2026-07-18 agent-f)](#load-type-vn-cse-decl-split-array-4ee44) — _int-typed null test also mis-fills the bnel delay (reload instead of the hoisted f32 arg load). A named-but-redundant pointer local (`world=(float*)m30`) costs an 8-byte dead home; cast at use instead. Raw char* base local unfolds a +0xB4 from the loop induction — keep the folded `(float*)(load+0xB4)` init._
 - [Address-taken `**pc = &local` kills a cross-call `local+K` CSE web (per-site home reload); named `t = *pc` at each call site = multi-def web spanning calls -> colored $s0 with `addiu a0,s0,K` in the jal delay slot (gl_func_00036C08 18.9->EXACT, 2026-07-18 agent-f)](#addr-taken-pc-web-kill-named-t-s0-36c08) — _plain local -> IDO hoists `ctx+0x30` into $s1 (`or a0,s1` per call); `&ctx` homes it and each `(*pc)` read reloads; the named-t respell recovers the s0-colored reload web + pushes the other global into $s1. Direct `(*pc)` reads in one BB share a single $t9 scratch. `cb += 0x70` mid-block pointer advance reproduces `addiu v0,v0,0x70` rebase with small element offsets._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -21769,3 +21770,27 @@ D+0x2C40[48]/0x2C10[48]/0x2C70[128], target 50 words):
    ADDRESS-CONSTANT webs) AND `for (p = sym, e = sym + 0x30; p < e; p++)` comma-init (pins the
    addiuE-before-addiuP half of the schedule; with plain separate defs the same dead-bit gives
    p,e,p,e). Literal-first compare `5 != p[K]` for the `beql a0,tN` operand order.
+
+
+## Load-type mismatch breaks CSE; scalar-decl-before-array lifts the array slot (gl_func_0004EE44 81.2->99.9, 2026-07-18 agent-f) <a name="load-type-vn-cse-decl-split-array-4ee44"></a>
+
+Two independent levers from the 4EE44 decode (state-gated emit + 393B8-family 4x4 mat-mult):
+
+1. **Type-consistent loads or no CSE.** `if (*(int *)(o+0x70) == 0)` followed later by
+   `*(char **)(o+0x70)` (pointer chain) produces TWO independent loads — cfe/uopt value-numbers
+   the int load and the pointer load separately. Target had ONE `lw v0,112(s0)` surviving the
+   no-call path (reloaded only after intervening calls) and the freed schedule slot let the
+   hoisted `lwc1 $f4` (a later call's f32 arg) fill the bnel delay. Spelling the null test
+   pointer-typed (`*(char **)(o+0x70) == 0`) collapsed 32 word diffs to 7 in one step.
+2. **Array frame placement via decl split.** Local scalars declared BEFORE a local array each
+   lift the array's home by 4 bytes (their reserved slots go above it); scalars declared AFTER
+   sit below. `float *src; int r; float result[16]; int c, k;` was the unique order putting
+   `result` at sp+0x5C. A pointer local that merely aliases an existing value (`world =
+   (float*)m30`) reserves a REAL 8-byte dead home and grows the frame — cast at the use site
+   instead (`((float *)m30)[k*4+c]`), which still hoists to the same `or t1,s1` loop-invariant.
+3. **Keep folded induction init.** `src = (float *)(*(char **)(o+0x70) + 0xB4)` folds the 0xB4
+   into `addiu a0,base,180` loop-induction init; respelling src as the raw char* base and adding
+   0xB4 at use unfolds it into every element offset (regression).
+
+Residual 2-word cap: the loop-init base load's scratch pick ($v0 here vs $a1 in target) — a
+pure allocator tie; decl-order nudges move the array placement instead. 99.94 objdiff.
