@@ -56,6 +56,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Folded (unsigned short) cast burns ONE ugen ring slot — de-name + fitted narrowing cast cracks a skipped-ring-slot residual (gl_func_0002A4D0 EXACT 2026-07-15)](#folded-ushort-cast-ring-slot-2a4d0) — _De-named `*a0 &= K; *a0 |= K2;` keeps values in the t-ring with store-forwarding; a FOLDED (unsigned short) cast on the store RHS (zero insns) still allocates a ring temp -> shifts andi/ori numbering by one. Skipped-ring-slot residuals ARE reachable at store RHS; (unsigned char) at natural store width folds without burning. BOUNDARY: feeding an `|`/arith op the fold materializes a move (+1) — store-RHS position only (D9CC (f) negative)._
 - [Wave-3 round-3 (agent-g 2026-07-15): 38C0-family recipe portable VERBATIM (3734 EXACT on first compile); ghost-home count = volatile-pad count; value-load vs address lui/lw tell; node-copy-spill guard; as1 addiu-vs-home-store delay tie (3734 100, 3638 95.9, 6A30 85)](#wave3-round3-3734-6a30) — _Backport family recipe before re-deriving; frame short N words with all insns exact = N scalar volatile pads after the named locals; beqz+4 alloc-fail skips only init; sw s0,0x10(sp) pre-jal = 5th K&R arg; register-float staging = candidate f0/f2/f12/f14 pool; *(V3*)&float cast-copy DSEs siblings (use struct fields)._
 - [Fresh-Vec3-per-site alloc-fallback fanout (7C1C 62.9->75.8): fresh address-taken Vec3 home per staging site (frame 2.5x), decl order = descending homes; `p=0;if(1){p=&X;}` anti-fold guard; int-cast `q=(f32*)((int)base+0x30)` hoisted above guard is the ONLY spelling that keeps the addiu join-CSE; objdiff fuzzy ignores sp-offset diffs so skip frame-gap pads](#fresh-vec3-fanout-intcast-q-7c1c) — _metric/3FAC dir arg = result-direction copy not segDir; lw-2312 double-deref tell._
+- [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var._
 - [Wave-3 round-2 closers (agent-g 2026-07-15): de-name expression locals = fresh-ring numbering + ghost-home kill in one move; void-alias the last jal before a CSE-temp region; pad-AFTER a lone named local re-packs spill homes (38C0 91.3->EXACT, 15FC 27->23)](#wave3-round2-38c0-15fc) — _Named OR-chain/CSE-ptr locals color in-place + cost dead homes; folding them into the call args restores t7->t8->t9->t0 fresh numbering AND the exact frame. "One CSE temp in a v-reg, the other on the ring" after a K&R int call = dead-$v0 exclusion; void-alias frees v1/v0 emission-order coloring. A lone named local + compiler CSE spills +4 with a hole below = volatile pad AFTER the local claims the stray word (frame unchanged)._
 - [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
@@ -20548,3 +20549,35 @@ source spelling here; next tool is the uoptlist coloring dump
 
 Bookkeeping: NM body grew ~+0x40 natural → re-measure the unit clip
 (0x2b750→0x2b790) or the tail sentinel (62F08) silently truncates to 25%.
+
+## Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6, 2026-07-17): guard-var/copy-var SPLIT at subtract-sites; state-keyed LUT "2/else" swap is a recurring decode-error class <a name="fresh-vec3-fanout-591C-replication"></a>
+
+Applying #fresh-vec3-fanout-intcast-q-7c1c verbatim to game_uso_func_0000591C
+(same TU, same alloc-fallback family, 25 addiu-sp homes, 9 alloc sites)
+moved 62.33->76.57 and closed the size deficit 59->11 words. Deltas vs the
+7C1C recipe worth knowing:
+
+1. **Two-variable sites**: where the site's staged Vec3 is READ afterwards
+   (word-copy through the sp+348 stage), the target keeps the GUARD reg =
+   `&fresh` while the COPY pointer may become the alloc result:
+   `q=0; if(1){q=&fresh;} w=q; if(w||(w=alloc(12))){w->y=0;...} stage=*q;`
+   Sites whose Vec3 is only read by the NEXT site (by name) use the plain
+   single-var spelling.
+2. **Decode-error class — keyed-LUT 2/else swap**: IDO's `bnel v0,at,skip`
+   with the not-taken fallthrough loading the OTHER float makes it trivially
+   easy to swap the ==2 and else offsets when hand-reading. 591C had FIVE
+   such swapped pairs (0x2C4/0x2AC, 0x39C/0x384, 0x234/0x21C, 0x1A4/0x18C,
+   0x1EC/0x1D4) surviving multiple prior passes. Rule: bnel executes its
+   delay slot ONLY when taken (v0 != const), so the delay-slot load is the
+   `else` value.
+3. **Decode-error class — flag-word provenance**: three adjacent spill slots
+   (416/420/436 = resolved_state / raw state_flag / out_flags accumulator)
+   each drive DIFFERENT tail dispatches; zip every `lw tX,N(sp)` in the tail
+   against its slot before trusting an existing NM body's single `out_flags`.
+4. **Early-goto poison**: the old body's `if(active) {out_flags=active; goto
+   commit;}` skipped the whole common tail; the target's active!=0 path runs
+   the FULL tail (A58 flag, 30.0 counter, 9B88/A0E8 dispatch). A too-early
+   goto commit caps fuzzy far below what the tail rewrite recovers.
+5. Live-f0 compares: post-call compare chains reuse the float RETURN reg
+   (7A98's f0) as the left operand of several later c.le.s — reading them as
+   "vs 0.0f" is wrong; check whether f0 was clobbered since the jal.
