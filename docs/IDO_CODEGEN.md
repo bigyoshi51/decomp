@@ -24,6 +24,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Constructor-family kit (4B620 86->93, 2026-07-10): macro-scoped do-while temps cost FRAME SLOTS PER EXPANSION; if(1)-barrier defeats &local-nonnull guard fold; single-mutated-pointer-temp colors s2 + flips self to s4; loop-web rank steals s-regs from straight-line webs](#feedback-ido-4b620-constructor-kit) — _(1) A `do{ T *_h; s32 _n; ... }while(0)` append macro expanded 9x reserves 9x16 bytes of -O2 frame (block-scope locals each get slots even when fully colored) — the giveaway is target frame 0xB0 vs built 0x108 with only 3 real aggregates; share FUNCTION-SCOPE temps to shrink. (2) `q = 0; if (1) { q = &local; }` reliably defeats the &local!=0 fold (plain `p=&local`, array-decay, member-&, goto-barrier all fold) — restores dead `bne &buf,zero,skip / jal alloc` guards (extends the A3C4 "unreliable" verdict: the barrier form IS reliable). (3) One `char *p` reused for alloc-fallback obj + DL-handle reloads + loop node = single candidate crossing loop calls -> colors s2 and pushes self to s4/arg1 to s0 (5-sreg prologue). Alloc-return appends read via the RETURN VALUE var (v0, no or-copy); only later appends reload through p. (4) uopt hands s0,s1,s2.. out in CANDIDATE-RANK order; loop-body webs (x10 weight) rank first — a loop-cached `sll idx` web steals s0/s1 from straight-line append webs; busting the cache (volatile per-use reload) frees them, but forcing MORE loop uses onto a var overflows the s-reg budget (6 saves, self->s5, net worse). Residual class: whole-candidate callee coloring of shared temps whose webs are dead across calls (target s0/s3 vs per-web v1/a0) + ternary-phi `or v0,zero + beq 0,0 + addu-in-delay` iterator-next shape (comma-side-effect ternaries flatten). Probe harness: standalone cc + word-aligned differ (scratchpad recipe in episode notes)._
 - [Void-alias dead-$v0 exclusion must cover EVERY jal the web touches; web piece starts at the call's ARG EVAL (gl_func_0000B0A8 99.57->objdiff-100, 2026-07-15)](#void-alias-all-jals-b0a8) — _CSE'd deref used as call arg = web crosses that jal too; void-zero-alias ALL return-discarded calls in the span, not just the obvious one. Companion negative: C28C phantom sweep (#c28c-phantom-negative-2026-07-15) — lone <<0 VN-folds outside shift chains, x*0+x promotes to candidate, fitted cast needs rangeable value._
 - [(float)0 cast-literal also flips branch-likely DELAY-SLOT FILL choice — re-probe "delay-fill pick not C-controllable" FP residuals (mgrproc 1F30 92.80→99.74 placeholder-ceiling, 2026-07-17)](#float0-cast-beql-delay-fill-1f30) — _`> (float)0` vs `> 0.0f` moved the field-load into the beql delay (+4.8pp one edit); companions: de-name single-use FP local kills mov.s copy; addend-first commutative + flips lwc1 pair order + f10/f16 numbering; `move a0,zero` arg vs target lui/addiu import pair = decode error (&extern, not 0)._
+- [Decl-order spill-slot rank extends to jal-delay ARG-SPILL templocs (declare the spilled var FIRST, frame-neutral; volatile pads grow the frame here) (titproc 1840 94.09→97.06, 2026-07-17)](#decl-order-arg-spill-temploc-1840) — _EE8C decl-order lever covers call-arg spill templocs; pads first/mid grew frame 0x28→0x30 (doubleword pad), pad-last elided; negatives: sw-ra-vs-move prologue bne-delay tie + 1E9C pair-order tie survive (float)0/void-alias/goto probes — pair-order ≠ post-call v-reg coloring._
 - [Redundant beqz-recheck dispatch = `else if (same cond)` — else kills cross-call liveness (no spill, exact frame); LIKELY-branch delay-slot stray load belongs to the branch TARGET's region, call is single-arg (mgrproc 3074 94.76→objdiff-100, 2026-07-17)](#else-if-redundant-recheck-3074) — _A provably-dead recheck branch is source-level `else if (redundant cond)`, not coloring; two independent ifs spill v1/a1 across the call. bgtzl-delay `lw a1` before a jal = taken-path hoist of the next region's reload, not arg1 — 2-arg spelling adds a jal-delay reload. Paired with void-alias dead-$v0 (which alone fixed the whole-fn v0<->v1 renumber, 94.76→96.19)._
 - [FP zero-web dead-$f0 reuse: reorder C so (float)0.0 stores precede the 1.0f web's last use — overlap forces fresh $f12 (546E8 96.5→99.0; register-float/BB-barrier fail)](#fp-zero-web-store-order-overlap-546e8) — _dead-reg reuse beats fresh-pool numbering; C store order is the only working lever; as1 re-sinks the 1.0f store for free._
 - [Wave-3 agent-g (2026-07-15): named-local dead-home rule (frame=names once spilled); target web-merge shared names; if(1) flips in-loop CSE web a2->v0; de-named capture = raw K(v0) reads; folded-table-offset base (7E34/7B2C/80F4 EXACT)](#return-capture-precolor-26fc) — _see the 2026-07-15 agent-g addendum at end of file: de-name via inline-CSE repeats or merge disjoint webs into one name to shed dead homes; merge flags+i/busy+off when one s-reg serves two phases; if(1){} BB-wrap is the a-reg->v0 flipper for loop CSE webs; plain spilled flag local = sltu/sltiu ring pair + delay-slot home store._
@@ -20429,3 +20430,31 @@ on the test, if(1) around the default call, and source polarity spellings all
 converge to the flipped form — and the +1 temp-ring phase it induces drags
 the two sub-arms of the final case (t0/t1 vs t9/t0). Trace-polarity + ring
 coupling; attack the polarity first if revisiting.
+
+## Decl-order spill-slot rank extends to jal-delay ARG-SPILL templocs — declare the spilled var FIRST for the top word; volatile pads grow the frame here (titproc 1840 94.09→97.06, 2026-07-17) <a name="decl-order-arg-spill-temploc-1840"></a>
+
+When the only slot residual is a jal-delay ARG-spill temploc one word too low
+(build `sw a0,0x20(sp)` vs target `sw a0,0x24(sp)`, target frame has a hole at
+0x20), the EE8C decl-order-slot-rank lever applies to this temploc class too:
+declare the variable whose value is being spilled (the call's arg temp, e.g.
+`sub` in `f(sub, ...)` with `lw a0` reload after) FIRST in the decl list —
+its spill temploc moves to the TOP local word, frame-neutral. On titproc 1840
+(`void *sub; void *self = a0;` instead of self-first) this fixed both spill
+words with zero other movement.
+
+**Anti-pattern for this shape:** every `volatile int pad;` / `int pad;` /
+`volatile char pad;` placed first or between decls moved the spill correctly
+but ALSO grew the frame 0x28→0x30 (IDO doubleword-pads the extra home) —
+wrong bytes at prologue/epilogue. A pad declared LAST is elided entirely
+(no slot, no shift). So for arg-spill temploc rank, decl-order swap is the
+frame-neutral form; pads are not.
+
+**Companion negatives (same session):** the 2-insn prologue tie `sw ra` vs
+`move s0,a0` bne-delay fill (docs "inline-prologue vs bne-delay" entry)
+survived (float)0 / (float)1 cast-literals, `register`, `!self`, and a
+goto-restructure — as1 tie, still not C-reachable. titproc 1E9C's post-call
+`addiu %lo` vs `lw` pair-order tie likewise survived void-alias dead-$v0 /
+if(1) / explicit-goto / named-addr-temp — pair-order cap class is NOT a
+post-call v-reg coloring problem, so the void-alias retraction does not
+extend to it. mgrproc 23FC: (float)0 beql-fill lever inapplicable (no FP
+compare feeds its likely branches).
