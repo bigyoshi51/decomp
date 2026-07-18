@@ -228,6 +228,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [**Fold `+K` into a load %lo (reloc `%hi/%lo(SYM+K)`, no extra addiu) by declaring SYM as an ARRAY and indexing — not `(T*)&SYM+K`**](#feedback-ido-funcarray-fold-reloc) — _`extern float SYM[]; SYM[K/4]` keeps the `+K` as the lwc1/lw offset under one reloc pair; `(char*)&SYM+K` / `(T*)(void*)&SYM` force a separate materialized pointer (+1 addiu). Unreachable via the FUNCTION symbol if SYM is a same-TU FUNCTION (splat-folded literal pool, e.g. bootup_uso func_0000098C) — BUT crackable in a base-0 USO unit by reading `*(int*)((char*)&D_00000000 + ABS)` with ABS = func's absolute offset + inner offset (object-symbol folds where the function symbol won't; func_000027E8 2026-06-22, denom loads 3→2 insns). func_0000E270 2026-06-22: register-exact reconstruction, blocked further by a same-frame f0↔a1 spill-SLOT swap (target spills the f32 temp at the lower slot)._
 - [**Declare a byte arg as `unsigned char` to reproduce BOTH its `sw aN` home AND its `andi 0xFF` zero-extend — but the eager extension flips s-reg order vs a later int arg**](#feedback-ido-unsigned-char-param-homes-and-extends) — _When the target both homes an incoming int-register arg (`sw a2,64(sp)`) AND zero-extends it once before use (`andi sX,a2,0xff`, hoisted out of a loop), the arg is an `unsigned char` parameter. Declaring it `int` + masking `a2 & 0xFF` gets the andi but NO home (the home only appears with the char type). The `unsigned char` declaration produces the home + the eager prologue zero-extend together — the cleanest way to match a dead-arg-home that coexists with a byte mask. CAVEAT (verified 2026-05-29 gl_func_0000A7B4): the char extension is EAGER at the prologue, so the extended pseudos are born before a sibling `int` arg's loop-invariant copy and grab the LOWER $s-regs — leaving the int arg (e.g. a1) in a higher $s than the target wants. So char-arg homing and "int-arg-first allocno order" are mutually exclusive; a function needing both lands as a clean cyclic $s-reg renumber (size + control flow + homes all exact). NM-wrap that residual._
 - [IDO target's 3-save reg pattern (copy to free reg + stack spill + stack reload) for arg preservation isn't reachable from natural C](#feedback-ido-3save-vs-2save-arg-preserve) — _When target asm preserves an arg ($a0) across a jal via THREE moves — `or $aN_free, $a0, $zero` (copy to a free arg-reg) + `sw $aN_free, off(sp)` (spill the copy) + `lw $aN_free, off(sp)` (reload after call) — IDO -O2…
+- [Ternary diamond emits the ELSE arm first (else-val; branch-on-cond to join; b .+1 with then-val in delay) — flip the spelling, not the logic, to pick which value computes first; abs as (x>=0)?x:-x](#ido-ternary-else-arm-first-31cb8) — _31CB8 46/46: target `negu v0,a1; bltz a1,join; nop; b join; move v0,a1` = `(step >= 0) ? step : -step` (else `-step` computed FIRST); spelling `(step < 0) ? -step : step` emits move-first/bgez — same logic, swapped arm order and branch polarity. Companion levers there: goto-loop keeps a top-test unrotated reload loop (while rotates + register-promotes); an un-named `(diff << 8)` CSE expression colors the numerator a2/quotient a1 (naming it as a local flips them); loop-body temp ring t0/t1/t2 follows SOURCE statement order even when the scheduler reorders the provably-non-aliasing stores (p[1]+=d before p[3]-=256 spelled first, yet p[3] store emitted first). GOTCHA: scripts/disasm-func.py may disassemble the BUILT non_matching body, not the target — always re-derive mnemonics from the raw .word list before probing. 2026-07-17._
 - [IDO bnel + delay-likely-move + fall-through alloc = "out = ptr ? ptr : alloc(N)" ternary](#feedback-ido-alloc-or-passthrough-ternary) — USO functions emit a 4-insn `bnel ptr,$0,+6 / move v1,ptr [delay-likely] / jal alloc / addiu a0,$0,N` pattern for the conditional-alloc ternary.
 - [Short-circuit `||` reproduces the alloc-cascade's fused `bne` (skip-alloc-AND-post-alloc-null-check) at -O0](#feedback-ido-shortcircuit-or-fused-bne-alloc-cascade) — _In a nested alloc cascade `if(p==0){p=alloc(); if(p==0) goto bail;} body`, the target's outer guard is a single `bne p,zero, <past the alloc AND the post-alloc beq>` (offset spans both). An explicit `if(p==0) goto bail;` for the inner check makes IDO -O0 emit `bnez p,.skip; b bail` (TWO branches → wrong bne offset, +2 each). Writing it as `if (p != 0 || (p = alloc()) != 0) { body }` makes IDO emit `bne p,zero,body; alloc; beq p,zero,end:` — a SINGLE `beq`, so the outer `bne` offset spans alloc+beq exactly. Dropped 3 branch-offset diffs on gl_func_00008C3C 2026-06-20 (9→6, branch-byte-exact; residual is the call_root -O0 temp-pool slot only). General: prefer short-circuit `||`/`&&` over explicit `if(){goto}` whenever the target's conditional branch must SKIP a following conditional check (the goto form costs an extra unconditional `b`)._
 - [Pre-assign default + conditional-overwrite for data-mux ternary: `p = a0; if (cond) p = buf;`](#feedback-ido-preassign-conditional-overwrite-ternary) — _When target asm shows a register being loaded from caller-spill in a `beq cond, $0, .skip; lw r, OFF(sp)` delay-slot fill, then ONLY OVERWRITTEN on fall-through via `addiu r, sp, BUF_OFF`, the matching C idiom is `p = a0; if (cond) p = buf;` — pre-assign the default, conditional-overwrite. NOT a ternary `p = cond ? buf : a0;` (which IDO emits differently with separate branch around the assignment) and NOT an explicit if/else (which doesn't schedule the default-load into the delay slot). Verified 2026-05-15 on `gl_func_0005FFD0`: 33.7% → 73.5% (+39.8pp) via this rewrite._
@@ -21146,3 +21147,36 @@ Recognizer: raw-word USO fn whose body uses aN with no visible producer + preced
 fn's .s ends in `or aN,a0,zero` past its `jr ra; nop` -> re-attribute the word and
 re-decode as a narrower arg list feeding a wider call. Stays NM wrap when callee is
 jal-0 placeholder.
+
+## Ternary diamond: else arm computes first — arm order/branch polarity is a spelling lever (31CB8)
+<a name="ido-ternary-else-arm-first-31cb8"></a>
+
+IDO 7.1 -O2 lowers `x = C ? A : B` as: compute **B (the else arm) first** into the
+phi home, `branch-on-C` to join, then `b join` with **A in the delay slot**.
+So the same abs value has two byte-different spellings:
+
+- `(a1 >= 0) ? a1 : -a1` → `negu v0,a1; bltz a1,join; nop; b join; move v0,a1` (negu first)
+- `(a1 < 0) ? -a1 : a1` → `move v0,a1; bgez a1,join; nop; b join; negu v0,a1` (move first)
+
+Match the target's first-computed arm by flipping the condition and swapping the
+arms (logic unchanged). Same for constant selectors (`(num >= 0) ? 1 : -1` puts
+`li v1,-1` first, hoistable above an unrelated exit test by the scheduler).
+
+Sibling levers proven in the same function (game_libs_func_00031CB8, 46/46):
+- **goto-loop beats while** when the target loop is an unrotated TOP-test that
+  reloads its memory operand every iteration (`label: if (p[3] >= 0x100) { ...;
+  goto label; }`); `while` gets rotated into a guarded do-while and the loop cell
+  register-promoted.
+- **Un-named CSE expression as register-rank lever**: `step = (diff << 8) / p[2]`
+  plus re-spelling the loop test as `((diff << 8) >= 0)` keeps the shifted
+  numerator an expression temp → colors a2 with the quotient in a1; naming
+  `num = diff << 8` flips the pair (one-color-per-variable rank shift).
+- **Loop temp ring follows source order, not schedule order**: writing
+  `p[1] += dir;` before `p[3] -= 0x100;` assigns lw=t0/addu=t1/addiu=t2 even
+  though the scheduler then emits the p[3] store BEFORE the p[1] store (both
+  provably non-aliasing off the same base, so store order is free).
+- **Tool gotcha**: `scripts/disasm-func.py <fn>` can print the disassembly of the
+  COMPILED non_matching body (the current NM-wrap C), not the raw target words —
+  the first probe chased a bltzl/`& 0x800000` shape that only existed in the old
+  NM body. Re-derive target mnemonics from the `.word` list (objdump -b binary)
+  before spending probes.
