@@ -20637,3 +20637,16 @@ regalloc-dump memo). The 32 `sw a2,8(sp)` delay stores (arg-homed a2 at a
 4-reg-arg K&R call) also remain unexplained by prototype shape — candidate:
 original passed the stage value through a type IDO homes (float-in-int-reg or
 4-byte struct); untested.
+
+**695F4 transfer addendum (same session, 75.97->EXACT 37/37):** the goto-end
+phi lever generalizes beyond $a0 — with the phi web crossing a SECOND call it
+colors $a3 (`move a3,a0` in the entry-branch delay, spill to the a0 ARG HOME,
+epilogue `move v0,a3`) and the frame stays 0x18 with ZERO named-local homes
+(param reuse, no `obj` copy-local). Two companion micro-levers: (1) sentinel
+guard `v1 = p+0x48; if (p != SENTINEL) goto store;` — the UNCONDITIONAL assign
+before the test turns beq+b (2 insns) into the single `bne` with the addiu in
+its delay slot (assign is harmless on the fall-through arm, overwritten by the
+alloc); (2) a `sw zero,X; sw reg,Y` tail pair where the target hoists the reg's
+home-reload to the label head: swap the C statement order — as1 re-emits the
+TARGET store order but moves only the lw (independent stores reorder freely,
+the load hoist follows source position).
