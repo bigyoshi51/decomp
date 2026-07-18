@@ -13822,6 +13822,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [7BC kit at 32 expansions w/ K&R callee: memcpy-form t-carrier load-bearing, ||-fallback must compare s1, per-site alias x34, val-dependent store order; 2-sw eval-order + t@uopt-slot residual (game_uso_func_0000C48C 67.09->99.74, 2026-07-17 agent-g)](#c48c-struct-arg-32x-memcpy-form) — _32x sw a2,8(sp) delay homes = struct-by-value; explicit shared `t=u` carrier required even for unprototyped callee (direct-u drops the 0(s2) staging hop); `s1 != -OFF || (obj=alloc())` keeps li/bne-s1 + stage-skip beqz; param-as-p homes at arg slot; 34 base-0 aliases bust template-addr spill-CSE; zero-val ctor stages store 0xC,0x14,0x10 vs nonzero 0xC,0x10,0x14._
 - [ptr+int addu operand-order INVERTS vs spelling: `(char*)p + off` -> `addu rd,OFF,p`, `off + (char*)p` -> `addu rd,p,OFF`; loop-array element re-spelled `self[1][i]` per use (never s-reg'd across calls) + de-named owner CSE temp = the no-s3 constructor-loop shape (gl_func_000683D4 77.46->99.44, 2026-07-17 agent-h)](#addu-order-respell-element-683d4) — _Naming the element made an s3 web (wrong saves/frame); the original reloads lw t?,4(s1)+addu+lw at EVERY use because calls kill the array memory. Named parent colors v0 only when the owner ptr (self[3]) is a DE-NAMED CSE temp (colors v1, feeds the bnezl-annulled delay reload); naming both flips v0/v1. Residual class: second vtable temp a1-vs-v0, immune to naming/de-naming/decl-order/web-merge._
 - [goto-mid label (or do-while(0)) blocks same-BB base+offset fold — materializes `addiu v0,a0,K; lw/sw 0(v0)` pointer shape at zero insn cost; cross-BB named ptr reserves an 8B bottom home slot (gl_func_00065060 76.76->93.10, 2026-07-17 agent-h)](#goto-mid-pointer-antifold-65060) — _`int *p=(int*)(a0+0x18); *p|=0x10;` always copy-props back to `lw/sw 24(a0)`. Inserting `goto mid; mid:` right before the use (or wrapping the use in `do{...}while(0)`) makes the def-use cross a BB boundary -> IDO materializes the exact addiu-base + 0-offset derefs with no extra insns. Cost: the pointer becomes a named cross-BB candidate and gets an 8B stack home reserved at the frame BOTTOM (below all arrays), shifting memory locals +8. All same-BB anti-fold re-spellings fail ((unsigned)/volatile/register/union/struct-field/ptr-arith); if(cond) adds beqz; &p adds a dead sw; phantom 2nd param homes to the arg area but emits `sw a1,frame+4(sp)`. Also: same-value FP-const webs split per (float)N cast-literal spelling generalize 4-way (0.0f/(float)0/1.0f/(float)1 -> four distinct mtc1 regs, post-call remat follows the web's spelling)._
+- [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -20923,3 +20924,44 @@ size shifts every later symbol; the NON_MATCHING_TEXT_CLIP_KEEP_ALIGN value
 must be re-measured as (last-fn start + target size) and may be non-16-aligned
 (0x2b730 -> 0x2b76c after 4EB54 grew 0x160->0x190) or the tail sentinel gets
 silently truncated and reads as a fuzzy regression.
+
+## Blanked USO reloc pairs (`lui $tX, (0x0 >> 16); addiu`) before `sw $tX, K(obj)` = symbol-ADDRESS store, not `= 0`; resolve via TextReloc symIdx, store `(s32)&alias`, per-SITE aliases stop cross-cascade addr GCSE, and symbolize the target .s so objdiff relocs agree (func_000090CC 75.10->75.41, 2026-07-17 agent-g) <a name="uso-blanked-reloc-vtable-store-90cc"></a>
+
+Target shape inside bootup_uso alloc-fallback constructor cascades:
+
+```
+lui   $t7, (0x0 >> 16)      # blanked HI16 reloc (splat placeholder)
+addiu $t7, $t7, 0x0         # blanked LO16
+sw    $t7, 0x28($s1)        # child-vtable pointer store
+```
+
+m2c renders this `*(p+0x28) = 0;` -> build emits ONE `sw zero` and the whole
+cascade collapses (69 target insns unmatched, register pressure gone, difflib
+reports the block "missing"). It is really `p->vt = &SYM` where SYM is a USO
+import/internal symbol whose baked bytes are 0.
+
+Recipe (all steps required):
+1. Resolve the true symbols: module header = magic 0x12345678 scan backwards
+   from (ROM_off_of_fn - fn_text_off); walk_dir/build_relocmap from
+   `scripts/uso-reloc-symbolize.py` + `scripts/emu-symdump/<mod>.symnames.json`.
+   90CC: symIdx 545 (shared 0x174-fallback vtable, used in all 4 cascades),
+   546/547/548 per-class, 312 = internal data +0x207DC.
+2. C: `extern char bu_90cc_vt545; ... *(s32*)(p+0x28) = (s32)&bu_90cc_vt545;`
+   plus `= 0x00000000;` entries in undefined_syms_auto.txt (BOTH, per the
+   alias gotcha). Bytes stay lui0/addiu0 -> ROM stays exact.
+3. objdiff penalizes build-reloc vs target-literal: rewrite the .s lines to
+   `%hi/%lo(alias)` (byte-identical since alias=0) and refresh that unit's
+   expected/.o, else the fix scores NEGATIVE (75.10 -> 74.73 observed).
+4. The shared symbol (545 in 4 cascades) gets GCSE'd: address computed BEFORE
+   the ctor call, spilled (`sw t9,64(sp)` / `lw s1,64(sp)`) — target
+   rematerializes per site. Split into per-cascade base-0 aliases
+   (vt545/_b/_c/_d) in BOTH C and .s: +0.30.
+5. Alloc-fallback grammar: primary result var must NOT be reassigned by the
+   fallback: `p = obj; if (p != 0 || (p = alloc(0x174), p != 0)) { ctor(p, &TMPL); p->vt = FB_VT; } obj->vt = CLASS_VT;`
+   — m2c's `temp_v0_5 = alloc(...)` reassignment conflates the webs (primary
+   must survive in a callee-save reg untouched by the dead fallback branch).
+
+Residual (unsolved): working-ptr colored $a0+spill vs target $s1/$a2, and the
+whole-fn frame gap (build 0x2E0 vs target 0x178, W90 placeholder slots) keeps
+every sp-relative immediate off — the remaining 24.6pp is dominated by that
+frame problem, not this cascade.
