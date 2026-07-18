@@ -59,6 +59,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Fresh-Vec3-per-site alloc-fallback fanout (7C1C 62.9->75.8): fresh address-taken Vec3 home per staging site (frame 2.5x), decl order = descending homes; `p=0;if(1){p=&X;}` anti-fold guard; int-cast `q=(f32*)((int)base+0x30)` hoisted above guard is the ONLY spelling that keeps the addiu join-CSE; objdiff fuzzy ignores sp-offset diffs so skip frame-gap pads](#fresh-vec3-fanout-intcast-q-7c1c) — _metric/3FAC dir arg = result-direction copy not segDir; lw-2312 double-deref tell._
 - [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var._
 - [NEGATIVE: C48C 32-stage template-addr %hi/%lo remat resists de-name + int-cast-literal (uopt GCSE spills 16-use address const regardless of spelling); 32 sw-a2-arg-home jal delays also open](#c48c-template-addr-gcse-negative) — _needs uoptlist, not spelling._
+- [Union parameter = float-arg bits view w/o &-caching: `*(int*)&arg` s-reg-caches the home-slot address (spills another web); by-value `union{f32 f;int i;}` param reads 72(sp) both ways; + int-cast &GLOBAL web lever, *p++ copied-pointer idiom (6126C 72.2->80.7, 2026-07-17 agent-f)](#union-param-bits-view-no-addr-cache-6126c) — _while(0) ptr-store ref-boost strips (unlike FP-web case); *p++ in if-cond emits sltu value-form._
 - [Escaped-aggregate scratch kills f22/f24 caching of sibling fields: separate f32 locals w/ one address-taken let IDO cache the rest in FP callee-saves across jalr; single struct scratch = full escape = target reload shape; also reversed &-operand emission + *= negation webs (3C86C 71.3->100, 2026-07-17 agent-f)](#aggregate-scratch-escape-vs-f22-caching-3c86c) — _frame-tiling names the struct size; load-temps regress to f0/f2 webs; owner-store-first blocks the lwc1 hoist._
 - [while(0) dead loop = FP-web coloring lever (head f2/f12/f14/f16 rotation): promotes folded sum to first-colored web, dead-ref ORDER steers ties, 2D-index CSE beats named locals (5DBB0 74.4->99.0, 2026-07-17 agent-f)](#while0-fp-web-coloring-dbb0) — _if(0) strips, dead-store-only bodies DSE; reverse dead-ref order colors first; dead add-trees do not CSE with real sums but real-sum reassociation flips the survivor; named f32 locals color f2-first in decl order (wrong here)._
 - [Wave-3 round-2 closers (agent-g 2026-07-15): de-name expression locals = fresh-ring numbering + ghost-home kill in one move; void-alias the last jal before a CSE-temp region; pad-AFTER a lone named local re-packs spill homes (38C0 91.3->EXACT, 15FC 27->23)](#wave3-round2-38c0-15fc) — _Named OR-chain/CSE-ptr locals color in-place + cost dead homes; folding them into the call args restores t7->t8->t9->t0 fresh numbering AND the exact frame. "One CSE temp in a v-reg, the other on the ring" after a K&R int call = dead-$v0 exclusion; void-alias frees v1/v0 emission-order coloring. A lone named local + compiler CSE spills +4 with a hole below = volatile pad AFTER the local claims the stray word (frame unchanged)._
@@ -20823,3 +20824,23 @@ frame size, and s-ring became exact (mnemonic-LCS 586/759). Register-shift
 noise can mask large structural convergence — gate multi-hour rewrites on
 structural anchors (frame word, prologue bytes, save offsets), not on the
 per-probe fuzzy delta.
+
+## Union parameter = bits-view of a float arg WITHOUT &-caching: `*(int*)&arg` promotes &arg into an s-reg (displacing a real web to a spill); `union {f32 f; int i;} arg` reads the home slot directly both ways (gl_func_0006126C 72.15->80.70, 2026-07-17 agent-f) <a name="union-param-bits-view-no-addr-cache-6126c"></a>
+
+Target tell: `lw a1,72(sp)` AND `lwc1 $f4,72(sp)` off the SAME homed arg slot,
+with no addiu sp-address materialization. Spelling `*(int *)&arg2` (f32 param)
+makes cfe address-take the home slot and uopt caches `&arg2` in an s-reg when
+used 2+ times across the dispatch — costing a callee-save and spilling another
+web. A by-value union param (`arg2.i` / `arg2.f`) is the only probed spelling
+that reads the slot directly in both views ((int)-cast per site does NOT break
+the CSE). Companions from the same function:
+- `int *flag = (int *)(int)&GLOBAL;` — the int-cast makes the baked-USO
+  address a real colored web (plain `&GLOBAL` rematerializes lui/addiu per
+  store site). `while(0){*flag=one;}` ref-boost does NOT work here — dead
+  stores through a pointer strip entirely (unlike the 5DBB0 FP-web case).
+- `c = *p++;` (not split `c=*p; p+=1;`) reproduces the `or v0,s2; lbu v1,0(v0)`
+  copied-pointer read idiom; `*p++` inside an if-CONDITION instead emits a
+  value-form sltu — hoist to a statement temp.
+- Residual cap here: uopt live-range-SPLITS the flag web (`or s1,s7`) inside
+  the heavy call arm and spills a 3-ref int web to the frame; decl-order
+  permutation neutral. 9-webs-for-9-s-regs exact fit not reached.
