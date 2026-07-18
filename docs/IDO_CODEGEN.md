@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
+- [Preheader lui/addiu NESTING (luiP,luiE,addiuE,addiuP) = while(0) dead-bit on the END constant + for-comma-init; x4 unroller fires only on indexed exact-trip `!=` form, `p<e` sltu form suppresses it; distinct extern per loop for per-loop base re-materialization (1FA20 68.9->100, 2026-07-18 agent-h)](#preheader-pair-nesting-unroll-trigger-1fa20) — _while(0) dead expr claims an early ucode bit for an ADDRESS-CONSTANT web (colors end v0 while cursor emits first); two plain defs can only give p,e,p,e or e,p,e,p; pointer `p != sym+K` bound does NOT unroll - use `for (i=0; i!=N; i++) arr[i+K]`._
 - [W65-70 game_libs trio (2026-07-18 agent-h): end-sentinel/slot-ptr DUAL-USE variable (24F30 frame-exact); param-as-cursor + post-inc idiom in BOTH arms tips uopt into s0 promotion where a separate local copy-props to a0+call-spill (1EE78); cached-count stale-v0 skip path kills join-beq + dup cond-load (1FAE8)](#w65-70-game-libs-trio-24f30-1ee78-1fae8) — _Also: K&R u16 reg arg = home store + re-mask per int-context use (the "redundant" andi); u16 stack arg = lhu slot+2; distinct placeholder externs for a loop bound LOSE the non-zero-trip proof (zero-trip guard + re-rotation, worse); `while(0){p+=1}` multi-def is fully DCE'd (inert as ref-boost/anti-remat); base with only %lo-foldable lw uses remats per-use (never s-reg) while a sibling address local colors an s-reg iff it has a non-foldable use (call arg/copy)._
 - [Single-int-CARRIER unification: one `q` playing loop-idx + EVERY check's pointer AND flag (int-cast reloads `q = p[k]; q = ((u32)((int*)q)[2] < (u32)((int*)q)[1]) ? 1 : 0;`) coalesces ptr+flag into $v0, pins `move v0,zero` below the sub-buffer loads, and reproduces the beql next-p delay-slot preload (57700 65.92->99.59, 2026-07-18)](#single-int-carrier-unification-57700) — _57->9 word residual in three steps: q for checks' ptr+flag, then unify blockA idx into q, then spell check1 identically (drop the named p). NEGATIVES on the final arr1/rec2/check1-ptr 3-cycle: decl orders inert; if(0) dead-ref ladder at HEAD forces the early a0->s0 split (bases flip to s0), MID/END dead BBs spill a0 and kill s0 wholesale; two-def arr1 disturbs schedule; rec2-as-q CSE-hoists the second lui const; trailing-K&R-arg carrier SPILLS p to frame (does not precolor a1 here)._
 - [Byte-RMW mask-width trichotomy: `*p &= K` direct-RMW statements keep per-step sbs with the LITERAL's andi width (~0x80 -> 0xff7f; literal 0xBF -> 0xbf); non-volatile local chain DSEs intermediate stores; volatile chain keeps stores but widens all masks to 0xffXX (2A260 69.1->87.9, 2026-07-18)](#byte-rmw-mask-width-2a260) — _also: symbol+const ptr arith can stay UN-folded (lui/addiu base + separate addiu 0x5280; base pair = stolen-prologue orphan fn); two same-page &D uses need DISTINCT placeholder externs or uopt CSEs one lui pair; sinking one RMW step below neighboring sh stores realigned downstream t-temp parity; disasm-func.py WITHOUT --obj shows the BUILD, not the target .s._
@@ -21747,3 +21748,24 @@ slides down one color. Companion levers from the same crack (all in-body, same f
   it is not interchangeable with array-direct reference; probe both.
 Dead `while(0){ rec = (u8*)array; }` did NOT create an early base-web occurrence (the shared
 address web's candidate bit stays late regardless); killing the competing web beat boosting.
+
+## Preheader lui/addiu NESTING (luiP,luiE,addiuE,addiuP) = while(0) dead-bit + for-comma-init; x4 unroller needs indexed exact-trip `!=` form, p<e sltu form suppresses it (1FA20 68.9->100 byte-exact, 2026-07-18 agent-h) <a name="preheader-pair-nesting-unroll-trigger-1fa20"></a>
+
+Three independent levers from a 3-loop byte-array sweep (`if (5 != p[K]) p[K] = 0;` over
+D+0x2C40[48]/0x2C10[48]/0x2C70[128], target 50 words):
+1. **Per-loop base re-materialization**: one shared placeholder symbol CSEs the cursor inits
+   across loops; a DISTINCT base-0 extern per loop gives each loop its own independent
+   lui/addiu pairs for BOTH cursor and end (end spelled `sym + K` as its own constant, not
+   `p + K`).
+2. **Unroll dichotomy**: pointer `p < e` form keeps sltu + bnezl and is NEVER counted-converted
+   or unrolled; the indexed exact-trip form `for (i = 0; i != 0x80; i++) arr[i + K]` gets
+   counted-conversion + the x4 unroller (byte offsets K..K+3, `addiu +4`, bnel end-compare).
+   Pointer `p != sym + 0x80` did NOT unroll even with same-symbol bound — use the indexed form.
+3. **Preheader pair NESTING**: two plain defs can only emit p,e,p,e or e,p,e,p (emission
+   follows real def order; as1 interleaves pairs). The target's NESTED order
+   `lui p; lui e; addiu e; addiu p` with end colored v0 / cursor v1 needs BOTH:
+   `while (0) { e = sym + 0x30; }` before the loop (dead expr claims the EARLY ucode bit ->
+   end colors v0 despite emitting second; extends the 48720 while(0) ucode-slot lever to
+   ADDRESS-CONSTANT webs) AND `for (p = sym, e = sym + 0x30; p < e; p++)` comma-init (pins the
+   addiuE-before-addiuP half of the schedule; with plain separate defs the same dead-bit gives
+   p,e,p,e). Literal-first compare `5 != p[K]` for the `beql a0,tN` operand order.
