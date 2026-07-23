@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import io
 import json
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+
+from elftools.elf.elffile import ELFFile
+from elftools.elf.sections import SymbolTableSection
 
 from decomp.rl.audit import (
     AuditStateError,
@@ -40,6 +45,7 @@ from decomp.rl.source import (
 from decomp.rl.splits import assembly_fingerprint, deterministic_split
 from decomp.rl.verifier import (
     PrebuiltVerifier,
+    clip_elf_symbol_ranges,
     extract_function_bytes,
     function_bytes_equal,
 )
@@ -359,6 +365,50 @@ class VerifierLayoutTests(unittest.TestCase):
             self.assertIsNotNone(extract_function_bytes(objects[0], "target"))
             self.assertTrue(function_bytes_equal(objects[0], objects[0], "target"))
             self.assertFalse(function_bytes_equal(objects[0], objects[1], "target"))
+
+    @unittest.skipUnless(shutil.which("cc"), "host C compiler is unavailable")
+    def test_clips_symbol_size_left_stale_by_section_truncation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source = root / "candidate.c"
+            output = root / "candidate.o"
+            source.write_text("int target(void) { return 1; }\n")
+            subprocess.run(["cc", "-c", str(source), "-o", str(output)], check=True)
+            original = extract_function_bytes(output.read_bytes(), "target")
+            self.assertIsNotNone(original)
+            assert original is not None
+
+            data = bytearray(output.read_bytes())
+            elf = ELFFile(io.BytesIO(data))
+            byte_order = "<" if elf.little_endian else ">"
+            size_offset = 16 if elf.elfclass == 64 else 8
+            size_format = "Q" if elf.elfclass == 64 else "I"
+            for symbol_table in elf.iter_sections():
+                if not isinstance(symbol_table, SymbolTableSection):
+                    continue
+                for index, symbol in enumerate(symbol_table.iter_symbols()):
+                    if symbol.name != "target":
+                        continue
+                    offset = (
+                        int(symbol_table["sh_offset"])
+                        + index * int(symbol_table["sh_entsize"])
+                        + size_offset
+                    )
+                    struct.pack_into(
+                        byte_order + size_format,
+                        data,
+                        offset,
+                        len(original) + 16,
+                    )
+            output.write_bytes(data)
+
+            self.assertEqual(
+                extract_function_bytes(output.read_bytes(), "target"), original
+            )
+            self.assertEqual(clip_elf_symbol_ranges(output), 1)
+            self.assertEqual(
+                extract_function_bytes(output.read_bytes(), "target"), original
+            )
 
 
 def _task(index: int) -> TaskSpec:

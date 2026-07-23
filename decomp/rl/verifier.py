@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -263,18 +264,26 @@ class PrebuiltVerifier:
                 elapsed_ms=_elapsed_ms(started),
                 failure_kind="compile",
             )
-        match, summary = self._score(root, task)
         assert task.build is not None
         compiled_object = root / task.build.base_object
+        compiled_data = compiled_object.read_bytes()
         byte_exact = function_bytes_equal(
             self.bundle.reference_object,
-            compiled_object.read_bytes(),
+            compiled_data,
             task.function_name,
         )
         if byte_exact is None:
             raise FixtureError(
                 f"cannot locate ELF function bytes for {task.function_name}"
             )
+        # Some historical recipes intentionally truncate .text after IDO emits
+        # the symbol table. New objdiff versions reject those stale out-of-bounds
+        # symbol sizes before diffing. Clip only the on-disk scoring copies; the
+        # exact-byte gate above compares the untouched private/candidate bytes.
+        reference_object = root / task.build.target_object
+        clip_elf_symbol_ranges(reference_object)
+        clip_elf_symbol_ranges(compiled_object)
+        match, summary = self._score(root, task)
         baseline = task.initial_match_percent or 0.0
         exact = match >= 99.999_999 and byte_exact
         if match >= 99.999_999 and not byte_exact:
@@ -459,6 +468,37 @@ def extract_function_bytes(object_data: bytes, function_name: str) -> bytes | No
     return result[0] if result is not None else None
 
 
+def clip_elf_symbol_ranges(path: Path) -> int:
+    """Clip stale ELF symbol sizes after an intentional section truncation."""
+    data = bytearray(path.read_bytes())
+    elf = ELFFile(io.BytesIO(data))
+    byte_order = "<" if elf.little_endian else ">"
+    size_offset = 16 if elf.elfclass == 64 else 8
+    size_format = "Q" if elf.elfclass == 64 else "I"
+    clipped = 0
+    for symbol_table in elf.iter_sections():
+        if not isinstance(symbol_table, SymbolTableSection):
+            continue
+        entry_size = int(symbol_table["sh_entsize"])
+        table_offset = int(symbol_table["sh_offset"])
+        for index, symbol in enumerate(symbol_table.iter_symbols()):
+            section_index = symbol["st_shndx"]
+            size = int(symbol["st_size"])
+            if not isinstance(section_index, int) or size <= 0:
+                continue
+            section = elf.get_section(section_index)
+            start = int(symbol["st_value"]) - int(section["sh_addr"])
+            available = int(section["sh_size"]) - start
+            if start < 0 or available < 0 or size <= available:
+                continue
+            offset = table_offset + index * entry_size + size_offset
+            struct.pack_into(byte_order + size_format, data, offset, available)
+            clipped += 1
+    if clipped:
+        path.write_bytes(data)
+    return clipped
+
+
 def _extract_function_data(
     object_data: bytes, function_name: str
 ) -> tuple[bytes, frozenset[int]] | None:
@@ -477,10 +517,13 @@ def _extract_function_data(
                     continue
                 section = elf.get_section(section_index)
                 start = int(symbol["st_value"]) - int(section["sh_addr"])
-                end = start + size
                 data = section.data()
-                if start < 0 or end > len(data):
+                if start < 0 or start >= len(data):
                     continue
+                # Intentional post-link section truncation can leave the final
+                # symbol's original IDO size in .symtab. Its available bytes are
+                # still the authoritative function body.
+                end = min(start + size, len(data))
                 relocation_offsets: set[int] = set()
                 for relocation_section in elf.iter_sections():
                     if not isinstance(relocation_section, RelocationSection):
