@@ -13888,6 +13888,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 - [Memory-resident iterator pair = `int *it[2]` ARRAY (struct gets SRA'd to s-regs); mat-mult "hand-unroll" caps may be memory compound-accumulate triple-fors; missing move-v0-zero = tail-call return (393B8 51.2->89.3)](#iterator-array-vs-struct-sra-393b8) — _named `float sum` local is the decode error; `res[r*4+c]+=` in-memory + trip-4 k-loop full-unroll + c-loop beql pipeline fall out of plain triple-for. Ternary-comma advance regresses. &D-publish $s4 addr-hoist vs per-site $at still unsolved._
 - [Load-type mismatch breaks CSE: `*(int*)(p+K)==0` test + `*(char**)(p+K)` chain = TWO loads (different value numbers); same-type spelling = one CSE'd load surviving the no-call path. Also: each scalar decl BEFORE a local array lifts the array's frame slot +4 (decl-split solver for array placement) (gl_func_0004EE44 81->99.9, 2026-07-18 agent-f)](#load-type-vn-cse-decl-split-array-4ee44) — _int-typed null test also mis-fills the bnel delay (reload instead of the hoisted f32 arg load). A named-but-redundant pointer local (`world=(float*)m30`) costs an 8-byte dead home; cast at use instead. Raw char* base local unfolds a +0xB4 from the loop induction — keep the folded `(float*)(load+0xB4)` init._
+- [Frame dead-home CENSUS solver: every fn-scope named local gets a dead 4-byte home in DECL ORDER (block-scope + `register` do NOT shed); target frame gaps = original's named-local count — merge disjoint-live-range m2c temps into shared names until the census matches, then distribute survivors at the gap offsets. Companion: `if (1) { p = &local; }` barrier keeps the addiu-sp null test + alloc branch a plain `p = &local` lets IDO fold AND delete (gl_func_000493AC 61.6->72.7, 2026-07-23 agent-f)](#frame-dead-home-census-493ac) — _0x6B8-frame builder fn: m2c's 57 fn-scope temps = 228 phantom bytes below the named slots; 24 renames (a2/t/s2/v0 pools, cross-loop var un-merge where it re-spilled) + 32-slot gap distribution closed the frame 0x7C0->0x708; held pI/pq/pr iterator pointers recover the s0/s1/s3 base-reg copy web._
 - [Address-taken `**pc = &local` kills a cross-call `local+K` CSE web (per-site home reload); named `t = *pc` at each call site = multi-def web spanning calls -> colored $s0 with `addiu a0,s0,K` in the jal delay slot (gl_func_00036C08 18.9->EXACT, 2026-07-18 agent-f)](#addr-taken-pc-web-kill-named-t-s0-36c08) — _plain local -> IDO hoists `ctx+0x30` into $s1 (`or a0,s1` per call); `&ctx` homes it and each `(*pc)` read reloads; the named-t respell recovers the s0-colored reload web + pushes the other global into $s1. Direct `(*pc)` reads in one BB share a single $t9 scratch. `cb += 0x70` mid-block pointer advance reproduces `addiu v0,v0,0x70` rebase with small element offsets._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -21689,6 +21690,34 @@ Residual class (both fns): name-load lands in $v0 vs target t-ring + FP zero-web
 
 **1FAE8 (67.02 -> 81.77) — cached-count stale-v0 skip path.** Record sweep with three callbacks. Control-flow tell: flag conds 2/3 branch to the CALL block, not the skip path — they gate only the status-byte toggle; the callbacks run for every `b33 == a0` record. The while-cond count is a CACHED local `n`, reloaded ONLY at the end of the then-arm (after the calls): the skip path reuses the stale $v0 from the previous load, which is why the target has no join branch (then-arm falls into `slt`, else jumps via the `bnel` likely-delay carrying `i++`). Also `*p &= 0xFF7F` literal (16-bit andi imm; `~0x80` promotes -129 into a hoisted in-loop s-reg const, 2A260 mask-width rule). RESIDUAL: base &D remats per-use (`lui+lw` x3) vs target s5 — every g-use is a %lo-foldable load, and uopt never s-reg-promotes an address web with only foldable uses; `tbl` colors s3 precisely because its use is a call arg (non-foldable). Target's independent s3 pair despite a live s5 = distinct real symbols conflated by the placeholder (24F30-class).
 
+
+## Frame dead-home CENSUS solver: decl-order 4-byte homes for EVERY fn-scope named local; merge temps to match the target's gap census (gl_func_000493AC 61.6->72.7, 2026-07-23 agent-f) <a name="frame-dead-home-census-493ac"></a>
+
+**Observation (measured, post0b 493AC):** IDO -O2 reserves a dead 4-byte home for EVERY named
+fn-scope local — register-allocated or not — laid out in DECLARATION ORDER descending from frame
+top. Moving decls to block scope changes nothing; adding `register` changes nothing (the 6CF0
+float finding does not generalize to ints/pointers). An m2c-style body with ~57 named temps
+carries ~228 phantom frame bytes the original never had.
+
+**The solver:** the target's frame GAPS (unaccessed byte runs between homed/accessed slots) are
+the dead homes of the ORIGINAL source's named locals. Recipe:
+1. Map target accessed slots + gaps (objdump sp-offset histogram vs frame size).
+2. Gap bytes / 4 = named-local budget. Merge m2c temps with disjoint live ranges into shared
+   names (same-type pools: temp_aN, temp_tN, temp_sN, temp_v0_N...) until your census matches.
+3. Distribute the surviving decls at the gap positions inside the ordered ladder of REAL
+   (accessed) locals — which temp goes in which gap is irrelevant (homes are dead), only count.
+4. Watch for merges that CREATE spills: a cross-loop shared name can become a long web that
+   spills (un-merge those; 493AC var_v1/var_a3/var_v0 un-merge recovered 0.1pp and killed
+   reloads).
+
+**Companion (null-test preservation):** target `addiu s0,sp,K; bne s0,zero,skip; jal alloc;
+beqz v0` — a plain `p = &local;` lets IDO VN-fold the null test and DELETE the alloc branch
+entirely. `if (1) { p = &local; }` barrier + `(p != 0) || (p = alloc(0xC), ...)` fallback keeps
+branch, materializes the addiu base, and holds p in an s-reg for later `p->field` base-reg
+accesses (the s0/s1/s3 iterator-copy web). Same lever family as the A3C4 alloc-fallback entry.
+
+**Residual on 493AC:** +0x50 frame from ~10 spurious spill slots (held pq/pr webs raise
+pressure); arg0 s5 vs target s6. 61.60 -> 72.67.
 
 ## Address-taken `**pc = &local` + named `t = *pc` per call site: the two-stage lever for "spilled ctx, per-site `addiu a0,s0,K` in the jal delay slot" (gl_func_00036C08 18.9->100 EXACT, 2026-07-18 agent-f) <a name="addr-taken-pc-web-kill-named-t-s0-36c08"></a>
 
