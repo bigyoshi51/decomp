@@ -86,9 +86,30 @@ class FixtureBuilder:
         preserve_hidden: tuple[str, ...] = (),
     ) -> None:
         """Redact a checked-out tree using the same rules as a public fixture."""
+        self._apply_support_overrides(root)
         self._redact_target(root, task)
         self._remove_hidden_paths(root, preserve=preserve_hidden)
         self._write_task_info(root, task)
+
+    def _apply_support_overrides(self, root: Path) -> None:
+        """Overlay profile-approved build helpers from the pinned project revision."""
+        values = self.profile.metadata.get("fixture_support_files", ())
+        if not isinstance(values, (list, tuple)):
+            raise FixtureError("metadata.fixture_support_files must be a list")
+        for raw_value in values:
+            value = str(raw_value)
+            relative = Path(value)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise FixtureError(f"invalid fixture support path: {value}")
+            data = self.git.show_bytes(self.profile.default_revision, value)
+            if data is None:
+                raise FixtureError(
+                    f"fixture support file is absent at "
+                    f"{self.profile.default_revision}: {value}"
+                )
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
 
     def materialize(self, task: TaskSpec, destination: Path) -> FixtureBundle:
         if destination.exists() and any(destination.iterdir()):

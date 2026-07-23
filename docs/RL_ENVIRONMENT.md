@@ -129,6 +129,14 @@ candidate while preserving compiler flags, split units, reference objects, and
 fresh state between tasks. Runtime candidate verification still starts from an
 immutable redacted fixture archive.
 
+Profiles may name generic `metadata.fixture_support_files` that are overlaid
+from the profile's pinned revision after checking out historical source. This
+is for verifier/build compatibility helpers, never solved C. The 1080 profile
+uses its current `truncate-elf-text.py`: early versions aborted whenever a
+redacted candidate made `.text` shorter than the solved object, while the
+pinned helper permits that candidate and safely tightens stale symbols and
+relocations.
+
 For independent workers or machines, add `--shard-count N --shard-index I` and
 give each shard a distinct output. Assignment is a stable hash of `task_id`, so
 it does not change when manifest order changes. Merge only after every shard

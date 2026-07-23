@@ -42,3 +42,5 @@ metadata:
     - make
     - mips-linux-gnu-as
     - objdiff-cli
+  fixture_support_files:
+    - scripts/truncate-elf-text.py

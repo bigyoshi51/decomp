@@ -19,8 +19,15 @@ class ProvenanceFixtureTests(unittest.TestCase):
         self._git("init", "-q")
         self._git("config", "user.email", "rl-tests@example.invalid")
         self._git("config", "user.name", "RL Tests")
-        for directory in ("src", "asm/nonmatchings/unit", "episodes", "expected/src"):
+        for directory in (
+            "src",
+            "asm/nonmatchings/unit",
+            "episodes",
+            "expected/src",
+            "scripts",
+        ):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
+        (self.root / "scripts/build-helper.py").write_text("historical helper\n")
         (self.root / "Makefile").write_text("all:\n\t@true\n")
         (self.root / "objdiff.json").write_text(
             json.dumps(
@@ -75,10 +82,14 @@ class ProvenanceFixtureTests(unittest.TestCase):
         )
         self._commit("solve target")
         self.solve = self._git("rev-parse", "HEAD").strip()
+        (self.root / "scripts/build-helper.py").write_text("pinned verifier helper\n")
+        self._commit("harden verifier helper")
+        self.head = self._git("rev-parse", "HEAD").strip()
         self.profile = ProjectProfile(
             project_id="fixture",
             repo_url="https://example.invalid/fixture.git",
-            default_revision=self.solve,
+            default_revision=self.head,
+            metadata={"fixture_support_files": ["scripts/build-helper.py"]},
         )
 
     def tearDown(self) -> None:
@@ -109,6 +120,10 @@ class ProvenanceFixtureTests(unittest.TestCase):
         self.assertFalse((destination / ".git").exists())
         self.assertFalse((destination / "episodes").exists())
         self.assertFalse((destination / "expected").exists())
+        self.assertEqual(
+            (destination / "scripts/build-helper.py").read_text(),
+            "pinned verifier helper\n",
+        )
         self.assertEqual(bundle.reference_object, b"reference-object")
 
     def _commit(self, message: str) -> None:
