@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
 - [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
 - [Preheader lui/addiu NESTING (luiP,luiE,addiuE,addiuP) = while(0) dead-bit on the END constant + for-comma-init; x4 unroller fires only on indexed exact-trip `!=` form, `p<e` sltu form suppresses it; distinct extern per loop for per-loop base re-materialization (1FA20 68.9->100, 2026-07-18 agent-h)](#preheader-pair-nesting-unroll-trigger-1fa20) — _while(0) dead expr claims an early ucode bit for an ADDRESS-CONSTANT web (colors end v0 while cursor emits first); two plain defs can only give p,e,p,e or e,p,e,p; pointer `p != sym+K` bound does NOT unroll - use `for (i=0; i!=N; i++) arr[i+K]`._
@@ -21848,3 +21849,15 @@ folded into each load/store offset).
   through `(f32)(s32)x` kills the u32 fixup branch (`bgez`+`lui 0x4f80`); (3) `sltiu at,tN,14`
   before a jr dispatch = jumptable spans 14 cases — add trailing EMPTY `case 0x4D: case 0x4E:
   break;` to widen the IDO-synthesized table.
+
+## x4-unroll trigger addendum (1DCB4, 2026-07-23 agent-h): int-counter `i < n` do-while over a 0x20-stride table with conditional s8-array store DOES unroll; s8 counter suppresses (at the cost of sll/sra 0x18 pairs) <a name="x4-unroll-int-counter-do-while-1dcb4"></a>
+
+Refines the 1FA20 entry ("unroller needs indexed exact-trip `!=` form"): in game_libs 1DCB4 the
+inner scan loops (`do { if (entry->w0 >> 31) { if (group-match) buf[idx++] = i; } i++; p += 0x20; }
+while (i < count);`) unroll x4 (andi a1,count,0x3 mod-preamble, +70 insns, fuzzy 63->34) as soon
+as the counter is widened s8 -> s32 — the `<` form did NOT suppress here. Narrow s8 counter
+suppresses the unroller but costs one sll/sra 0x18 pair per increment (9 pairs). Target 1DCB4 has
+NEITHER unroll nor narrowing -> the original's suppressor is still unknown (open decode question;
+sibling loop with a single un-nested if in the same fn does not unroll even with s32). If you crack
+it, also reproduce the target's per-iteration `move v0,v1` entry-copy that copy-props away in our
+builds.
