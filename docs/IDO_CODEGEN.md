@@ -158,6 +158,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Rules-sweep wave 2 results (2026-06-11)](#rules-sweep-wave-2-results-2026-06-11-remaining-cohort-completed) — _7/12 cracked to 100.0: skip_to_end (struct-vs-array branch shape), E6E8/E910/E79C (pad[2] 8-byte phantom), 4ACD4 (inner-scope named base), 4880C (guard-scoped param copy = entry-copy region placement), D9B8 (hidden pass-through arity). Survivors = ugen temp/binding class + -O0/-O1 caps._
 - [BEQ/BNE OPERAND ORDER IS UCODE SHAPE — uoptinput ==/!= isvar swap (uso_skip_to_end CRACKED)](#beqbne-operand-order-is-ucode-shape--uoptinput-swaps--when-left-isnt-an-isvar-struct-field-reads-are-isvar-array-element-reads-are-not-uso_skip_to_end-cracked) — _branch operand order vs promoted const = buffer-type question: local array elem (lda+ilod, not isvar) → const-first; local struct field (isvar) → var-first. Source operand order irrelevant. u32[3]↔struct flip cracked a "permuter-floors structural cap"._
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1. 2026-07-23: `p += expr` = 4th base-first spelling (plain/self-assign = scaled-first); same-var += webs coalesce colors — middle-web-in-own-temp target = coloring residual (1D870 95.1)._
+- [Unrolled-sum-loop kit: `q=src;src++` old-ptr-copy body (frees $a0 -> arg homes to 0(sp)); inline `len/4` bound = single CSE web (named n splits webs + blocks lui delay-slot hoist); destructive `sum=chk-sum` tail (97B4 BYTE-EXACT, 2026-07-23)](#unrolled-sum-loop-kit-old-ptr-copy-body-inline-bound-cse-single-web-destructive-tail-reuse-game_libs_func_000097b4-byte-exact) — _inline-expression bounds CSE to one temp web where a named var splits def+loop webs; fresh named tail temps renumber, destructive reuse pins; `key-(chk-sum)` inline reassociates._
 - [LONGEST-SPAN LR LANDS IN AN ARG REGISTER (a0), not v0 — function-tail base-pointer cap + isop-mode-check %-mover (func_0001304C pass 15)](#longest-span-lr-lands-in-an-arg-register-a0-not-v0--the-function-tail-base-pointer-cap-and-the-isop-mode-check-mover-that-survives-it-func_0001304c-pass-15) — _a base ptr loaded once + held across the whole tail = longest LR = lowest save/span priority = colored LAST = lands in a0 (derefs grab v0/v1 first); a build coloring it into v0 rebases the whole tail = arg-register-targeting cap (no pseudo-order lever, permuter floors). BUT inlining `mode == N` deref into the compare (isop → Uneq swap → bne const-first) is a real monotonic %-mover that stacks anyway (92.5→92.61)._
 - [Value-returning lookup with -1 default: if-return (not ternary) frees v0 → base lands in v1; + array-index + split-pointer levers (game_libs_func_00027300)](#value-returning-lookup-with--1-default-use-ifcondreturn-x-return--1-not-a-ternary-to-free-v0-for-the-return-pushing-the-held-base-into-v1--plus-array-index--split-pointer-levers-game_libs_func_00027300-body-byte-exact) — _`return cond ? load : -1` near-misses with the body shifted one v-reg (base in v0, result moved). Three levers (27300 12→0 body diffs): (1) `if(cond){return load;} return -1;` reserves v0 for the return so the held strided base colors into v1, byte loads straight to v0; (2) array-index `((int*)(p+OFF))[i]` gives addu base-first; (3) split chained inner deref into a named local → IDO reuses the dead arg reg for the load. CAVEAT: cross-fn tail-merge (-1 path beql-branches into the NEXT symbol's jr) is NOT C-reproducible — body can be byte-exact but the two-symbol split blocks a per-symbol byte_verify land; keep INCLUDE_ASM._
 - [STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (44F4 79.57 -> 100.0)](#feedback-ido-struct-by-value-marshalling-lever) — _`sw a2,8(sp)` in jal delay = struct-by-value arg homed to its own arg slot; `addiu sN,sp,K` held in s-reg = struct local (ILDA web colorable — char* &local never is); store-direct+load-via-pointer pair = struct copy; `bne base,-K` = `if (base+K == NULL)`; iter alloc-fail can skip to NEXT iter, not epi._
@@ -15797,6 +15798,30 @@ the struct spelling, not a funnel.
 
 This is the branch cousin of the ADDU/IXA ucode-shape rule below:
 operand order is ucode shape, not allocator behavior.
+
+## Unrolled-sum-loop kit: old-ptr-copy body, inline bound CSE single-web, destructive tail reuse (game_libs_func_000097B4 BYTE-EXACT)
+
+(2026-07-23, agent-h; 58.9 -> byte-exact 184/184.) Three composable levers
+for IDO -O2 auto-unrolled word-sum loops (x4 body + `count & 3` remainder
+pre-loop, `blez n` guard):
+1. **Per-load `or a0,a1,zero` old-pointer copy** in the target loop = the
+   body was `q = src; src++; i++; sum += *q;` (load through the OLD copy,
+   post-increment as its own statement). Plain `sum += *src; src++;` folds
+   the copy away. Side effect: q colors $a0, so a pointer ARG that lives to
+   the tail gets HOMED to its 0(sp) home slot with per-use reloads — no
+   address-taken barrier needed; the register theft alone does it.
+2. **Named loop bound splits into two webs** (`sra t1` def + `or t0,t1`
+   loop copy) and the copy eats the `blez` delay slot, blocking the
+   scheduler from hoisting a tail constant's `lui` there. Spelling the
+   bound INLINE in both guard and condition (`if (len/4 > 0) ... while
+   (i != len/4)`) CSEs to ONE temp web (`sra t0`), no copy, and the `lui`
+   hoists into the delay slot. (Generalizes the 1D870 lesson: named-var
+   webs are what split; a CSE'd expression temp is a single web.)
+3. **Tail temp destructively reuses a dead accumulator**: `subu v0,v1,v0`
+   = `sum = chk - sum; out[1] = key - sum;` — a FRESH named temp (`d =
+   chk - sum`) gets its own reg and shifts the whole tail's temp numbering.
+   Also: `key - (chk - sum)` written inline gets REASSOCIATED to
+   `(key - chk) + sum`; the named destructive form pins the tree.
 
 ## ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first; flat ptr-arith emits deeper-operand-first (timproc twins CRACKED)
 
