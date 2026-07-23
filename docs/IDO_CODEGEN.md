@@ -13890,6 +13890,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Memory-resident iterator pair = `int *it[2]` ARRAY (struct gets SRA'd to s-regs); mat-mult "hand-unroll" caps may be memory compound-accumulate triple-fors; missing move-v0-zero = tail-call return (393B8 51.2->89.3)](#iterator-array-vs-struct-sra-393b8) — _named `float sum` local is the decode error; `res[r*4+c]+=` in-memory + trip-4 k-loop full-unroll + c-loop beql pipeline fall out of plain triple-for. Ternary-comma advance regresses. &D-publish $s4 addr-hoist vs per-site $at still unsolved._
 - [Load-type mismatch breaks CSE: `*(int*)(p+K)==0` test + `*(char**)(p+K)` chain = TWO loads (different value numbers); same-type spelling = one CSE'd load surviving the no-call path. Also: each scalar decl BEFORE a local array lifts the array's frame slot +4 (decl-split solver for array placement) (gl_func_0004EE44 81->99.9, 2026-07-18 agent-f)](#load-type-vn-cse-decl-split-array-4ee44) — _int-typed null test also mis-fills the bnel delay (reload instead of the hoisted f32 arg load). A named-but-redundant pointer local (`world=(float*)m30`) costs an 8-byte dead home; cast at use instead. Raw char* base local unfolds a +0xB4 from the loop induction — keep the folded `(float*)(load+0xB4)` init._
 - [Frame dead-home CENSUS solver: every fn-scope named local gets a dead 4-byte home in DECL ORDER (block-scope + `register` do NOT shed); target frame gaps = original's named-local count — merge disjoint-live-range m2c temps into shared names until the census matches, then distribute survivors at the gap offsets. Companion: `if (1) { p = &local; }` barrier keeps the addiu-sp null test + alloc branch a plain `p = &local` lets IDO fold AND delete (gl_func_000493AC 61.6->72.7, 2026-07-23 agent-f)](#frame-dead-home-census-493ac) — _0x6B8-frame builder fn: m2c's 57 fn-scope temps = 228 phantom bytes below the named slots; 24 renames (a2/t/s2/v0 pools, cross-loop var un-merge where it re-spilled) + 32-slot gap distribution closed the frame 0x7C0->0x708; held pI/pq/pr iterator pointers recover the s0/s1/s3 base-reg copy web._
+- [`if(1){app=&arg}` address-taken barrier on the sole pointer arg kills ALL s-reg candidates -> no-s-reg/ra-only/arg-homed -O2 driver shape at zero cost; per-region `A=*app` reload + per-region `g=&D` re-materialization; retracts a "not C-flippable" coloring cap (gl_func_0004BAF4 60.91->71.64, 2026-07-23 agent-f)](#addr-taken-arg-kills-all-sregs-4baf4)
 - [Address-taken `**pc = &local` kills a cross-call `local+K` CSE web (per-site home reload); named `t = *pc` at each call site = multi-def web spanning calls -> colored $s0 with `addiu a0,s0,K` in the jal delay slot (gl_func_00036C08 18.9->EXACT, 2026-07-18 agent-f)](#addr-taken-pc-web-kill-named-t-s0-36c08) — _plain local -> IDO hoists `ctx+0x30` into $s1 (`or a0,s1` per call); `&ctx` homes it and each `(*pc)` read reloads; the named-t respell recovers the s0-colored reload web + pushes the other global into $s1. Direct `(*pc)` reads in one BB share a single $t9 scratch. `cb += 0x70` mid-block pointer advance reproduces `addiu v0,v0,0x70` rebase with small element offsets._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -21720,6 +21721,26 @@ accesses (the s0/s1/s3 iterator-copy web). Same lever family as the A3C4 alloc-f
 **Residual on 493AC:** +0x50 frame from ~10 spurious spill slots (held pq/pr webs raise
 pressure); arg0 s5 vs target s6. 61.60 -> 72.67.
 
+**SCALED to 113 temps (timproc_b5 8FC8, 1624 insns, 2026-07-23 agent-g, 65.8->73.6 on the merge
+alone):** at m2c scale don't hand-pick merges — the pool partition is COMPUTABLE. m2c names temps
+by the register holding the value, so temps sharing a register root (temp_v0_N, var_v0_N → root
+v0) are near-disjoint by construction; greedy interval partitioning per root (sort by first use,
+assign to first pool whose last use precedes it) landed exactly on the 17-name budget the target's
+gap census demanded, as a pure alpha-rename (every member keeps its declared type — split
+s32/char*/u16 members into type-homogeneous sibling pools and rebalance across roots, e.g. one
+int-v pool absorbing var_v1+var_v0_2/4/6, and two 2-colored t-scratch pools covering the
+(t6,t7)/(t1,t2)/(t5,t6_2)/(t0,t1_2) simultaneous pairs). Gap budget = target unaccessed words
+MINUS words inside declared arrays/aggregates (sp94[10] covers 0x98-0xB8 — not gaps) and MINUS
+the arg-build/save area. **Companion (+4.6pp more, 73.6->78.2): a repeated `(&D_sym + K)`
+FP-literal-pool base across calls becomes a callee-saved CSE web (lui hoisted into s4,
+`lwc1 f,K(s4)` everywhere) where the target re-materializes `lui at,%hi; lwc1 %lo(at)` per site —
+the original had DISTINCT symbols. Fix: one typed extern PER OFFSET (`extern f32 DF_2A4;`), not
+one base symbol; kills the s-reg and restores the per-site at-form.** Negative bound: the
+remaining 5-vs-3 s-reg gap (target s1 = one 48-def web spanning what are two pools in the
+reconstruction) is NOT reachable by further name merging — the big pools textually interleave
+(pairwise-overlap matrix all X), so the original's wider webs came from different statement
+structure, not naming.
+
 ## Address-taken `**pc = &local` + named `t = *pc` per call site: the two-stage lever for "spilled ctx, per-site `addiu a0,s0,K` in the jal delay slot" (gl_func_00036C08 18.9->100 EXACT, 2026-07-18 agent-f) <a name="addr-taken-pc-web-kill-named-t-s0-36c08"></a>
 
 **Target shape:** a pointer local (`ctx = *(o+0x14)`) homed at top-of-frame (sp+0x74), reloaded
@@ -21861,3 +21882,51 @@ NEITHER unroll nor narrowing -> the original's suppressor is still unknown (open
 sibling loop with a single un-nested if in the same fn does not unroll even with s32). If you crack
 it, also reproduce the target's per-iteration `move v0,v1` entry-copy that copy-props away in our
 builds.
+
+---
+
+<a id="addr-taken-arg-kills-all-sregs-4baf4"></a>
+## `if (1) { app = &arg; }` on the SOLE pointer arg kills EVERY s-reg candidate — reproduces the "no-s-reg / ra-only-save / arg homed at sp+frame" driver shape at zero insn cost (gl_func_0004BAF4 60.91→71.64, 2026-07-23 agent-f)
+
+Target tell: big multi-call -O2 function whose prologue saves ONLY ra (low
+slot, e.g. 0x14), spills a0 to its home ABOVE the frame (`sw a0,240(sp)` at
+frame 0xF0) and re-reads it after every call (`lw t3,240(sp)`), recomputes
+`lui/addiu` symbol bases per call-free region, and spills cross-call FP/int
+temps to NAMED mid-frame slots. Looks like -O1 but is NOT (-O1 probes ~35%
+oversize, stores extra bases, no beql scheduling). It is -O2 where the arg
+was address-taken:
+
+1. `char **app; if (1) { app = &arg0; }` — homes arg0 (sw a0,HOME) and,
+   because every other cross-call value is a named memory-resident local,
+   uopt ends up with ZERO global candidates → no s-regs saved. The barrier
+   assignment itself emits NOTHING (dead, DCE'd) — but the address-taken
+   attribute survives. This RETRACTS the 4BAF4 "cross-call coloring cap /
+   not C-flippable" note (2026-06-22).
+2. Per-call-region `A = *app;` (multi-def web, one def after each call) =
+   ONE `lw tX,HOME(sp)` per region, held across BBs including annulled
+   beql delay slots. Plain `arg0` reads instead reload per-BB. (Sibling of
+   the 36C08 named-`t = *pc` entry, but with t-reg regions, not $s0 —
+   each def-range is call-free so the web never crosses a call.)
+3. Per-region `g = (char *)&D_00000000;` reassignment right after each
+   call re-materializes `lui;addiu` there; a single top assignment gets
+   copy-propagated and each use %lo-folds into its load instead.
+4. Cross-call scalars must be the NAMED sp-resident locals used DIRECTLY
+   (`sp94`, `sp98`, ... in decl-order homes): dirty write-backs then land
+   as the pre-jal store web (`swc1 $f12,148(sp); jal; ... lwc1` reloads),
+   with dead stores (values not read past the next call) eliminated free.
+   Do NOT mirror them through m2c `temp_*` copies.
+5. Frame census applies unchanged: every fn-scope named local (incl. g,
+   app, A, and the shared temp-pool names) reserves a dead 4-byte home in
+   decl order; merge disjoint-live-range m2c temps until the frame is
+   byte-exact (here 55→51 names: u→r, vz→cy, cx→n, q→dl gave 0xF0 exact).
+6. Decode audit that fell out: what m2c renders as extra call args can be
+   the caller-save spill stores scheduled before the jal (the emit cbs
+   take ONE arg); and a `*(s32*)p = 0xB3000000;` had been silently turned
+   into `= -2.9802322e-8f` (float literal through s32* stores 0) — grep NM
+   bodies for float literals stored through integer pointers.
+
+Residual class after all of the above: FP temp ROTATION only (prologue
+f4,f2,f6 vs target f4,f6,f8; sp98/sp94 land in f12/f14 vs f2/f12) plus the
+target's SPLIT bases v0=&D+0xA0 / t4=&D+0 (ours CSEs to one &D base;
+per-site extern aliases would need a defined D_000000A0 symbol for the
+baked-reloc bytes to survive).
