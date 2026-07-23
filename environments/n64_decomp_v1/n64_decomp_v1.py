@@ -443,6 +443,28 @@ async def _verify_in_trusted_container(
         )
         if compiled.exit_code != 0:
             return _failure("compile", (compiled.stderr or compiled.stdout)[-8000:])
+        # Preserve untouched candidate bytes for the exact gate before clipping
+        # stale symbol sizes in disposable objdiff scoring copies.
+        candidate_object = await trusted.read(task.build.base_object)
+        normalized = await trusted.run(
+            [
+                "python3",
+                "-c",
+                (
+                    "import sys; from pathlib import Path; "
+                    "from decomp.rl.verifier import clip_elf_symbol_ranges; "
+                    "[clip_elf_symbol_ranges(Path(value)) for value in sys.argv[1:]]"
+                ),
+                task.build.target_object,
+                task.build.base_object,
+            ],
+            {},
+        )
+        if normalized.exit_code != 0:
+            return _failure(
+                "infrastructure",
+                (normalized.stderr or normalized.stdout)[-8000:],
+            )
         scored = await trusted.run(
             [
                 objdiff_command,
@@ -459,7 +481,6 @@ async def _verify_in_trusted_container(
         function = find_report_function(report, task.function_name)
         raw_match = function.get("fuzzy_match_percent", 0.0)
         match = float(raw_match) if raw_match is not None else 0.0
-        candidate_object = await trusted.read(task.build.base_object)
         byte_exact = function_bytes_equal(
             bundle.reference_object, candidate_object, task.function_name
         )
