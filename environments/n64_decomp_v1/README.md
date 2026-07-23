@@ -3,7 +3,7 @@
 A Verifiers v1 taskset for exact, single-function N64 decompilation. It supports
 two harness modes over the same manifest and trusted object verifier:
 
-- `coding_agent`: the standard Verifiers `default` harness gets a redacted
+- `coding_agent`: the standard Verifiers `bash` harness gets a redacted
   historical project snapshot with bash and edit tools.
 - `submit_candidate`: the `null` harness gets only a stateful
   `submit_candidate(source)` tool and iterative compile/diff feedback.
@@ -26,4 +26,4 @@ Then run the documented release build audit and use its
 `exports/1080-v1/tasks.audited.jsonl` output for eval or training.
 
 See `docs/RL_ENVIRONMENT.md` for image setup, validation, evaluation, and
-Prime-RL commands.
+Prime-RL commands, including the checked-in one-step single-GPU smoke config.

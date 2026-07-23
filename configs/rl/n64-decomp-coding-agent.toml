@@ -32,10 +32,10 @@ max_completion_tokens = 16384
 
 [[orchestrator.train.env]]
 name = "n64-decomp-coding-agent"
-max_turns = 30
-timeout = { setup = 300, rollout = 1800, scoring = 300 }
-taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "train", mode = "coding_agent" }
-harness = { id = "default", runtime = { type = "docker" } }
+env.taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "train", mode = "coding_agent" }
+env.agent.max_turns = 30
+env.agent.timeout = { setup = 300, rollout = 1800, scoring = 300 }
+env.agent.harness = { id = "bash", runtime = { type = "docker" } }
 
 [orchestrator.eval]
 interval = 20
@@ -43,8 +43,8 @@ interval = 20
 [[orchestrator.eval.env]]
 name = "n64-decomp-coding-agent-validation"
 num_examples = 32
-max_turns = 30
-taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "validation", mode = "coding_agent" }
-harness = { id = "default", runtime = { type = "docker" } }
+env.taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "validation", mode = "coding_agent" }
+env.agent.max_turns = 30
+env.agent.harness = { id = "bash", runtime = { type = "docker" } }
 
 [inference]

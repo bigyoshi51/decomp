@@ -10,7 +10,7 @@ project profile, not hard-coded environment logic.
 
 The environment has two modes over the same task manifest and scorer:
 
-- **`coding_agent` (primary):** Verifiers' `default` harness receives a
+- **`coding_agent` (primary):** Verifiers' `bash` harness receives a
   redacted historical project tree with bash and edit tools. The final source
   is copied into a second trusted fixture and scored after the harness exits.
 - **`submit_candidate` (secondary):** Verifiers' `null` harness receives only
@@ -149,6 +149,11 @@ quarantined class with `--resume --retry-status <status>`.
 
 The audit records the starter's measured `initial_match_percent`, requires the
 gold to reach exact, and stops immediately on verifier infrastructure failure.
+Historical post-compile recipes may intentionally truncate an ELF section
+without rewriting IDO's symbol table. Before invoking current objdiff, the
+verifier clips only out-of-bounds symbol sizes in its disposable scoring
+copies; exactness still compares the untouched candidate and private reference
+function bytes.
 If a recovered historical starter no longer compiles in the resolved split
 unit, it retries a signature-preserving empty scaffold; the audited row records
 whichever starter was actually measured. Already-exact or still-noncompiling
@@ -227,6 +232,14 @@ uv run --project /path/to/prime-rl rl \
 uv run --project /path/to/prime-rl rl \
   @ configs/rl/n64-decomp-submit-candidate.toml
 ```
+
+The checked-in `n64-decomp-submit-candidate-smoke.toml` is a one-step,
+one-task integration run for a single 32 GB GPU. It runs Prime-RL inference as
+a separate process on the same GPU with a conservative memory cap, assigns
+only the trainer through the unified launcher, and uses filesystem weight
+broadcast. The exact two commands are documented at the top of that config.
+The production configs retain the standard separate inference/trainer GPU
+layout.
 
 Environment-server workers need access to a Docker daemon. The agent runtime
 and the trusted verifier are separate containers; constrained-mode submissions

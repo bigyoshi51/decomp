@@ -1,0 +1,66 @@
+# One-step integration smoke test for a single 32 GB GPU.
+#
+# Start Prime-RL's inference server separately on the same GPU with a conservative
+# memory cap, then launch this config from the decomp repository root:
+#
+#   /path/to/prime-rl/.venv/bin/inference \
+#     --model.name Qwen/Qwen3-0.6B \
+#     --gpu-memory-utilization 0.2
+#
+#   WANDB_MODE=offline /path/to/prime-rl/.venv/bin/rl \
+#     @ configs/rl/n64-decomp-submit-candidate-smoke.toml
+#
+# The external server remains reachable at the default localhost:8000 endpoint.
+# Omitting [inference] lets the one trainer share physical GPU 0 with that
+# separately launched server; filesystem weight broadcast avoids a two-GPU NCCL
+# process group.
+
+max_steps = 1
+seq_len = 2048
+
+[deployment]
+num_train_gpus = 1
+num_infer_gpus = 0
+
+[weight_broadcast]
+type = "filesystem"
+
+[model]
+name = "Qwen/Qwen3-0.6B"
+
+[trainer.wandb]
+project = "n64-decomp-v1"
+name = "submit-candidate-smoke-trainer"
+offline = true
+
+[orchestrator.wandb]
+project = "n64-decomp-v1"
+name = "submit-candidate-smoke-orchestrator"
+offline = true
+
+[file_monitor]
+
+[trainer.model]
+impl = "auto"
+
+[trainer.model.ac]
+freq = 1
+
+[trainer.optim]
+lr = 1e-5
+
+[orchestrator]
+batch_size = 1
+group_size = 1
+
+[orchestrator.train.sampling]
+max_completion_tokens = 512
+
+[[orchestrator.train.env]]
+name = "n64-decomp-submit-candidate-smoke"
+pool = { type = "static", num_workers = 1 }
+env.taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "train", mode = "submit_candidate", max_tasks = 1 }
+env.agent.max_turns = 2
+env.agent.max_output_tokens = 1024
+env.agent.timeout = { setup = 300, rollout = 600, scoring = 60 }
+env.agent.harness = { id = "null", runtime = { type = "docker" } }

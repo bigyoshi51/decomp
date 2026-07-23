@@ -2,10 +2,9 @@
 #   @ configs/eval/n64-decomp-submit-candidate.toml --model <endpoint-model>
 num_tasks = 10
 num_rollouts = 1
-max_turns = 20
-max_output_tokens = 8192
+max_concurrent = 1
 
-[taskset]
+[env.taskset]
 id = "n64-decomp-v1"
 project_root = "projects/1080-decomp"
 profile = "project_profiles/1080.yaml"
@@ -13,6 +12,13 @@ manifest = "exports/1080-v1/tasks.audited.jsonl"
 split = "test"
 mode = "submit_candidate"
 
-[harness]
+[env.agent]
+max_turns = 20
+timeout = { setup = 300, rollout = 900, scoring = 60 }
+
+[env.agent.harness]
 id = "null"
 runtime = { type = "docker" }
+
+[sampling]
+max_tokens = 8192

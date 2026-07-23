@@ -3,10 +3,9 @@
 #   @ configs/eval/n64-decomp-coding-agent.toml --model <endpoint-model>
 num_tasks = 10
 num_rollouts = 1
-max_turns = 30
-max_output_tokens = 16384
+max_concurrent = 1
 
-[taskset]
+[env.taskset]
 id = "n64-decomp-v1"
 project_root = "projects/1080-decomp"
 profile = "project_profiles/1080.yaml"
@@ -14,6 +13,13 @@ manifest = "exports/1080-v1/tasks.audited.jsonl"
 split = "test"
 mode = "coding_agent"
 
-[harness]
-id = "default"
+[env.agent]
+max_turns = 30
+timeout = { setup = 300, rollout = 1800, scoring = 300 }
+
+[env.agent.harness]
+id = "bash"
 runtime = { type = "docker" }
+
+[sampling]
+max_tokens = 16384
