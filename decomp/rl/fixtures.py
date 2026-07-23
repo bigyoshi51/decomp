@@ -20,7 +20,6 @@ from .source import (
     find_function_spans,
     nonexact_function_body,
     relocation_scaffold_function_body,
-    replace_function,
 )
 
 
@@ -202,34 +201,7 @@ class FixtureBuilder:
 
     def _target_paths(self, root: Path, function_name: str, primary: Path) -> set[Path]:
         """Find only files that can leak the target, with a portable fallback."""
-        directories = [
-            root / value
-            for value in self.profile.source_roots
-            if (root / value).is_dir()
-        ]
-        if shutil.which("rg") and directories:
-            command = ["rg", "--files-with-matches", "--fixed-strings"]
-            for suffix in self.profile.allowed_source_suffixes:
-                command.extend(("--glob", f"*{suffix}"))
-            command.extend((function_name, *(str(path) for path in directories)))
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True)
-            if result.returncode in {0, 1}:
-                return {
-                    primary,
-                    *(
-                        Path(line) if Path(line).is_absolute() else root / line
-                        for line in result.stdout.splitlines()
-                        if line
-                    ),
-                }
-
-        paths = {primary}
-        for directory in directories:
-            for suffix in self.profile.allowed_source_suffixes:
-                for path in directory.rglob(f"*{suffix}"):
-                    if function_name in path.read_text(errors="replace"):
-                        paths.add(path)
-        return paths
+        return target_paths(root, self.profile, function_name, primary)
 
     def _remove_hidden_paths(
         self, root: Path, *, preserve: tuple[str, ...] = ()
@@ -261,7 +233,13 @@ class FixtureBuilder:
         )
 
 
-def apply_candidate(root: Path, task: TaskSpec, candidate_source: str) -> None:
+def apply_candidate(
+    root: Path,
+    task: TaskSpec,
+    candidate_source: str,
+    *,
+    profile: ProjectProfile | None = None,
+) -> None:
     if task.provenance.source_path is None:
         raise FixtureError("task has no source path")
     function, violations = validate_candidate_source(
@@ -270,8 +248,61 @@ def apply_candidate(root: Path, task: TaskSpec, candidate_source: str) -> None:
     if function is None or violations:
         detail = "; ".join(item.message for item in violations)
         raise FixtureError(detail or "invalid candidate")
-    path = root / task.provenance.source_path
-    path.write_text(replace_function(path.read_text(), task.function_name, function))
+    primary = root / task.provenance.source_path
+    paths = (
+        target_paths(root, profile, task.function_name, primary)
+        if profile is not None
+        else {primary}
+    )
+    replaced = False
+    for path in sorted(paths):
+        source = path.read_text()
+        spans = find_function_spans(source, task.function_name)
+        if not spans:
+            continue
+        for span in reversed(spans):
+            source = source[: span.start] + function.rstrip() + source[span.end :]
+        path.write_text(source)
+        replaced = True
+    if not replaced:
+        raise FixtureError(f"function definition not found: {task.function_name}")
+
+
+def target_paths(
+    root: Path,
+    profile: ProjectProfile,
+    function_name: str,
+    primary: Path,
+) -> set[Path]:
+    """Find source files containing a target definition or textual reference."""
+    directories = [
+        root / value
+        for value in profile.source_roots
+        if (root / value).is_dir()
+    ]
+    if shutil.which("rg") and directories:
+        command = ["rg", "--files-with-matches", "--fixed-strings"]
+        for suffix in profile.allowed_source_suffixes:
+            command.extend(("--glob", f"*{suffix}"))
+        command.extend((function_name, *(str(path) for path in directories)))
+        result = subprocess.run(command, cwd=root, capture_output=True, text=True)
+        if result.returncode in {0, 1}:
+            return {
+                primary,
+                *(
+                    Path(line) if Path(line).is_absolute() else root / line
+                    for line in result.stdout.splitlines()
+                    if line
+                ),
+            }
+
+    paths = {primary}
+    for directory in directories:
+        for suffix in profile.allowed_source_suffixes:
+            for path in directory.rglob(f"*{suffix}"):
+                if function_name in path.read_text(errors="replace"):
+                    paths.add(path)
+    return paths
 
 
 def isolate_objdiff_config(root: Path, profile: ProjectProfile, task: TaskSpec) -> None:
@@ -306,7 +337,7 @@ def build_verification_archive(
     with tempfile.TemporaryDirectory(prefix="decomp-private-fixture-") as raw_tmp:
         root = Path(raw_tmp)
         materialize_archive(bundle.archive, root)
-        apply_candidate(root, task, candidate_source)
+        apply_candidate(root, task, candidate_source, profile=profile)
         if task.build is None:
             raise FixtureError("task has no build profile")
         reference = root / task.build.target_object

@@ -250,7 +250,7 @@ class PrebuiltVerifier:
         candidate: str,
         started: float,
     ) -> VerificationResult:
-        apply_candidate(root, task, candidate)
+        apply_candidate(root, task, candidate, profile=self.profile)
         result = self._compile(root, task)
         if result.returncode != 0:
             return VerificationResult(

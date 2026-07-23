@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from decomp.rl.episodes import load_episode
-from decomp.rl.fixtures import FixtureBuilder
+from decomp.rl.fixtures import FixtureBuilder, apply_candidate
 from decomp.rl.models import ProjectProfile, TaskStatus
 from decomp.rl.provenance import ProvenanceResolver
 
@@ -117,6 +117,20 @@ class ProvenanceFixtureTests(unittest.TestCase):
         self.assertNotIn("target exact duplicate", duplicate)
         self.assertIn("void target(int x)", duplicate)
         self.assertIn("decomp_rl_relocation_probe();", duplicate)
+        apply_candidate(
+            destination,
+            task,
+            task.gold_source or "",
+            profile=self.profile,
+        )
+        self.assertIn(
+            "if (x) return;",
+            (destination / "src/unit.c").read_text(),
+        )
+        self.assertIn(
+            "if (x) return;",
+            (destination / "src/duplicate.c").read_text(),
+        )
         self.assertFalse((destination / ".git").exists())
         self.assertFalse((destination / "episodes").exists())
         self.assertFalse((destination / "expected").exists())

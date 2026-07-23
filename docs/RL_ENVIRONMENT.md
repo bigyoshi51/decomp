@@ -170,7 +170,10 @@ retry using the pinned source definition; that replacement is retained only
 when the compiler and exact-byte gate pass, and its provenance confidence is
 promoted to `verified`. Duplicate definitions use a relocation-bearing redacted
 scaffold so donor-object splice recipes remain runnable without exposing gold
-C. Use the audited manifest in release/training configs.
+C. Trusted verification reinserts the submitted candidate into every redacted
+definition, which lets donor-object and editable-source files differ without
+either leaking a solved duplicate or scoring the scaffold. Use the audited
+manifest in release/training configs.
 During quarantine cleanup, pass one or more repeatable
 `--episode episodes/<name>.json` arguments to audit only selected rows.
 
