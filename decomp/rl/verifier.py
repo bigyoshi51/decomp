@@ -469,12 +469,13 @@ def extract_function_bytes(object_data: bytes, function_name: str) -> bytes | No
 
 
 def clip_elf_symbol_ranges(path: Path) -> int:
-    """Clip stale ELF symbol sizes after an intentional section truncation."""
+    """Normalize stale ELF symbol ranges after an intentional section truncation."""
     data = bytearray(path.read_bytes())
     elf = ELFFile(io.BytesIO(data))
     byte_order = "<" if elf.little_endian else ">"
     size_offset = 16 if elf.elfclass == 64 else 8
     size_format = "Q" if elf.elfclass == 64 else "I"
+    section_index_offset = 6 if elf.elfclass == 64 else 14
     clipped = 0
     for symbol_table in elf.iter_sections():
         if not isinstance(symbol_table, SymbolTableSection):
@@ -484,15 +485,34 @@ def clip_elf_symbol_ranges(path: Path) -> int:
         for index, symbol in enumerate(symbol_table.iter_symbols()):
             section_index = symbol["st_shndx"]
             size = int(symbol["st_size"])
-            if not isinstance(section_index, int) or size <= 0:
+            if not isinstance(section_index, int):
                 continue
             section = elf.get_section(section_index)
             start = int(symbol["st_value"]) - int(section["sh_addr"])
             available = int(section["sh_size"]) - start
-            if start < 0 or available < 0 or size <= available:
+            entry_offset = table_offset + index * entry_size
+            if start < 0:
                 continue
-            offset = table_offset + index * entry_size + size_offset
-            struct.pack_into(byte_order + size_format, data, offset, available)
+            if available <= 0:
+                # objdiff rejects even a zero-length symbol whose start equals
+                # the end of its section. It has no bytes to score, so make
+                # only the disposable scoring-copy symbol undefined.
+                struct.pack_into(
+                    byte_order + "H",
+                    data,
+                    entry_offset + section_index_offset,
+                    0,
+                )
+                clipped += 1
+                continue
+            if size <= 0 or size <= available:
+                continue
+            struct.pack_into(
+                byte_order + size_format,
+                data,
+                entry_offset + size_offset,
+                available,
+            )
             clipped += 1
     if clipped:
         path.write_bytes(data)

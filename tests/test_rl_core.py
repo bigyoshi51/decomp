@@ -410,6 +410,59 @@ class VerifierLayoutTests(unittest.TestCase):
                 extract_function_bytes(output.read_bytes(), "target"), original
             )
 
+    @unittest.skipUnless(shutil.which("cc"), "host C compiler is unavailable")
+    def test_undefines_zero_length_symbol_at_section_end(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source = root / "candidate.c"
+            output = root / "candidate.o"
+            source.write_text("int target(void) { return 1; }\n")
+            subprocess.run(["cc", "-c", str(source), "-o", str(output)], check=True)
+
+            data = bytearray(output.read_bytes())
+            elf = ELFFile(io.BytesIO(data))
+            byte_order = "<" if elf.little_endian else ">"
+            value_offset = 8 if elf.elfclass == 64 else 4
+            value_format = "Q" if elf.elfclass == 64 else "I"
+            size_offset = 16 if elf.elfclass == 64 else 8
+            size_format = "Q" if elf.elfclass == 64 else "I"
+            text = elf.get_section_by_name(".text")
+            assert text is not None
+            for symbol_table in elf.iter_sections():
+                if not isinstance(symbol_table, SymbolTableSection):
+                    continue
+                for index, symbol in enumerate(symbol_table.iter_symbols()):
+                    if symbol.name != "target":
+                        continue
+                    entry = (
+                        int(symbol_table["sh_offset"])
+                        + index * int(symbol_table["sh_entsize"])
+                    )
+                    struct.pack_into(
+                        byte_order + value_format,
+                        data,
+                        entry + value_offset,
+                        int(text["sh_addr"]) + int(text["sh_size"]),
+                    )
+                    struct.pack_into(
+                        byte_order + size_format,
+                        data,
+                        entry + size_offset,
+                        0,
+                    )
+            output.write_bytes(data)
+
+            self.assertEqual(clip_elf_symbol_ranges(output), 1)
+            normalized = ELFFile(io.BytesIO(output.read_bytes()))
+            target = next(
+                symbol
+                for section in normalized.iter_sections()
+                if isinstance(section, SymbolTableSection)
+                for symbol in section.iter_symbols()
+                if symbol.name == "target"
+            )
+            self.assertEqual(target["st_shndx"], "SHN_UNDEF")
+
 
 def _task(index: int) -> TaskSpec:
     name = f"func_{index:08X}"
