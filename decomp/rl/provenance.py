@@ -18,6 +18,7 @@ from .source import (
     same_function,
 )
 from .splits import assembly_fingerprint, deterministic_split
+from .verifier import extract_function_bytes
 
 
 class ProvenanceResolver:
@@ -267,7 +268,9 @@ class ProvenanceResolver:
         solve_commit: str,
         target_object: str,
     ) -> str | None:
-        if self.git.exists(solve_commit, target_object):
+        if self._reference_target_status(
+            solve_commit, target_object, episode.function_name
+        ):
             return solve_commit
         history = reversed(
             self.git.history(target_object, self.profile.default_revision)
@@ -281,9 +284,32 @@ class ProvenanceResolver:
                 if text is not None
                 else None
             )
-            if span is not None and same_function(span.text, episode.gold_source):
+            if (
+                span is not None
+                and same_function(span.text, episode.gold_source)
+                and self._reference_target_status(
+                    commit, target_object, episode.function_name
+                )
+            ):
                 return commit
         return None
+
+    @functools.lru_cache(maxsize=8192)
+    def _reference_target_status(
+        self,
+        revision: str,
+        target_object: str,
+        function_name: str,
+    ) -> bool | None:
+        """Return whether an existing ELF reference contains the target symbol."""
+        data = self.git.show_bytes(revision, target_object)
+        if data is None:
+            return None
+        # Other project profiles may use a non-ELF reference format. Its
+        # verifier owns validation; the historical N64 objects are ELF.
+        if not data.startswith(b"\x7fELF"):
+            return True
+        return extract_function_bytes(data, function_name) is not None
 
     def _source_candidates(
         self, episode: EpisodeRecord, episode_commit: str | None
@@ -313,6 +339,7 @@ class ProvenanceResolver:
     ) -> tuple[str | None, str | None, str, list[str]]:
         prefer_metadata = episode.schema == "canonical_v2"
         direct_revisions = (episode_commit,) if episode_commit else ()
+        invalid_direct_reference = False
         for revision in direct_revisions:
             text = self.git.show_text(revision, source_path)
             span = (
@@ -322,16 +349,20 @@ class ProvenanceResolver:
             )
             if span is None or not same_function(span.text, episode.gold_source):
                 continue
-            if (
-                self._resolve_build(
-                    revision,
-                    source_path,
-                    metadata,
-                    function_name=episode.function_name,
-                    prefer_metadata=prefer_metadata,
-                )
-                is None
-            ):
+            build = self._resolve_build(
+                revision,
+                source_path,
+                metadata,
+                function_name=episode.function_name,
+                prefer_metadata=prefer_metadata,
+            )
+            if build is None:
+                continue
+            reference_status = self._reference_target_status(
+                revision, build.target_object, episode.function_name
+            )
+            if reference_status is False:
+                invalid_direct_reference = True
                 continue
             starter_source = None
             parent = self.git.parent(revision)
@@ -354,6 +385,30 @@ class ProvenanceResolver:
             else:
                 evidence.append("no prior C body; fixture synthesizes a scaffold")
             return revision, starter_source, "high", evidence
+
+        # Some episode commits precede a follow-up expected-object refresh or
+        # non-matching build-recipe fix. If the checked-in reference is an ELF
+        # but omits the target entirely, use the pinned compatible project
+        # context rather than auditing against that known-broken intermediate.
+        if invalid_direct_reference:
+            pinned_replay = self._pinned_replay_context(
+                episode,
+                source_path,
+                metadata,
+                prefer_metadata=prefer_metadata,
+            )
+            if pinned_replay is not None:
+                revision, starter, confidence, evidence = pinned_replay
+                return (
+                    revision,
+                    starter,
+                    confidence,
+                    [
+                        "episode revision's reference ELF omitted the target "
+                        "symbol",
+                        *evidence,
+                    ],
+                )
 
         # Episodes are sometimes committed before their source/build-unit landing
         # commit. Search the pinned project history, then use exact C equality to
@@ -502,7 +557,14 @@ class ProvenanceResolver:
             function_name=episode.function_name,
             prefer_metadata=prefer_metadata,
         )
-        if pinned_span is None or gold_span is None or build is None:
+        if (
+            pinned_span is None
+            or gold_span is None
+            or build is None
+            or not self._reference_target_status(
+                revision, build.target_object, episode.function_name
+            )
+        ):
             return None
         evidence = [
             "pinned source provides a compatible replay build context; "

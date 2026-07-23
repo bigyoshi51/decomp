@@ -174,6 +174,11 @@ C. Trusted verification reinserts the submitted candidate into every redacted
 definition, which lets donor-object and editable-source files differ without
 either leaking a solved duplicate or scoring the scaffold. Use the audited
 manifest in release/training configs.
+Profiles can also map `metadata.fixture_builtin_support_files` destinations to
+immutable helpers shipped in `decomp/rl/support/`. The 1080 profile uses a
+verifier-only `.text` clip helper: exact candidates retain production symbol
+sizes, while shorter starter/partial candidates are allowed to compile and
+receive a non-exact score instead of failing the build-layout safety check.
 During quarantine cleanup, pass one or more repeatable
 `--episode episodes/<name>.json` arguments to audit only selected rows.
 

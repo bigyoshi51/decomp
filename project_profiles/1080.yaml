@@ -44,3 +44,5 @@ metadata:
     - objdiff-cli
   fixture_support_files:
     - scripts/truncate-elf-text.py
+  fixture_builtin_support_files:
+    scripts/clip-elf-text-keep-align.py: clip_elf_text_keep_align.py

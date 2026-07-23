@@ -110,6 +110,34 @@ class FixtureBuilder:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
 
+        builtins = self.profile.metadata.get("fixture_builtin_support_files", {})
+        if not isinstance(builtins, dict):
+            raise FixtureError(
+                "metadata.fixture_builtin_support_files must be a mapping"
+            )
+        support_root = Path(__file__).with_name("support")
+        for raw_destination, raw_source in builtins.items():
+            destination_path = Path(str(raw_destination))
+            source_path = Path(str(raw_source))
+            if (
+                destination_path.is_absolute()
+                or ".." in destination_path.parts
+                or source_path.is_absolute()
+                or ".." in source_path.parts
+            ):
+                raise FixtureError(
+                    "invalid built-in fixture support mapping: "
+                    f"{raw_destination}: {raw_source}"
+                )
+            source = support_root / source_path
+            if not source.is_file():
+                raise FixtureError(
+                    f"built-in fixture support file is absent: {raw_source}"
+                )
+            destination = root / destination_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.read_bytes())
+
     def materialize(self, task: TaskSpec, destination: Path) -> FixtureBundle:
         if destination.exists() and any(destination.iterdir()):
             raise FixtureError(f"destination is not empty: {destination}")

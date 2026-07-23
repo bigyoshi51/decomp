@@ -89,7 +89,14 @@ class ProvenanceFixtureTests(unittest.TestCase):
             project_id="fixture",
             repo_url="https://example.invalid/fixture.git",
             default_revision=self.head,
-            metadata={"fixture_support_files": ["scripts/build-helper.py"]},
+            metadata={
+                "fixture_support_files": ["scripts/build-helper.py"],
+                "fixture_builtin_support_files": {
+                    "scripts/clip-elf-text-keep-align.py": (
+                        "clip_elf_text_keep_align.py"
+                    )
+                },
+            },
         )
 
     def tearDown(self) -> None:
@@ -138,7 +145,42 @@ class ProvenanceFixtureTests(unittest.TestCase):
             (destination / "scripts/build-helper.py").read_text(),
             "pinned verifier helper\n",
         )
+        self.assertIn(
+            "verifier candidate .text is shorter",
+            (
+                destination / "scripts/clip-elf-text-keep-align.py"
+            ).read_text(),
+        )
         self.assertEqual(bundle.reference_object, b"reference-object")
+
+    def test_replays_from_pinned_context_when_episode_elf_omits_target(self) -> None:
+        episode_path = self.root / "episodes/target.json"
+        episode_data = json.loads(episode_path.read_text())
+        episode_data["metadata"]["reference_generation"] = "pending"
+        episode_path.write_text(json.dumps(episode_data))
+        (self.root / "expected/src/unit.c.o").write_bytes(b"\x7fELF stale")
+        self._commit("record episode before expected refresh")
+
+        (self.root / "expected/src/unit.c.o").write_bytes(b"refreshed-reference")
+        self._commit("refresh expected object")
+        pinned = self._git("rev-parse", "HEAD").strip()
+        profile = ProjectProfile(
+            project_id="fixture",
+            repo_url="https://example.invalid/fixture.git",
+            default_revision=pinned,
+            metadata={"allow_pinned_replay_fallback": True},
+        )
+
+        episode = load_episode(episode_path, project_root=self.root)
+        task = ProvenanceResolver(self.root, profile).resolve(episode)
+
+        self.assertEqual(task.status, TaskStatus.READY)
+        self.assertEqual(task.provenance.solve_commit, pinned)
+        self.assertEqual(task.provenance.reference_commit, pinned)
+        self.assertIn(
+            "episode revision's reference ELF omitted the target symbol",
+            task.provenance.evidence,
+        )
 
     def _commit(self, message: str) -> None:
         self._git("add", ".")
