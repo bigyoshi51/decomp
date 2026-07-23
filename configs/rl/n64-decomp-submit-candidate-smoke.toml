@@ -59,7 +59,7 @@ max_completion_tokens = 512
 [[orchestrator.train.env]]
 name = "n64-decomp-submit-candidate-smoke"
 pool = { type = "static", num_workers = 1 }
-env.taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "train", mode = "submit_candidate", max_tasks = 1 }
+env.taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.release.jsonl", split = "train", mode = "submit_candidate", max_tasks = 1 }
 env.agent.max_turns = 2
 env.agent.max_output_tokens = 1024
 env.agent.timeout = { setup = 300, rollout = 600, scoring = 60 }

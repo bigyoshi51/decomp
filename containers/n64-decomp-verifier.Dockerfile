@@ -30,10 +30,11 @@ RUN git clone https://github.com/decompals/ido-static-recomp.git \
     && make -C /opt/ido-static-recomp -j"$(nproc)" RELEASE=1 VERSION=5.3 \
     && rm -rf /opt/ido-static-recomp/.git
 
-RUN case "${TARGETARCH}" in \
-      amd64) objdiff_arch=x86_64 ;; \
-      arm64) objdiff_arch=aarch64 ;; \
-      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+RUN detected_arch="${TARGETARCH:-$(uname -m)}" \
+    && case "${detected_arch}" in \
+      amd64|x86_64) objdiff_arch=x86_64 ;; \
+      arm64|aarch64) objdiff_arch=aarch64 ;; \
+      *) echo "unsupported architecture=${detected_arch}" >&2; exit 1 ;; \
     esac \
     && curl -fL \
       "https://github.com/encounter/objdiff/releases/download/v${OBJDIFF_VERSION}/objdiff-cli-linux-${objdiff_arch}" \
@@ -46,6 +47,8 @@ COPY projects/1080-decomp/tools/asm-processor /opt/asm-processor
 
 COPY pyproject.toml README.md /opt/decomp/
 COPY decomp /opt/decomp/decomp
-RUN uv pip install --system /opt/decomp
+ENV PATH="/opt/venv/bin:${PATH}"
+RUN uv venv /opt/venv \
+    && uv pip install --python /opt/venv/bin/python /opt/decomp
 
 WORKDIR /workspace

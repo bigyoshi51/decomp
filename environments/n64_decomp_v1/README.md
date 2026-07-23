@@ -22,8 +22,8 @@ uv run decomp-rl manifest \
   --output exports/1080-v1/tasks.jsonl
 ```
 
-Then run the documented release build audit and use its
-`exports/1080-v1/tasks.audited.jsonl` output for eval or training.
+Then run the documented release build audit and coverage-checked merge, and use
+its frozen `exports/1080-v1/tasks.release.jsonl` output for eval or training.
 
 See `docs/RL_ENVIRONMENT.md` for image setup, validation, evaluation, and
 Prime-RL commands, including the checked-in one-step single-GPU smoke config.

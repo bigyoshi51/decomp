@@ -8,7 +8,7 @@ max_concurrent = 1
 id = "n64-decomp-v1"
 project_root = "projects/1080-decomp"
 profile = "project_profiles/1080.yaml"
-manifest = "exports/1080-v1/tasks.audited.jsonl"
+manifest = "exports/1080-v1/tasks.release.jsonl"
 split = "test"
 mode = "submit_candidate"
 

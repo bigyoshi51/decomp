@@ -67,7 +67,7 @@ retained with a quarantine status and reason instead of being silently
 dropped.
 
 At the pinned 1080 revision, the provenance pass covers all 2,239 episode
-files: 2,238 are ready and one is `needs_provenance`. The remaining provenance
+files: 2,238 are ready and one is `unsupported_build_recipe`. That explicit
 row, `func_800081D0`, is a linker-defined alternate entry in the middle of
 `func_8000817C`, not an independent C definition; it is intentionally outside
 the current single-function task model. This is the discovery denominator, not
@@ -147,13 +147,19 @@ uv run decomp-rl merge-audits \
   --expected exports/1080-v1/tasks.jsonl \
   --input exports/1080-v1/audit-shard-0.jsonl \
   --input exports/1080-v1/audit-shard-1.jsonl \
-  --output exports/1080-v1/tasks.audited.jsonl
+  --output exports/1080-v1/tasks.release.jsonl
 ```
 
 The merge rejects duplicate, stale, unexpected, and missing task IDs. It also
 rejects a `ready` row without a measured starter baseline, proving that copying
 the discovery manifest cannot masquerade as a completed audit. Re-run a
 quarantined class with `--resume --retry-status <status>`.
+
+The frozen 1080-v1 audit contains 2,060 ready rows, 112
+`gold_not_reproducible` quarantines, 66 `starter_already_exact` exclusions, and
+one explicit `unsupported_build_recipe` entry. The complete gold-free release
+manifest SHA-256 is
+`df82e0684a7380cd328e741b656c575151f1a5d4972c341f2c6d19d24d6d33c5`.
 
 The audit records the starter's measured `initial_match_percent`, requires the
 gold to reach exact, and stops immediately on verifier infrastructure failure.

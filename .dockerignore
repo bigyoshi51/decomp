@@ -5,9 +5,14 @@
 exports
 references
 roms
+environments
+dist
 
 # The 1080 verifier image needs only the project's pinned asm-processor copy.
-projects/**
+projects/*
 !projects/1080-decomp/
+projects/1080-decomp/*
 !projects/1080-decomp/tools/
+projects/1080-decomp/tools/*
+!projects/1080-decomp/tools/asm-processor/
 !projects/1080-decomp/tools/asm-processor/**
