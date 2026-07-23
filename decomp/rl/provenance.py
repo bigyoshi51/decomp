@@ -47,6 +47,31 @@ class ProvenanceResolver:
 
         episode, recovery_evidence = self._recover_malformed_gold(episode)
 
+        unsupported_reason = self._unsupported_entry_point_reason(
+            episode.function_name
+        )
+        if unsupported_reason is not None:
+            raw_source = episode.metadata.get("source_path")
+            source_path = (
+                _project_relative(raw_source)
+                if isinstance(raw_source, str)
+                else None
+            )
+            return self._unresolved(
+                episode,
+                task_id=task_id,
+                split=split,
+                fingerprint=fingerprint,
+                episode_commit=episode_commit,
+                source_path=source_path,
+                status=TaskStatus.UNSUPPORTED_BUILD_RECIPE,
+                reason=unsupported_reason,
+                evidence=[
+                    "profile identifies the episode symbol as a non-standalone "
+                    "entry point"
+                ],
+            )
+
         candidates = self._source_candidates(episode, episode_commit)
         if not candidates:
             return self._unresolved(
@@ -329,6 +354,13 @@ class ProvenanceResolver:
             if matching:
                 indexed = matching
         return list(dict.fromkeys((*preferred, *sorted(indexed))))
+
+    def _unsupported_entry_point_reason(self, function_name: str) -> str | None:
+        values = self.profile.metadata.get("unsupported_entry_points", {})
+        if not isinstance(values, dict):
+            return None
+        reason = values.get(function_name)
+        return str(reason) if reason else None
 
     def _find_solve_commit(
         self,

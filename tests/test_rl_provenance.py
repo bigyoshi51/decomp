@@ -182,6 +182,30 @@ class ProvenanceFixtureTests(unittest.TestCase):
             task.provenance.evidence,
         )
 
+    def test_classifies_profile_known_mid_function_entry_as_unsupported(self) -> None:
+        profile = ProjectProfile(
+            project_id="fixture",
+            repo_url="https://example.invalid/fixture.git",
+            default_revision=self.head,
+            metadata={
+                "unsupported_entry_points": {
+                    "target": (
+                        "mid-function linker entry into owner + 0x10; "
+                        "no independent C body"
+                    )
+                }
+            },
+        )
+        episode = load_episode(
+            self.root / "episodes/target.json", project_root=self.root
+        )
+
+        task = ProvenanceResolver(self.root, profile).resolve(episode)
+
+        self.assertEqual(task.status, TaskStatus.UNSUPPORTED_BUILD_RECIPE)
+        self.assertIn("mid-function linker entry", task.reason or "")
+        self.assertEqual(task.provenance.source_path, "src/unit.c")
+
     def _commit(self, message: str) -> None:
         self._git("add", ".")
         self._git("commit", "-qm", message)

@@ -46,3 +46,7 @@ metadata:
     - scripts/truncate-elf-text.py
   fixture_builtin_support_files:
     scripts/clip-elf-text-keep-align.py: clip_elf_text_keep_align.py
+  unsupported_entry_points:
+    func_800081D0: >-
+      mid-function linker entry at func_8000817C + 0x54; it reuses the owning
+      function's frame and has no independent C function body to edit or score

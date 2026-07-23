@@ -179,6 +179,10 @@ immutable helpers shipped in `decomp/rl/support/`. The 1080 profile uses a
 verifier-only `.text` clip helper: exact candidates retain production symbol
 sizes, while shorter starter/partial candidates are allowed to compile and
 receive a non-exact score instead of failing the build-layout safety check.
+`metadata.unsupported_entry_points` explicitly quarantines linker-created
+mid-function entries that reuse an owning function's frame and therefore have
+no independent C body. These are unsupported single-function tasks, not
+missing provenance.
 During quarantine cleanup, pass one or more repeatable
 `--episode episodes/<name>.json` arguments to audit only selected rows.
 
