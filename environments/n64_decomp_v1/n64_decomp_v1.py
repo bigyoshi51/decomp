@@ -70,6 +70,11 @@ class N64DecompTaskConfig(vf.TaskConfig):
 
 
 class SubmitCandidateTools(vf.Toolset[SubmitCandidateConfig, N64DecompState]):
+    # This task exposes one purpose-built API, and its prompts name that public
+    # API directly.  Avoid Verifiers' default class-name prefix so providers see
+    # `submit_candidate`, not `submit_candidate_tools_submit_candidate`.
+    TOOL_PREFIX = None
+
     def __init__(self, config: SubmitCandidateConfig) -> None:
         super().__init__(config)
         self.task_data: N64DecompTaskData | None = None
@@ -99,20 +104,25 @@ class SubmitCandidateTools(vf.Toolset[SubmitCandidateConfig, N64DecompState]):
             objdiff_command=self.config.objdiff_command,
             toolchain_source=self.config.toolchain_source,
         )
+        reward = float(result["reward"])
+        match_percent = float(result["match_percent"])
+        exact = bool(result["exact"])
         self.state.attempts += 1
-        if result.reward > self.state.best_reward or result.exact:
-            self.state.best_reward = result.reward
-            self.state.best_match_percent = result.match_percent
-            self.state.best_exact = result.exact
+        if match_percent > self.state.best_match_percent or exact:
+            self.state.best_match_percent = match_percent
+        if reward > self.state.best_reward or exact:
+            self.state.best_reward = reward
+        if exact:
+            self.state.best_exact = exact
         return {
-            "compiled": result.compiled,
-            "exact": result.exact,
-            "match_percent": result.match_percent,
-            "reward": result.reward,
+            "compiled": bool(result["compiled"]),
+            "exact": exact,
+            "match_percent": match_percent,
+            "reward": reward,
             "best_match_percent": self.state.best_match_percent,
             "best_reward": self.state.best_reward,
-            "failure_kind": result.failure_kind,
-            "diagnostic": (result.compile_stderr or result.diff_summary)[-4000:],
+            "failure_kind": result["failure_kind"],
+            "diagnostic": str(result["diagnostic"])[-4000:],
         }
 
 

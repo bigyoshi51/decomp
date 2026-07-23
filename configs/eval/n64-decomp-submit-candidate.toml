@@ -22,3 +22,5 @@ runtime = { type = "docker" }
 
 [sampling]
 max_tokens = 8192
+seed = 1
+tool_choice = "required"
