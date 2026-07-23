@@ -16,6 +16,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 ### large-body matching
 - [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
+- [4-case switch = COMPARE CHAIN below IDO's 5-label jumptable threshold; empty trailing `case N: break;` forces the table; `goto`-only case arm = block placed after post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h)](#empty-trailing-case-jumptable-threshold-76f0) — _sltiu N+1 + local-rodata-table words are the only residual; pairs with external-uso-jumptable-cap. Also: m2c `func(0,X)` with target `lui/addiu a0` pair = `func(&D_00000000, X)`._
 - [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
 - [Preheader lui/addiu NESTING (luiP,luiE,addiuE,addiuP) = while(0) dead-bit on the END constant + for-comma-init; x4 unroller fires only on indexed exact-trip `!=` form, `p<e` sltu form suppresses it; distinct extern per loop for per-loop base re-materialization (1FA20 68.9->100, 2026-07-18 agent-h)](#preheader-pair-nesting-unroll-trigger-1fa20) — _while(0) dead expr claims an early ucode bit for an ADDRESS-CONSTANT web (colors end v0 while cursor emits first); two plain defs can only give p,e,p,e or e,p,e,p; pointer `p != sym+K` bound does NOT unroll - use `for (i=0; i!=N; i++) arr[i+K]`._
 - [W65-70 game_libs trio (2026-07-18 agent-h): end-sentinel/slot-ptr DUAL-USE variable (24F30 frame-exact); param-as-cursor + post-inc idiom in BOTH arms tips uopt into s0 promotion where a separate local copy-props to a0+call-spill (1EE78); cached-count stale-v0 skip path kills join-beq + dup cond-load (1FAE8)](#w65-70-game-libs-trio-24f30-1ee78-1fae8) — _Also: K&R u16 reg arg = home store + re-mask per int-context use (the "redundant" andi); u16 stack arg = lhu slot+2; distinct placeholder externs for a loop bound LOSE the non-zero-trip proof (zero-trip guard + re-rotation, worse); `while(0){p+=1}` multi-def is fully DCE'd (inert as ref-boost/anti-remat); base with only %lo-foldable lw uses remats per-use (never s-reg) while a sibling address local colors an s-reg iff it has a non-foldable use (call arg/copy)._
@@ -21930,3 +21931,28 @@ f4,f2,f6 vs target f4,f6,f8; sp98/sp94 land in f12/f14 vs f2/f12) plus the
 target's SPLIT bases v0=&D+0xA0 / t4=&D+0 (ours CSEs to one &D base;
 per-site extern aliases would need a defined D_000000A0 symbol for the
 baked-reloc bytes to survive).
+
+
+## 4-case C switch lowers to a COMPARE CHAIN — add an EMPTY TRAILING CASE to cross IDO's jumptable threshold; a `goto`-only case arm places its block AFTER the post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h) <a name="empty-trailing-case-jumptable-threshold-76f0"></a>
+
+Target shows `sltiu at,X,4; ... lw tN,OFF(at); jr tN` (a 4-entry jumptable) but
+your 4-case `switch` (cases 0-3, real bodies) emits a beq/li compare CHAIN —
+IDO 7.1 -O2's jumptable threshold is 5 labels, not 4 (verified twice in one fn:
+switch2 AND switch4 of gl_func_000076F0 both chained at 4 cases while the
+6-label switch1 tabled). FIX: add `case N: break;` (empty trailing case, same
+semantics as default-fallthrough) to reach 5 labels — the table appears and the
+whole arm layout aligns. Residual: `sltiu at,X,5` (1 word) + the local .rodata
+table base/offset words vs the target's external-USO table (structural cap,
+see external-uso-jumptable-cap) — worth it: shape alignment moved 76F0
+80.1->88.5 on two switches.
+
+Companion layout lever from the same fn: when the target emits one case's body
+AFTER the post-switch fallthrough code (here: switch2's case-3 "advance" arm
+sits between case-1's tail `sw 2,0x4E0; b exit` and the next switch1 arm),
+spell that case as `case 3: goto advance_a;` and place the labeled block as a
+labeled statement AFTER the enclosing case's `break;` (a label between two
+cases of the OUTER switch is legal C). IDO folds the goto into the jumptable
+entry and emits the block exactly where the source puts it. Also re-confirmed
+here: every `func(0, X)` m2c guess whose target sets a0 via `lui a0,0x0;
+addiu a0,a0,0` is really `func((char*)&D_00000000, X)` (addiu-form = address,
+never literal 0) — 8 call sites in one fn.
