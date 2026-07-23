@@ -15,10 +15,17 @@ from decomp.rl.audit import (
     prepare_resume,
     select_shard,
 )
+from decomp.rl.cli import _audit_task
 from decomp.rl.episodes import EpisodeError, load_episode
 from decomp.rl.fixtures import FixtureBundle
 from decomp.rl.manifest import read_manifest, write_manifest
-from decomp.rl.models import ProjectProfile, Provenance, TaskSpec, TaskStatus
+from decomp.rl.models import (
+    ProjectProfile,
+    Provenance,
+    TaskSpec,
+    TaskStatus,
+    VerificationResult,
+)
 from decomp.rl.policy import validate_candidate_source
 from decomp.rl.reward import improvement_reward
 from decomp.rl.source import (
@@ -271,6 +278,48 @@ class AuditStateTests(unittest.TestCase):
             write_manifest(tasks, output)
             self.assertEqual(read_manifest(output), tasks)
             self.assertEqual(list(root.glob(".tasks.jsonl.*.tmp")), [])
+
+    def test_audit_prepares_fixture_once_for_gold_and_starter(self) -> None:
+        task = replace(
+            _task(1),
+            gold_source="void func_00000001(void) { exact(); }\n",
+            starter_source="void func_00000001(void) {}\n",
+        )
+
+        class Prepared:
+            def verify(self, candidate_task, source):
+                exact = source == candidate_task.gold_source
+                return VerificationResult(
+                    compiled=True,
+                    exact=exact,
+                    match_percent=100.0 if exact else 12.5,
+                    baseline_percent=0.0,
+                    reward=1.0 if exact else 0.0,
+                )
+
+        class Fixtures:
+            @staticmethod
+            def starter_candidate(candidate_task):
+                return candidate_task.starter_source
+
+        class Verifier:
+            profile = ProjectProfile(
+                project_id="fixture",
+                repo_url="https://example.invalid/fixture.git",
+                default_revision="deadbeef",
+            )
+            fixtures = Fixtures()
+            prepare_calls = 0
+
+            def prepare(self, candidate_task):
+                self.prepare_calls += 1
+                return Prepared()
+
+        verifier = Verifier()
+        audited = _audit_task(task, verifier)
+        self.assertEqual(verifier.prepare_calls, 1)
+        self.assertEqual(audited.status, TaskStatus.READY)
+        self.assertEqual(audited.initial_match_percent, 12.5)
 
 
 class VerifierLayoutTests(unittest.TestCase):

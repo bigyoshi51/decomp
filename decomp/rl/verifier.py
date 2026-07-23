@@ -48,9 +48,14 @@ class CompilerVerifier:
 
     def verify(self, task: TaskSpec, candidate_source: str) -> VerificationResult:
         try:
-            bundle = self.fixtures.build(task)
+            verifier = self.prepare(task)
         except (FixtureError, OSError, subprocess.SubprocessError) as exc:
             return _infrastructure_failure(task, str(exc))
+        return verifier.verify(task, candidate_source)
+
+    def prepare(self, task: TaskSpec) -> PrebuiltVerifier:
+        """Build one immutable fixture bundle for repeated candidate checks."""
+        bundle = self.fixtures.build(task)
         toolchain = self.toolchain_source
         if toolchain is None:
             candidates = (
@@ -64,7 +69,7 @@ class CompilerVerifier:
             objdiff_command=self.objdiff_command,
             timeout_seconds=self.timeout_seconds,
             toolchain_source=toolchain,
-        ).verify(task, candidate_source)
+        )
 
 
 class PrebuiltVerifier:

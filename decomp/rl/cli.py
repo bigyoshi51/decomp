@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -15,7 +16,7 @@ from .audit import (
     select_shard,
 )
 from .episodes import load_episode
-from .fixtures import FixtureBuilder
+from .fixtures import FixtureBuilder, FixtureError
 from .manifest import (
     discover_tasks,
     read_manifest,
@@ -276,7 +277,13 @@ def _audit_task(task, verifier: CompilerVerifier):
             status=TaskStatus.INVALID_EPISODE,
             reason="ready task has no gold source during build audit",
         )
-    gold = verifier.verify(task, task.gold_source)
+    try:
+        task_verifier = verifier.prepare(task)
+    except (FixtureError, OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            f"verifier infrastructure failed for {task.task_id}: {exc}"
+        ) from exc
+    gold = task_verifier.verify(task, task.gold_source)
     if gold.failure_kind == "infrastructure":
         raise RuntimeError(
             f"verifier infrastructure failed for {task.task_id}: {gold.compile_stderr}"
@@ -286,7 +293,7 @@ def _audit_task(task, verifier: CompilerVerifier):
     ):
         recovered_gold = verifier.fixtures.source_candidate(task)
         if recovered_gold and not same_function(recovered_gold, task.gold_source):
-            recovered = verifier.verify(task, recovered_gold)
+            recovered = task_verifier.verify(task, recovered_gold)
             if recovered.failure_kind == "infrastructure":
                 raise RuntimeError(
                     f"verifier infrastructure failed for {task.task_id}: "
@@ -330,7 +337,7 @@ def _audit_task(task, verifier: CompilerVerifier):
             ),
         )
     starter_source = verifier.fixtures.starter_candidate(task)
-    starter = verifier.verify(task, starter_source)
+    starter = task_verifier.verify(task, starter_source)
     if starter.failure_kind == "infrastructure":
         raise RuntimeError(
             f"verifier infrastructure failed for {task.task_id}: "
@@ -342,7 +349,7 @@ def _audit_task(task, verifier: CompilerVerifier):
         except ValueError:
             fallback_source = starter_source
         if fallback_source != starter_source:
-            fallback = verifier.verify(task, fallback_source)
+            fallback = task_verifier.verify(task, fallback_source)
             if fallback.failure_kind == "infrastructure":
                 raise RuntimeError(
                     f"verifier infrastructure failed for {task.task_id}: "
