@@ -68,9 +68,7 @@ class FixtureBuilder:
         with tempfile.TemporaryDirectory(prefix="decomp-fixture-") as raw_tmp:
             root = Path(raw_tmp)
             _extract_tar(archive, root)
-            self._redact_target(root, task)
-            self._remove_hidden_paths(root)
-            self._write_task_info(root, task)
+            self.redact_tree(root, task)
             output = _pack_tar(root)
 
         return FixtureBundle(
@@ -79,6 +77,18 @@ class FixtureBuilder:
             reference_object=reference,
             reference_sha256=hashlib.sha256(reference).hexdigest(),
         )
+
+    def redact_tree(
+        self,
+        root: Path,
+        task: TaskSpec,
+        *,
+        preserve_hidden: tuple[str, ...] = (),
+    ) -> None:
+        """Redact a checked-out tree using the same rules as a public fixture."""
+        self._redact_target(root, task)
+        self._remove_hidden_paths(root, preserve=preserve_hidden)
+        self._write_task_info(root, task)
 
     def materialize(self, task: TaskSpec, destination: Path) -> FixtureBundle:
         if destination.exists() and any(destination.iterdir()):
@@ -200,8 +210,13 @@ class FixtureBuilder:
                         paths.add(path)
         return paths
 
-    def _remove_hidden_paths(self, root: Path) -> None:
+    def _remove_hidden_paths(
+        self, root: Path, *, preserve: tuple[str, ...] = ()
+    ) -> None:
+        preserved = set(preserve)
         for value in tuple(dict.fromkeys((*self.profile.hidden_paths, "expected"))):
+            if value in preserved:
+                continue
             target = root / value
             if target.is_dir() and not target.is_symlink():
                 shutil.rmtree(target)

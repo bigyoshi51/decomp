@@ -120,6 +120,15 @@ checkpoint is an atomic file replacement, so interruption cannot leave a
 partially written JSON line. An existing output requires either `--resume` or
 the explicit destructive choice `--overwrite`.
 
+Each local audit worker owns a disposable shared Git checkout. It force-checks
+out the task's resolved historical revision, removes all prior build products,
+applies the same redaction/hidden-path rules as the public fixture, and then
+reuses that clean per-task tree for the trusted gold and starter compiles. This
+avoids expanding and recompressing the full historical repository for every
+candidate while preserving compiler flags, split units, reference objects, and
+fresh state between tasks. Runtime candidate verification still starts from an
+immutable redacted fixture archive.
+
 For independent workers or machines, add `--shard-count N --shard-index I` and
 give each shard a distinct output. Assignment is a stable hash of `task_id`, so
 it does not change when manifest order changes. Merge only after every shard

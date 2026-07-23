@@ -5,6 +5,7 @@ import concurrent.futures
 import json
 import subprocess
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,7 +28,11 @@ from .models import TaskStatus
 from .profile import load_project_profile
 from .provenance import ProvenanceResolver
 from .source import empty_function_body
-from .verifier import CompilerVerifier, missing_commands
+from .verifier import (
+    CompilerVerifier,
+    ReusableCheckoutCompilerVerifier,
+    missing_commands,
+)
 
 
 def main() -> None:
@@ -183,19 +188,40 @@ def main() -> None:
         except (AuditStateError, OSError, ValueError) as exc:
             parser.error(str(exc))
 
-        verifier = CompilerVerifier(
-            root,
-            profile,
-            objdiff_command=args.objdiff_command,
-            timeout_seconds=args.timeout,
-            toolchain_source=args.toolchain_source,
-        )
+        verifier_kwargs = {
+            "objdiff_command": args.objdiff_command,
+            "timeout_seconds": args.timeout,
+            "toolchain_source": args.toolchain_source,
+        }
+        audit_verifiers = []
         if args.workers == 1:
+            verifier = ReusableCheckoutCompilerVerifier(
+                root, profile, **verifier_kwargs
+            )
+            audit_verifiers.append(verifier)
             results = map(lambda task: _audit_task(task, verifier), pending)
             executor = None
         else:
+            worker_state = threading.local()
+            verifier_lock = threading.Lock()
+
+            def audit_in_worker(task):
+                verifier = getattr(worker_state, "verifier", None)
+                if verifier is None:
+                    verifier = ReusableCheckoutCompilerVerifier(
+                        root, profile, **verifier_kwargs
+                    )
+                    worker_state.verifier = verifier
+                    with verifier_lock:
+                        audit_verifiers.append(verifier)
+                return _audit_task(task, verifier)
+
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.workers)
-            results = executor.map(lambda task: _audit_task(task, verifier), pending)
+            futures = [executor.submit(audit_in_worker, task) for task in pending]
+            results = (
+                future.result()
+                for future in concurrent.futures.as_completed(futures)
+            )
         resumed = len(tasks) - len(pending)
         newly_audited = 0
         try:
@@ -220,6 +246,8 @@ def main() -> None:
         finally:
             if executor is not None:
                 executor.shutdown(cancel_futures=True)
+            for verifier in audit_verifiers:
+                verifier.close()
             write_manifest(
                 ordered_results(tasks, audited_by_id),
                 args.output,

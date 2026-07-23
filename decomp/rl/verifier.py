@@ -22,7 +22,13 @@ from .fixtures import (
     isolate_objdiff_config,
     materialize_archive,
 )
-from .models import ProjectProfile, TaskSpec, VerificationResult
+from .models import (
+    PolicyViolation,
+    ProjectProfile,
+    TaskSpec,
+    TaskStatus,
+    VerificationResult,
+)
 from .policy import validate_candidate_source
 from .reward import improvement_reward
 
@@ -72,6 +78,129 @@ class CompilerVerifier:
         )
 
 
+class ReusableCheckoutCompilerVerifier:
+    """Audit many tasks in one disposable checkout instead of re-archiving each."""
+
+    def __init__(
+        self,
+        project_root: Path,
+        profile: ProjectProfile,
+        *,
+        objdiff_command: str = "objdiff-cli",
+        timeout_seconds: int = 180,
+        toolchain_source: Path | None = None,
+    ) -> None:
+        self.project_root = project_root.resolve()
+        self.profile = profile
+        self.fixtures = FixtureBuilder(self.project_root, profile)
+        self.objdiff_command = objdiff_command
+        self.timeout_seconds = timeout_seconds
+        self.toolchain_source = toolchain_source
+        self._temporary = tempfile.TemporaryDirectory(
+            prefix="decomp-audit-checkout-"
+        )
+        self.checkout_root = (
+            Path(self._temporary.name) / "projects" / self.profile.project_id
+        )
+        self.checkout_root.parent.mkdir(parents=True)
+        result = subprocess.run(
+            [
+                "git",
+                "clone",
+                "--shared",
+                "--no-checkout",
+                "--quiet",
+                "--",
+                str(self.project_root),
+                str(self.checkout_root),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            self.close()
+            raise FixtureError(
+                result.stderr.strip() or "failed to create reusable audit checkout"
+            )
+
+    def close(self) -> None:
+        temporary = getattr(self, "_temporary", None)
+        if temporary is not None:
+            temporary.cleanup()
+            self._temporary = None
+
+    def prepare(self, task: TaskSpec) -> InPlaceVerifier:
+        if task.status != TaskStatus.READY:
+            raise FixtureError(f"task is not ready: {task.status.value}")
+        if (
+            task.build is None
+            or task.provenance.solve_commit is None
+            or task.provenance.source_path is None
+        ):
+            raise FixtureError("task has no build profile or solve revision")
+
+        self._reset_checkout(task.provenance.solve_commit)
+        reference_revision = (
+            task.provenance.reference_commit or task.provenance.solve_commit
+        )
+        reference = self.fixtures.git.show_bytes(
+            reference_revision, task.build.target_object
+        )
+        if reference is None:
+            raise FixtureError(
+                f"reference object is absent at {reference_revision}: "
+                f"{task.build.target_object}"
+            )
+
+        # The checkout's .git directory is private audit machinery. Everything
+        # else is redacted exactly as it is in a public fixture.
+        self.fixtures.redact_tree(
+            self.checkout_root,
+            task,
+            preserve_hidden=(".git",),
+        )
+        source_path = self.checkout_root / task.provenance.source_path
+        bundle = FixtureBundle(
+            task_id=task.task_id,
+            archive=b"",
+            reference_object=reference,
+            reference_sha256="",
+        )
+        prepared = InPlaceVerifier(
+            self.profile,
+            bundle,
+            root=self.checkout_root,
+            redacted_source=source_path.read_text(),
+            objdiff_command=self.objdiff_command,
+            timeout_seconds=self.timeout_seconds,
+            toolchain_source=self.toolchain_source,
+        )
+        prepared._attach_toolchain(self.checkout_root)
+        reference_path = self.checkout_root / task.build.target_object
+        reference_path.parent.mkdir(parents=True, exist_ok=True)
+        reference_path.write_bytes(reference)
+        prepared._write_objdiff_config(self.checkout_root, task)
+        return prepared
+
+    def _reset_checkout(self, revision: str) -> None:
+        commands = (
+            ["git", "checkout", "--detach", "--force", "--quiet", revision],
+            ["git", "clean", "-ffdqx"],
+        )
+        for command in commands:
+            result = subprocess.run(
+                command,
+                cwd=self.checkout_root,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise FixtureError(
+                    result.stderr.strip()
+                    or f"audit checkout command failed: {' '.join(command)}"
+                )
+
+
 class PrebuiltVerifier:
     """Verify from a redacted archive and private object, without Git access."""
 
@@ -96,65 +225,56 @@ class PrebuiltVerifier:
             candidate_source, task.function_name
         )
         if candidate is None or violations:
-            return VerificationResult(
-                compiled=False,
-                exact=False,
-                match_percent=0.0,
-                baseline_percent=task.initial_match_percent or 0.0,
-                reward=0.0,
-                policy_violations=violations,
-                elapsed_ms=_elapsed_ms(started),
-                failure_kind="policy",
-            )
+            return _policy_failure(task, violations, started)
 
         try:
             with tempfile.TemporaryDirectory(prefix="decomp-verify-") as raw_tmp:
                 root = Path(raw_tmp) / "projects" / self.profile.project_id
                 root.mkdir(parents=True)
                 materialize_archive(self.bundle.archive, root)
-                apply_candidate(root, task, candidate)
                 self._attach_toolchain(root)
                 assert task.build is not None
                 reference_path = root / task.build.target_object
                 reference_path.parent.mkdir(parents=True, exist_ok=True)
                 reference_path.write_bytes(self.bundle.reference_object)
                 self._write_objdiff_config(root, task)
-                result = self._compile(root, task)
-                if result.returncode != 0:
-                    return VerificationResult(
-                        compiled=False,
-                        exact=False,
-                        match_percent=0.0,
-                        baseline_percent=task.initial_match_percent or 0.0,
-                        reward=0.0,
-                        compile_stdout=result.stdout[-12_000:],
-                        compile_stderr=result.stderr[-12_000:],
-                        elapsed_ms=_elapsed_ms(started),
-                        failure_kind="compile",
-                    )
-                match, summary = self._score(root, task)
-                compiled_object = root / task.build.base_object
-                byte_exact = function_bytes_equal(
-                    self.bundle.reference_object,
-                    compiled_object.read_bytes(),
-                    task.function_name,
-                )
-                if byte_exact is None:
-                    raise FixtureError(
-                        f"cannot locate ELF function bytes for {task.function_name}"
-                    )
+                return self._verify_prepared_root(root, task, candidate, started)
         except (FixtureError, OSError, subprocess.SubprocessError) as exc:
+            return _infrastructure_failure(task, str(exc), started=started)
+
+    def _verify_prepared_root(
+        self,
+        root: Path,
+        task: TaskSpec,
+        candidate: str,
+        started: float,
+    ) -> VerificationResult:
+        apply_candidate(root, task, candidate)
+        result = self._compile(root, task)
+        if result.returncode != 0:
             return VerificationResult(
                 compiled=False,
                 exact=False,
                 match_percent=0.0,
                 baseline_percent=task.initial_match_percent or 0.0,
                 reward=0.0,
-                compile_stderr=str(exc),
+                compile_stdout=result.stdout[-12_000:],
+                compile_stderr=result.stderr[-12_000:],
                 elapsed_ms=_elapsed_ms(started),
-                failure_kind="infrastructure",
+                failure_kind="compile",
             )
-
+        match, summary = self._score(root, task)
+        assert task.build is not None
+        compiled_object = root / task.build.base_object
+        byte_exact = function_bytes_equal(
+            self.bundle.reference_object,
+            compiled_object.read_bytes(),
+            task.function_name,
+        )
+        if byte_exact is None:
+            raise FixtureError(
+                f"cannot locate ELF function bytes for {task.function_name}"
+            )
         baseline = task.initial_match_percent or 0.0
         exact = match >= 99.999_999 and byte_exact
         if match >= 99.999_999 and not byte_exact:
@@ -192,7 +312,9 @@ class PrebuiltVerifier:
                 continue
             for tool_root in tool_roots:
                 destination = tool_root / name
-                if destination.exists() or destination.is_symlink():
+                if destination.is_symlink():
+                    destination.unlink()
+                elif destination.exists():
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.symlink_to(
@@ -249,6 +371,49 @@ class PrebuiltVerifier:
             sort_keys=True,
         )
         return match, summary
+
+
+class InPlaceVerifier(PrebuiltVerifier):
+    """Verify trusted audit candidates in a resettable checkout."""
+
+    def __init__(
+        self,
+        profile: ProjectProfile,
+        bundle: FixtureBundle,
+        *,
+        root: Path,
+        redacted_source: str,
+        objdiff_command: str = "objdiff-cli",
+        timeout_seconds: int = 180,
+        toolchain_source: Path | None = None,
+    ) -> None:
+        super().__init__(
+            profile,
+            bundle,
+            objdiff_command=objdiff_command,
+            timeout_seconds=timeout_seconds,
+            toolchain_source=toolchain_source,
+        )
+        self.root = root
+        self.redacted_source = redacted_source
+
+    def verify(self, task: TaskSpec, candidate_source: str) -> VerificationResult:
+        started = time.monotonic()
+        candidate, violations = validate_candidate_source(
+            candidate_source, task.function_name
+        )
+        if candidate is None or violations:
+            return _policy_failure(task, violations, started)
+        try:
+            assert task.provenance.source_path is not None
+            (self.root / task.provenance.source_path).write_text(
+                self.redacted_source
+            )
+            return self._verify_prepared_root(
+                self.root, task, candidate, started
+            )
+        except (FixtureError, OSError, subprocess.SubprocessError) as exc:
+            return _infrastructure_failure(task, str(exc), started=started)
 
 
 def find_report_function(report: dict[str, Any], function_name: str) -> dict[str, Any]:
@@ -352,7 +517,26 @@ def _elapsed_ms(started: float) -> int:
     return round((time.monotonic() - started) * 1000)
 
 
-def _infrastructure_failure(task: TaskSpec, detail: str) -> VerificationResult:
+def _policy_failure(
+    task: TaskSpec,
+    violations: tuple[PolicyViolation, ...],
+    started: float,
+) -> VerificationResult:
+    return VerificationResult(
+        compiled=False,
+        exact=False,
+        match_percent=0.0,
+        baseline_percent=task.initial_match_percent or 0.0,
+        reward=0.0,
+        policy_violations=violations,
+        elapsed_ms=_elapsed_ms(started),
+        failure_kind="policy",
+    )
+
+
+def _infrastructure_failure(
+    task: TaskSpec, detail: str, *, started: float | None = None
+) -> VerificationResult:
     return VerificationResult(
         compiled=False,
         exact=False,
@@ -360,5 +544,6 @@ def _infrastructure_failure(task: TaskSpec, detail: str) -> VerificationResult:
         baseline_percent=task.initial_match_percent or 0.0,
         reward=0.0,
         compile_stderr=detail,
+        elapsed_ms=_elapsed_ms(started) if started is not None else 0,
         failure_kind="infrastructure",
     )
