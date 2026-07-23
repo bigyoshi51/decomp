@@ -6,6 +6,10 @@ Wraps the standard N64 decomp ecosystem: splat, asm-differ, decomp-permuter, m2c
 
 Heavily inspired by https://github.com/cdlewis/snowboardkids2-decomp.
 
+The Verifiers v1 environment for historical single-function RL, including
+coding-agent and constrained submission modes plus Prime-RL configs, is
+documented in [`docs/RL_ENVIRONMENT.md`](docs/RL_ENVIRONMENT.md).
+
 ## Setup
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
@@ -96,5 +100,5 @@ uv run python -m decomp.main diff <function_name>
 - [x] Tool wrappers (compiler, differ, m2c, permuter)
 - [x] CLI for discovery and manual tool use
 - [x] Claude agent loop for automated decompilation (via `/decompile` skill + `/loop`)
-- [ ] Function scoring and batch processing
+- [x] Historical single-function scoring and manifest preparation
 - [x] Episode logging for future RL (canonical `Episode`/`Step` schema via `log-exact-episode`)

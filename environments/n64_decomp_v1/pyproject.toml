@@ -1,0 +1,23 @@
+[project]
+name = "n64-decomp-v1"
+version = "0.1.0"
+description = "Verifiers v1 environment for single-function N64 decompilation"
+requires-python = ">=3.12"
+dependencies = [
+  "decomp",
+  "verifiers>=0.2,<0.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["n64_decomp_v1.py", "README.md", "pyproject.toml"]
+
+[tool.uv.sources]
+decomp = { path = "../..", editable = true }
+
+[tool.verifiers.eval]
+num_examples = 10
+rollouts_per_example = 1

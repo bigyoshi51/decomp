@@ -1,0 +1,50 @@
+# Prime-RL current unified config. Launch from this repository root with:
+# uv run --project /path/to/prime-rl rl @ configs/rl/n64-decomp-submit-candidate.toml
+max_steps = 200
+seq_len = 16384
+
+[model]
+name = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+
+[wandb]
+project = "n64-decomp-v1"
+name = "submit-candidate"
+
+[trainer.model]
+impl = "auto"
+
+[trainer.model.ac]
+freq = 1
+
+[trainer.model.lora]
+rank = 32
+alpha = 64
+
+[trainer.optim]
+lr = 1e-5
+
+[orchestrator]
+batch_size = 128
+group_size = 8
+
+[orchestrator.train.sampling]
+max_completion_tokens = 8192
+
+[[orchestrator.train.env]]
+name = "n64-decomp-submit-candidate"
+max_turns = 20
+timeout = { setup = 300, rollout = 900, scoring = 60 }
+taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "train", mode = "submit_candidate" }
+harness = { id = "null", runtime = { type = "docker" } }
+
+[orchestrator.eval]
+interval = 20
+
+[[orchestrator.eval.env]]
+name = "n64-decomp-submit-candidate-validation"
+num_examples = 32
+max_turns = 20
+taskset = { id = "n64-decomp-v1", project_root = "projects/1080-decomp", profile = "project_profiles/1080.yaml", manifest = "exports/1080-v1/tasks.audited.jsonl", split = "validation", mode = "submit_candidate" }
+harness = { id = "null", runtime = { type = "docker" } }
+
+[inference]

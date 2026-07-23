@@ -1,0 +1,44 @@
+project_id: 1080-decomp
+repo_url: https://github.com/bigyoshi51/1080-decomp.git
+default_revision: 576b930abc50aadd38bb5696fe9f0b15e6f31cb8
+episode_dir: episodes
+source_roots:
+  - src
+asm_roots:
+  - asm/nonmatchings
+objdiff_config: objdiff.json
+expected_root: expected
+build_root: build/non_matching
+object_target_template: build/non_matching/{source_path}.o
+make_args:
+  - RUN_CC_CHECK=0
+immutable_paths:
+  - Makefile
+  - expected
+  - include
+  - scripts
+  - tools
+hidden_paths:
+  - .git
+  - episodes
+  - expected
+  - report.json
+allowed_source_suffixes:
+  - .c
+toolchain_image: ghcr.io/bigyoshi51/n64-decomp-verifier:1080-v1
+metadata:
+  display_name: 1080 Snowboarding
+  history_search_limit: 512
+  allow_pinned_replay_fallback: true
+  pinned_replay_history_limit: 32
+  recover_malformed_gold_from_pinned: true
+  recover_gold_after_failed_audit: true
+  target_architecture: mips-n64-big-endian
+  compiler_families:
+    - IDO 5.3
+    - IDO 7.1
+  required_host_commands:
+    - git
+    - make
+    - mips-linux-gnu-as
+    - objdiff-cli

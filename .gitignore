@@ -30,3 +30,6 @@ references/
 
 # Ad-hoc test artifacts
 test_*.s
+
+# Derived training/evaluation manifests
+exports/

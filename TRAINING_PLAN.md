@@ -1,18 +1,29 @@
 # Training Plan
 
+> **Implementation update (2026-07-20):** The first verifier-RL environment is
+> now implemented. `decomp/rl/` provides provenance discovery, redacted
+> historical fixtures, policy checks, object compilation, objdiff scoring,
+> deterministic assembly-twin splits, and release auditing.
+> `environments/n64_decomp_v1/` provides both the primary coding-agent mode and
+> the constrained `submit_candidate` mode on Verifiers v1. Runnable eval and
+> Prime-RL configs are under `configs/`. See `docs/RL_ENVIRONMENT.md` for the
+> current architecture and runbook. Older recommendations below are retained
+> as design history where they do not conflict with that implementation.
+
 This document captures the current plan for turning the repo's decompilation
 episodes and scaffolding into useful training assets for:
 
 - supervised fine-tuning (SFT)
 - verifier-based reinforcement learning (RL)
 
-The central recommendation is:
+The current recommendation is:
 
-- keep improving the decomp project now
-- keep logging exact matches in the canonical structured schema
-- use the historical episode corpus primarily for SFT, eval, and prompt mining
-- defer the actual verifier-RL environment buildout until the task distribution
-  and verifier path are more stable
+- keep improving the decomp project and logging exact matches in the canonical
+  structured schema;
+- use the historical corpus for SFT, eval, prompt mining, and the implemented
+  fresh-rollout verifier RL environment;
+- require the full release build audit before publishing a dataset or starting
+  a training run.
 
 ## Goal
 
@@ -22,10 +33,9 @@ Eventually support two training modes:
 2. fresh-rollout verifier RL where the model generates candidate C online and
    receives reward from project-native verification
 
-This repo does not need to choose one forever. The intended flow is:
-
-- SFT/bootstrap first
-- verifier RL later
+This repo supports both paths. SFT remains useful for bootstrapping, while the
+verifier environment can hill-climb fresh model candidates against historical
+tracked objects.
 
 ## Current State
 
@@ -46,11 +56,17 @@ Operationally:
 - the 1080 and Glover project hooks validate newly added episode files against
   the canonical schema
 
-Current 1080 corpus characteristics:
+At the profile's pinned 1080 revision, the corpus has 2,239 episode files:
+1,860 canonical v2 and 379 recognized legacy v1 records. The provenance audit
+currently resolves 2,238 tasks. The only remaining provenance exception is a
+linker-defined mid-function alternate entry that has no independent C
+definition. Nearly all episodes are single-attempt summaries rather than rich
+trajectories.
 
-- a few hundred solved episodes already exist
-- almost all are positive exact matches
-- nearly all are single-attempt summaries rather than rich trajectories
+Of the 65 rows quarantined by the original provenance implementation, 63 now
+pass compiler and exact-byte verification. The other two are deliberately not
+RL tasks: the mid-function entry above and an empty function whose generated
+starter is already exact.
 
 That makes the current corpus much better suited to SFT than to tool-trajectory
 RL.
@@ -101,13 +117,14 @@ Treat them as `legacy_v1` data:
 - keep using them for SFT, eval, and prompt mining
 - do not require them to pass the new canonical validator
 
-Use them for:
+Use the exact, provenance-resolved subset for:
 
 - exact-match SFT examples
 - evaluation targets
 - prompt/context mining
 - difficulty estimation
 - project history / provenance
+- fresh-rollout verifier RL tasks
 
 Do not treat them as canonical RL trajectories.
 
