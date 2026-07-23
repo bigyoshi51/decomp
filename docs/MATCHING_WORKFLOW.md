@@ -13,6 +13,7 @@
 _74 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 - [Resolved-jal m2c overlay pipeline: full-body redecode of big raw-.word USO NM fns (8FC8 41.5→65.8, B624 20.7→62.6, 2026-07-23)](#resolved-jal-m2c-overlay-pipeline) — _disasm expected-.o (NOT default search: build/non_matching hits first!), overlay .s jal/lui symbols by insn index, %lo every consumer of every lui (multi-consumer + dual-lui-branch-join + bc1fl-label-space gotchas), fabricate .text-invisible jtbl entries, m2c --valid-syntax, char*-only locals, reuse sibling-block decls. Hand-paraphrase 'FP-schedule cap / fuzzy=None' verdicts do NOT transfer to the m2c emission — re-test them._
+- [GOTCHA: disasm-func.py can return a wrong/stale body — expected/<unit>.c.o is the only ground truth (B154 2026-07-23)](#disasm-func-stale-vs-expected-obj) — _script gave a 123-insn frame-176 shape diffing ~identical to the NM build while objdiff said 58%; real target in expected/.o was 133-insn frame-168 at a different address._
 
 ## Quick reference by sub-topic
 
@@ -9659,3 +9660,15 @@ Big raw-.word USO functions whose NM body is a low-% paraphrase can be redecoded
 5. m2c `--valid-syntax` + context, then mechanical adaptation: `#define M2C_FIELD(p,t,o) (*(t)((char*)(p)+(o)))`, ALL pointer locals → `char *` (m2c prints byte offsets but may type a var `s32*` — element-scaled arith would silently x4), `M2C_UNK`→s32, `void**`→`char**` (IDO rejects void* arithmetic), &-taken stack-vec trios → one struct with `.f4/.f8` alias-read rewrites.
 6. TU-scope traps (same class as the CEB4→1658 warning above): existing file-scope decls BELOW the fn are not in scope (C position matters) — redeclare locally with IDENTICAL types; sibling NM blocks' decls (different signature for the same callee) must be REUSED not redeclared; typedef names collide across NM blocks.
 Everything stays inside `#ifdef NON_MATCHING` → regular build/ROM byte-identical, exact-set risk zero. Residual after the pipeline = the m2c temp-decl frame-inflation class (8FC8: frame 0x2E0 vs 0x160, ~120 temps) — the known multi-tick grind, same as 4118. NOTE: a prior "FP-schedule cap, fuzzy=None" verdict on a HAND-written reconstruction (B624) did NOT hold for the m2c emission — m2c's exact temp/aggregate-copy structure anchors where a logic-equivalent paraphrase scores zero; re-test hand-paraphrase caps with this pipeline before trusting them.
+
+## GOTCHA: scripts/disasm-func.py can return a WRONG/STALE body — expected/<unit>.c.o is the only ground truth for diff-driven matching (B154, 2026-07-23 agent-g) <a name="disasm-func-stale-vs-expected-obj"></a>
+
+`scripts/disasm-func.py timproc_uso_b5_func_0000B154` returned a 123-insn frame-176
+f20-saving body that diffed ~instruction-identical to the current NM build — while
+`objdiff` reported 58%. The REAL target (disassembled from
+`expected/src/<unit>/<unit>.c.o`, which is what the ROM-exact build links) is a
+different 133-insn frame-168 shape at a different address (0xB130 vs 0xAFA0 — the
+script's address/source was stale). Matching against the script output would have
+"perfected" the wrong bytes. Rule: before any deep decomp pass, dump the target with
+`mips-linux-gnu-objdump -d expected/src/<unit>/<unit>.c.o` and range-select the
+function; treat any disasm-func.py/objdiff disagreement as a stale-source red flag.

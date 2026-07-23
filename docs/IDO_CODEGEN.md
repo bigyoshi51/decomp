@@ -29,6 +29,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
 - [Register-resident `&sym` ptr: MULTI-DEF w/ DISTINCT placeholder syms + call-free def placement + per-use extern split (kills %hi-CSE web-merge) + inline cross-block m2c locals = target lui;addiu web with guard re-materialization + beql tail-dup (timproc 69E8 87.60->96.01 count-exact, 2026-07-18 agent-g)](#register-resident-addr-ptr-multidef-69e8) — _Single-def or same-sym double-def copy-props back to folded lui form; def above earlier calls = spilled web (frame +8); residual = def1 %hi-temp coalesce rotation (zdbug:6 next)._
 - [Pointer-local web reuse kills the 2nd dead home; do-while(0) anti-fold on 3-use f32* base; int-temps-after-pointer probe grows frame (timproc B624 62.6->89.4, 2026-07-23 agent-g)](#pointer-web-reuse-b624) — _One reassigned pointer local = two target colorings ($2 unhomed + $4 homed); chained union-carrier struct copies land the lw/sw forwarding web exactly._
+- [B624 twin recipe transfers whole-shape to B154/B368 (+25/+36pp); 4th same-const FP block flips 0.0f web into callee-saved f20 — split one block via (f32)0 + de-named temps (2026-07-23 agent-g)](#b624-twin-transfer-fpconst-threshold) — _top-of-decl-list aggregate keeps all lower offsets; union carrier reused across chains; 4-call dst CSE colors $s1 not the spill (open)._
 - [USO global at-macro: loads pair / stores don\'t; per-LOAD-SITE distinct externs + FP-local arg routing for lwc1+mfc1; volatile pairs the address AND re-types f32 loads to lw (307B0 67.8->83.3, 2026-07-18 agent-h)](#at-macro-load-store-asymmetry-307b0) — _Shared struct extern = whole-fn base web (worst); clamp = local-f single join store / store-then-cond-restore._
 - [CONVERSE cap: entry-block ONCE-materialized &sym pairs unreachable — uopt const-sinks defs to preheader + tail remat regardless of placement/distinct-syms/if(1)/inline (game_libs 23E60, 2026-07-18 agent-h)](#entry-block-const-placement-sink-cap-23e60) — _Distinct externs fuzzy-identical to folded same-sym (objdiff relaxes reloc imms); banked: a1-first capture order, drop return-0 for or-v0-less tail._
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
@@ -22067,3 +22068,34 @@ word-diff deltas on game_libs_func_00042938, 0x614):
 Residual on 42938 (69.2 fuzzy, honest NM): global temp-ring rotation (t6.. vs
 t2..), candidate color swaps (n↔cx on v1/a2, 1/80 on v1/t3), frame 0x30 vs
 0x58 dead-home census — classic coloring endgame, no structural diffs left.
+
+## B624 twin recipe TRANSFERS whole-shape (B154 58.3->83.1, B368 45.8->82.1); a 4th same-const FP block flips the 0.0f web into callee-saved f20 — split ONE block's web via (f32)0 spelling or de-named field-copy temps (2026-07-23 agent-g) <a name="b624-twin-transfer-fpconst-threshold"></a>
+
+Applying #pointer-web-reuse-b624 verbatim to its same-file siblings:
+
+1. **Twin transfer works at the layout level.** B154's target is a byte-level B624 clone
+   with a 16B vec4 declared FIRST (frame 152->168): adding an aggregate at the TOP of the
+   decl list leaves every lower local's sp-offset unchanged (offsets assign top-down, frame
+   grows by exactly the new size). B368 = same skeleton + guards + two extra chained-copy
+   webs (frame 320), and its c1 union carrier is REUSED as the mid carrier of a later
+   scaled-vector chain (sp92 -> c1_292 -> sp240) — reuse the same named union, don't
+   declare a fresh one.
+2. **FP-const CSE threshold — the new finding.** With 3 axis blocks (9 zero-uses across 3
+   calls) IDO rematerializes `mtc1 zero` per block (B624). Adding a 4th block (12 uses / 4
+   calls) pushes the 0.0f web into callee-saved $f20 (sdc1 prologue, frame +8, every local
+   shifts). Fix: put ONLY the extra block's zeros in a separate web — `(f32) 0` cast-literal
+   spelling (web splits per spelling, see #goto-mid-pointer-antifold-65060) — and de-name
+   that block's FP temps (`obj->E8 = obj->0x118` repeated: the 3-use load CSEs into $f0 with
+   NO home and no callee-saved demand). Same lever killed the ang-in-$f20 hoist: one named
+   `ang` across 3 disjoint lifetimes colors $f0/$f2 (fine), but reusing it for a 4th/5th
+   lifetime re-triggers f20; keep it <=3-4 lifetimes or de-name.
+3. **Volatile SCALAR pads do get slots in this -O2 file** (pad40 at the decl-list bottom
+   + pad9C[4] mid-ladder tuned the 8/20/4/4 dead-hole layout exactly).
+4. **Open residual (B368): a dst pointer CSE'd across 4 calls colors $s1** instead of the
+   target's 36(sp) temp spill (frame +8, all locals shift). sp28-reassign web-reuse does
+   NOT force the spill here (the named web also colors $s1). 3 calls (B154) -> spill; 4+
+   (B368) -> s-reg. Unsolved; costs ~10 partial rows.
+5. **Neutral probes (don't repeat):** bne operand order for `==` (source flip does not swap),
+   addu base-vs-index order (`arg0 + i*4` vs `i*4 + arg0` both emit index-first),
+   `s32 *q = p + 6; *q = p[6]|4` (copy-props back to sw 24(p), losing the addiu bump —
+   keep `t = p[6]|4; p += 6; *p = t`).
