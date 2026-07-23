@@ -5,10 +5,19 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
+from decomp.rl.audit import (
+    AuditStateError,
+    merge_audits,
+    ordered_results,
+    prepare_resume,
+    select_shard,
+)
 from decomp.rl.episodes import EpisodeError, load_episode
 from decomp.rl.fixtures import FixtureBundle
+from decomp.rl.manifest import read_manifest, write_manifest
 from decomp.rl.models import ProjectProfile, Provenance, TaskSpec, TaskStatus
 from decomp.rl.policy import validate_candidate_source
 from decomp.rl.reward import improvement_reward
@@ -200,6 +209,70 @@ class SplitRewardPolicyTests(unittest.TestCase):
         self.assertEqual(TaskSpec.from_dict(serialized), task)
 
 
+class AuditStateTests(unittest.TestCase):
+    def test_shards_are_stable_disjoint_and_complete(self) -> None:
+        tasks = [_task(index) for index in range(40)]
+        shards = [
+            select_shard(tasks, shard_count=4, shard_index=index) for index in range(4)
+        ]
+        task_ids = [task.task_id for shard in shards for task in shard]
+        self.assertEqual(len(task_ids), len(set(task_ids)))
+        self.assertEqual(set(task_ids), {task.task_id for task in tasks})
+        self.assertEqual(
+            shards,
+            [
+                select_shard(tasks, shard_count=4, shard_index=index)
+                for index in range(4)
+            ],
+        )
+
+    def test_resume_retains_checkpoint_and_retries_selected_status(self) -> None:
+        tasks = [_task(index) for index in range(3)]
+        failed = replace(tasks[0], status=TaskStatus.GOLD_NOT_REPRODUCIBLE)
+        ready = replace(tasks[1], initial_match_percent=12.5)
+        retained, pending = prepare_resume(
+            tasks,
+            [failed, ready],
+            retry_statuses=frozenset({TaskStatus.GOLD_NOT_REPRODUCIBLE}),
+        )
+        self.assertEqual(set(retained), {tasks[0].task_id, tasks[1].task_id})
+        self.assertEqual(
+            [task.task_id for task in pending],
+            [tasks[0].task_id, tasks[2].task_id],
+        )
+        self.assertEqual(
+            ordered_results(tasks, retained),
+            [failed, ready],
+        )
+
+    def test_merge_rejects_missing_duplicate_and_stale_rows(self) -> None:
+        tasks = [_task(index) for index in range(4)]
+        audited = [
+            replace(task, initial_match_percent=float(index))
+            for index, task in enumerate(tasks)
+        ]
+        merged = merge_audits(tasks, (audited[:2], audited[2:]))
+        self.assertEqual(merged, audited)
+        with self.assertRaisesRegex(AuditStateError, "incomplete"):
+            merge_audits(tasks, (audited[:2],))
+        with self.assertRaisesRegex(AuditStateError, "duplicate"):
+            merge_audits(tasks, (audited, audited[:1]))
+        stale = replace(audited[0], episode_path="episodes/stale.json")
+        with self.assertRaisesRegex(AuditStateError, "stale audit identity"):
+            merge_audits(tasks, ([stale], audited[1:]))
+        with self.assertRaisesRegex(AuditStateError, "no measured starter"):
+            merge_audits(tasks, (tasks,))
+
+    def test_manifest_write_is_atomic_and_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            output = root / "tasks.jsonl"
+            tasks = [_task(index) for index in range(3)]
+            write_manifest(tasks, output)
+            self.assertEqual(read_manifest(output), tasks)
+            self.assertEqual(list(root.glob(".tasks.jsonl.*.tmp")), [])
+
+
 class VerifierLayoutTests(unittest.TestCase):
     def test_supports_project_local_and_historical_shared_tools(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -237,6 +310,23 @@ class VerifierLayoutTests(unittest.TestCase):
             self.assertIsNotNone(extract_function_bytes(objects[0], "target"))
             self.assertTrue(function_bytes_equal(objects[0], objects[0], "target"))
             self.assertFalse(function_bytes_equal(objects[0], objects[1], "target"))
+
+
+def _task(index: int) -> TaskSpec:
+    name = f"func_{index:08X}"
+    return TaskSpec(
+        schema_version=1,
+        task_id=f"fixture/unit/{name}",
+        project="fixture",
+        function_name=name,
+        episode_path=f"episodes/{name}.json",
+        episode_schema="canonical_v2",
+        status=TaskStatus.READY,
+        split="train",
+        assembly_fingerprint=f"shape-{index}",
+        instruction_count=index + 1,
+        provenance=Provenance(solve_commit=f"{index:040x}"),
+    )
 
 
 if __name__ == "__main__":

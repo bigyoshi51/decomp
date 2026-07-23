@@ -101,6 +101,7 @@ dataset release, compile both the starter and gold source for every ready row:
 
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$PWD:/work" -w /work \
   ghcr.io/bigyoshi51/n64-decomp-verifier:1080-v1 \
   decomp-rl build-audit \
@@ -108,8 +109,34 @@ docker run --rm \
     --profile project_profiles/1080.yaml \
     --toolchain-source /opt/ido-static-recomp \
     --workers 4 \
+    --checkpoint-every 10 \
+    --resume \
     --output exports/1080-v1/tasks.audited.jsonl
 ```
+
+`--resume` accepts a missing output on the first run. Thereafter it validates
+task identity, retains completed rows, and retries only unfinished rows. Every
+checkpoint is an atomic file replacement, so interruption cannot leave a
+partially written JSON line. An existing output requires either `--resume` or
+the explicit destructive choice `--overwrite`.
+
+For independent workers or machines, add `--shard-count N --shard-index I` and
+give each shard a distinct output. Assignment is a stable hash of `task_id`, so
+it does not change when manifest order changes. Merge only after every shard
+finishes:
+
+```bash
+uv run decomp-rl merge-audits \
+  --expected exports/1080-v1/tasks.jsonl \
+  --input exports/1080-v1/audit-shard-0.jsonl \
+  --input exports/1080-v1/audit-shard-1.jsonl \
+  --output exports/1080-v1/tasks.audited.jsonl
+```
+
+The merge rejects duplicate, stale, unexpected, and missing task IDs. It also
+rejects a `ready` row without a measured starter baseline, proving that copying
+the discovery manifest cannot masquerade as a completed audit. Re-run a
+quarantined class with `--resume --retry-status <status>`.
 
 The audit records the starter's measured `initial_match_percent`, requires the
 gold to reach exact, and stops immediately on verifier infrastructure failure.

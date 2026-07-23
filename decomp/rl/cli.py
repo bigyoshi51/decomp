@@ -7,9 +7,22 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+from .audit import (
+    AuditStateError,
+    merge_audits,
+    ordered_results,
+    prepare_resume,
+    select_shard,
+)
 from .episodes import load_episode
 from .fixtures import FixtureBuilder
-from .manifest import discover_tasks, summarize_tasks, write_manifest
+from .manifest import (
+    discover_tasks,
+    read_manifest,
+    summarize_tasks,
+    write_manifest,
+)
+from .models import TaskStatus
 from .profile import load_project_profile
 from .provenance import ProvenanceResolver
 from .source import empty_function_body
@@ -59,8 +72,55 @@ def main() -> None:
     audit.add_argument("--timeout", type=int, default=180)
     audit.add_argument("--progress-every", type=int, default=25)
     audit.add_argument("--workers", type=int, default=1)
+    audit.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="atomically checkpoint after this many newly audited rows",
+    )
+    audit.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume from valid rows already present in --output",
+    )
+    audit.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace an existing output instead of requiring --resume",
+    )
+    audit.add_argument(
+        "--retry-status",
+        action="append",
+        choices=tuple(status.value for status in TaskStatus),
+        default=[],
+        help="with --resume, re-audit checkpoint rows having this status",
+    )
+    audit.add_argument("--shard-count", type=int, default=1)
+    audit.add_argument("--shard-index", type=int, default=0)
+
+    merge = subparsers.add_parser(
+        "merge-audits",
+        help="merge audit shards and prove complete expected-manifest coverage",
+    )
+    merge.add_argument("--expected", type=Path, required=True)
+    merge.add_argument("--input", type=Path, action="append", required=True)
+    merge.add_argument("--output", type=Path, required=True)
+    merge.add_argument("--overwrite", action="store_true")
 
     args = parser.parse_args()
+    if args.command == "merge-audits":
+        if args.output.exists() and not args.overwrite:
+            parser.error(f"output exists; pass --overwrite: {args.output}")
+        try:
+            expected = read_manifest(args.expected)
+            groups = [read_manifest(path) for path in args.input]
+            merged_tasks = merge_audits(expected, groups)
+        except (AuditStateError, OSError, ValueError) as exc:
+            parser.error(str(exc))
+        write_manifest(merged_tasks, args.output)
+        print(json.dumps(summarize_tasks(merged_tasks).to_dict(), indent=2))
+        return
+
     profile = load_project_profile(args.profile)
     root = args.project_root.resolve()
 
@@ -93,6 +153,35 @@ def main() -> None:
                 limit=args.limit,
                 progress=_progress_callback("discovered", args.progress_every),
             )
+        if args.output.exists() and not (args.resume or args.overwrite):
+            parser.error(f"output exists; pass --resume or --overwrite: {args.output}")
+        if args.resume and args.overwrite:
+            parser.error("--resume and --overwrite are mutually exclusive")
+        if args.workers < 1:
+            parser.error("--workers must be at least 1")
+        if args.checkpoint_every < 1:
+            parser.error("--checkpoint-every must be at least 1")
+        try:
+            tasks = select_shard(
+                tasks,
+                shard_count=args.shard_count,
+                shard_index=args.shard_index,
+            )
+            existing = (
+                read_manifest(args.output)
+                if args.resume and args.output.exists()
+                else []
+            )
+            audited_by_id, pending = prepare_resume(
+                tasks,
+                existing,
+                retry_statuses=frozenset(
+                    TaskStatus(value) for value in args.retry_status
+                ),
+            )
+        except (AuditStateError, OSError, ValueError) as exc:
+            parser.error(str(exc))
+
         verifier = CompilerVerifier(
             root,
             profile,
@@ -100,28 +189,42 @@ def main() -> None:
             timeout_seconds=args.timeout,
             toolchain_source=args.toolchain_source,
         )
-        if args.workers < 1:
-            parser.error("--workers must be at least 1")
         if args.workers == 1:
-            results = map(lambda task: _audit_task(task, verifier), tasks)
+            results = map(lambda task: _audit_task(task, verifier), pending)
             executor = None
         else:
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.workers)
-            results = executor.map(lambda task: _audit_task(task, verifier), tasks)
-        audited = []
+            results = executor.map(lambda task: _audit_task(task, verifier), pending)
+        resumed = len(tasks) - len(pending)
+        newly_audited = 0
         try:
-            for index, task in enumerate(results, 1):
-                audited.append(task)
-                if args.progress_every and index % args.progress_every == 0:
+            for task in results:
+                audited_by_id[task.task_id] = task
+                newly_audited += 1
+                completed = resumed + newly_audited
+                if newly_audited % args.checkpoint_every == 0:
+                    write_manifest(
+                        ordered_results(tasks, audited_by_id),
+                        args.output,
+                        include_gold=False,
+                    )
+                if args.progress_every and (
+                    completed % args.progress_every == 0 or completed == len(tasks)
+                ):
                     print(
-                        f"audited {index}/{len(tasks)} tasks",
+                        f"audited {completed}/{len(tasks)} tasks ({resumed} resumed)",
                         file=sys.stderr,
                         flush=True,
                     )
         finally:
             if executor is not None:
                 executor.shutdown(cancel_futures=True)
-        write_manifest(audited, args.output, include_gold=False)
+            write_manifest(
+                ordered_results(tasks, audited_by_id),
+                args.output,
+                include_gold=False,
+            )
+        audited = ordered_results(tasks, audited_by_id)
         print(json.dumps(summarize_tasks(audited).to_dict(), indent=2))
         return
 

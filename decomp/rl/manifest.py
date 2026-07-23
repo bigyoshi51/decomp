@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -90,14 +92,29 @@ def write_manifest(
     ready_only: bool = False,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w") as handle:
-        for task in tasks:
-            if ready_only and task.status != TaskStatus.READY:
-                continue
-            handle.write(
-                json.dumps(task.to_dict(include_gold=include_gold), sort_keys=True)
-                + "\n"
-            )
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            for task in tasks:
+                if ready_only and task.status != TaskStatus.READY:
+                    continue
+                handle.write(
+                    json.dumps(task.to_dict(include_gold=include_gold), sort_keys=True)
+                    + "\n"
+                )
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(output)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def read_manifest(path: Path) -> list[TaskSpec]:
