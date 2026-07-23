@@ -28,6 +28,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [De-name at scale: alpha-rename m2c temp-explosion onto shared ROLE locals (99 decls -> 3, frame 0x348->0x1C8); shared `&D+N` multi-offset base CSE steals $s0 from the arg ring — split into TRUE reloc identities (&realfunc+0x18 / distinct base-0 value alias) -> prologue+frame EXACT (E68, 2026-07-17 agent-g)](#dename-role-locals-base-split-e68) — _Homed-arg0-in-target = stealable-base tell; volatile-hole mimicry fails while residual spills occupy the hole; fuzzy can dip while prologue/frame/ring snap exact — gate big rewrites on structural anchors._
 - [Alias-split pass ORDER: pays after the s-reg role skeleton matches (E68 70.21->70.48), lowers fuzzy before it (6808 60.3->56.6 reverted, identity map kept in comments); x-x and const-locals VN-fold through copies/memory — target subu r,r + addiu s7,const unexplained (2026-07-17 agent-g)](#alias-split-order-vn-fold-e68-6808) — _One alias split can free TWO slots (address home + re-colored neighbor spill); re-close frame with volatile pad after each kill._
 - [Register-resident `&sym` ptr: MULTI-DEF w/ DISTINCT placeholder syms + call-free def placement + per-use extern split (kills %hi-CSE web-merge) + inline cross-block m2c locals = target lui;addiu web with guard re-materialization + beql tail-dup (timproc 69E8 87.60->96.01 count-exact, 2026-07-18 agent-g)](#register-resident-addr-ptr-multidef-69e8) — _Single-def or same-sym double-def copy-props back to folded lui form; def above earlier calls = spilled web (frame +8); residual = def1 %hi-temp coalesce rotation (zdbug:6 next)._
+- [Pointer-local web reuse kills the 2nd dead home; do-while(0) anti-fold on 3-use f32* base; int-temps-after-pointer probe grows frame (timproc B624 62.6->89.4, 2026-07-23 agent-g)](#pointer-web-reuse-b624) — _One reassigned pointer local = two target colorings ($2 unhomed + $4 homed); chained union-carrier struct copies land the lw/sw forwarding web exactly._
 - [USO global at-macro: loads pair / stores don\'t; per-LOAD-SITE distinct externs + FP-local arg routing for lwc1+mfc1; volatile pairs the address AND re-types f32 loads to lw (307B0 67.8->83.3, 2026-07-18 agent-h)](#at-macro-load-store-asymmetry-307b0) — _Shared struct extern = whole-fn base web (worst); clamp = local-f single join store / store-then-cond-restore._
 - [CONVERSE cap: entry-block ONCE-materialized &sym pairs unreachable — uopt const-sinks defs to preheader + tail remat regardless of placement/distinct-syms/if(1)/inline (game_libs 23E60, 2026-07-18 agent-h)](#entry-block-const-placement-sink-cap-23e60) — _Distinct externs fuzzy-identical to folded same-sym (objdiff relaxes reloc imms); banked: a1-first capture order, drop return-0 for or-v0-less tail._
 - [if(1){k++} breaks call-arg (k+1)==n vs k++ CSE (extra-s-reg promotion -> target's rematerialize-in-delay); loop-init guard placement phase-couples a LATER loop's counter to a1+spill — probe inits inside AND outside (44EDC 76.2->98.3, 2026-07-15 agent-f)](#bb-lever-incr-cse-guard-init-phase-44edc) — _Signed/unsigned split does NOT break increment CSE; the BB barrier does. Also: USO string-key addends are sign-extending lo16 (write &D+0x1FExx not 0x2FExx); 3-term sltu-normalized wait-loop = VALUE-form || via assigned cond var (2-term stays branch-form); shared obj local colors the recurring s0 web; float-returning placeholder callee needs its own extern for swc1 f0._
@@ -21956,3 +21957,34 @@ entry and emits the block exactly where the source puts it. Also re-confirmed
 here: every `func(0, X)` m2c guess whose target sets a0 via `lui a0,0x0;
 addiu a0,a0,0` is really `func((char*)&D_00000000, X)` (addiu-form = address,
 never literal 0) — 8 call sites in one fn.
+
+## Pointer-local WEB REUSE kills the second dead home; do-while(0) anti-fold extends to 3-use f32* bases; int-temps-after-last-pointer decl probe GROWS the frame (1080 timproc b5 B624 62.6->89.4, 2026-07-23 agent-g) <a name="pointer-web-reuse-b624"></a>
+
+307B0/63F34-family application to a b5 proximity-gated transform setter, plus three new frame findings:
+
+1. **Reassign ONE named pointer local for two disjoint lifetimes instead of two locals.**
+   B624 needs `t = obj+0xDC` (head-only, target colors $2, no home) and `dst = obj+0xF4`
+   (spilled to its 40(sp) home across three calls, target $4). Named separately, the
+   -g3-homes file reserves a dead slot for BOTH (frame +4, every lower local shifts).
+   Spelling both through one local (`sp28 = obj+0xDC; ...head...; sp28 = obj+0xF4;`)
+   lets uopt split the webs — head web colors $2 exactly like the target's unhomed temp,
+   second web keeps the 40(sp) home. One decl, two target registers, no phantom slot.
+2. **The FC34 do-while(0) anti-fold works on a 3-use `f32*` load base**: `sp28 = (f32*)(obj+0xDC);`
+   with the three `sp28[i] - REF_i` subs wrapped in `do { } while (0)` materializes the
+   target `addiu $2,$4,220` + `0/4/8($2)` shape (unwrapped, all three fold to `220/224/228($16)`).
+   Bonus: the wrap also moved `move $16,$4` DOWN to the target's late slot (head loads run off a0).
+3. **Chained aggregate copy `sp7C = sp68; sp8C = sp7C;` through a union carrier**
+   (`union { VecF v; s32 w[4]; } sp7C` for a 16B-home/12B-copy slot) reproduces the target's
+   interleaved lw/sw web byte-exactly, including the second copy re-reading word 0 from
+   memory while words 1-2 forward from registers. Do NOT hand-schedule per-word copies.
+4. **Negative probe — declaring int temps AFTER the last pointer local does NOT move their
+   homes into the 24..31 gap below the locals**: uopt allocated fresh slots above sp28 and
+   the frame grew 152->168. Dead-home placement follows decl order only WITHIN the local
+   region; you cannot push homes into the outgoing-arg/save-reg gap. A residual phantom 4B
+   slot directly above the lowest pointer local survived every reorder probe (arrays->structs,
+   pad resize, temp elimination) — accept ~6 imm-offset rows rather than chase it.
+5. **Head at-macro pairing reproduced**: three per-load-site pad-struct externs emit
+   lui-at per site but the as-level pairing still merges adjacent same-%hi pairs when the
+   scheduler groups the loads; residual is the target's all-6-loads-then-3-subs grouping +
+   f2/f0/f12 low-ring coloring of the three difference values (named-candidate ring not
+   reachable without adding homes).
