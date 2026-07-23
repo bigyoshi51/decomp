@@ -127,6 +127,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [USO-constructor sub-70 redecode kit: li->%hi/%lo reloc respell, ONE roving temp (s-reg web), shared carrier home (volatile/if(0)-escape), prototyped-f32 alias, ptr-scaling audit (b5 18B4/283C 98.7, D550 74, 2026-07-18)](#uso-ctor-sub70-redecode-kit-b5)
 - [`swc1 $f0,16(sp)` in jal delay = fifth f32 stack arg (prototyped call), NOT float-return spill; fixing the one shared unprototyped decl un-doubles every sibling call site](#swc1-delay-fifth-f32-arg-prototype-0546dc) — _timproc b5 0546DC family; DF14 59.1→78.5, D884/D14C +2pp free. cfe errors on prototype-after-unprototyped-decl: edit the shared decl + audit all sites (4-arg sites need explicit fifth 0.0f). if(0) &argN escape demotes arg-first s0 promotion._
 
+- [Baked-USO big-fn lever stack (42938): per-site real-address externs vs pool base; array flag externs; direct-array $s0 LICM; named FP scale locals vs const-fold; emit-macro role pools](#baked-uso-lever-stack-42938) — _2026-07-23 agent-f; five composable levers for big raw-word bodies; gotchas: literal-1 flag store, (f32)0 cast for 0*x._
+
 ## Quick reference by sub-topic
 
 ### uopt internals (allocator opened, 2026-06-11)
@@ -21988,3 +21990,42 @@ never literal 0) — 8 call sites in one fn.
    scheduler groups the loads; residual is the target's all-6-loads-then-3-subs grouping +
    f2/f0/f12 low-ring coloring of the three difference values (named-candidate ring not
    reachable without adding homes).
+
+## Baked-USO big-fn lever stack validated end-to-end on merged 42938 (60.9→69.2, 2026-07-23 agent-f): per-site REAL-ADDRESS typed externs kill the uopt far-global pool base; array-typed flag externs share the flag address in one reg (load+store); direct array-sym refs → LICM base into $s0; named FP scale locals defeat float const-fold; DL-emit macro cx/nd/n FUNCTION-scope role pools <a name="baked-uso-lever-stack-42938"></a>
+
+Five composable levers for big raw-word game_libs/USO bodies (each verified by
+word-diff deltas on game_libs_func_00042938, 0x614):
+
+1. **Far-global pool base**: many `(char*)&D_00000000 + 0x3C8xx` sites make
+   uopt invent a shared base (`lui s0,0x38000`-style, every access s0-relative)
+   that the target doesn't have. Per-site typed externs at the REAL addresses
+   (`gl_d_42938_pa = 0x3C938;` in undefined_syms_auto.txt) remove the visible
+   arithmetic relationship → each site gets the target's own lui-at/lo form.
+   objdiff resolves the relocs against the linker-script values, and
+   bake-data-relocs.py bakes them on the ROM path, so real-address externs are
+   fully land-compatible (same mechanism as timproc 8FC8's 52 externs).
+2. **Flag `if (*p==0) { *p=1; }` with shared address reg** (`lui v0;addiu;
+   lw 0(v0); ... sw one,0(v0)`): scalar extern folds to two independent
+   at-forms; `extern int FLAG[]; if (FLAG[0]==0) { FLAG[0]=1; }` (array form)
+   materializes the address once and shares it — the gl_d_233A0 array lever
+   applied to a read+write pair. GOTCHA: store a LITERAL 1; storing a named
+   `one` local reverts the shape to at-form.
+3. **Whole-fn base held in $s0** (`lui s0,0x0; addiu s0,s0,0` + `lw X,0x254(s0)`
+   everywhere): reference a base-0 ARRAY extern DIRECTLY at every use
+   (`FP(gl_d_gb,0x254)`); a `char *g = gl_d_gb;` held-pointer local BLOCKS the
+   LICM promotion (docs #184 confirmed at -O2 on a 386-word body).
+4. **Runtime `mul.s` of literal constants** (`320.0f*2.0f` emitted as two
+   materializations + mul.s, scale shared in $f16): literal*literal folds;
+   assign the scale to a named f32 local (`two = 2.0f; w = 320.0f * two;`).
+   For `0.0f * four` the named-local form STILL folds (mtc1 zero) —
+   `(f32)0 * four` cast-literal form needed (residual: B-side still folded).
+5. **DL-emit macro role pools**: target colors the emit chain ctx=a2, node=v0,
+   count=v1 IDENTICALLY across 6+ macro expansions = those are ONE
+   function-scope variable each; macro-local temps create fresh per-expansion
+   webs (each colored v0-first). Keep only the entry pointer macro-local (its
+   webs rotate a0/a1/a3 like the target). Same census logic as the 8FC8
+   role-pool merge, applied inside a macro.
+
+Residual on 42938 (69.2 fuzzy, honest NM): global temp-ring rotation (t6.. vs
+t2..), candidate color swaps (n↔cx on v1/a2, 1/80 on v1/t3), frame 0x30 vs
+0x58 dead-home census — classic coloring endgame, no structural diffs left.

@@ -9540,6 +9540,20 @@ caller-set-`$t6` cap list — the existing rule "verify it's not a mis-split"
 (see the caller-set-`$t6` bullet above) only checked that the predecessor *ends
 clean*; a no-`jr-ra` ORPHAN predecessor is the opposite tell and is near-proof.
 
+**Second instance (2026-07-23, agent-f, game_libs 42938+42944):** the SAME tell
+at IDO 7.1 -O2 — gl_func_00042944 (0x608) carried a "caller-set $v0/$t6,
+permanent INCLUDE_ASM" verdict for over a month while the preceding
+game_libs_func_00042938 (0xC, no jr ra) was exactly `lui v0,%hi(D+0x3C890);
+addiu; lw t6,0(v0)` — the fn's own flag load hoisted above `addiu sp`. Merge
+recipe at this scale: concat the orphan's words into the parent .s (parent name
+= EARLIER address; ROM bytes unchanged, cmp stays clean), delete the orphan's
+INCLUDE_ASM + .s, refresh expected/ (`cp build/src/...c.o expected/...`), and
+**re-derive any offset-based NON_MATCHING_TEXT_CLIP**: the new NM body size
+shifts every downstream symbol, so a hardcoded clip boundary now truncates the
+last sentinel mid-body (62F08 100→25 until clip 0x2b9e8→0x2ba24 = new last-sym
+start + its full 0x50). Sweep implication: EVERY "caller-set reg" cap adjacent
+to a no-jr-ra orphan in the cap lists should be re-audited before being trusted.
+
 **Identity tell:** the constant identifies the hardware base — `0xA6000000` =
 `PHYS_TO_K1(PI_DOM1_ADDR1)` → **osDriveRomInit** (driverominit.c verbatim,
 init fields 1/0x40/7/7/2 + bzero(0x60) + __osPiTable link under
