@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
 - [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
 - [Preheader lui/addiu NESTING (luiP,luiE,addiuE,addiuP) = while(0) dead-bit on the END constant + for-comma-init; x4 unroller fires only on indexed exact-trip `!=` form, `p<e` sltu form suppresses it; distinct extern per loop for per-loop base re-materialization (1FA20 68.9->100, 2026-07-18 agent-h)](#preheader-pair-nesting-unroll-trigger-1fa20) — _while(0) dead expr claims an early ucode bit for an ADDRESS-CONSTANT web (colors end v0 while cursor emits first); two plain defs can only give p,e,p,e or e,p,e,p; pointer `p != sym+K` bound does NOT unroll - use `for (i=0; i!=N; i++) arr[i+K]`._
 - [W65-70 game_libs trio (2026-07-18 agent-h): end-sentinel/slot-ptr DUAL-USE variable (24F30 frame-exact); param-as-cursor + post-inc idiom in BOTH arms tips uopt into s0 promotion where a separate local copy-props to a0+call-spill (1EE78); cached-count stale-v0 skip path kills join-beq + dup cond-load (1FAE8)](#w65-70-game-libs-trio-24f30-1ee78-1fae8) — _Also: K&R u16 reg arg = home store + re-mask per int-context use (the "redundant" andi); u16 stack arg = lhu slot+2; distinct placeholder externs for a loop bound LOSE the non-zero-trip proof (zero-trip guard + re-rotation, worse); `while(0){p+=1}` multi-def is fully DCE'd (inert as ref-boost/anti-remat); base with only %lo-foldable lw uses remats per-use (never s-reg) while a sibling address local colors an s-reg iff it has a non-foldable use (call arg/copy)._
@@ -21794,3 +21795,27 @@ Two independent levers from the 4EE44 decode (state-gated emit + 393B8-family 4x
 
 Residual 2-word cap: the loop-init base load's scratch pick ($v0 here vs $a1 in target) — a
 pure allocator tie; decl-order nudges move the array placement instead. 99.94 objdiff.
+
+## Named index local -> uopt sinks/remats the whole `base + idx*sizeof` address into EVERY use region (multu x12); RAW MEMORY EXPR as index forces one s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h) <a name="raw-mem-index-defeats-addr-remat-26d64"></a>
+
+Symptom (queue-drain switch, game_libs 26D64): target computes `obj = g + pidx*0x160 + 0x2D00`
+ONCE into s2 (shift-decomposed `((p*4-p)*4-p)<<5`) before the case dispatch; build rematerialized
+it in every switch arm as `multu v,s5` (12 multu, +40 insns, 0x160 const-promoted into s5, +0x2D00
+folded into each load/store offset).
+
+- **Root cause:** `u8 pidx = *(u8*)(ent+1);` local. With the index held in a register-local, the
+  address expr is cheaply rematerializable at every use, so uopt sinks it per-arm. Writing the
+  index as the RAW memory expression at each site — `obj = (Obj*)(g+0x2D00) + *(u8*)(ent+1);`
+  (and `*(u8*)(ent+1)` again in the bound check / mask read) — makes remat illegal past the case
+  bodies' stores (aliasing), so uopt CSEs the lbu AND materializes obj once in an s-reg. This is
+  the CONVERSE of the remove-local-recompute-inline lever: there you delete a local to force remat;
+  here you delete it to FORBID remat.
+- Typed struct (`Obj26D64 *obj`, sizeof 0x160) alone did NOT stop the sinking (268 insns, still
+  12 multu); explicit `(pidx*0xB)<<5` shift spelling made it WORSE (284 — remats the shift form).
+  Only the raw-mem index collapsed it (236 vs target 230).
+- Same function, three sibling decode tells: (1) mid-struct byte cursor at +0x1B5DC (out of s16
+  reach of the base) is per-site absolute `lui at,%hi(D+0x1B5DC)` derefs, NOT base-relative
+  arithmetic — spell as `*(u8*)((char*)&D_00000000 + 0x1B5DC)` inline at every site; (2) u8->f32
+  through `(f32)(s32)x` kills the u32 fixup branch (`bgez`+`lui 0x4f80`); (3) `sltiu at,tN,14`
+  before a jr dispatch = jumptable spans 14 cases — add trailing EMPTY `case 0x4D: case 0x4E:
+  break;` to widen the IDO-synthesized table.
