@@ -22505,3 +22505,34 @@ from the expected .o. New findings on top of kits I-III:
 6. Residuals at 91.75: obj-load def-site et = v1 in target vs t-ring here
    (uniform -1 ring phase, same class as 526D0); named scalar temps (msk)
    color $v0 not the per-site t-ring; frame +16 temp-area estimate.
+
+## `f32 *ap = &arg4` home-slot aliasing pins scaled float args to 256/260/264(sp) and kills the sdc1 $f20/$f22 callee-saved promotion; `s32 cell[2]` memory-homing forces the sw + pointer-chain reload (CSE killer); anti-hoist probes can REGRESS a coupled coloring (gl_func_0003BE1C 53.5->74.1, 2026-07-30 agent-f) <a name="arg-home-slot-aliasing-3be1c"></a>
+
+Context: gl_func_0003BE1C (0x620, largest post0b node) — target scales its three
+stack-passed f32 args in place (`swc1` back to the o32 home slots 0x100/0x104/0x108)
+and reloads them per-use across two `jal`s, with NO FP callee-saved registers.
+
+- **Plain `arg4 *= K[0]; ...` at -O2** promotes the products into $f20/$f22
+  (`sdc1` pair in the prologue, frame +16, every arg use register-direct) —
+  a whole-function skew. **Lever:** `f32 *ap = &arg4; ap[0] *= K[0];
+  ap[1] *= K[1]; ap[2] *= K[2];` — the address escape forces memory residence
+  in the contiguous home slots; later reads of `arg4/arg5/arg6` compile to
+  per-use `lwc1 256/260/264(sp)` exactly like the target. (K&R o32 home-slot
+  contiguity makes `ap[1]/ap[2]` alias arg5/arg6.)
+- **`s32 cell[2]` instead of two scalars** when the target `sw`s both values
+  AND re-reads a pointer chain (`arg0->0x84->0xA0`) between/after them: array
+  stores are real memory stores, which IDO's alias analysis treats as killing
+  the `char**` load CSE — reproducing the triple reload. Scalars (even with
+  `*(&x)` deref-of-address, which folds) stay in regs and the reloads CSE away.
+- **Anti-hoist probes on a coupled coloring can regress**: with 8 saved regs
+  fully subscribed, "fixing" one spurious promotion (distinct RING/RING_END
+  zero-alias syms for `&D_0` / `&D_0+6`: 74.0->71.6; `s32 sp54[1]` homing:
+  74.0->71.2) reshuffles every other assignment. Measure each lever in
+  isolation and keep only net winners; the residual 8-saved-reg skew
+  (s5/s7/s2/s3 role rotation) is the documented intractable class.
+- Also confirmed here: baked-USO constant args (`lui 0x2/addiu -4452` =
+  0x1EE9C) need an opaque extern + `undefined_syms_auto.txt` (int literal
+  emits the `lui/ori` unsigned form); f32 coefficient pools read via an
+  opaque extern array symbol (`D_3BE1C_128[0..2]`) give the hoisted
+  base + 0/4/8 loads where folded `&D+0x128` per-use derefs give a CSE'd
+  base with folded 296/300/304 offsets.
