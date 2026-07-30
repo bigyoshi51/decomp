@@ -87,7 +87,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Folded (unsigned short) cast burns ONE ugen ring slot — de-name + fitted narrowing cast cracks a skipped-ring-slot residual (gl_func_0002A4D0 EXACT 2026-07-15)](#folded-ushort-cast-ring-slot-2a4d0) — _De-named `*a0 &= K; *a0 |= K2;` keeps values in the t-ring with store-forwarding; a FOLDED (unsigned short) cast on the store RHS (zero insns) still allocates a ring temp -> shifts andi/ori numbering by one. Skipped-ring-slot residuals ARE reachable at store RHS; (unsigned char) at natural store width folds without burning. BOUNDARY: feeding an `|`/arith op the fold materializes a move (+1) — store-RHS position only (D9CC (f) negative)._
 - [Wave-3 round-3 (agent-g 2026-07-15): 38C0-family recipe portable VERBATIM (3734 EXACT on first compile); ghost-home count = volatile-pad count; value-load vs address lui/lw tell; node-copy-spill guard; as1 addiu-vs-home-store delay tie (3734 100, 3638 95.9, 6A30 85)](#wave3-round3-3734-6a30) — _Backport family recipe before re-deriving; frame short N words with all insns exact = N scalar volatile pads after the named locals; beqz+4 alloc-fail skips only init; sw s0,0x10(sp) pre-jal = 5th K&R arg; register-float staging = candidate f0/f2/f12/f14 pool; *(V3*)&float cast-copy DSEs siblings (use struct fields)._
 - [Fresh-Vec3-per-site alloc-fallback fanout (7C1C 62.9->75.8): fresh address-taken Vec3 home per staging site (frame 2.5x), decl order = descending homes; `p=0;if(1){p=&X;}` anti-fold guard; int-cast `q=(f32*)((int)base+0x30)` hoisted above guard is the ONLY spelling that keeps the addiu join-CSE; objdiff fuzzy ignores sp-offset diffs so skip frame-gap pads](#fresh-vec3-fanout-intcast-q-7c1c) — _metric/3FAC dir arg = result-direction copy not segDir; lw-2312 double-deref tell._
-- [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var._
+- [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var. 8CD8 addendum (62.2->71.9): copy chains hop through the just-written home (not fan-out from one source); named-two forces div.s but value-CSE halves it; fresh product Vec3 per += block._
 - [NEGATIVE: C48C 32-stage template-addr %hi/%lo remat resists de-name + int-cast-literal (uopt GCSE spills 16-use address const regardless of spelling); 32 sw-a2-arg-home jal delays also open](#c48c-template-addr-gcse-negative) — _needs uoptlist, not spelling._
 - [Union parameter = float-arg bits view w/o &-caching: `*(int*)&arg` s-reg-caches the home-slot address (spills another web); by-value `union{f32 f;int i;}` param reads 72(sp) both ways; + int-cast &GLOBAL web lever, *p++ copied-pointer idiom (6126C 72.2->80.7, 2026-07-17 agent-f)](#union-param-bits-view-no-addr-cache-6126c) — _while(0) ptr-store ref-boost strips (unlike FP-web case); *p++ in if-cond emits sltu value-form._
 - [Escaped-aggregate scratch kills f22/f24 caching of sibling fields: separate f32 locals w/ one address-taken let IDO cache the rest in FP callee-saves across jalr; single struct scratch = full escape = target reload shape; also reversed &-operand emission + *= negation webs (3C86C 71.3->100, 2026-07-17 agent-f)](#aggregate-scratch-escape-vs-f22-caching-3c86c) — _frame-tiling names the struct size; load-temps regress to f0/f2 webs; owner-store-first blocks the lwc1 hoist._
@@ -20737,6 +20737,28 @@ moved 62.33->76.57 and closed the size deficit 59->11 words. Deltas vs the
 5. Live-f0 compares: post-call compare chains reuse the float RETURN reg
    (7A98's f0) as the left operand of several later c.le.s — reading them as
    "vs 0.0f" is wrong; check whether f0 was clobbered since the jal.
+
+### 8CD8 replication addendum (62.16->71.85, 2026-07-30 agent-g)
+
+Third fanout land (game_uso_func_00008CD8, 709w, 16 alloc sites). New deltas:
+1. **Copy-chain provenance is per-hop, not fan-out**: the old NM body wrote
+   `spF0=spA8; sp1B0=sp174` (all from one source); target chains through the
+   JUST-WRITTEN home each hop (`stage<-spA8; spF0<-stage; spCC<-spF0` — the
+   interleaved `sw;lw 0(dst)` tell). Readbacks also go through MEMORY the
+   target actually wrote: `sp11C <- *(Tri3i*)(arg1+0x90)` (lw 144(a1)), not
+   the local that fed it.
+2. **Named-local divisor (`two=2.0f; x/two`) flips mul-by-0.5 back to div.s**
+   (confirms the 5B764 lever inside a big -O2 body) BUT value-CSE keeps ONE
+   div.s where the target recomputes both — the `X/two` value web survives
+   the intervening `*(f32*)(arg1+0x84) +=` stores even though the loads
+   alias; residual, no spelling found in-budget.
+3. Repeated dot-product `+=` blocks each get a FRESH product Vec3
+   (prodA/prodB at descending homes) + stage round-trip; computing straight
+   into the destination (`sp1C8.x = ...` then self-copy) collapses the chain.
+4. Subtract-site decode check: re-verify WHICH saved arg the body reloads
+   (`lw v0,536(sp)` = a2) — two sites in the old body read arg3 where the
+   target reads arg2; and the tail out-write is a WORD copy to arg0
+   (`*(Tri3i*)arg0 = *(Tri3i*)&stage`), not per-element floats.
 
 ## goto-end early-exit flips the alloc-fallback join phi to $a0 (kills bnez+b, gives beqz-v0-with-delay-move + epilogue move v0,a0); struct-copy (not per-element) picks held-&tmp store base; 637BC pad-array precedent generalizes (gl_func_00063884 73.25->EXACT 56/56, 2026-07-17 agent-h) <a name="goto-end-phi-a0-struct-copy-63884"></a>
 
