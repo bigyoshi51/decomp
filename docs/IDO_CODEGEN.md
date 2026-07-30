@@ -92,6 +92,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var. 8CD8 addendum (62.2->71.9): copy chains hop through the just-written home (not fan-out from one source); named-two forces div.s but value-CSE halves it; fresh product Vec3 per += block._
 - [Cast &local through (unsigned)/int to BREAK ADDRESS PROVENANCE: `out = (int*)(unsigned)local;` keeps the `if (out==0) alloc()` dead arm (bne skip + fall-through jal) that plain/ternary spellings fold; 9 dead alloc-guard arms re-emitted (game_uso 9B88 55.85->61.35, 2026-07-30 agent-g)](#int-cast-provenance-dead-alloc-arm-9b88) — _uopt only folds null-tests on values it can prove are stack addresses; a scalar-conversion round-trip launders the pointer. Same-region: target fanout copies hop THROUGH a shared staging buffer (sp+0xEC) via live pointer vars rematerialized after each jal._
 - [a1-skip in K&R varargs calls = 8-byte-aligned 64-bit args: lw/lw pair into a2:a3 = long long, ldc1/sdc1 = double, three-ll blocks not four ints; multi-def p=0;if(1){p=base+K;} beats (int)-cast for keeping a derived base unfolded across a call (55C34 52.1->100.0, 2026-07-30 agent-f)](#a1-skip-longlong-varargs-55c34) — _decode tell: printf call setting a2/a3+stack but never a1; residual = baked absolute jal (jal 0x6a620, no reloc) vs compiled jal 0+R_MIPS_26, 3 words, objdiff still 100._
+- [Escaping stack-record aggregate + region-alternating (f32)0 web-split kills a whole-function callee-saved $f20 zero web (bootup C234 63.93->68.06, 2026-07-30 agent-g)](#aggregate-escape-f32zero-split-f20-web-c234) — _m2c-scalarized callee-output locals = one escaping struct (post-call reloads return); compare-site casts are part of the zero web; spurious "f64 2nd half" placeholder arg shifts K&R FP marshal (f64#1 starts at a2); volatile pads slot BELOW aggregates (frame-gap fill negative)._
 - [NEGATIVE: C48C 32-stage template-addr %hi/%lo remat resists de-name + int-cast-literal (uopt GCSE spills 16-use address const regardless of spelling); 32 sw-a2-arg-home jal delays also open](#c48c-template-addr-gcse-negative) — _needs uoptlist, not spelling._
 - [Union parameter = float-arg bits view w/o &-caching: `*(int*)&arg` s-reg-caches the home-slot address (spills another web); by-value `union{f32 f;int i;}` param reads 72(sp) both ways; + int-cast &GLOBAL web lever, *p++ copied-pointer idiom (6126C 72.2->80.7, 2026-07-17 agent-f)](#union-param-bits-view-no-addr-cache-6126c) — _while(0) ptr-store ref-boost strips (unlike FP-web case); *p++ in if-cond emits sltu value-form._
 - [Escaped-aggregate scratch kills f22/f24 caching of sibling fields: separate f32 locals w/ one address-taken let IDO cache the rest in FP callee-saves across jalr; single struct scratch = full escape = target reload shape; also reversed &-operand emission + *= negation webs (3C86C 71.3->100, 2026-07-17 agent-f)](#aggregate-scratch-escape-vs-f22-caching-3c86c) — _frame-tiling names the struct size; load-temps regress to f0/f2 webs; owner-store-first blocks the lwc1 hoist._
@@ -22625,3 +22626,36 @@ From the gl_func_00055C34 redecode (64-bit context/register dump printf fn):
 1. **Decode tell: a printf-style call that sets a2/a3 + stack slots but never a1.** O32 aligns 64-bit args to even register pairs, so `f(fmt, <8-byte value>, ...)` skips a1 and puts the value in a2:a3. If the pair is loaded with `lw/lw` (and staged to 16/20/24/28(sp) via `sw`), the args are `long long`s — three per call here (a2:a3 + two stack pairs), NOT four misaligned ints. If loaded `ldc1` and staged `sdc1`, they're `double`s. Mixed `(fmt, ll, dbl)` = lw pair into a2:a3 + ldc1/sdc1 to sp16. m2c decodes none of this — it emitted 4-int / single-(s32) calls (the whole 52% error). The lw-pair scheduling signature: +8/+C loaded first into tN pair, then +0/+4 into a2/a3, then +14/+10 swapped.
 2. **`p = 0; if (1) { p = arg0 + 0x20; }` multi-def guard is stronger than the (int)-cast launder for offset folds.** Both `p = arg0 + 0x20` and `p = (char*)((int)arg0 + 0x20)` let uopt fold call 2's `*(p+0xFC)` to `[arg0+0x11C]` (deferring s0's live start + one extra home reload, +1 insn / 900 vs 896). The multi-def spelling kills copy-prop, keeping the target's `lw s0,home; addiu s0,s0,32; lw a1,252(s0)` at zero cost. (Scalar-conversion laundering — 9B88 entry above — works on *null-test provenance*, not on constant-offset folds.)
 3. **Residual reloc class: baked absolute jal.** Target words `jal 0x6a620` with no reloc (USO-baked absolute call to 62F08); compiled C necessarily emits `jal 0` + R_MIPS_26. 3 words, byte-unmatchable at .o level, link-correct in ROM. objdiff scores the fn 100 regardless.
+
+## Escaping stack-record aggregate + region-alternating (f32)0 web-split kills a whole-function callee-saved $f20 zero web (bootup C234 63.93->68.06, 2026-07-30 agent-g) <a name="aggregate-escape-f32zero-split-f20-web-c234"></a>
+
+Target profile: NM saves `$f20` (`sdc1` in prologue, frame +8) and holds
+`mtc1 zero,$f20` ONCE, storing `swc1 $f20` at every zero site across many
+calls; expected instead re-materializes `mtc1 zero,$fN` per region (13x in a
+550-insn body) with NO $f20 save. Two levers, BOTH needed:
+
+1. **Aggregate the callee-output stack scalars into one struct whose address
+   escapes.** m2c emits `s32 spCC; f32 spD8; s16 spDC; ... f32 spF0;` as
+   separate locals when the target has ONE record at sp+0xCC..0xF3 passed as
+   `&spCC` to a probe call. Separate scalars = IDO constant-propagates the
+   pre-call `0/0/0/1.0` initializers past the call (they can't alias); one
+   struct + escaping `&spCC` = post-call reads reload from memory (target
+   `lwc1 228/232/236/240(sp)` shapes reappear).
+2. **Split the remaining literal zero web by spelling** — region-alternating
+   `(f32) 0` vs `0.0f` (the DF98/64588 cast-literal family). With ~15 zero
+   sites in 7 regions, alternating spellings per region tipped BOTH sub-webs
+   into per-region `mtc1 zero` remat and dropped the `$f20` save + frame 8.
+   The two COMPARE sites (`x < (f32) 0`) are part of the web: reverting just
+   those two casts regressed 68.06->66.05.
+
+Also confirmed on the same function: K&R f64 varargs — a spurious
+`0 /* f64 2nd half */` placeholder arg before `(f64)` args shifts the whole
+FP marshal (int a2 + sdc1-only); the target's `mfc1 a2/a3` pair means f64#1
+starts AT a2 — delete the placeholder, don't pad it.
+
+NEGATIVE (frame-gap fill): target frame had 80B of local-slot gaps
+(4+12+4+36+8+8+8 between the named aggregates). Interleaving `volatile f32`
+scalar pads between aggregate decls did NOT fill them — cfe slotted all pads
+BELOW the aggregates (uniform +84 shift, frame 328, fuzzy-neutral). The
+volatile-pad ghost-home lever does not compose with aggregate locals this
+way; the 264-vs-248 frame residual stays.
