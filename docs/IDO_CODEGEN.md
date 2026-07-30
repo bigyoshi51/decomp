@@ -94,6 +94,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Escaped-aggregate scratch kills f22/f24 caching of sibling fields: separate f32 locals w/ one address-taken let IDO cache the rest in FP callee-saves across jalr; single struct scratch = full escape = target reload shape; also reversed &-operand emission + *= negation webs (3C86C 71.3->100, 2026-07-17 agent-f)](#aggregate-scratch-escape-vs-f22-caching-3c86c) — _frame-tiling names the struct size; load-temps regress to f0/f2 webs; owner-store-first blocks the lwc1 hoist._
 - [while(0) dead loop = FP-web coloring lever (head f2/f12/f14/f16 rotation): promotes folded sum to first-colored web, dead-ref ORDER steers ties, 2D-index CSE beats named locals (5DBB0 74.4->99.0, 2026-07-17 agent-f)](#while0-fp-web-coloring-dbb0) — _if(0) strips, dead-store-only bodies DSE; reverse dead-ref order colors first; dead add-trees do not CSE with real sums but real-sum reassociation flips the survivor; named f32 locals color f2-first in decl order (wrong here)._
 - [Wave-3 round-2 closers (agent-g 2026-07-15): de-name expression locals = fresh-ring numbering + ghost-home kill in one move; void-alias the last jal before a CSE-temp region; pad-AFTER a lone named local re-packs spill homes (38C0 91.3->EXACT, 15FC 27->23)](#wave3-round2-38c0-15fc) — _Named OR-chain/CSE-ptr locals color in-place + cost dead homes; folding them into the call args restores t7->t8->t9->t0 fresh numbering AND the exact frame. "One CSE temp in a v-reg, the other on the ring" after a K&R int call = dead-$v0 exclusion; void-alias frees v1/v0 emission-order coloring. A lone named local + compiler CSE spills +4 with a hole below = volatile pad AFTER the local claims the stray word (frame unchanged)._
+- [game_uso 1DDC/28C0 homing family: fresh-Vec3 two-hop fanout (+13.5pp) transfers from 0B3C; NO-s-reg target profile (param $a2+arg-home spill, &local remat per region) spelling-unreachable — 4 probes negative; 7538 ret-pair coloring same class (2026-07-30 agent-g)](#no-sreg-homing-family-1ddc) — _key3 flavor trichotomy: plain local caches / array reloads per-use / homed-copy reads back once; (float)0 cast re-mats late mtc1 zero on compares (9B88)._
 - [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
 - [POST0B 85-90 BAND WAVE (2026-07-15, agent-f): e-split fresh-reload-web + flat-deref in-place chains + first-call pass-through erases unused-param home + named-single-use dead slots + writeback same-line join + aligned-win/fuzzy-loss gotcha](#post0b-85-90-wave-2026-07-15) — _531C0 exact (e-split `i=a1;a1=0` -> reload colors a0; dead-if 2-web swap; flat u16 deref in-place *6 chain), 3F7A8+3F8E8 exact (a4 stored-not-passed; buf-to-frame-top decl-order layout; cb1(&buf,a1) pass-through; inline named r/st), 48354 exact (post-inc + store same-line join; compare must reload ctr), 5BCD4 rise (s/c destructive reuse + FP decl-order slots; caller-set-$f4 head cap), 3E238/5E138 caps (if(1) base-materialization wins aligned but LOSES fuzzy; addiu-share 1-insn tie)._
@@ -22566,3 +22567,27 @@ From two game_libs [45,50)-band redecodes (gl_func_000693A4 47.8->89.5, gl_func_
 6. Companion shapes validated again: 12-byte struct carrier chains (`t = d; e = t;`) for the interleaved
    lw/sw copy trains; s0=arg0 with a1-a3 homed at entry when each has 1-2 post-call uses; per-site
    prototyped zero-alias callees for f12-arg sqrt / (ptr,ptr,f32) K&R-bit passing.
+
+## game_uso 1DDC/28C0 homing-family: fresh-Vec3 two-hop fanout lands +13.5pp; NO-s-reg target profile (param->$a2+arg-home spill, &local remat) is spelling-unreachable (2026-07-30 agent-g) <a name="no-sreg-homing-family-1ddc"></a>
+
+game_uso 1DDC (55.8->69.4): the 0B3C fresh-Vec3 kit transfers — every scaled Vec3 result
+gets its OWN named stack Vec3, then a TWO-hop `*(Tri3i*)` chain through two SHARED hop
+buffers (hop A doubles as the 23D4 out-arg; hop B second); `*delta` int-copies into a
+named local before float adds; declaration order = descending slot ladder. key==3 short
+path: `float m[3]` array staging (per-use reload) + a homed pointer copy (`ptr[1]` array
+or copy-local) read back ONCE for the second store batch — plain local caches, array
+reloads per use, homed-copy-read-once is the third distinct flavor.
+
+CAP (family-wide; twin 28C0 target has the identical shape): target colors NO s-regs at
+all — the param lives in $a2 with spill-to-its-own-arg-home around calls (`or a2,a0` +
+`sw a2,frame(sp)` pre-call), and `&scratch` re-materializes `addiu a3,sp,K` per region.
+Build promotes param->$s0 and the address->$s1 (call-arg use makes the address web
+s-colorable, W65-70 rule). Four probes NEGATIVE: `x=0;if(1){x=a0;}` copy-guard (coalesces
+back to s-reg, 0-def DCE'd), `if(0){f(&param);}` escape (prologue-home flavor + kills the
+bnel), `int *volatile` param (per-use reloads), float[3] respelling of the hop buffer
+(fuzzy-neutral). Expected frame is +32 over build = dead named-local gaps (0B3C class).
+Related same session: 7538's v0/v1-vs-a2/a3 ret-pair coloring inversion also confirmed
+spelling-unreachable (`register` hints inert, guards inert) — both need a uoptlist
+candidate-order session, not spellings. 9B88 tail: cross-product operand order is ugen
+eval order (spell B*A to swap the lwc1 pair) and `(float)0` cast-literal re-materializes
+the late `mtc1 zero` (fceabb6 generalization holds on compares).
