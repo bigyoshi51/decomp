@@ -223,6 +223,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [GLOBAL_ASM .s gotchas: multi-line /* */ comments break asm-processor; lone %hi symbolization breaks bake-data-relocs; stale half-built .o after post-process failure](#global-asm-s-gotchas-2026-06-10) — _Single-line comments only in .s (multi-line blocks throw "without an initial glabel" or "incorrectly computed size"). Symbolizing a lui to %hi(sym) while its addiu partner stays a raw .word leaves a lone trailing R_MIPS_HI16 that bake-data-relocs rejects. A failed asm-processor post-process leaves a cc-only .o full of _asmpp_* placeholder fillers that make won't rebuild (.s files aren't deps) — rm the .o._
 - [jr-via-EXTERNAL-rodata-table dispatch is UNMATCHABLE by C switch — structural diagnostic + 12-fn class is a permanent INCLUDE_ASM cap (2026-06-20)](#jr-external-rodata-table-unmatchable-2026-06-20) — _IDO's C switch ALWAYS lowers to `lui %hi(.rodata); addu; lw 0(at); jr` with an HI16+LO16 pair against a SELF-LOCAL .rodata label and ZERO displacement (verified standalone). The cap targets (game_uso_func_00000940 etc.) emit HI16-ONLY against a NAMED EXTERNAL symbol (game_uso_D_807FFxxx) with the table offset FOLDED into the lw displacement (+4/+0x20/+0x38) — the signature of indexing a pre-existing external/cross-TU data table, which no C switch produces. The table data lives in a SEPARATE Yay0 data block (RAM 0x807FFxxx = past block1's 0x11B30 .text end), unreachable by the `--only-section=.text` build; symbols are stubbed `=0`; bake-data-relocs can't even express an HI16-only data reloc. Forcing the reference (computed-goto vs &external) would be match-faking (banned). NOT solvable by any "make IDO's switch reference the external table" infra. Class = 12 fns (game_uso x6: 940/B3C/8CD8/ECEC/EDD4/1189C; timproc_uso_b5 x6: 4118/5FC0/87A0/8FC8/D884/DF14). Disposition: permanent INCLUDE_ASM for the dispatch; NM-wrap the CASE BODIES for partial-credit % (per the 6900 stub-vein entry)._
 - [Clip re-probe: LAST symbol keeps FULL expected size (clip=last_sym+expected_size, not old_clip+body_delta); partial window = length-ratio score (62F08 100->65); missing fuzzy key (None) = over-clip fingerprint](#clip-last-symbol-full-expected-size)
+- [Cross-function fuzzy regression from a preceding NM body's size delta: trailing-pad shape depends on .text offset mod 16 — diff the victim's disasm first; fix the size donor (66A50/64DEC, 2026-07-30)](#nm-size-delta-shifts-downstream-pad-parity)
 
 
 ---
@@ -9684,3 +9685,27 @@ which side needs the pin. History: pin removed 2026-07-18 (expected then carried
 restored 2026-07-23 after a baseline refresh re-captured 0x2c. RULE: after ANY baseline
 refresh touching such a unit, re-check the 55B10-class fns and toggle their pins to match
 the fresh expected side; the exact-set gate catches the mismatch as a "lost" sentinel.
+
+## Cross-function fuzzy "regression" from a preceding NM body's SIZE delta: IDO trailing-pad shape depends on section offset parity — fix the size, not the victim (66A50 88.4->80.3->88.4, 2026-07-30 agent-h) <a name="nm-size-delta-shifts-downstream-pad-parity"></a>
+
+gl_func_00066A50's fuzzy dropped 88.4->80.3 when 64DEC (earlier in the same TU) was
+redecoded 3 insns SHORT of its expected size (0x268 vs 0x274). 66A50's own C block and its
+real-instruction bytes were BYTE-IDENTICAL before/after — the delta was entirely in its
+IDO-emitted trailing unreachable-pad region (nops after a `b .` halt + dead epilogue),
+whose SHAPE/length varies with the function's .text start offset mod 16. The 0xC shift
+changed the pad layout and the symbol size (0x9c vs 0x88 vs expected 0x94-parity),
+costing ~8pp of fuzzy on a 37-insn fn.
+
+Rules:
+- When a redecode of fn A "regresses" a DOWNSTREAM fn B in the same unit, diff B's build
+  disasm before/after FIRST. If identical, it's offset-parity scoring, not codegen — do
+  not touch B. Restore A's build size to the expected size (episode: the honest fix also
+  raised A 86.9->91.5).
+- Corollary: an NM body that lands SIZE-EXACT protects every downstream fn's pad parity;
+  prefer closing an insn-count deficit before chasing register colors.
+- Frame/layout levers used to close the deficit (generalizable): if(1)-mutation base-pin
+  (`p=(T*)a; if(1){p=(T*)((char*)p+K);}`) materializes `addiu rX,base,K`; named f32
+  diff-locals batch lwc1 groups + land sub.s in candidate regs, and REUSING the same trio
+  for later reloads reproduces candidate-reg reload forms; local-decl ORDER tunes slot
+  layout (aggregates/pointers/scalars each shift the uopt spill-temp base — anchor with
+  the known slots like spA4@0xA4 and probe pad-array sizes).
