@@ -14,7 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
-- [Homed-locals-as-ARRAY defeats struct-field scalarization (arrays never scalarized; struct fields DO promote); volatile pad ARRAYS survive trimming, decl order = frame placement; E68 anchor-split works on in-TU func bases for fuzzy (bootup 411C 69.6->88.0, 2026-07-30 agent-g)](#homed-array-vs-struct-scalarize-padarrays-411c) — _Serial alloc temp p + guard-only if(p)init (no early returns) + per-region q=A[i] block temps; residual = BF8C direct-form lui-at/lwc1 vs addiu-form for in-TU-defined-function base (struct-cast doesn't fold)._
+- [Homed-locals-as-ARRAY defeats struct-field scalarization (arrays never scalarized; struct fields DO promote); volatile pad ARRAYS survive trimming, decl order = frame placement; E68 anchor-split works on in-TU func bases for fuzzy (411C 69.6->88.0; CCE0 84.2->90.0, BF8C 86.9->88.3 CSE-collapse killable; 24B8 serial-reuse-var NEGATIVE: webs split; volatile kills cross-arm PRE, 2026-07-30 agent-g)](#homed-array-vs-struct-scalarize-padarrays-411c) — _Serial alloc temp p + guard-only if(p)init (no early returns) + per-region q=A[i] block temps; residual = BF8C direct-form lui-at/lwc1 vs addiu-form for in-TU-defined-function base (struct-cast doesn't fold)._
 - [sw a2,0x8(sp) in jal delay = 4-byte struct passed by value (only shape that homes a2); char*volatile local = save slot below homed array (plain/struct-field promotes, spills at frame top); unused scalar decls hold frame slots (bootup 13D40 52.4->88.5, 2026-07-30 agent-g)](#struct-byval-a2-home-volatile-save-13d40) — _Residual: six per-block value webs coalesce into one v0 global web (target = block-local t-cycle temps) + 3 reserved spill words + post-call temp-pair renumber; ~25 variants stable. Siblings harvested 2026-07-30: 1438C 65->87.9, 8124 69.5->94.5 (+ tail variable-reuse lever, dead-decl-pair slot placement); 84A0 62.5->93.3 (A[6]+q2 odd-parity pad; addend-no-fold on real-fn symbol); 90CC/6808 parked (grep AFA60008)._
 - [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
@@ -22814,6 +22814,30 @@ into $s0/$s1 and cascaded the whole register file.
 5. Commutative FP order: `pool * rand()` matched mul.s operand order at the
    first site but the second site needed `rand() * pool` — per-site, not
    global; gate each on the emitted operand order.
+6. **2026-07-30 (agent-g) anchor-split validated twice more**: bootup CCE0
+   84.2->90.0 (5-site pool base &func_00000940+0x1C..0x2C: 4 alternate in-TU
+   anchors 098C/08F4/08D4/08B4 killed the base CSE — spill slot gone, frame
+   -96->-88 exact, all 9 save-slots exact via single-scope reversed decl list
+   + `volatile int pad[1]` reproducing the target's 64(sp) gap) and BF8C
+   86.9->88.3 (`&func_00008A38+0x34` for the 8A40+0x2C tail ref — frame
+   -80->-32 exact; retracts the "hard cap, not source-reorderable" note at
+   the CSE-collapse entry: the COLLAPSE is killable for fuzzy, only the
+   direct-form lui-at/lwc1 per-site shape + reloc name stay capped).
+7. **NEGATIVE (24B8, 2026-07-30)**: the 8124 tail-variable-reuse lever does
+   NOT generalize to forcing a serially-reassigned local into one saved reg.
+   Target's s0 is reused for 9 disjoint short webs (flags temp, cfg ptr,
+   vtable ptr, &cam->field cursor, counter); writing them all as ONE C var
+   `h` changes nothing — uopt allocates by du-chain WEB, not source var, so
+   the copies split and color into v/t regs (80.6->78.3, reverted). The 8124
+   form only works because the reused var is memory-homed/spilled (the copy
+   survives as a load). Two-saved-reg coloring there remains a cap.
+8. **Cross-arm PRE hoist of a common load is volatile-killable** (BF8C): both
+   if/else arms read `*(0x508)` as a mul operand; IDO PRE hoists ONE load
+   above the branch, target loads per-arm. `*(volatile f32*)` in each arm
+   restores per-arm loads. Also: source `A * B` emitted mul.s B-first at SIX
+   BF8C sites — writing `B * A` matched every one (reverse-of-source rule,
+   gate per-site per #5). Switch compare-order is NOT source-steerable
+   (case reorder = identical bytes; if-chain = worse shape).
 
 ## Custom guLookAtF decode (5F5F0 45.3->82.3): gu-shape first; (f32)1 CSE-break; low-rank guard-sqrt var memory-homes; escape-array + join-scalar clamp (2026-07-30 agent-f) <a name="gulookatf-clamp-5f5f0"></a>
 
