@@ -75,6 +75,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [POST0B 80-85 BAND WAVE (2026-07-15, agent-f): trailing volatile pads get TRIMMED (leading dead-home rebuilds frames); jal-delay-spill of pre-call $v0 = discarded-return decode signature; params spill to arg-area homes (is-it-a-param diagnostic); neg-canonicalization + li-at/lui-slot + assert-string-hoist caps](#post0b-80-85-wave-2026-07-15) — _5185C 84->objdiff-100 (reloc-form &D args + ||-alloc-fallback + 519A4 struct-copy + LEADING volatile pad; trailing pads never slot); 3D8A8 83->94 (permuter had plateaued 132k iters on a WRONG decode: `ret=X2(...)` vs target discarding X2's return — jal-delay `sw v0` + post-call reload of the SPILL, not $v0, is the tell); 4ADB4 83->87.9 (de-named cap in ring, `(base*2)*-1` distributed address; every add-of-neg spelling VN-folds to subu, scale-then-negate pair unreachable); 62E10 83->85.7 (naming base+tag two-statement destructive mask -> v1/v0 candidates, ring snaps; li-at/lui slot swap = as1 tie); 4A7C4 85.6->87.3 (distinct base-0 externs; assert-string lui/addiu speculative hoist above slt/bnel immune to if(1)/goto/named-local = cap)._
 - [Per-symbol pad-struct externs kill %hi-CSE for multi-offset baked-USO const reads; prototyped f32 placeholder extern; local-def callee bakes jal target](#per-symbol-pad-struct-hi-cse-63f34) — _63F34 68.28->86.98: distinct pad-struct externs per constant -> at-macro form; extern f32 fn(f32) vs K&R double-promotion; jal 0x0 needs undefined extern; 12-byte sp struct fixed frame; volatile-pad phantom slot composes._
 - [Stack-homed linked-list walk: volatile 2-field iterator struct pins cur/next to adjacent sp slots + exact load/store order; plain struct gets scalarized to s-regs by uopt (6337C 65.67→87.45, 2026-07-18 agent-h)](#volatile-iterator-struct-stack-homed-walk-6337C) — _Tell: adjacent-slot sw/lw walk + per-iteration `obj = cur[0]` reload + loop flag in v0. Residual: val s1-vs-v0 coloring cascade._
+- [Dispatch-temp/pointer ONE-LOCAL v1 unification (reused `tmp` = switch temp + call-result ptr -> both $v1, top home) + twin-indexed ARRAY-extern = paired lui/addiu base (inverse of split-NAME kill); phantom li aN,K before jal = one-arg-too-many tell (h2hproc A88 89.1->97.1, 2026-07-30)](#one-local-v1-unification-a88) — _if-chain degrades 3-arm dispatch; shared named const local homes+remats (cross-BB const PRE cap); min-web $a2 arg-discount tie residual._
 - [NAMED-LOCAL WEB CROSSING A JAL CAN NEVER COLOR $v0 (call-return def conflict) — v0/v1 swap on a spilled-across-call temp is a cap when the spill slot is a decl-first named home; tmp-first decl + volatile pad ARRAY rebuilds a high temp-spill frame exactly (37AF0 98.97->99.13, 2026-07-15)](#named-web-jal-v0-conflict-37af0) — _uoptlist: a named local live across a jal conflicts with the call's v0 def -> forced v1; original's unnamed split-range temp took v0 both sides of its spill/reload. Frame recipe: declare the temp FIRST (highest home, jal-delay-slot spill to it) then `volatile int pad[4]` phantoms lift later locals; single-int-struct copy goes through &home (+2 insns), s1/p2 reuse and if(1) inert on the color._
 - [SHARED-$AT ABSOLUTE-STORE PAIR IS A CAP: one `lui at` + two `sw ..,%lo/%lo+4(at)` is unreachable from -O2 C — every shape gives base-CSE (4 insns) or per-store lui (4 insns) (66A50/66B64, 2026-07-15)](#shared-at-absolute-store-cap-66a50) — _Probed 8 shapes: extern struct pair / int[2] / (&sym+1) => uopt materializes ONE base reg (lui+addiu+2sw); two scalar externs => two direct sw macros but two unmergeable %hi relocs; `*(int*)0xADDR` literal => uopt lowers per-store lui t8/t9 with NO %hi CSE (volatile same); if(1)/same-line inert. The 3-insn form needs same-symbol HI16 merging with unequal addends, which neither uopt nor as1 does on reloc operands. Target shape = pre-linked-library bake. Sibling fact: `*(int*)LITERAL = k` at -O2 emits lui tN,%hi;sw %lo(tN) DIRECT (correct sw shape, wrong base reg class).\_
 - [if(1) BB-break kills store-to-load forwarding (local-CSE, per-BB) + zero-jal library-call gotcha + swap/RMW ring-temp spellings (62F8C 98.08->100, 2026-07-15)](#if1-bb-break-store-forwarding-62f8c) — _Wrap the re-read in `if(1){...}` (zero code, fresh BB) when the build truncs the pre-store copy instead of the reload; de-name a swap temp via two stores on one line (ring t4 + delay-slot store order); RMW spelling `F=F+1; n=F;` keeps the load ring-t9-split; one function-scope ptr for repeated derefs = cross-site color bias; game_libs calls must link jal 0x0 via zero-alias, .o word-diff alone lies._
@@ -22289,3 +22290,26 @@ guard uses ride the copy SOURCE, +1 insn — net worse. Leave as the sole 1-word
   Pads inside an inner block only lift that block's locals (result[] et al.), leaving function-scope homes
   (iter2 cursor pair) unmoved. 38DC0: 2 function-scope pads = iter2 0xB0->0xB8, result 0x58->0x60,
   frame -184 -> -192, all store offsets exact.
+
+## Dispatch-temp/pointer ONE-LOCAL v1 unification + twin-indexed array-extern paired base (h2hproc A88 89.1->97.1, 2026-07-30) <a name="one-local-v1-unification-a88"></a>
+
+Switch dispatcher whose dispatch temp builds in $v0 but target has it in $v1, AND a later call-result
+pointer reloads into $v1 from the frame's TOP slot: suspect the target source used ONE reused local for
+both. Reusing a single `int tmp` (switch temp at entry, then `tmp = alloc_call(...)` in an arm) merges
+them into one jal-crossing named web — which can never color $v0 (named-web-jal-v0-conflict) — so BOTH
+the dispatch compares and the pointer land $v1 in one move. A dead-at-that-point `tmp` can be reused a
+THIRD time as a scratch (here diff_b) to pin another $v1 site. Per-web levers (if(1) wrap, named `state`,
+if-chain instead of switch, shared const local) were all inert or regressive; the if-chain also degrades
+the 3-arm beqz/beq/b dispatch to bnez-skip nested form.
+
+Paired-base corollary (inverse of the split-NAME %hi-CSE KILL): to get the target's PROMOTED base form
+`lui rB,%hi(D); addiu rB,%lo(D)+0; lw rX,0x170(rB); lw rY,0x174(rB)` for a twin read, spell it as an
+ARRAY-typed extern indexed twice (`extern unsigned pair[]; pair[0x170/4]; pair[0x174/4]`) — the
+char*-base `*(u32*)(base+0x170)` spelling folds per-site into TWO unpaired luis with baked addends.
+Under reloc-masked USO scoring a fresh extern name is free.
+
+Logic tell from the same crack: a phantom `li aN,K` before a jal that target lacks = you're passing one
+arg too many (here a bogus 3rd arg `1`); it also costs +8 frame. Residual caps confirmed on this fn:
+min-web const-call-arg $a2-vs-$v0 arg-discount tie (kit III NEGATIVE class) and uopt cross-BB const PRE
+of a shared `li a1,3` into the dispatch delay slot (no C spelling reproduces; a shared named const local
+just homes+remats).
