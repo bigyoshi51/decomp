@@ -13944,6 +13944,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 
 - [Dead-kill `p = 0;` AFTER a `saved = p;` copy un-coalesces a widget-ptr/saved-copy pair from one long memory web into register-web + frame-homed copy; placement is load-bearing (adjacent-to-copy works, at-tail is DCE'd early and coalescing returns); cascade de-registerizes a shared mult constant (li+multu -> per-site sll/subu/sll/addu strength reduction) (timproc_uso_b1 1340 76.5->84.44, 2026-07-30 agent-g)](#dead-kill-uncoalesce-saved-copy-1340)
 - [do-while(0) statement macro = 2 BBs per expansion: Chow span denominator bloat turns EVERY loop var priority negative (-168 frame, t-regs + spill around jals, zero s-regs); plain-brace macro restores the full s0-s8 prologue in one step; mixed temp scoping (fn-scope _c/_q/_n + block register _e) is load-bearing for stable-vs-ring colors + exact frame (46050 48.5->80.1, 2026-07-30 agent-f)](#dowhile0-macro-bb-bloat-span-demotion-46050) — _Also: if/else-if chain (not switch) hoists compare literals 10/9/0x30 into s5-s7 loop-constant regs; dead if(charw){} flips an s1/s2 priority tie; jal-delay-slot w0 store identifies true emit statement order._
+- [do-while(0) BB-bloat DOSED in reverse: 3 wraps demote only lui-const/FP-const hoist webs (s6/f22) keeping s0-s5+f20 exact, 6+ wraps = 46050 all-s-regs-die wall; char*volatile memory-homes list cur/next iterators (454C4 29.8->62.1, 2026-07-30 agent-f)](#dowhile0-bb-bloat-dosing-454C4) — _Add one wrap at a time at original-macro-shaped sites (DL appends) and re-diff; caps: unified 255.0f web insists on f22 vs target f0-remat-after-jal; elem copy-pair coalesces to one lw._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -22965,3 +22966,33 @@ gl_func_00002840 (game_libs) levers, generalizable to any USO fn calling blank e
 - `trunc.w.s` + `mfc1 a1` feeding an int arg register = plain `(s32)` cast in the arg. m2c's `(f32)(s32)(...)` emits trunc->mfc1->mtc1->cvt.s->cvt.d->mfc1 a2/a3 garbage (double round-trip).
 - `lwc1` from a data global = float load; m2c often types it `*(int*)&D_X` (lw + mtc1 + cvt.s.w). Check the consumer: straight into mul.s means f32 global.
 - Negative probe: `if(0){ f(&local); }` address-escape on the twice-assigned spill pair made things WORSE (reordered subs, zero-store); the m2c literal shape (named sp-slot locals assigned before and after the if, plus separate reg temps) reproduced the target's two-store/one-slot-pair pattern best.
+
+## do-while(0) BB-bloat as a DOSED demotion lever: 3 wraps kill only the constant hoists, 6+ hit the 46050 wall (454C4 29.8->62.1, 2026-07-30 agent-f) <a name="dowhile0-bb-bloat-dosing-454C4"></a>
+
+Inverse application of the 46050 finding: when the BUILD hoists loop-invariant
+constants into leftover callee-saved regs that the TARGET leaves free
+(`lui s6,0x300` preheader hoist; 255.0f web in `$f22` where the target remats
+`lui at,0x437f; mtc1 at,$f0` per region), the span-denominator bloat can be
+dosed to demote ONLY those low-benefit webs:
+
+- Each `do{...}while(0)` wrap = +~2 BBs in every web that spans it. Constant
+  webs (1-3 uses) go priority-negative first; high-use var webs (rec/args/
+  counter, 10+ uses) survive.
+- Dose-response on 454C4 (0x7EC colour-quantize batch, target s0-s5+f20):
+  - 0 wraps: s0-s8 + f20 + f22 (constants hoisted; 61.8%)
+  - 3 wraps (loop DL-append + both mid-tail appends): s0-s5 + f20 + f22
+    EXACT int prologue, `lui 0x300` hoist gone (62.0%)
+  - 6 wraps (all DL-append sites) or wraps on the head FCSR-dance/clamp
+    statements: 46050 wall — ALL s-regs die, s0-s3-only prologue, frame wrong.
+- Wrap the sites that look like original statement MACROS (gfx DL-append
+  blocks); nonlinearity is sharp, so add one wrap at a time and re-diff.
+- Companion lever: `char * volatile` on linked-list cur/next iterator locals
+  memory-homes them (target `sw/lw 60/64(sp)` shape incl. the volatile load
+  duplicated into bnel/beql delay slots) and releases s6-s8/f22 pressure in
+  one step. Declared-only volatile, no (void) cast.
+- Residual caps on 454C4: (a) unified 255.0f web takes $f22 while target
+  remats into caller-saved $f0 after each jal — every spelling probed
+  ((f32)255 split moves the web to f20/f22, per-site distinct spellings
+  triple-materialize, head/loop split leaves f22); (b) `e2 = e;` elem copy
+  pair coalesces into ONE `lw x,196()` load where the target keeps two webs
+  and two loads — dead `if(e2){}` interference probe made it worse.
