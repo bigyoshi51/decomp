@@ -21,6 +21,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [4-case switch = COMPARE CHAIN below IDO's 5-label jumptable threshold; empty trailing `case N: break;` forces the table; `goto`-only case arm = block placed after post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h)](#empty-trailing-case-jumptable-threshold-76f0) — _sltiu N+1 + local-rodata-table words are the only residual; pairs with external-uso-jumptable-cap. Also: m2c `func(0,X)` with target `lui/addiu a0` pair = `func(&D_00000000, X)`._
 - [Int-cast base arith (`int g = (int)arr;`) UNFOLDS the $at-macro absolute store into a compiler-held lui/addiu base + disp store; pair with per-site-extern %hi-CSE-kill for cross-call rematerialization (272C4 48.3->100, 2026-07-30 agent-h)](#int-cast-base-unfold-272c4) — _Also this session: (a) 3-float-param FP-home budget cap: IDO 7.1/5.3 home at most TWO float params via mtc1->f12/f14 (+mfc1 back for onward gp-reg pass); a target homing THREE (mtc1 a3,$f16) is unreachable in every probed mode (6F834 residual). fnptr-cast calls cost lui/addiu+jalr+v0-spill vs direct typed extern jal (64.2->87.7 on the swap). (b) Per-compare $at-macro big-constant materialization (4x lui at/ori at for one repeated magic) WITH -O2 scheduling is unreachable: -O1 gives the $at macros unscheduled, -O2 (any of -g3/volatile/literal-addr/5.3/7.1) value-CSEs the constant into a reg with only call-clobber rematerialization (66AF0 residual; cap class)._
 - [Two-lever combo for "chain computed once pre-branch, arms diverge" caps: MULTI-DEF anti-fold (`v0b = base+attr*K; v0b += idx*M;`) pins the address chain pre-branch; param-as-cursor reassign (`a0 = call(...); a0 += 8; return a0;`) tips the s0 promotion (1DB88 48.6->78.6, 2026-07-30 agent-h)](#multidef-prebranch-plus-param-cursor-1db88) — _Single-expression AND per-use-macro-CSE spellings both duplicate/recompute the chain per arm; separate named result var copy-props to $a0+call-home-spill (`register` inert). Frame-slot A/B: sole named local (rest macro'd) = frame+spill-slots EXACT but folds arm loads into big offsets; extra named local = arm shape exact at +8 frame — fuzzy favors shape. `*((short*)&a1+1)` per-use-reload probe REGRESSES (address-taken kills K&R short homing shape)._
+- [jal-delay `sw v0,SLOT(sp)` + post-call `lw v0,SLOT(sp)` = spill/restore of the PRE-CALL base (call result DISCARDED), not a call-result respill — decode as base kept in v0 across calls, plain -O2 spill coloring; residual &local slot then falls to the decl-order lever (3395C 41.95->100, 2026-07-30 agent-h)](#jal-delay-sw-v0-is-base-spill-3395c)
 - [Switch-arm `break` vs inline `return 0`: break tail-merges into the shared v0=0 epilogue (bare bne/bgez + bltzl-to-epilogue), inline return 0 costs +2 insns/site + t-ring drift; re-tested consts = SEQUENTIAL ifs not else-if; stale reloc-blind "hardcoded jal" cap retracted via expected/.o (baked USO jal = extern at USO-local vram) (2A080 48.25->92.03, 2026-07-30 agent-h)](#switch-break-tailmerge-sequential-ifs-2a080) — _disasm-func.py without --obj reads build/non_matching FIRST (own NM build masquerades as target); objdump -r before believing no-reloc claims; copy-prop-immune pure copies (or v0,a2 / dead-param reuse) re-confirmed 3E1B0-class (while(0)/if(1)/param-reassign all fold)._
 - [Spline-fanout big-fn kit IV: `default:` doesn't count toward the 5-label jumptable threshold; named `one=1` const web (compares/stores share t0, literal args fresh li); RMW-through-incremented-pointer keeps sw unfolded; big-struct-copy doesn't reserve frame temp area (0B3C 48.2->91.8, 2026-07-30 agent-g)](#spline-fanout-kit-4-0b3c) — _Also: seg anti-fold guard flips s1->a3+home on a 22-call-live pointer; 0x40 struct assign = 3-word/iter copy loop; volatile pads rebuild named-local gaps but grow frame 1:1._
 - [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
@@ -23020,3 +23021,22 @@ dosed to demote ONLY those low-benefit webs:
   triple-materialize, head/loop split leaves f22); (b) `e2 = e;` elem copy
   pair coalesces into ONE `lw x,196()` load where the target keeps two webs
   and two loads — dead `if(e2){}` interference probe made it worse.
+
+
+## jal-delay `sw v0,SLOT(sp)` + post-call `lw v0,SLOT(sp)` = PRE-CALL base spill, not call-result respill (3395C, 2026-07-30 agent-h) <a name="jal-delay-sw-v0-is-base-spill-3395c"></a>
+
+Shape: `jal cb / sw v0,0x1C(sp)` then `lw v0,0x1C(sp)` right after the
+call, repeated at each call site with the SAME slot. Easy misread: "p =
+cb(...) respilled to sp+0x1C" (an old NM note called it an unmatchable
+respill cap and decoded `p = cb(...)` chains). Actually the delay-slot
+`sw` stores the OLD v0 (a base pointer computed before the calls) and the
+`lw` RESTORES it — the call results are discarded. This is plain IDO -O2
+spill-slot coloring for a value that spans calls when uopt doesn't give
+it an s-reg: decode as `rec = BASE; if (rec->flag) { cb(...); ...
+rec->field = 0; }` with `rec` a plain local. gl_func_0003395C: 28/29
+first compile at unit-default 7.1 -O2 -mips2 once the 7-word stolen
+prologue (game_libs_func_00033940 = the addr compute + first field load)
+was folded back in; the last word (`&local` at sp+0x24 vs 0x20) is the
+decl-order lever — declare the scratch `int local` BEFORE the record
+pointer. Checklist trigger: entry reads an unset register (here t8/v0)
+=> hunt the preceding orphan .s before believing any cap note.
