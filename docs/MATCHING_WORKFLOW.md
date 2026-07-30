@@ -10,9 +10,10 @@
 
 > Operational recipes for the matching workflow: NM wraps, fragment merging, objdiff scoring quirks, expected/ baseline care, file split mechanics, build hygiene.
 
-_74 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_75 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 - [Resolved-jal m2c overlay pipeline: full-body redecode of big raw-.word USO NM fns (8FC8 41.5→65.8, B624 20.7→62.6, 2026-07-23)](#resolved-jal-m2c-overlay-pipeline) — _disasm expected-.o (NOT default search: build/non_matching hits first!), overlay .s jal/lui symbols by insn index, %lo every consumer of every lui (multi-consumer + dual-lui-branch-join + bc1fl-label-space gotchas), fabricate .text-invisible jtbl entries, m2c --valid-syntax, char*-only locals, reuse sibling-block decls. Hand-paraphrase 'FP-schedule cap / fuzzy=None' verdicts do NOT transfer to the m2c emission — re-test them._
+- [Donor-spliced switch jumptables ARE landable: rename donor-local .rodata reloc to <func>_rodata + pin baked %lo in undefined_syms_auto (6DD14 __osDevMgrMain 46.2->100, 2026-07-30)](#donor-splice-switch-jumptable-rodata-rename) — _30AF4 "external jumptable permanent cap" holds only for in-unit compiles; for REPLACE_FUNC_BODY donors the table already ships in the USO data segment. Also: 74 entries -> 75._
 - [GOTCHA: disasm-func.py can return a wrong/stale body — expected/<unit>.c.o is the only ground truth (B154 2026-07-23)](#disasm-func-stale-vs-expected-obj) — _script gave a 123-insn frame-176 shape diffing ~identical to the NM build while objdiff said 58%; real target in expected/.o was 133-insn frame-168 at a different address._
 
 ## Quick reference by sub-topic
@@ -9709,3 +9710,32 @@ Rules:
   for later reloads reproduces candidate-reg reload forms; local-decl ORDER tunes slot
   layout (aggregates/pointers/scalars each shift the uopt spill-temp base — anchor with
   the known slots like spA4@0xA4 and probe pad-array sizes).
+
+## Donor-spliced switch JUMPTABLES are landable: rename donor-local .rodata reloc + pin via undefined_syms_auto (6DD14 __osDevMgrMain 46.2->100, 2026-07-30 agent-h) <a name="donor-splice-switch-jumptable-rodata-rename"></a>
+
+The "external jumptable = permanent cap" analysis (30AF4-class: IDO always emits a
+switch's table into local .rodata + HI16/LO16 relocs, while the USO target reads it
+from the data segment at a baked %lo like `lui at,0; lw t1,0x23B0(at)`) holds ONLY
+for in-unit compiles. For REPLACE_FUNC_BODY donor splices the reloc machinery closes
+the gap:
+
+- `scripts/replace-function-body.py::import_donor_relocs` now renames any donor reloc
+  against a LOCAL SECTION symbol (name starts with `.`) to `<func><_section>`
+  (e.g. `gl_func_0006DD14_rodata`) instead of importing a global UNDEF literally
+  named `.rodata` (which would alias every donor's local data).
+- One `undefined_syms_auto.txt` line pins it to the baked table offset the USO ships:
+  `gl_func_0006DD14_rodata = 0x000023B0;` — the linker then bakes
+  `lui at,%hi(0x23B0)=0 / lw t1,0x23B0(at)`, byte-identical to the raw target words.
+- The donor's own .rodata CONTENT (the table) is intentionally discarded: the USO
+  already ships the table in its data segment (it was never part of the INCLUDE_ASM
+  text). Precondition: the donor's case-body .text offsets must equal the target's
+  (they do when the body is word-exact), so the shipped table stays consistent.
+
+Case study gl_func_0006DD14 = libultra __osDevMgrMain (io/devmgr.c verbatim, IDO 5.3
+-O1, 0x490/292 words; sibling of the 6DA74/6F088/6DC0C LEO-family donors): reference
+source compiled 291/292 on the FIRST try; the only decode delta was the switch range —
+`switch(mb->hdr.type)` spans type 10..16 (add `case 15: case 16:` sharing `default:`
+=> `sltiu at,X,7`), and the 292nd word was the jumptable %lo, closed by the rename+pin
+above. Fingerprint for the family: ra-only frame, every local stack-resident with
+sequential t-reg reload chains = IDO 5.3 -O1, so probe the libreultra identity BEFORE
+grinding the m2c stub.
