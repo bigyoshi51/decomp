@@ -17,6 +17,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
 - [4-case switch = COMPARE CHAIN below IDO's 5-label jumptable threshold; empty trailing `case N: break;` forces the table; `goto`-only case arm = block placed after post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h)](#empty-trailing-case-jumptable-threshold-76f0) — _sltiu N+1 + local-rodata-table words are the only residual; pairs with external-uso-jumptable-cap. Also: m2c `func(0,X)` with target `lui/addiu a0` pair = `func(&D_00000000, X)`._
+- [Spline-fanout big-fn kit IV: `default:` doesn't count toward the 5-label jumptable threshold; named `one=1` const web (compares/stores share t0, literal args fresh li); RMW-through-incremented-pointer keeps sw unfolded; big-struct-copy doesn't reserve frame temp area (0B3C 48.2->91.8, 2026-07-30 agent-g)](#spline-fanout-kit-4-0b3c) — _Also: seg anti-fold guard flips s1->a3+home on a 22-call-live pointer; 0x40 struct assign = 3-word/iter copy loop; volatile pads rebuild named-local gaps but grow frame 1:1._
 - [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
 - [Preheader lui/addiu NESTING (luiP,luiE,addiuE,addiuP) = while(0) dead-bit on the END constant + for-comma-init; x4 unroller fires only on indexed exact-trip `!=` form, `p<e` sltu form suppresses it; distinct extern per loop for per-loop base re-materialization (1FA20 68.9->100, 2026-07-18 agent-h)](#preheader-pair-nesting-unroll-trigger-1fa20) — _while(0) dead expr claims an early ucode bit for an ADDRESS-CONSTANT web (colors end v0 while cursor emits first); two plain defs can only give p,e,p,e or e,p,e,p; pointer `p != sym+K` bound does NOT unroll - use `for (i=0; i!=N; i++) arr[i+K]`._
 - [W65-70 game_libs trio (2026-07-18 agent-h): end-sentinel/slot-ptr DUAL-USE variable (24F30 frame-exact); param-as-cursor + post-inc idiom in BOTH arms tips uopt into s0 promotion where a separate local copy-props to a0+call-spill (1EE78); cached-count stale-v0 skip path kills join-beq + dup cond-load (1FAE8)](#w65-70-game-libs-trio-24f30-1ee78-1fae8) — _Also: K&R u16 reg arg = home store + re-mask per int-context use (the "redundant" andi); u16 stack arg = lhu slot+2; distinct placeholder externs for a loop bound LOSE the non-zero-trip proof (zero-trip guard + re-rotation, worse); `while(0){p+=1}` multi-def is fully DCE'd (inert as ref-boost/anti-remat); base with only %lo-foldable lw uses remats per-use (never s-reg) while a sibling address local colors an s-reg iff it has a non-foldable use (call arg/copy)._
@@ -22465,3 +22466,42 @@ fields to sp+0x20..0x24 each outer iteration and RELOADS them per inner iteratio
    if(1) BB breaks. Tie class currently unsolved — don't re-run those sweeps.
 6. Also confirmed: 6-byte-struct scaling (`base[u16idx]`) = `li 6` + multu/mflo (kept in
    a reg across the loop); a literal `*6` on a char* base would strength-reduce to shifts.
+
+## Spline-fanout big-fn kit IV (0B3C 48.2->91.8, 2026-07-30 agent-g): `default:` does NOT count toward the 5-label jumptable threshold; named `one=1` web = compare/store t0 sharing while literal call-args stay fresh `li`; RMW-through-incremented-pointer keeps the sw unfolded; big-struct-copy does NOT cause the frame temp-area reserve <a name="spline-fanout-kit-4-0b3c"></a>
+
+Fourth fresh-Vec3-fanout replication (game_uso 0B3C, 706w, 2824B), full rewrite
+from the expected .o. New findings on top of kits I-III:
+
+1. **`default: break;` is NOT a 5th label** for IDO's jumptable threshold — a
+   4-case switch + explicit default still lowers to a beq chain. Only a real
+   `case N: break;` crosses it (then `sltiu N+1` vs the target's `sltiu N` is
+   the 1-word residual, and the whole dispatch + case-body region re-syncs).
+2. **Named `int one = 1;`**: comparisons (`if (one == x)`) and stores
+   (`s->130 = one`) share the t0-colored web (re-materialized after the call
+   region), while literal `1` call args materialize per-site `li a1,1` —
+   matching a target that mixes `bne t0,vX` compares with fresh `li a1,1`
+   args. With ALL-literal spelling the arg had joined the compare web
+   (`move a1,t0` = wrong). Constant-web membership is a SOURCE property:
+   variable-consts join, literal args don't.
+3. **A58 RMW idiom** (`lw t,2648(v1); addiu v1,v1,2648; and; sw t2,0(v1)`):
+   `tv = ...; x = *(s32*)(tv+0xA58) & M; tv += 0xA58; *(s32*)tv = x;` — the
+   load folds through the ORIGINAL tv (copy-prop blocked for the store because
+   tv is destroyed by the increment), store stays 0(v1). A named `int *p =
+   (int*)(tv+0xA58)` gets fully folded away (both accesses base+imm, no
+   addiu). Folded-store variant (`sw 2648(v1)` + trailing addiu) at one site:
+   plain RMW + trailing `tv += 0xA58` gets the addiu DCE'd — 1-word residual.
+4. **0x40-byte struct assignment** (`*(Blk40*)(p+0x70) = *(Blk40*)(p+0x30)` with
+   `typedef struct {int w[16];} Blk40`) reproduces IDO's 3-words/iter copy
+   loop + 1-word tail exactly. Probe-verified it does NOT reserve a shadow
+   stack temp: deleting both copies left the frame unchanged, so an oversized
+   unused temp area (locals sitting +0x2C above target homes) is uopt's
+   register-pressure estimate from elsewhere, not the struct move. Volatile
+   pads can rebuild the target's named-local gaps but GROW the frame 1:1 —
+   only net-win if you can also shrink the temp estimate.
+5. **seg anti-fold guard** (`seg = 0; if (1) { seg = ...; }`) flipped the
+   long-lived across-22-calls pointer from callee-saved s1 to the target's
+   caller-saved a3 + spill home (multi-def web drops s-reg priority) — the
+   single biggest lever here (frame/save-shape + whole-body ring re-sync).
+6. Residuals at 91.75: obj-load def-site et = v1 in target vs t-ring here
+   (uniform -1 ring phase, same class as 526D0); named scalar temps (msk)
+   color $v0 not the per-site t-ring; frame +16 temp-area estimate.
