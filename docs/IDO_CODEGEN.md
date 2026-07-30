@@ -13941,6 +13941,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [s16-typed index decls live across jal clusters -> live-range-split `or sN,sM` copies that evict the held base to a spill; declare s32 + (u32) at the mult site; f32[3] stack-homed arrays = C-reachable "all-floats-homed" shape (no f20-f30 saves); tune homed-array offsets/frame by resizing an adjacent u8 buffer; NM-body size change shifts NM .text -> re-probe clip pin (gl_func_00053C04 55.96->92.15, 2026-07-23 agent-f)](#s16-decl-liverange-split-copies-53c04)
 
 - [Dead-kill `p = 0;` AFTER a `saved = p;` copy un-coalesces a widget-ptr/saved-copy pair from one long memory web into register-web + frame-homed copy; placement is load-bearing (adjacent-to-copy works, at-tail is DCE'd early and coalescing returns); cascade de-registerizes a shared mult constant (li+multu -> per-site sll/subu/sll/addu strength reduction) (timproc_uso_b1 1340 76.5->84.44, 2026-07-30 agent-g)](#dead-kill-uncoalesce-saved-copy-1340)
+- [do-while(0) statement macro = 2 BBs per expansion: Chow span denominator bloat turns EVERY loop var priority negative (-168 frame, t-regs + spill around jals, zero s-regs); plain-brace macro restores the full s0-s8 prologue in one step; mixed temp scoping (fn-scope _c/_q/_n + block register _e) is load-bearing for stable-vs-ring colors + exact frame (46050 48.5->80.1, 2026-07-30 agent-f)](#dowhile0-macro-bb-bloat-span-demotion-46050) — _Also: if/else-if chain (not switch) hoists compare literals 10/9/0x30 into s5-s7 loop-constant regs; dead if(charw){} flips an s1/s2 priority tie; jal-delay-slot w0 store identifies true emit statement order._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -22892,3 +22893,17 @@ scoped decls, goto-CFG, -g3: all still coalesce. Plus [or a1/li a3/sw]
 3-insn window rotation (li/move const-first scheduling class). Sibling
 family: 1438C / 8124 / 84A0 / 90CC / 6808 share the idiom (grep
 AFA60008 in bootup asm) — same recipe applies.
+
+## do-while(0) macro = 2 BBs per expansion — Chow span denominator bloat demotes EVERY loop var from s-regs (46050 48.5->80.1, 2026-07-30 agent-f) <a name="dowhile0-macro-bb-bloat-span-demotion-46050"></a>
+
+**Tell:** a function whose target has a full s0-s8 prologue (loop invariants, hoisted compare constants, param cursors all callee-saved) builds with a HUGE frame (-168 vs -64), zero-to-two s-regs, and t-reg values explicitly spilled/reloaded around every jal (`sw t1..t3,NN(sp); jal; lw t1..t3`). uoptlist shows dozens of `not colored (-ve save)` candidates. Every documented promotion lever (`register`, param-as-cursor, ref boosts) moves only single vars.
+
+**Mechanism:** a `do { ... } while (0)` statement macro contributes ~2 flow-graph BBs per expansion (visible as the alternating label rows in the `-Wo,-zdbug:6` flow graph). With a 17-expansion straight-line header block that is ~34 phantom BBs; Chow priority = savings/SPAN, and every variable live through the header (all the loop's invariants, loaded at entry) takes the full span hit -> priorities go negative -> spill homes for everything. Rewriting the macro body as a plain `{ ... }` block (call sites are all `EMIT(...);` statements, so the dangling-else guard is not needed) collapsed the header to one BB and restored the entire 10-reg prologue in ONE step (pos-match 4/462 -> 156/462 after temp-scoping below).
+
+**Companion scoping result for the shared emit temps** (`_c = ctx; _q = _c->0xC; _n = _q->4; _q->4 = _n+1; e = (_c->0xC)->0 + _n*8; e[0]=w0; e[1]=w1` DL-append kit):
+- fn-scope `_c/_q/_n` + BLOCK-scope `register void *_e` = target shape: stable `_c`=v1/`_n` colors across expansions, `_e` rotates through the ring with NO frame slot, frame lands EXACT (-64).
+- ALL fn-scope (incl. `_e`) = +32 frame (named homes) at same insn shapes.
+- ALL block-scope register = whole trio becomes rotating ring temps (22/462 — far worse).
+So mixed scoping is load-bearing; pick per-temp by whether the target color is stable (fn-scope candidate) or rotating (block register temp).
+
+**Also on this function:** if/else-if chain (`==10`, `==9`, `==0x30`) — NOT switch — is what hoists the compare literals into s5/s6/s7 loop-constant regs (switch lowering re-materializes `li at,K` per compare); dead `if (charw) {}` in the loop body flipped a charw/lineh s1/s2 priority tie (emission-free boost, cf. a7b4/d418 entry); jal-region emit ORDER read straight off which lui feeds the delay-slot store (w0 lui appears ~1 emit early — the store in the jal delay identifies the true statement order; prior decode had two emits swapped).
