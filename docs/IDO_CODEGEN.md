@@ -13904,6 +13904,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Live-range copy (move rHOME,rTEMP) survives ONLY when the var is assigned from a CSE'd RE-READ; plain var-to-var copies coalesce; + volatile test-read to break a global byte CSE, hoist-above-if anti-fold for dst ptr, (float)(int) u8 cvt, compound-RMW to keep flags in t-ring (game_libs 28604 74.85->93.86, 2026-07-18 agent-f)](#cse-reread-copy-vs-coalesce-28604) — _`p=expr; owner=p;` and `node2=node;` fully coalesce; only `owner = <repeated load of the tested expr>` (no intervening may-alias store; same-base disjoint offsets OK, different-base store kills->reload) keeps the target move. volatile on the if-read forces the target 3-load reload shape AND frees the CSE's register for downstream coloring. dst=base+K hoisted above the gating if defeats addiu offset-folding. (float)(int) on lbu u8 avoids the lui-0x4F80 u32->float fixup; FP mul right-operand is ring-numbered first. Residual: one-slot global coloring rotation (dst/node2/-1/6 = v0/v1/a3/t0 vs v1/a3/t0/t1), decl-order/register/temp-elim immune - uoptlist next._
 - [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
+- [Single-ref global-address s-reg hoist KILLED by dead 2nd symbol ref in another BB (`if(0){x=*(int**)&SYM;}`); vt-as-hidden-2nd-arg = $a1 dispatch; unconditional it[0]-store sinks into advance delay (393B8 89.3->98.56, 2026-07-30)](#dead-2nd-symbol-ref-anti-hoist-393b8) — _no single-ref spelling stops the lui/addiu-sN hoist of a loop-conditional global store (volatile/cast/goto-loop all hoist); dead cross-BB ref restores the macro `sw s3,D` $at form. Also: n=node copy after ternary snaps s0/s1 encounter order; block-scope homes sit BELOW fn-scope dead homes (parity-pad coupling); dup-arg f(x,x) = lw+move pair. Retracts the 07-18 "still unsolved" verdict below._
 - [Memory-resident iterator pair = `int *it[2]` ARRAY (struct gets SRA'd to s-regs); mat-mult "hand-unroll" caps may be memory compound-accumulate triple-fors; missing move-v0-zero = tail-call return (393B8 51.2->89.3)](#iterator-array-vs-struct-sra-393b8) — _named `float sum` local is the decode error; `res[r*4+c]+=` in-memory + trip-4 k-loop full-unroll + c-loop beql pipeline fall out of plain triple-for. Ternary-comma advance regresses. &D-publish $s4 addr-hoist vs per-site $at still unsolved._
 - [Load-type mismatch breaks CSE: `*(int*)(p+K)==0` test + `*(char**)(p+K)` chain = TWO loads (different value numbers); same-type spelling = one CSE'd load surviving the no-call path. Also: each scalar decl BEFORE a local array lifts the array's frame slot +4 (decl-split solver for array placement) (gl_func_0004EE44 81->99.9, 2026-07-18 agent-f)](#load-type-vn-cse-decl-split-array-4ee44) — _int-typed null test also mis-fills the bnel delay (reload instead of the hoisted f32 arg load). A named-but-redundant pointer local (`world=(float*)m30`) costs an 8-byte dead home; cast at use instead. Raw char* base local unfolds a +0xB4 from the loop induction — keep the folded `(float*)(load+0xB4)` init._
 - [Frame dead-home CENSUS solver: every fn-scope named local gets a dead 4-byte home in DECL ORDER (block-scope + `register` do NOT shed); target frame gaps = original's named-local count — merge disjoint-live-range m2c temps into shared names until the census matches, then distribute survivors at the gap offsets. Companion: `if (1) { p = &local; }` barrier keeps the addiu-sp null test + alloc branch a plain `p = &local` lets IDO fold AND delete (gl_func_000493AC 61.6->72.7, 2026-07-23 agent-f)](#frame-dead-home-census-493ac) — _0x6B8-frame builder fn: m2c's 57 fn-scope temps = 228 phantom bytes below the named slots; 24 renames (a2/t/s2/v0 pools, cross-loop var un-merge where it re-spilled) + 32-slot gap distribution closed the frame 0x7C0->0x708; held pI/pq/pr iterator pointers recover the s0/s1/s3 base-reg copy web. SCALED addendum (8FC8, 113 temps, agent-g): greedy interval partition per m2c register root computes the pool set mechanically as a pure alpha-rename; per-OFFSET typed externs (not one base sym) kill an FP-literal-pool lui CSE web the target re-materializes per site; pools that textually interleave mark the un-mergeable statement-structure boundary._
@@ -22321,3 +22322,38 @@ forces $a2. (2) Reuse a DEAD s-reg local (`sub`) as the vtable holder to color $
 = $v1; per-site block locals = +8 frame EACH, worse). (3) `f(list, sub = *(void**)(root+K))`
 arg-embedded reload flips as1 to `lw a0,HOME(sp)` before `move s0,v0` (statement form emits the move
 first) — fixed all six repeated registration sections at once.
+
+## Single-ref global-address s-reg hoist KILLED by a dead 2nd symbol ref in another BB (`if (0) { x = *(int**)&SYM; }`); vt-as-hidden-2nd-arg pins the dispatch web to $a1; unconditional store before ternary-advance sinks into the branch delay (gl_func_000393B8 89.3->98.56, 2026-07-30 agent-f) <a name="dead-2nd-symbol-ref-anti-hoist-393b8"></a>
+
+Four transferable levers from finishing the 393B8/38DC0 sibling pair:
+
+1. **Dead-2nd-symbol-ref anti-hoist.** A global stored ONCE inside a loop (`D = root;` under two
+   conditionals) gets its address speculatively hoisted `lui sN/addiu sN` into a fresh saved reg,
+   where the target keeps a per-site macro store `sw s3,D` (lui $at + %lo-folded sw). NO single-ref
+   spelling stops it (direct assign, `*(int**)&D` cast, volatile store, goto-shaped outer loop all
+   hoist). Adding a DEAD reference to the same symbol in a DIFFERENT basic block —
+   `if (0) { root = *(int**)&D_00000000; }` after the loop-exit label — survives into uopt (39EE4
+   dead-multi-def class), splits the symbol's occurrences across BBs, and the store stays a direct
+   macro sw. Store-form `if (0) { *(int**)&D = root; }` works equally. Sibling evidence: 39094 (3
+   refs in different BBs, goto-exits for(;;)) never hoists; single-ref 393B8 always did.
+2. **Dispatch temp in $a1 via a hidden 2nd arg.** Target `lw a1,0x28(sN); lw t9,0x24(a1);
+   lh t3,0x20(a1); jalr t9` (vt in $a1, lw-first): spell the call as
+   `((void(*)(int,int*))vt[9])(disp + (int)n, vt)` — passing vt as an extra arg coalesces its web
+   into $a1 and orders the t9 load first. The 39EE4 `if(0){vt=NULL}` dead-def lever colors $v0
+   instead — pick per target reg.
+3. **Advance-idiom refinement (38DC0 ternary-comma, one step further):** when the target has
+   `sw t7,it0(sp)` in the guard's DELAY slot (executes even on the NULL path), the `iter2[0]=iter2[1];`
+   store is UNCONDITIONAL in source, BEFORE the ternary: `it[0]=it[1]; node = (it[1]!=NULL) ?
+   (it[1]=..., it[0][0]) : NULL;` — IDO sinks the unconditional store into its own beqz delay; keeping
+   it inside the ternary-comma emits it conditionally (+nop). The `n = node;` copy after the ternary
+   snaps the node->s0 / li-16->s1 encounter order (single-var form colors them swapped).
+4. **Frame home-region accounting:** block-scoped locals home BELOW fn-scope dead homes (deeper
+   scope = lower slot; sibling blocks overlay). Moving `vt` into a sibling block relocated its dead
+   home from the above-result region to below-result. Below/above word counts are coupled by the
+   bottom parity pad (odd total => extra below word), so a below=10/above=6 target split can be
+   unreachable when your C needs below=9/above=7 (393B8's last 3-word result-offset residual).
+   Dup-arg `f(x, x)` = CSE one lw + reg copy for the second arg (matches lw+move pairs; marshaling
+   ORDER a0-first vs a1-first not C-steerable here, 2-word residual).
+
+Remaining 13/155: call-staging order (2), result -4 parity (3), node-web uncoalesced-fetch-copy
+(8, the documented 38DC0 cap — skip on sight).
