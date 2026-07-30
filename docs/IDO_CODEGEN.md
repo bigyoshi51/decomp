@@ -13906,6 +13906,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 - [Single-ref global-address s-reg hoist KILLED by dead 2nd symbol ref in another BB (`if(0){x=*(int**)&SYM;}`); vt-as-hidden-2nd-arg = $a1 dispatch; unconditional it[0]-store sinks into advance delay (393B8 89.3->98.56, 2026-07-30)](#dead-2nd-symbol-ref-anti-hoist-393b8) — _no single-ref spelling stops the lui/addiu-sN hoist of a loop-conditional global store (volatile/cast/goto-loop all hoist); dead cross-BB ref restores the macro `sw s3,D` $at form. Also: n=node copy after ternary snaps s0/s1 encounter order; block-scope homes sit BELOW fn-scope dead homes (parity-pad coupling); dup-arg f(x,x) = lw+move pair. Retracts the 07-18 "still unsolved" verdict below._
 - [Prototyped zero-alias extern = raw-single $a2 float arg (kills K&R double-promote); orphan-stub lui/lw before prologue IS IDO pre-prologue hoist; dead float[N] aggregates reserve exact frame gaps (35E6C 80.6, 5640C EXACT, 2026-07-30)](#proto-zero-alias-float-a2-stolen-prologue-hoist-35e6c) — _per-site prototyped `gl_func_00000000_x` alias + `=0x0` binding; goto-chain default-after-bodies detail; residual = cross-BB FP-const PRE split._
+- [s16 local ARRAY (never promoted) vs struct (promoted) sh/lh lever; oversize live array for frame pad (dead pads deleted); indexed-global D_arr[j] = per-outer-iter IV lui/addiu; inline deref into condition fixes t6-t9 ring phase via VN age (4F9E4 59.1->98.2, 2026-07-30)](#array-vs-struct-promotion-ring-phase-4f9e4) — _residual = 3 adjacent-pair scheduler-tie swaps (probed matrix inert; do not re-sweep)._
 - [Memory-resident iterator pair = `int *it[2]` ARRAY (struct gets SRA'd to s-regs); mat-mult "hand-unroll" caps may be memory compound-accumulate triple-fors; missing move-v0-zero = tail-call return (393B8 51.2->89.3)](#iterator-array-vs-struct-sra-393b8) — _named `float sum` local is the decode error; `res[r*4+c]+=` in-memory + trip-4 k-loop full-unroll + c-loop beql pipeline fall out of plain triple-for. Ternary-comma advance regresses. &D-publish $s4 addr-hoist vs per-site $at still unsolved._
 - [Load-type mismatch breaks CSE: `*(int*)(p+K)==0` test + `*(char**)(p+K)` chain = TWO loads (different value numbers); same-type spelling = one CSE'd load surviving the no-call path. Also: each scalar decl BEFORE a local array lifts the array's frame slot +4 (decl-split solver for array placement) (gl_func_0004EE44 81->99.9, 2026-07-18 agent-f)](#load-type-vn-cse-decl-split-array-4ee44) — _int-typed null test also mis-fills the bnel delay (reload instead of the hoisted f32 arg load). A named-but-redundant pointer local (`world=(float*)m30`) costs an 8-byte dead home; cast at use instead. Raw char* base local unfolds a +0xB4 from the loop induction — keep the folded `(float*)(load+0xB4)` init._
 - [Frame dead-home CENSUS solver: every fn-scope named local gets a dead 4-byte home in DECL ORDER (block-scope + `register` do NOT shed); target frame gaps = original's named-local count — merge disjoint-live-range m2c temps into shared names until the census matches, then distribute survivors at the gap offsets. Companion: `if (1) { p = &local; }` barrier keeps the addiu-sp null test + alloc branch a plain `p = &local` lets IDO fold AND delete (gl_func_000493AC 61.6->72.7, 2026-07-23 agent-f)](#frame-dead-home-census-493ac) — _0x6B8-frame builder fn: m2c's 57 fn-scope temps = 228 phantom bytes below the named slots; 24 renames (a2/t/s2/v0 pools, cross-loop var un-merge where it re-spilled) + 32-slot gap distribution closed the frame 0x7C0->0x708; held pI/pq/pr iterator pointers recover the s0/s1/s3 base-reg copy web. SCALED addendum (8FC8, 113 temps, agent-g): greedy interval partition per m2c register root computes the pool set mechanically as a pure alpha-rename; per-OFFSET typed externs (not one base sym) kill an FP-literal-pool lui CSE web the target re-materializes per site; pools that textually interleave mark the un-mergeable statement-structure boundary._
@@ -22433,3 +22434,34 @@ generalizes — put the DEFAULT call after the labeled return bodies (`goto def;
 end); its first insn (lui a0 of the addiu-form `&D+0x218EC` msg arg) gets hoisted into the
 final beq's delay slot and a lone `b` jumps the bodies, exactly as the target lays it out.
 The last-eq-test split lever (`if (v != 9) goto def; goto c9;`) composes with it.
+
+## s16 LOCAL ARRAY (never register-promoted) vs struct (promoted) = the sh/lh stack-traffic lever; oversize the live array for frame pad (dead pad aggregates CAN be deleted); indexed-global `D_arr[j]` re-materializes the IV lui/addiu in the inner preheader; inline the record deref into the condition to fix t6-t9 ring PHASE (VN age) (gl_func_0004F9E4 59.1->98.2, 2026-07-30 agent-f) <a name="array-vs-struct-promotion-ring-phase-4f9e4"></a>
+
+Dedup-register loop (raw-.word game_libs USO, reloc-free): target stores 3 s16 record
+fields to sp+0x20..0x24 each outer iteration and RELOADS them per inner iteration.
+
+1. **Struct local gets register-promoted; array local does not.** `GLRec cur;` with
+   field-by-field copies kept everything in a3/t0/t1 (no stack traffic). `s16 cur[3];`
+   with `cur[0..2]` produced the exact sh-then-lh memory shape. Companion to 393B8's
+   `int *it[2]` iterator-array entry — same axis, scalar-copy flavor.
+2. **Dead pad aggregates are NOT reliably kept.** Unlike 35E6C (dead float[N] reserved
+   frame gaps), here dead `s32 [2]` AND `f32 [2]` were deleted at -O2. To pad the frame
+   (0x28 -> 0x30 target) oversize the LIVE array instead: `s16 cur[8]` — locals are
+   placed top-down, so the 16-byte array lands at sp+0x20 exactly.
+3. **Per-outer-iteration `lui/addiu` of a global array base**: don't hoist a pointer
+   (`p = D_itr; ... *p; p++` hoists the base to an s-reg / $fp). Spell it as indexed
+   global `D_itr[j]` — strength reduction re-creates the IV (`addiu v1,v1,2` back-edge
+   step) with its init (lui/addiu) in the inner-loop preheader = INSIDE the outer loop.
+4. **Temp-ring PHASE (which of two interleaved load pairs gets t6/t8 vs t7/t9) follows
+   VN creation order, not compare operand spelling.** `q = base + D_itr[j]; if (cur[0]==q->f0 ...)`
+   ages the q-chain first (wrong phase; flipping `==` operands is canonicalized away and
+   INERT). Inline the deref into the condition — `cur[0] == base[D_itr[j]].f0 && ...` —
+   so cur[0] evaluates first: ring snaps to target (13 -> 6 words here).
+5. **Arm store order**: head-counter store FIRST in both if/else arms put the else-arm's
+   `addiu cnt+1` into the beqz delay slot and the found-arm's sh into the b delay.
+   Residual 6 words = 3 adjacent-pair scheduler/delay-filler tie swaps
+   (addiu-v1/move, addu/addiu, sh/sw); probed inert-or-worse: arm-order matrix, named
+   nh/dst temps (renumber to $v0 or spill t3 remat), `register` decls, for-loop form,
+   if(1) BB breaks. Tie class currently unsolved — don't re-run those sweeps.
+6. Also confirmed: 6-byte-struct scaling (`base[u16idx]`) = `li 6` + multu/mflo (kept in
+   a reg across the loop); a literal `*6` on a char* base would strength-reduce to shifts.
