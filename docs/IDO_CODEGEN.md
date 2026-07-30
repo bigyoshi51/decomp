@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Homed-locals-as-ARRAY defeats struct-field scalarization (arrays never scalarized; struct fields DO promote); volatile pad ARRAYS survive trimming, decl order = frame placement; E68 anchor-split works on in-TU func bases for fuzzy (bootup 411C 69.6->88.0, 2026-07-30 agent-g)](#homed-array-vs-struct-scalarize-padarrays-411c) — _Serial alloc temp p + guard-only if(p)init (no early returns) + per-region q=A[i] block temps; residual = BF8C direct-form lui-at/lwc1 vs addiu-form for in-TU-defined-function base (struct-cast doesn't fold)._
 - [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
 - [4-case switch = COMPARE CHAIN below IDO's 5-label jumptable threshold; empty trailing `case N: break;` forces the table; `goto`-only case arm = block placed after post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h)](#empty-trailing-case-jumptable-threshold-76f0) — _sltiu N+1 + local-rodata-table words are the only residual; pairs with external-uso-jumptable-cap. Also: m2c `func(0,X)` with target `lui/addiu a0` pair = `func(&D_00000000, X)`._
@@ -22757,3 +22758,43 @@ two-var ternary fabs `q=(t<0)?-t:t` (bc1fl+mov / b+neg / dead-mov shape).
 3. **Iterator ctor/copy idiom (recurs in post0b node walkers):** ctor-with-alloc `||` exactly as gl_func_00048A74 (`self || (self=alloc(0xC))` then idx=-1/list/end init), then a DOUBLE struct copy `tmp = *p; itB = tmp;` where `tmp` is ONE shared function-scope NodeIter (inline-function return temp) reused by all mutually-exclusive arms, while itA/itB pairs are per-arm slots (decl order B-before-A, function scope, allocated high-to-low in decl order).
 
 4. Related decode tells fixed same pass: pool cursor `slot = (*(int**)(g+0x3C))[1]++; buf = (*(int**)(g+0x3C))[0] + (slot<<6);` — base RE-READ between ++ and use (int-store may alias, kills CSE; caching a `pool` var is wrong); dispatch arg carries an extra deref `pool[0] + node->sh8A*8`; element access is `it.list[0][idx]` (list holds &array-holder); `lh` not `lw` at vtable+0x28.
+
+## Homed-locals-as-ARRAY defeats struct-field scalarization; volatile pad ARRAYS survive dead-local trimming (bootup 411C 69.6->88.0, 2026-07-30 agent-g) <a name="homed-array-vs-struct-scalarize-padarrays-411c"></a>
+
+Target profile (0x2B8 builder chain): 8 call-result/index locals ALL memory-homed
+at contiguous sp+0x4C..0x68 with block-granular reloads, only 2 s-regs
+(s0 = serial alloc temp, s1 = param); recomp instead promoted the busiest local
+into $s0/$s1 and cascaded the whole register file.
+
+1. **Struct fields are NOT safe homes**: a non-escaping local `struct {..} L;`
+   gets SCALARIZED by uopt — the hottest field (`L.r1`, 5 cross-call uses) was
+   promoted to $s1 exactly like a plain named local. A local ARRAY
+   (`char *A[8];` + `(int)A[4]` casts for int slots) is never scalarized —
+   every element stays a genuine sp home with per-block reload/reuse, matching
+   the target shape (single `lw a3` reused for cross-link stores + next call
+   arg; fresh reload per call-delimited region via block-scoped `q = A[5];`
+   temps). `volatile` on the field also demotes it but over-reloads (kills the
+   in-block a3 reuse / v0 store-forwarding the target shows).
+2. **Serial temp for alloc chain**: o1/o2/o3/big = ONE variable `p` (re-assigned)
+   reproduces `or s0,v0` in each alloc beq delay + `if (p) init(p,N);`
+   guard-only shape (no early returns — flow continues on alloc failure,
+   including the guarded-init-then-UNconditional-use tail).
+3. **Volatile pad placement around aggregates**: a single unreferenced
+   `volatile int pad;` gets TRIMMED entirely (frame unchanged); `volatile int
+   pad[N];` arrays survive. Decl order steers placement: earlier decl = HIGHER
+   frame address. `volatile int padA[1]; char *A[8]; volatile int padB[2];`
+   put 4B above + 8B below the array = frame -104 -> -112 and slid A's base
+   onto the target offsets (pad[2]-before-A and A-first had each been 4 off).
+4. **E68 reloc-identity split works on in-TU FUNCTION bases too** (for fuzzy,
+   not exact): 2nd use of `&func_000003F8+0x150` respelled as
+   `&func_0000057C-0x34` (same absolute address, different in-TU anchor) kills
+   the cross-call base CSE (frees $s1 back to the param, drops $s2). Residual
+   BF8C-class cap: expected uses DIRECT-form `lui at,%hi(sym+K); lwc1 %lo`
+   (2 insns, $at); any C pointer-arith spelling of an in-TU-defined-function
+   base emits addiu-form (3 insns, t-reg), and `((struct P*)func)->field`
+   struct-cast does NOT fold either; the wrong-name anchor also byte-breaks
+   its lo16. Downstream f10/f18 mtc1/lwc1 ring swap + mfc1-into-a2 idx-temp
+   coloring are coupled to that form, not independently steerable.
+5. Commutative FP order: `pool * rand()` matched mul.s operand order at the
+   first site but the second site needed `rand() * pool` — per-site, not
+   global; gate each on the emitted operand order.
