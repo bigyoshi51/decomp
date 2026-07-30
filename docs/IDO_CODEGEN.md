@@ -35,6 +35,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Split-NAME extern (same target sym) kills %hi-CSE for TWIN indexed reads under reloc-masked USO scoring; volatile int param forces arg home-reload; FP-div fold-break transfers (timproc b5 5BF0 59->88.7, 72D0 64->100, C310 60->90.5, C98C 69->99.9, 2026-07-23 agent-g)](#split-name-hi-cse-volatile-param-b5) — _de-named cross-BB row ptr (nameless GCSE) + separate loop counters fixed a0/a1 webs; same-line `cur=...; if(...)` collapse flips 2-lwc1 as1 tie; open: const-1 promotes to s8 where target remats li t0,1 (C310), loop2 v0/v1 tie (5BF0)._
 - [Indexed `arr[i]` + derived `i*K` arg (NO named walking ptr) kills the &local s-reg cache — uopt strength-reduction re-creates the walk ptr with per-outer-iter `addiu rX,sp,off` remat; pointer-MUTATION base (`p=&D; if(1){p+=0x10;}`) keeps the base a variable web = correct color + base-first... still mult-first addu (timproc b1 2BE4 65.9->99.84, b3 2DF0 62.8->99.84 byte-twins, 2026-07-23 agent-g)](#indexed-iv-kills-local-addr-cache-2be4) — _named walking ptr = s8-cache disease (if(1)/copy-barrier/array-decay all fail); struct-assign copy = t9/t8 ping-pong interleave + jal-delay final sw; copy-src as `*(S*)((char*)&D+0x4D0)` bakes %lo offset; residual: commutative `addu s2,s4,t1` base-first canonicalization unreachable (5 spellings probed)._
 - [Twin-kit backport b3 0E60 -> b1 0EE8 (78.8->99.92, 2026-07-23 agent-g): goto dispatch + volatile &D base + state-var REUSED as loop counter (colors s0; fresh local = v0) + mult-first call-arg spelling reorders the ugen temp ring to target](#indexed-iv-kills-local-addr-cache-2be4) — _call-arg operand order IS the ugen temp-numbering lever (`base[i]*0x30 + *table` vs `*table + base[i]*0x30` renumbers 13 words); residual 2-word t8-vs-a1 scratch pick (named count local shifts whole ring -1, 4-param K&R sig homes a1-a3 — both worse)._
+- [FP PARAM in $f20 at loop-depth 0 UNREACHABLE (recomp IDO spills param to arg-slot home around calls; only real loops promote; cascade: f2/f12/f14-free vec schedules + ||-ring + entry-lhu all one cap) (bootup 8BD4 64.1->83.9, 2026-07-30 agent-g)](#fp-param-f20-depth0-unreachable-8bd4) — _probe battery negative: param-copy splits f12/f14+mov.s, register inert, while(0) x5, if(1)/else, call-return, multidef; for(i<1) promotes but keeps bne. Banked levers: de-named per-block cx pointer locals, value-form 3-term ||, staging-copy marshal chain, two-var ternary fabs._
 - [B624 twin recipe transfers whole-shape to B154/B368 (+25/+36pp); 4th same-const FP block flips 0.0f web into callee-saved f20 — split one block via (f32)0 + de-named temps (2026-07-23 agent-g)](#b624-twin-transfer-fpconst-threshold) — _top-of-decl-list aggregate keeps all lower offsets; union carrier reused across chains; 4-call dst CSE colors $s1 not the spill (open)._
 - [USO global at-macro: loads pair / stores don\'t; per-LOAD-SITE distinct externs + FP-local arg routing for lwc1+mfc1; volatile pairs the address AND re-types f32 loads to lw (307B0 67.8->83.3, 2026-07-18 agent-h)](#at-macro-load-store-asymmetry-307b0) — _Shared struct extern = whole-fn base web (worst); clamp = local-f single join store / store-then-cond-restore._
 - [CONVERSE cap: entry-block ONCE-materialized &sym pairs unreachable — uopt const-sinks defs to preheader + tail remat regardless of placement/distinct-syms/if(1)/inline (game_libs 23E60, 2026-07-18 agent-h)](#entry-block-const-placement-sink-cap-23e60) — _Distinct externs fuzzy-identical to folded same-sym (objdiff relaxes reloc imms); banked: a1-first capture order, drop return-0 for or-v0-less tail._
@@ -22697,3 +22698,34 @@ From gl_func_00044918 (game_libs_post0b, raw-.word USO, 0x1D4):
 3. **sltu value-form || chain requires ASSIGNING the condition to a var** (`busy = (a!=0||b!=0||c!=0); while(busy){...; busy=(...);}`). Bare `while(a||b||c)` emits branch-only form (bnez tN, no sltu). Confirms the 21D4/44EDC "value-form comparand via assigned cond var" tell in a while-loop setting.
 4. **Pre-call CSE-temp (`addiu v0,s0,K` + sp spill/reload across the jal) reproduced by assigning a struct-ptr local BEFORE the preceding call.** `fl = (Pair2*)(arg0+0x138);` placed before `f(arg0);` + `fl->b` accesses on both sides of a later call → IDO materializes the base once pre-masks, spills it to a temp slot in the jal delay, reloads after — matching the target. Assigned at first use instead, IDO folds pre-call accesses to `K+4(s0)` and REmaterializes post-call (1 insn cheaper, no spill). Struct-ptr field access (`fl->b`) also reproduced the exact or-cascade t-ring (t2/t3/t5/t7/t9/t1) where `((int*)(..))[1]` spellings folded.
 5. **`if(0){f(&r);}` address-escape** (the gui-kit lever) transfers: un-promotes a loop-crossing pointer local from $s1 to a memory-homed sp slot (target frame keeps 1 s-reg). Residual honest gap: escape homes at the DEF site (+1 word) where the target re-stores in each in-loop jal delay slot, and the value colors t6/t8 vs target v1 (first-temp coloring tie).
+
+## FP PARAM in callee-saved $f20 at loop-depth 0 is UNREACHABLE in recomp IDO 7.1 — spills to arg-slot home around calls; only real loops promote (bootup 8BD4 64.1->83.9, 2026-07-30 agent-g) <a name="fp-param-f20-depth0-unreachable-8bd4"></a>
+
+Target prologue `sdc1 $f20; mtc1 a1,$f20` (float param after a pointer param,
+arrives in $a1, parked callee-saved for the whole function, no loop anywhere)
+is NOT reproducible from C with this toolchain: our recomp IDO 7.1 -O2 keeps
+the param in caller-saved $f14 and spills to its incoming-arg-slot home
+(`swc1/lwc1 0xAC(sp)`) around every jal. Minimal-probe battery, ALL negative
+for f20: param copy-local `float amtF = amt;` (does NOT copy-prop; splits
+f12/f14 + mov.s = worse), `register` on the param (inert), while(0)
+ref-multiplier in 5 placements incl. the titproc dead-def-duplication pattern
+(`while(0){negamt=-amt;}` before the real def) and assign-to-param forms
+(`while(0){x=x+x;}`), `if(1){}else{use}`, call-return-def web (M6), multidef
+(M7), many-uses-across-2-calls (M2). The ONE positive: a REAL loop
+(`for(i=0;i<1;i++)` — bne kept, not collapsed) promotes instantly to the exact
+target entry shape `sdc1 f20; mtc1 a1,f20` — loop weight is the only lever,
+and it costs loop-control insns. So: no-loop target with an fp param in
+$f20 = toolchain fp-regalloc cap (same family as the 19555 "live-across-call
+float in $f20" residual class); NM-wrap the residual. RECOGNIZE the cascade
+before burning probes on "independent" diffs: with amt in f20 the target has
+f2/f12/f14 FREE, giving grouped 3-lwc1/3-mul/3-swc1 Vec3 schedules (ours
+interleaves via ring temps), the ||-chain temp ring starts at a0 (ours v1,
+because target's `lw a0` call-arg sits in the jal delay where ours holds the
+swc1 spill), entry `lhu v0` vs `lhu v1`, and mfc1-before-lui tails — ALL
+pressure-coupled to the one cap, not separately fixable. Positive structural
+levers banked the +19.8pp: de-named per-block pointer locals for repeated
+`*(char**)(b+0x170)` accumulation groups (kills the named-cx s-reg web →
+per-block v0/v1/a0 reloads + trailing dead-ish `addiu base,base,K`),
+value-form 3-term || via assigned cond var, staging-copy chain `impB=imp;
+impA=impB; ... impB=nn; nnA=impB;` (second dest reads the STAGING copy),
+two-var ternary fabs `q=(t<0)?-t:t` (bc1fl+mov / b+neg / dead-mov shape).
