@@ -13909,6 +13909,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Address-taken `**pc = &local` kills a cross-call `local+K` CSE web (per-site home reload); named `t = *pc` at each call site = multi-def web spanning calls -> colored $s0 with `addiu a0,s0,K` in the jal delay slot (gl_func_00036C08 18.9->EXACT, 2026-07-18 agent-f)](#addr-taken-pc-web-kill-named-t-s0-36c08) — _plain local -> IDO hoists `ctx+0x30` into $s1 (`or a0,s1` per call); `&ctx` homes it and each `(*pc)` read reloads; the named-t respell recovers the s0-colored reload web + pushes the other global into $s1. Direct `(*pc)` reads in one BB share a single $t9 scratch. `cb += 0x70` mid-block pointer advance reproduces `addiu v0,v0,0x70` rebase with small element offsets._
 - [s16-typed index decls live across jal clusters -> live-range-split `or sN,sM` copies that evict the held base to a spill; declare s32 + (u32) at the mult site; f32[3] stack-homed arrays = C-reachable "all-floats-homed" shape (no f20-f30 saves); tune homed-array offsets/frame by resizing an adjacent u8 buffer; NM-body size change shifts NM .text -> re-probe clip pin (gl_func_00053C04 55.96->92.15, 2026-07-23 agent-f)](#s16-decl-liverange-split-copies-53c04)
 
+- [Dead-kill `p = 0;` AFTER a `saved = p;` copy un-coalesces a widget-ptr/saved-copy pair from one long memory web into register-web + frame-homed copy; placement is load-bearing (adjacent-to-copy works, at-tail is DCE'd early and coalescing returns); cascade de-registerizes a shared mult constant (li+multu -> per-site sll/subu/sll/addu strength reduction) (timproc_uso_b1 1340 76.5->84.44, 2026-07-30 agent-g)](#dead-kill-uncoalesce-saved-copy-1340)
+
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
 <a name="ido-o0-stale-nm-percent-table-reflects-c-shape"></a>
@@ -22244,3 +22246,16 @@ arg2 = arg2 / 10;
 ```
 
 arg2's incoming a2 must be consumed before the first call clobbers it, so uopt keeps the chain at the top: first div reads a2 directly, the running remainder is colored s0 (`move s0,a2` entry copy), and min/sec land in callee-saved s2/s4. Also the explicit `x -= q*K` remainder spelling reproduces the multu+subu pair (a `%` would emit mfhi).
+
+
+## Dead-kill after a saved-copy un-coalesces the ptr/copy web pair; cascade frees a registerized mult constant (timproc_uso_b1 1340, 2026-07-30) <a name="dead-kill-uncoalesce-saved-copy-1340"></a>
+
+Shape: `w = base + K; call(w); ... saved = w; count = strlen(buf); /* w dead */ ... draw(saved, ...)` (tail uses only `saved`). IDO coalesces `w` and `saved` into ONE web spanning def -> tail; the long span tanks its priority -> memory home (per-use `lw $4` reloads, store at def). Target instead has `w` as a short register web (colored an s-reg, call args emitted `or $4,$sN`) plus `saved` as a frame-homed local whose store lands at the copy line (scheduled into the jal delay slots there) and whose tail reload rents a then-free s-reg.
+
+**Lever:** add dead kills `w = 0;` immediately after (or one call after — equivalent) the `saved = w;` copy. The redefinition blocks coalescing; the dead def itself is DCE'd with ZERO emission. `w` becomes a short high-priority register web, `saved` a separate frame-homed candidate.
+
+**Placement is load-bearing:** kills at function tail (or dead pre-defs at block entry) are DCE'd before the coalescing decision -> no-op, coalescing returns. Only adjacent-to-copy placement worked.
+
+**Cascade:** with two freed pointer webs taking s-regs, a mult constant that had been registerized (`li $s8,13` + `multu` at two `count*13` sites) loses its register and reverts to per-site strength reduction `sll/subu/sll/addu` (x13 canonical form) — the +14-insn size deficit closed in one lever. Diagnose the const-registerization as a SYMPTOM of s-reg surplus, not a CSE cap in itself.
+
+**Residual on 1340 (still NM at 84.44):** s1..s8 rotation (ours w6CC,w6B4,glyph,w6FC,arg0,min,sec,buf vs target w6FC,min,glyph,sec,arg0,w6CC,w6B4,buf) — the un-coalesced ptr webs now color TOO EARLY (4th/5th, need 7th/8th), and late-created min/sec copy webs (uoptlist ids 179/180) must outrank glyph/arg0. Probed and failed: while(0) ref-boosts (re-registerized the 13, net regression), dead `if (ptr) {}` EMITS a beq for pointer-arith vars (value not known nonzero — contrast the a7b4 empty-if boost on ints), decl reorder. FP temp-ring const-vs-load numbering (f4/f6 etc, 255.0f * mem) resists one-level typed-member and (f32)N cast-literal spellings — needs the two-level chain, unavailable for a direct member.
