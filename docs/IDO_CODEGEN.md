@@ -15,7 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [Homed-locals-as-ARRAY defeats struct-field scalarization (arrays never scalarized; struct fields DO promote); volatile pad ARRAYS survive trimming, decl order = frame placement; E68 anchor-split works on in-TU func bases for fuzzy (bootup 411C 69.6->88.0, 2026-07-30 agent-g)](#homed-array-vs-struct-scalarize-padarrays-411c) — _Serial alloc temp p + guard-only if(p)init (no early returns) + per-region q=A[i] block temps; residual = BF8C direct-form lui-at/lwc1 vs addiu-form for in-TU-defined-function base (struct-cast doesn't fold)._
-- [sw a2,0x8(sp) in jal delay = 4-byte struct passed by value (only shape that homes a2); char*volatile local = save slot below homed array (plain/struct-field promotes, spills at frame top); unused scalar decls hold frame slots (bootup 13D40 52.4->88.5, 2026-07-30 agent-g)](#struct-byval-a2-home-volatile-save-13d40) — _Residual: six per-block value webs coalesce into one v0 global web (target = block-local t-cycle temps) + 3 reserved spill words + post-call temp-pair renumber; ~25 variants stable. Siblings 1438C/8124/84A0/90CC/6808 share idiom (grep AFA60008)._
+- [sw a2,0x8(sp) in jal delay = 4-byte struct passed by value (only shape that homes a2); char*volatile local = save slot below homed array (plain/struct-field promotes, spills at frame top); unused scalar decls hold frame slots (bootup 13D40 52.4->88.5, 2026-07-30 agent-g)](#struct-byval-a2-home-volatile-save-13d40) — _Residual: six per-block value webs coalesce into one v0 global web (target = block-local t-cycle temps) + 3 reserved spill words + post-call temp-pair renumber; ~25 variants stable. Siblings harvested 2026-07-30: 1438C 65->87.9, 8124 69.5->94.5 (+ tail variable-reuse lever, dead-decl-pair slot placement); 84A0/90CC/6808 remain (grep AFA60008)._
 - [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
 - [4-case switch = COMPARE CHAIN below IDO's 5-label jumptable threshold; empty trailing `case N: break;` forces the table; `goto`-only case arm = block placed after post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h)](#empty-trailing-case-jumptable-threshold-76f0) — _sltiu N+1 + local-rodata-table words are the only residual; pairs with external-uso-jumptable-cap. Also: m2c `func(0,X)` with target `lui/addiu a0` pair = `func(&D_00000000, X)`._
@@ -22893,6 +22893,28 @@ scoped decls, goto-CFG, -g3: all still coalesce. Plus [or a1/li a3/sw]
 3-insn window rotation (li/move const-first scheduling class). Sibling
 family: 1438C / 8124 / 84A0 / 90CC / 6808 share the idiom (grep
 AFA60008 in bootup asm) — same recipe applies.
+
+2026-07-30 harvest addenda (1438C 65.0->87.9, 8124 69.5->94.5, both
+recipe-confirmed; residual = same allocator-web cap):
+
+4. **Tail variable-REUSE lever (8124, `move v1,s0` fingerprint):** when a
+   ctor's tail loads a child (`lw v0,0x40(t6); beqz v0; move s0,v0` with
+   the object saved via `move v1,s0` + spill 0x4C), the source reuses the
+   OBJECT variable for the load: `v = o; o = *(char **)(arg0 + 0x40);
+   if (o != 0) { func(v + 0x10, o); ... o->0x14 = v; } return v;`. Do
+   NOT introduce a separate `d` with `o = d` inside the if — that splits
+   the web and spills o off s0 entirely (+5 insns, whole-body regalloc
+   shift). Assignment-in-condition vs separate statement: identical.
+
+5. **Dead-decl PAIR placement (8124):** locals needed +8 with a hole at
+   0x28 between p (0x24) and w (0x2C): declare `char *q2;` between w and
+   p AND `char *q1;` after p (`... A[5]; volatile w; q2; p; q1;`) —
+   last-decl-lowest, so q1 takes 0x20, p 0x24, q2 0x28, w 0x2C, A 0x30+.
+   One dead decl shifts by 4; position in the decl list picks WHICH slot.
+
+6. **Incoming arg homed to caller slot (`sw a0, frame(sp)` prologue +
+   late reload)** falls out naturally when the arg's only use is after
+   the call cascade — no source lever needed.
 
 ## do-while(0) macro = 2 BBs per expansion — Chow span denominator bloat demotes EVERY loop var from s-regs (46050 48.5->80.1, 2026-07-30 agent-f) <a name="dowhile0-macro-bb-bloat-span-demotion-46050"></a>
 
