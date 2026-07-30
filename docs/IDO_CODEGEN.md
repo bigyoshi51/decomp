@@ -22313,3 +22313,11 @@ arg too many (here a bogus 3rd arg `1`); it also costs +8 frame. Residual caps c
 min-web const-call-arg $a2-vs-$v0 arg-discount tie (kit III NEGATIVE class) and uopt cross-BB const PRE
 of a shared `li a1,3` into the dispatch delay slot (no C spelling reproduces; a shared named const local
 just homes+remats).
+
+**C54 transfer addendum (titproc 89.56->93.95, same session):** the one-local family generalizes:
+(1) PARAM-REUSE — a dead-arm alloc-cascade temp that target colors $a0 is the freed PARAM variable
+reused (`a0 = sub; if (!sub) { a0 = alloc(N); }`); a shared fn-scope name spanning later blocks is what
+forces $a2. (2) Reuse a DEAD s-reg local (`sub`) as the vtable holder to color $s0 (fn-scope `vtable`
+= $v1; per-site block locals = +8 frame EACH, worse). (3) `f(list, sub = *(void**)(root+K))`
+arg-embedded reload flips as1 to `lw a0,HOME(sp)` before `move s0,v0` (statement form emits the move
+first) — fixed all six repeated registration sections at once.
