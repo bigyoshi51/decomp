@@ -148,6 +148,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 - [Baked-USO big-fn lever stack (42938): per-site real-address externs vs pool base; array flag externs; direct-array $s0 LICM; named FP scale locals vs const-fold; emit-macro role pools](#baked-uso-lever-stack-42938) — _2026-07-23 agent-f; five composable levers for big raw-word bodies; gotchas: literal-1 flag store, (f32)0 cast for 0*x._
 
+- [Custom guLookAtF decode (5F5F0 45.3->82.3): gu-shape first; (f32)1 CSE-break; low-rank guard-sqrt var memory-homes; escape-array + join-scalar clamp (2026-07-30 agent-f)](#gulookatf-clamp-5f5f0) — _clamped guLookAtF variant; direct-jal not fnptr-cast; v[3] escape array + join scalars; (f32)1 splits 1.0f compare/assign CSE (callee-saved waste); slen own-var memory-homes (volatile = +1 reload, wrong); up-vector must reuse Up params; residual = entry-anchored written-param blocks f22 timeshare with 10.0f const._
+
 ## Quick reference by sub-topic
 
 ### uopt internals (allocator opened, 2026-06-11)
@@ -22798,3 +22800,42 @@ into $s0/$s1 and cascaded the whole register file.
 5. Commutative FP order: `pool * rand()` matched mul.s operand order at the
    first site but the second site needed `rand() * pool` — per-site, not
    global; gate each on the emitted operand order.
+
+## Custom guLookAtF decode (5F5F0 45.3->82.3): gu-shape first; (f32)1 CSE-break; low-rank guard-sqrt var memory-homes; escape-array + join-scalar clamp (2026-07-30 agent-f) <a name="gulookatf-clamp-5f5f0"></a>
+
+1080's `gl_func_0005F5F0(f32 mf[4][4], eye, at, up x3)` is
+`references/libreultra/src/gu/lookat.c` guLookAtF with three deltas: no
+guMtxIdentF (constant row/col stored explicitly at the end), sqrtf as a
+baked-USO external jal (word 0x0C000000), and a leading distance clamp:
+`if (far2@D+0x205C < d2 || d2 < 10.0f) { normalize-or-(0,0,1); scale look to
+10; d2 = 100.0f; }`. Levers proven against the target bytes:
+
+1. **Direct K&R extern calls, never fnptr casts** — each
+   `((f32(*)())fn)(..)` cast costs lui/addiu/jalr vs the target's single
+   baked `jal 0` (+reloc, byte-equal). Biggest single chunk of the 45->82 rise.
+2. **Clamp temp = escape ARRAY + separate join scalars**: `f32 v[3];`
+   stored `v[0..2]=look` only on the else path, `norm(v)`, reload into
+   plain `x,y,z` scalars; then `look = x*10 ...; v[0..2] = look;`. The
+   then-arm `(0,0,1)` stays in pure regs (no stores) only if it writes the
+   JOIN SCALARS, not the array.
+3. **`z = (f32) 1;` cast-literal CSE-break** (generalizing the DF98 entry):
+   without it IDO CSEs the `d2 < 1.0f` compare literal with `z = 1.0f`
+   into one CALLEE-SAVED reg (range spans the else-arm jal), wasting an
+   f2x and cascading the whole FP coloring. Target has two separate mtc1.
+4. **Guarded sqrt result in its own low-rank var**: `slen = sqrtf(...); if
+   (slen < eps) {...; slen = 1.0f;} len = 1.0f/slen;` memory-homes slen
+   (store-def / store-guard / reload-div) like the target; folding it into
+   the reused `len` var keeps it in a register (wrong). Do NOT use
+   volatile — that also reloads for the guard COMPARE (+1 insn); target
+   compares the live call-result reg.
+5. **Up-vector must REUSE the xUp/yUp/zUp params** (libreultra style) so
+   ups land in callee-saved f22/f24/f26. Residual cap: written-to param
+   candidates appear entry-anchored in uopt — my reused yUp refuses to
+   timeshare f22 with the dead 10.0f-const range (target: ten f22 ->
+   yUp f22; mine: yUp f24, shifting xLook/yLook one reg and spilling
+   yLook). Local-copy `yu = yUp` does NOT fix it (tested, worse). ~18
+   insn-diff residual is this single coloring shift cascading.
+
+Also: shrinking a post0b NM body forces a NON_MATCHING_TEXT_CLIP_KEEP_ALIGN
+re-probe (clip errors "smaller than requested"); lower the clip to the new
+.text total and re-verify sentinel 100s via objdiff report.
