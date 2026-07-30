@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [Homed-locals-as-ARRAY defeats struct-field scalarization (arrays never scalarized; struct fields DO promote); volatile pad ARRAYS survive trimming, decl order = frame placement; E68 anchor-split works on in-TU func bases for fuzzy (bootup 411C 69.6->88.0, 2026-07-30 agent-g)](#homed-array-vs-struct-scalarize-padarrays-411c) — _Serial alloc temp p + guard-only if(p)init (no early returns) + per-region q=A[i] block temps; residual = BF8C direct-form lui-at/lwc1 vs addiu-form for in-TU-defined-function base (struct-cast doesn't fold)._
+- [sw a2,0x8(sp) in jal delay = 4-byte struct passed by value (only shape that homes a2); char*volatile local = save slot below homed array (plain/struct-field promotes, spills at frame top); unused scalar decls hold frame slots (bootup 13D40 52.4->88.5, 2026-07-30 agent-g)](#struct-byval-a2-home-volatile-save-13d40) — _Residual: six per-block value webs coalesce into one v0 global web (target = block-local t-cycle temps) + 3 reserved spill words + post-call temp-pair renumber; ~25 variants stable. Siblings 1438C/8124/84A0/90CC/6808 share idiom (grep AFA60008)._
 - [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
 - [4-case switch = COMPARE CHAIN below IDO's 5-label jumptable threshold; empty trailing `case N: break;` forces the table; `goto`-only case arm = block placed after post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h)](#empty-trailing-case-jumptable-threshold-76f0) — _sltiu N+1 + local-rodata-table words are the only residual; pairs with external-uso-jumptable-cap. Also: m2c `func(0,X)` with target `lui/addiu a0` pair = `func(&D_00000000, X)`._
@@ -22839,3 +22840,46 @@ baked-USO external jal (word 0x0C000000), and a leading distance clamp:
 Also: shrinking a post0b NM body forces a NON_MATCHING_TEXT_CLIP_KEEP_ALIGN
 re-probe (clip errors "smaller than requested"); lower the clip to the new
 .text total and re-verify sentinel 100s via objdiff report.
+
+## sw a2,0x8(sp) in jal delay = 4-byte struct passed by value; char*volatile local = spill-slot-below-array save; unused scalar decls hold frame slots (bootup 13D40 52.4->88.5, 2026-07-30 agent-g) <a name="struct-byval-a2-home-volatile-save-13d40"></a>
+
+Three levers cracked on func_00013D40 (get-or-create ctor + 6 child blocks,
+168 insns, structure-exact at 168/168 mnemonics+offsets):
+
+1. **`sw $a2, 0x8($sp)` in a jal delay slot (caller side) = the 3rd argument
+   is a 4-BYTE STRUCT PASSED BY VALUE.** IDO homes a one-word struct local
+   (e.g. `typedef struct {int v;} Val; Val p;`) at a frame slot, stores the
+   value there (`sw` lands in the preceding bne delay), then at the call
+   reloads `lw a2, home` and ALSO stores it to the outgoing arg-home slot
+   `sw a2, 0x8(sp)`. A plain int argument NEVER produces the 0x8(sp) store
+   (probed: K&R callee, varargs prototype, extern-int all negative). An
+   8-byte struct arg3 stores both 0x8 and 0xC (t4 probe); struct as ARG0
+   additionally stores word0 to 0x0(sp) — absence of that store rules
+   arg0-struct out.
+
+2. **`sw a0, X(sp)` before jal + `lw a0, X(sp)` after, where X sits BELOW
+   the homed array** = `char * volatile w;` local used as the save slot
+   (`func(w = c, o, p, 1); c = w;`). A plain local or one-word-struct field
+   PROMOTES (scalarizes) and its spill slot lands ABOVE all locals (top of
+   frame) instead; `char *C[1]` array form reloads per use (block-granular)
+   and needs a `q = C[0]` temp but degrades scheduling. Volatile scalar is
+   the only shape that pinned the slot between the struct home and the
+   array while keeping single store+reload.
+
+3. **Unused scalar decls still consume frame slots** in this shape: an
+   unused `char *q;` decl was load-bearing for slot layout (dropping it
+   shifted every local down 4 and changed the frame). Opposite of the
+   usual "unused decls trim" assumption — keep/probe dead decls when slot
+   addresses are off by 4/8.
+
+Residual cap (73/168 words, ~25 standalone-cc variants all stable): uopt
+coalesces the six per-block `p.v` value webs into ONE global web colored
+v0 where the target keeps six block-local t-cycle temps (t7/t2); same
+root cause reserves 3 extra spill words (frame 0x60 vs 0x50) and offsets
+the post-call temp-pair numbering (t8/t9 vs t0/t1: target numbers a2/a3
+arg temps per-block, consuming 2 more cycle slots/block). Distinct
+x1..x6 temps, Val p1..p6, Val P[1] array element, union, pointer-to-p,
+scoped decls, goto-CFG, -g3: all still coalesce. Plus [or a1/li a3/sw]
+3-insn window rotation (li/move const-first scheduling class). Sibling
+family: 1438C / 8124 / 84A0 / 90CC / 6808 share the idiom (grep
+AFA60008 in bootup asm) — same recipe applies.
