@@ -13905,6 +13905,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Blanked USO reloc lui/addiu-0 pair feeding `sw $tX,K(obj)` = vtable-ADDRESS store not `=0`; TextReloc-resolve to base-0 aliases, per-site alias split vs addr GCSE, symbolize .s or objdiff scores it negative (func_000090CC 75.10->75.41, 2026-07-17 agent-g)](#uso-blanked-reloc-vtable-store-90cc) — _`*(p+0x28)=0` collapses a 69-insn cascade to one `sw zero`; alloc-fallback primary var must not be reassigned by the fallback alloc; expected/.o refresh required after .s symbolization._
 - [goto-end early-exit flips the alloc-fallback join phi to $a0 + struct-copy picks held-&tmp store base + 2+2 pad-array frame fit (gl_func_00063884 73.25->EXACT, 2026-07-17 agent-h)](#goto-end-phi-a0-struct-copy-63884) — _`if(!a0) return a0;` early-exit coalesces the post-call web into $v0 (bnez+b head, v0-based body); `if(!a0) goto end;` + `end:` label at the final return keeps the threaded beqz-v0-delay-move head AND colors the phi $a0 (epilogue move v0,a0). Vec3 snapshot must be an aggregate copy `tmp=*(Tri3i*)p` — per-element copies invert the sp-fold/held-base split. Plain int pad[2] arrays before+after one local survive -O2 DCE and place it (637BC precedent). 2nd land of the 64588 per-site ANSI f32 alias._
 - [Single-ref global-address s-reg hoist KILLED by dead 2nd symbol ref in another BB (`if(0){x=*(int**)&SYM;}`); vt-as-hidden-2nd-arg = $a1 dispatch; unconditional it[0]-store sinks into advance delay (393B8 89.3->98.56, 2026-07-30)](#dead-2nd-symbol-ref-anti-hoist-393b8) — _no single-ref spelling stops the lui/addiu-sN hoist of a loop-conditional global store (volatile/cast/goto-loop all hoist); dead cross-BB ref restores the macro `sw s3,D` $at form. Also: n=node copy after ternary snaps s0/s1 encounter order; block-scope homes sit BELOW fn-scope dead homes (parity-pad coupling); dup-arg f(x,x) = lw+move pair. Retracts the 07-18 "still unsolved" verdict below._
+- [Prototyped zero-alias extern = raw-single $a2 float arg (kills K&R double-promote); orphan-stub lui/lw before prologue IS IDO pre-prologue hoist; dead float[N] aggregates reserve exact frame gaps (35E6C 80.6, 5640C EXACT, 2026-07-30)](#proto-zero-alias-float-a2-stolen-prologue-hoist-35e6c) — _per-site prototyped `gl_func_00000000_x` alias + `=0x0` binding; goto-chain default-after-bodies detail; residual = cross-BB FP-const PRE split._
 - [Memory-resident iterator pair = `int *it[2]` ARRAY (struct gets SRA'd to s-regs); mat-mult "hand-unroll" caps may be memory compound-accumulate triple-fors; missing move-v0-zero = tail-call return (393B8 51.2->89.3)](#iterator-array-vs-struct-sra-393b8) — _named `float sum` local is the decode error; `res[r*4+c]+=` in-memory + trip-4 k-loop full-unroll + c-loop beql pipeline fall out of plain triple-for. Ternary-comma advance regresses. &D-publish $s4 addr-hoist vs per-site $at still unsolved._
 - [Load-type mismatch breaks CSE: `*(int*)(p+K)==0` test + `*(char**)(p+K)` chain = TWO loads (different value numbers); same-type spelling = one CSE'd load surviving the no-call path. Also: each scalar decl BEFORE a local array lifts the array's frame slot +4 (decl-split solver for array placement) (gl_func_0004EE44 81->99.9, 2026-07-18 agent-f)](#load-type-vn-cse-decl-split-array-4ee44) — _int-typed null test also mis-fills the bnel delay (reload instead of the hoisted f32 arg load). A named-but-redundant pointer local (`world=(float*)m30`) costs an 8-byte dead home; cast at use instead. Raw char* base local unfolds a +0xB4 from the loop induction — keep the folded `(float*)(load+0xB4)` init._
 - [Frame dead-home CENSUS solver: every fn-scope named local gets a dead 4-byte home in DECL ORDER (block-scope + `register` do NOT shed); target frame gaps = original's named-local count — merge disjoint-live-range m2c temps into shared names until the census matches, then distribute survivors at the gap offsets. Companion: `if (1) { p = &local; }` barrier keeps the addiu-sp null test + alloc branch a plain `p = &local` lets IDO fold AND delete (gl_func_000493AC 61.6->72.7, 2026-07-23 agent-f)](#frame-dead-home-census-493ac) — _0x6B8-frame builder fn: m2c's 57 fn-scope temps = 228 phantom bytes below the named slots; 24 renames (a2/t/s2/v0 pools, cross-loop var un-merge where it re-spilled) + 32-slot gap distribution closed the frame 0x7C0->0x708; held pI/pq/pr iterator pointers recover the s0/s1/s3 base-reg copy web. SCALED addendum (8FC8, 113 temps, agent-g): greedy interval partition per m2c register root computes the pool set mechanically as a pure alpha-rename; per-OFFSET typed externs (not one base sym) kill an FP-literal-pool lui CSE web the target re-materializes per site; pools that textually interleave mark the un-mergeable statement-structure boundary._
@@ -22370,3 +22371,43 @@ Four transferable levers from finishing the 393B8/38DC0 sibling pair:
 
 Remaining 13/155: call-staging order (2), result -4 parity (3), node-web uncoalesced-fetch-copy
 (8, the documented 38DC0 cap — skip on sight).
+
+<a id="proto-zero-alias-float-a2-stolen-prologue-hoist-35e6c"></a>
+## Prototyped zero-alias extern pins a mid-list float arg to raw-single $a2 (and drops the K&R double-promote); orphan-stub lui/lw before the prologue IS reproducible — IDO hoists the entry-BB global load above `addiu sp` (35E6C 59.6->80.6, 5640C EXACT, 2026-07-30 agent-f)
+
+Two findings from the game_libs post0b USO segment (runtime-reloc'd, all callee `jal`s baked as `0x0C000000`):
+
+1. **jal-0 zero-alias with a PROTOTYPE.** The established convention for USO calls is a
+   zero-bound alias (`gl_func_00000000` = 0x0 in `undefined_syms_auto.txt`) so the
+   compiled `jal` bakes to `0x0C000000` = ROM bytes. Those aliases are K&R (`extern int
+   gl_func_00000000();`), which double-promotes float args (cvt.d.s + mfc1 pair into
+   a2/a3 + 5th arg spilling to 0x10(sp)). When the target passes a float as a RAW SINGLE
+   in an integer arg reg (`lui a2,0x447A` = 1000.0f straight into $a2, 4-reg arg list, no
+   stack arg), declare a **per-site prototyped zero-alias**: `extern int
+   gl_func_00000000_35e6c(char *, float *, float, float *);` + its `= 0x00000000;`
+   binding line. Fixes the whole call staging AND shrinks the arg-build area (s0 home
+   drops 0x20->0x18, matching the target frame).
+
+2. **Stolen-prologue orphan (`nop,nop,lui t6,lw t6` stub before the fn) is NOT a cap by
+   itself.** gl_func_00035E6C's first two real insns (lui/lw of the ctx global into t6,
+   consumed by `beqz t6` at +0x10) live in the preceding 0x10 orphan stub
+   game_libs_func_00035E5C. Compiling `ctx = *(char**)((char*)&D_00000000+0); if (ctx==0) return;`
+   at -O2 makes IDO emit the lui/lw ABOVE `addiu sp` — the "orphan value preserved by IDO
+   hoist" case of the orphan-prologue vein. Diff with the 2-word prefix prepended to the
+   target words; symbol-boundary parity is a separate (landing-time) question.
+
+3. Residual on 35E6C (why 80.6 not 100): the 200.0f literal is used in two BBs (c.lt.s
+   guard + sub.s in the taken arm); target materializes ONE `mtc1 at,f18` in the guard BB,
+   our build remats per-BB (+1 insn) and burns an extra aligned temp slot (+8 frame,
+   ctx spill 0x28-vs-0x20). Probed: named const local (homes the compare temp — worse),
+   `register float` (no effect). Same family as the h2hproc "cross-BB const PRE cap".
+   Companion detail that DID land: dead `float[N]` aggregates reserve exact frame gaps
+   (unused aggregates are NOT deleted at -O2) — used deadA[7]/deadB[3]/deadC[6] to
+   reproduce the 0x24..0x3C / 0x68..0x74 / 0x84..0xA0 holes; and the double Vec3 word-copy
+   (0x3C->0x4C->0x5C) is two `*(struct{int x,y,z;}*)` cast-copies, scheduler-interleaved.
+
+Also confirmed on gl_func_0005640C (EXACT): the 16-case goto-chain dispatch entry
+generalizes — put the DEFAULT call after the labeled return bodies (`goto def;` at chain
+end); its first insn (lui a0 of the addiu-form `&D+0x218EC` msg arg) gets hoisted into the
+final beq's delay slot and a lone `b` jumps the bodies, exactly as the target lays it out.
+The last-eq-test split lever (`if (v != 9) goto def; goto c9;`) composes with it.
