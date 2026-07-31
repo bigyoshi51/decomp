@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Volatile-BRIDGE copy (`char *volatile vb; vb=s; r=vb;`) defeats copy-prop of a homed alias into pre-redefinition stores — cracks the 6CF0 "split-at-spill non-steerable" class for serial-s0 constructors (timproc D14C 69.0->81.7, D884 69.0->81.4, 2026-07-31 agent-g)](#volatile-bridge-serial-s0-d14c-d884) — _Retracts D550's "no spelling stops t2=r propagating" note and D884's "regalloc divergence intractable" cap; &r-if(0)-escape alternative over-reloads (address-taken aliases every store)._
 - [Array-FIRST decl claims TOP frame block, named scalars ghost-descend below it (spill/CSE temps land at their homes); ||-alloc sentinel polarity reads from the FALLTHROUGH arm; tail-table CSE is the element ADDRESS not the element; dead-web var reuse steers a post-call load to $a1 (bootup B1B4 93.1->96.1, 2026-07-31 agent-g)](#array-first-decl-top-block-b1b4) — _Residual class confirmed probe-immune: post-call constant-group mats in source order with the store group emitted REVERSED (as1/ugen pair-order); mat order = store order = source order in every C spelling._
 
 - [Homed-locals-as-ARRAY defeats struct-field scalarization (arrays never scalarized; struct fields DO promote); volatile pad ARRAYS survive trimming, decl order = frame placement; E68 anchor-split works on in-TU func bases for fuzzy (411C 69.6->88.0; CCE0 84.2->90.0, BF8C 86.9->88.3 CSE-collapse killable; 24B8 serial-reuse-var NEGATIVE: webs split; volatile kills cross-arm PRE, 2026-07-30 agent-g)](#homed-array-vs-struct-scalarize-padarrays-411c) — _Serial alloc temp p + guard-only if(p)init (no early returns) + per-region q=A[i] block temps; residual = BF8C direct-form lui-at/lwc1 vs addiu-form for in-TU-defined-function base (struct-cast doesn't fold)._
@@ -22779,6 +22780,48 @@ two-var ternary fabs `q=(t<0)?-t:t` (bc1fl+mov / b+neg / dead-mov shape).
 3. **Iterator ctor/copy idiom (recurs in post0b node walkers):** ctor-with-alloc `||` exactly as gl_func_00048A74 (`self || (self=alloc(0xC))` then idx=-1/list/end init), then a DOUBLE struct copy `tmp = *p; itB = tmp;` where `tmp` is ONE shared function-scope NodeIter (inline-function return temp) reused by all mutually-exclusive arms, while itA/itB pairs are per-arm slots (decl order B-before-A, function scope, allocated high-to-low in decl order).
 
 4. Related decode tells fixed same pass: pool cursor `slot = (*(int**)(g+0x3C))[1]++; buf = (*(int**)(g+0x3C))[0] + (slot<<6);` — base RE-READ between ++ and use (int-store may alias, kills CSE; caching a `pool` var is wrong); dispatch arg carries an extra deref `pool[0] + node->sh8A*8`; element access is `it.list[0][idx]` (list holds &array-holder); `lh` not `lw` at vtable+0x28.
+
+## Volatile-BRIDGE copy defeats copy-prop into pre-redefinition stores; serial-s0 constructor recipe (timproc D14C 69.0->81.7 / D884 69.0->81.4, 2026-07-31 agent-g) <a name="volatile-bridge-serial-s0-d14c-d884"></a>
+
+Target family (timproc D14C/D884, D550's map): frame 0x60, ONE saved reg — s0 serially
+holds panel -> widget -> tail idx (`or s0,v0` in each alloc-beq delay, `lw s0,0x6c(t)` idx
+reload); the panel's LATE uses go through a stack home (`sw s0,0x5c(sp)` once, `lw v0,0x5c`
+reloads); the sub-record web lives in $a2 with home sp+0x54 (spill/reload around calls,
+never an s-reg).
+
+Recipe that lands the whole shape:
+1. **One serial C var** (`child`) for panel, then widget, then `(char*)idx` at the tail
+   (cast arithmetic for the `FW(a0,0x6C)` counter). This gives every `or s0,v0` delay and
+   the tail `lw s0` exactly.
+2. **Volatile-bridge the homed alias**: `char *volatile vb; ... vb = child; r = vb;` right
+   before the panel's last direct use. `r = child` alone gets copy-propagated so
+   pre-redefinition stores (0x2A4/0x2B0) read s0 instead of the home — the exact D550
+   failure ("no spelling found that stops t2 = r propagating"; that note + D884's
+   "regalloc divergence intractable" cap are hereby RETRACTED). The bridge costs 2 debris
+   insns (lw/sw pair at the copy point) but r becomes a plain, non-address-taken,
+   memory-homed local whose loads CSE per block like the target.
+   - `if (0) f(&r)` escape also blocks copy-prop BUT address-taken r re-loads around every
+     intervening store (alias assumption) — 3 reloads where target has 1. Don't use it for
+     the homed alias; DO keep `if (0) f(&arg1,&arg2)` to force ARG homes (stops arg1
+     stealing s0 for a single distant use).
+3. **Dead-escape the int args** (`if (0) { f(&arg1,&arg2); }`) — without it uopt gave s0
+   to arg1 (one mtc1 use 200 insns in) and homed the panel from birth.
+4. **pad[4] ghost block** (volatile int pad[4] mid-decl-list) to push the named block to
+   the target frame (-96) — plain dead decls trim, volatile arrays survive (see 411C entry).
+5. Sentinel polarity: `if (obj != 0 || (obj = alloc(0x2B8)) != 0) { init }` — bne to init,
+   alloc on the ==0 fallthrough (reading `== 0` off m2c emits the wrong branch sense).
+
+Sibling-divergence gotchas found while porting D884<->D14C (same TU, same flag word!):
+- **Flag-word or-chain**: D14C target does load,and,or(hi),ori,ori,ori, ONE store —
+  per-statement `G = G | C;` on the NON-volatile global keeps the ors unfolded; a local
+  accumulator respell folds the constants (scored 4pp WORSE); D884 target keeps ALL 5
+  intermediate stores = volatile spelling. Same symbol, two spellings — score per function.
+- 05D0E0 factory first arg is 0 (a0=zero), and EVERY switch case wires
+  `04DFFC(child, 05D0E0(0, desc, key, 0))` — the nested call emits jal;move a0,s0;jal with
+  move a1,v0 delay exactly.
+- Cases 0-7 pass a reloc-FREE absolute-0 address (lui a2,0;addiu a2,a2,0): `extern char
+  import_00000000; &import_00000000 + 0` reproduces bytes+shape (reloc-name noise only;
+  NM objects never link so the extern needs no ld entry).
 
 ## Array-FIRST decl claims TOP frame block; sentinel-polarity from fallthrough; &tbl[i] addr-CSE; dead-web $a1 steer (bootup B1B4 93.1->96.1, 2026-07-31 agent-g) <a name="array-first-decl-top-block-b1b4"></a>
 
