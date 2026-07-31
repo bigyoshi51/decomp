@@ -13947,6 +13947,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 
 - [Dead-kill `p = 0;` AFTER a `saved = p;` copy un-coalesces a widget-ptr/saved-copy pair from one long memory web into register-web + frame-homed copy; placement is load-bearing (adjacent-to-copy works, at-tail is DCE'd early and coalescing returns); cascade de-registerizes a shared mult constant (li+multu -> per-site sll/subu/sll/addu strength reduction) (timproc_uso_b1 1340 76.5->84.44, 2026-07-30 agent-g)](#dead-kill-uncoalesce-saved-copy-1340)
 - [do-while(0) statement macro = 2 BBs per expansion: Chow span denominator bloat turns EVERY loop var priority negative (-168 frame, t-regs + spill around jals, zero s-regs); plain-brace macro restores the full s0-s8 prologue in one step; mixed temp scoping (fn-scope _c/_q/_n + block register _e) is load-bearing for stable-vs-ring colors + exact frame (46050 48.5->80.1, 2026-07-30 agent-f)](#dowhile0-macro-bb-bloat-span-demotion-46050) — _Also: if/else-if chain (not switch) hoists compare literals 10/9/0x30 into s5-s7 loop-constant regs; dead if(charw){} flips an s1/s2 priority tie; jal-delay-slot w0 store identifies true emit statement order._
+- [Block-scope prototyped ALIAS extern = unpromoted single-word f32 arg + direct jal (fn-ptr cast=jalr; same-name block prototype=cfe error); NM-only since alias never links (36224 82.1->85.1, 2026-07-31 agent-f)](#blockscope-alias-prototype-f32-arg-36224) — _`swc1 32(sp)` single-word float arg to a K&R placeholder needs a nested-block prototyped alias name; safe because non_matching .o is compile-only + expected/ .o reloc-free._
+- [Union-member overwrite defeats dead-store elim while keeping reg forwarding; volatile-cast store forces reloads, BB-breaks nuke the frame (36224, 2026-07-31 agent-f)](#union-member-overwrite-dse-defeat-36224) — _`union {Vec3 v; f32 p[3];}` + copies/overwrites through different members = plain store survives + subs still use forwarded regs; member choice canonicalized (either direction identical)._
 - [do-while(0) BB-bloat DOSED in reverse: 3 wraps demote only lui-const/FP-const hoist webs (s6/f22) keeping s0-s5+f20 exact, 6+ wraps = 46050 all-s-regs-die wall; char*volatile memory-homes list cur/next iterators (454C4 29.8->62.1, 2026-07-30 agent-f)](#dowhile0-bb-bloat-dosing-454C4) — _Add one wrap at a time at original-macro-shaped sites (DL appends) and re-diff; caps: unified 255.0f web insists on f22 vs target f0-remat-after-jal; elem copy-pair coalesces to one lw._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -23054,3 +23056,41 @@ was folded back in; the last word (`&local` at sp+0x24 vs 0x20) is the
 decl-order lever — declare the scratch `int local` BEFORE the record
 pointer. Checklist trigger: entry reads an unset register (here t8/v0)
 => hunt the preceding orphan .s before believing any cap note.
+
+## Block-scope prototyped ALIAS extern = unpromoted single-word f32 arg with direct jal; fn-ptr cast gives jalr, same-name block prototype = cfe redeclaration error (36224 82.1->85.1, 2026-07-31 agent-f) <a name="blockscope-alias-prototype-f32-arg-36224"></a>
+
+Target shape: K&R placeholder callee (`int gl_func_00034458()`) called with a
+float 5th arg stored as a SINGLE word (`lwc1 $f4,68(s0); swc1 $f4,32(sp)` in
+the outgoing-arg area). A plain K&R call promotes float->double (sdc1/2 words);
+`*(int *)` spelling gives integer lw/sw — both wrong.
+- `((int (*)(...,f32))fn)(...)` cast: IDO emits `lui/addiu/jalr` + a v1 spill,
+  NOT jal (confirms feedback_knr_direct_call_vs_fnptr_cast_jal in game_libs
+  raw-word context too). Dead end.
+- Block-scope re-declaration of the SAME name with a prototype: cfe hard error
+  ("redeclaration of ...; previous declaration at line N").
+- WORKS: nested `{ int fn_p5(Vec3 *, char *, Vec3, Vec3, f32); ... }` with an
+  ALIAS name (`gl_func_00034458_p5`) scoped to a bare block around just those
+  call sites -> direct `jal` + `swc1 32(sp)`, byval Vec3 args unchanged.
+  Safe ONLY for NM wraps: build/non_matching objects are compile-only (never
+  linked) and the expected/ .o is reloc-free, so the alias symbol neither
+  breaks the link nor scores against the target. Do NOT promote such a body
+  out of its NM wrap without restoring a linkable callee name.
+
+## Union-member overwrite (write .v fields, overwrite via .p[i] or vice versa) defeats uopt dead-store elim while KEEPING register forwarding; volatile-cast store forces reloads, do-while(0)/if(1) BB-breaks nuke the frame (36224, 2026-07-31 agent-f) <a name="union-member-overwrite-dse-defeat-36224"></a>
+
+Target keeps "dead" plain stores (`vecA.x = tmp.x` stored, then overwritten by
+`vecA.x = vecA.x - 160.0f` a few insns later) AND the subs use the forwarded
+tmp registers (no reload). With `Vec3 vecA` all plain-store spellings
+(self-reference `vecA.x = vecA.x - C`, alias pointer `pA=&vecA` passed byval,
+tmp-read subs) get dead-store-eliminated; `*(volatile f32 *)&vecA.x = ...`
+keeps the store but materializes a base pointer AND forces the subs to reload
+from memory (wrong shape); do-while(0) or if(1) BB-breaks around the subs
+demote the whole s-reg/frame layout (541/537-line diff blowups vs 370).
+WORKS: declare the local as `union { Vec3 v; f32 p[3]; } vecA;` and spell the
+initial copies and the overwrites through DIFFERENT members
+(`vecA.p[0] = tmp.v.x; ... vecA.v.x = vecA.p[0] - 160.0f;`). uopt treats the
+cross-member store as may-alias (store survives) but the same-offset read
+still forwards from the register. Which member is used for which access is
+canonicalized away — .v-then-.p and .p-then-.v emit identically. Residual cap
+here: load order z,y,x + early z store vs scheduler's y,x,...,z sink —
+statement-order probes don't move it (list-scheduling tie).
