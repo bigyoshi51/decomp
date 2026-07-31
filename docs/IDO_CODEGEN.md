@@ -28,6 +28,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [jal-delay `sw v0,SLOT(sp)` + post-call `lw v0,SLOT(sp)` = spill/restore of the PRE-CALL base (call result DISCARDED), not a call-result respill — decode as base kept in v0 across calls, plain -O2 spill coloring; residual &local slot then falls to the decl-order lever (3395C 41.95->100, 2026-07-30 agent-h)](#jal-delay-sw-v0-is-base-spill-3395c)
 - [Switch-arm `break` vs inline `return 0`: break tail-merges into the shared v0=0 epilogue (bare bne/bgez + bltzl-to-epilogue), inline return 0 costs +2 insns/site + t-ring drift; re-tested consts = SEQUENTIAL ifs not else-if; stale reloc-blind "hardcoded jal" cap retracted via expected/.o (baked USO jal = extern at USO-local vram) (2A080 48.25->92.03, 2026-07-30 agent-h)](#switch-break-tailmerge-sequential-ifs-2a080) — _disasm-func.py without --obj reads build/non_matching FIRST (own NM build masquerades as target); objdump -r before believing no-reloc claims; copy-prop-immune pure copies (or v0,a2 / dead-param reuse) re-confirmed 3E1B0-class (while(0)/if(1)/param-reassign all fold)._
 - [Spline-fanout big-fn kit IV: `default:` doesn't count toward the 5-label jumptable threshold; named `one=1` const web (compares/stores share t0, literal args fresh li); RMW-through-incremented-pointer keeps sw unfolded; big-struct-copy doesn't reserve frame temp area (0B3C 48.2->91.8, 2026-07-30 agent-g)](#spline-fanout-kit-4-0b3c) — _Also: seg anti-fold guard flips s1->a3+home on a 22-call-live pointer; 0x40 struct assign = 3-word/iter copy loop; volatile pads rebuild named-local gaps but grow frame 1:1._
+- [Stack-arg-5 byte home read = FORWARDED char PARAM not uninitialized local (2F578 34.6->99.9); base held whole-fn via mutation (p=&D-4;if(1){p+=4;}) still ranks LAST in candidate order when its web is all %lo-foldable lws (proxy-sum spills wholesale at 9-candidate pressure) — 22464 trio-rotation cap (2026-07-31 agent-h)](#arg5-byte-home-and-mutation-base-rank-2026-07-31)
 - [Shared `ucvt` widening web of a u8 local steals a low arg-reg color: retype `unsigned int`, keep byte semantics via u8 lvalues + store-forward reload test (2266C 68.2->100 byte-exact, 2026-07-18 agent-h)](#ucvt-widening-web-steals-color-2266c) — _Diagnose with uoptlist: invisible candidate at the stolen color = `ucvt{local}`; also: mutation-form `rec=(u8*)(i*16); rec+=load` flips addu to offset-first; explicit off-var swaps v1/a0 vs strength-reduction; while(0) dead base ref can't advance the shared-address web's bit._
 - [Preheader lui/addiu NESTING (luiP,luiE,addiuE,addiuP) = while(0) dead-bit on the END constant + for-comma-init; x4 unroller fires only on indexed exact-trip `!=` form, `p<e` sltu form suppresses it; distinct extern per loop for per-loop base re-materialization (1FA20 68.9->100, 2026-07-18 agent-h)](#preheader-pair-nesting-unroll-trigger-1fa20) — _while(0) dead expr claims an early ucode bit for an ADDRESS-CONSTANT web (colors end v0 while cursor emits first); two plain defs can only give p,e,p,e or e,p,e,p; pointer `p != sym+K` bound does NOT unroll - use `for (i=0; i!=N; i++) arr[i+K]`._
 - [W65-70 game_libs trio (2026-07-18 agent-h): end-sentinel/slot-ptr DUAL-USE variable (24F30 frame-exact); param-as-cursor + post-inc idiom in BOTH arms tips uopt into s0 promotion where a separate local copy-props to a0+call-spill (1EE78); cached-count stale-v0 skip path kills join-beq + dup cond-load (1FAE8)](#w65-70-game-libs-trio-24f30-1ee78-1fae8) — _Also: K&R u16 reg arg = home store + re-mask per int-context use (the "redundant" andi); u16 stack arg = lhu slot+2; distinct placeholder externs for a loop bound LOSE the non-zero-trip proof (zero-trip guard + re-rotation, worse); `while(0){p+=1}` multi-def is fully DCE'd (inert as ref-boost/anti-remat); base with only %lo-foldable lw uses remats per-use (never s-reg) while a sibling address local colors an s-reg iff it has a non-foldable use (call arg/copy)._
@@ -23170,3 +23171,31 @@ still forwards from the register. Which member is used for which access is
 canonicalized away — .v-then-.p and .p-then-.v emit identically. Residual cap
 here: load order z,y,x + early z store vs scheduler's y,x,...,z sink —
 statement-order probes don't move it (list-scheduling tie).
+
+## Stack-arg-5 byte home + mutation-base candidate rank (2F578 / 22464, 2026-07-31 agent-h) {#arg5-byte-home-and-mutation-base-rank-2026-07-31}
+
+**Tell 1 — `sb X,(frame+0x10+3)(sp)` written in one arm, `lbu` read on ALL paths:** not an
+uninitialized local — it is the byte home of a FIFTH (stack) char parameter (arg5 word slot
+= frame+0x10, byte at +3 big-endian), conditionally OVERWRITTEN then forwarded to a callee.
+Declaring `unsigned char b` as param #5 costs zero prologue insns (value already in the
+caller-written slot) and fixes both the frame size and the "uninitialized" read
+(game_libs_func_0002F578 34.61->99.89; residual = placeholder jal name only).
+Companion tells there: `w = v + 15.0f` as a SEPARATE float local = fresh $f2 web while the
+f32 param stays $f12; trunc.w.s duplicated into a beql/beqzl likely-delay = ONE source
+trunc after the if-join.
+
+**Tell 2 — held whole-fn base that refuses its target s-reg:** for a base whose web is
+ONLY %lo-foldable `lw/lh` derefs, three spellings behave differently under high (9-candidate)
+s-reg pressure (gl_func_00022464):
+- plain `B = (char*)gl_d;` — colors an s-reg but REMATERIALIZES per-site at loop heads;
+- proxy sum `B = (char*)gl_d + (int)&gl_d_proxy;` — non-remat-able, so uopt SPILLS the
+  whole web to a stack slot (reload per outer iter);
+- mutation base `B = (char*)gl_d - 4; if (1) { B += 4; }` — variable web, held whole-fn
+  with NO remat and NO spill (the 2119C-proxy behavior at high pressure).
+BUT the mutation-held base still ranks BOTTOM of the candidate order (all-load use web =
+cupcosts lu->reg discount), so a target coloring of base ABOVE the index/induction webs
+(s5 vs s6/s7) stays unreachable: decl order is inert for the trio, and the rotation costs
+~15-20pp of objdiff fuzzy (every base/index insn arg-mismatches). Treat base/off/i
+rank rotation as a residual cap unless uoptlist shows a demotable competing web.
+Also validated there: nested single-statement ifs do NOT split an lb reload the way a
+one-site `volatile` cast does (volatile site1 + plain sites 2/3 = load1 / shared load2).
