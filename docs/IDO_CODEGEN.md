@@ -15,6 +15,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 ### large-body matching
 - [Volatile-BRIDGE copy (`char *volatile vb; vb=s; r=vb;`) defeats copy-prop of a homed alias into pre-redefinition stores — cracks the 6CF0 "split-at-spill non-steerable" class for serial-s0 constructors (timproc D14C 69.0->81.7, D884 69.0->81.4, 2026-07-31 agent-g)](#volatile-bridge-serial-s0-d14c-d884) — _Retracts D550's "no spelling stops t2=r propagating" note and D884's "regalloc divergence intractable" cap; &r-if(0)-escape alternative over-reloads (address-taken aliases every store)._
+- [D550 port of the volatile-bridge kit (74.1->82.4): strict decl-order top-down slot mapping makes frame offsets source-steerable via pad[N]+decl reordering; if(0)-escape kills reload-CSE — repair with block-scope cluster temps; baked reloc-free lui0/lwc1 must be spelled sym+off (absolute literal folds to $zero-base) (2026-07-31 agent-g)](#volatile-bridge-d550-slot-sculpting) — _Per-access folded-lo16 flag reads are pressure-driven remat, probe-immune (char/array/struct/volatile all materialize once per region)._
 - [Array-FIRST decl claims TOP frame block, named scalars ghost-descend below it (spill/CSE temps land at their homes); ||-alloc sentinel polarity reads from the FALLTHROUGH arm; tail-table CSE is the element ADDRESS not the element; dead-web var reuse steers a post-call load to $a1 (bootup B1B4 93.1->96.1, 2026-07-31 agent-g)](#array-first-decl-top-block-b1b4) — _Residual class confirmed probe-immune: post-call constant-group mats in source order with the store group emitted REVERSED (as1/ugen pair-order); mat order = store order = source order in every C spelling._
 
 - [Homed-locals-as-ARRAY defeats struct-field scalarization (arrays never scalarized; struct fields DO promote); volatile pad ARRAYS survive trimming, decl order = frame placement; E68 anchor-split works on in-TU func bases for fuzzy (411C 69.6->88.0; CCE0 84.2->90.0, BF8C 86.9->88.3 CSE-collapse killable; 24B8 serial-reuse-var NEGATIVE: webs split; volatile kills cross-arm PRE, 2026-07-30 agent-g)](#homed-array-vs-struct-scalarize-padarrays-411c) — _Serial alloc temp p + guard-only if(p)init (no early returns) + per-region q=A[i] block temps; residual = BF8C direct-form lui-at/lwc1 vs addiu-form for in-TU-defined-function base (struct-cast doesn't fold)._
@@ -22822,6 +22823,38 @@ Sibling-divergence gotchas found while porting D884<->D14C (same TU, same flag w
 - Cases 0-7 pass a reloc-FREE absolute-0 address (lui a2,0;addiu a2,a2,0): `extern char
   import_00000000; &import_00000000 + 0` reproduces bytes+shape (reloc-name noise only;
   NM objects never link so the extern needs no ld entry).
+
+
+### Addendum: D550 port (74.1->82.4, 2026-07-31 agent-g) — slot sculpting + escape-CSE repair <a name="volatile-bridge-d550-slot-sculpting"></a>
+
+Porting the kit to D550 surfaced four generalizable levers/limits:
+
+1. **Strict decl-order top-down slot mapping.** In this TU (-O2), every declared
+   local gets ONE frame word in declaration order, allocated top-down from the
+   highest local slot, arrays contiguous — even candidates that never spill
+   still consume their word (D884's eliminated `r` leaves the 0x58 ghost gap).
+   So target slot offsets are directly source-steerable: D550 wanted obj@0x54,
+   savedbit@0x30, p@0x2C, gc@0x28 under frame -96 → decl list
+   `r, vb, obj, child, volatile int pad[7], savedbit, p, gc` lands ALL of them
+   exactly (pad[7] both grows frame -88->-96 and fills 0x34..0x4C).
+2. **if(0)-escape kills cross-statement reload CSE; repair with block temps.**
+   `&obj` in the if(0) call forces the target's memory-homed reload-per-use
+   shape (needed to keep obj out of an s-reg), but an escaped local aliases
+   every store, so uopt re-loads it after each `sw` — target instead reloads
+   once per use-cluster. Fix: block-scope register temp per cluster
+   (`{ char *o2 = obj; FW(o2,0x28)=..; f(o2+0x2C); }`); same for a 6-store gc
+   cluster (`g2`) and a double arg2 read (`s32 a2v = arg2;` feeding
+   `FW(r,0x2B0)=a2v; obj=(char*)(a2v+1);` = target's addiu-off-same-load).
+3. **Baked reloc-free `lui 0; lwc1 f,0x3B8(at)`**: absolute `*(f32 *)0x3B8`
+   folds to `lwc1 f,952($zero)` (16-bit literal → $zero base, WRONG shape).
+   Spell as `sym+0x3B8` (import_80807FB8): byte-identical insn pair, extra
+   reloc entries are the only honest residual.
+4. **Per-access `lui hi; lw r,4(r)` folded-lo16 flag reads are NOT
+   source-steerable** when uopt has a free reg: char/array/struct/volatile
+   spellings all materialize the address once per region
+   (`lui; addiu lo16; lw 4(reg)`) — probe series 2026-07-31. Target's
+   per-access remat is pressure-driven. Shared residual class across
+   D14C/D884/D550 (with vb eager-copy debris + DCE'd dead `p+=0xB4`).
 
 ## Array-FIRST decl claims TOP frame block; sentinel-polarity from fallthrough; &tbl[i] addr-CSE; dead-web $a1 steer (bootup B1B4 93.1->96.1, 2026-07-31 agent-g) <a name="array-first-decl-top-block-b1b4"></a>
 
