@@ -9825,3 +9825,42 @@ changes), (b) new donor-unit expected .o, and `git checkout --` the rest.
 Folding the drift into a land commit would silently move the objdiff
 baseline for dozens of unrelated functions. (Batch-7 6FB54/6FE5C +
 3395C session: 23 modified expected .o, only 2 belonged to the land.)
+
+## objdiff fuzzy can hard-zero a valid NM body (fuzzy MISSING/0.0 while neighbors score) — bisect the BODY, and know the clip-pin can silently fabricate the zero (55470, 2026-07-31 agent-f) <a name="objdiff-fuzzy-hard-zero-nm-body"></a>
+
+While decoding gl_func_00055470 (0x430 17-value opcode dispatcher, game_libs_post0b), the
+shape-truest spelling — the NESTED-`!=` chain (per the gui 27A0 kit entry, which correctly
+reproduces the target's packed beq-to-out-of-line-body compare chain) — made objdiff score the
+function 0.0 (report omits `fuzzy_match_percent` entirely = "MISSING"), while the ==-else-chain
+spelling scored 36.6 and a flat goto-ladder scored 39.9 with near-identical instruction content.
+Bisection: minimal nested chain scores (18.4), chain+one-fetch-arm scores (10.9), but the full
+17-arm nested body zeroes — removing the jalr arm, the struct-by-value arms, the HI16/LO16-split
+pair (uopt sinking the `%lo` addiu into a jal delay slot between the HI16 and LO16 relocs), and
+the folded-addend `&D_00000000 + 0x211B0` each did NOT un-zero it. Root cause not isolated
+(some full-body interaction inside objdiff's scorer). Practical rules:
+
+1. **A 0.0/MISSING fuzzy on a body whose objdump diff looks 60-90% aligned is a metric
+   anomaly, not a decode verdict.** Cross-check with a manual mnemonic diff before reverting
+   work. Gate on the best OFFICIALLY-SCORED variant (goto-ladder 39.9 kept here), and note the
+   truer-shaped variant in the source comment for a future objdiff upgrade.
+2. **Rule out the clip pin FIRST — it fabricates zeros for the whole TU tail.** A stale
+   `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` pin (any NM body size change moves it) truncates
+   .text below a symbol's end → objdiff report aborts ("Symbol data out of bounds") or
+   silently mis-scores; a pin ABOVE natural end hard-errors the build (Error 1), leaving a
+   STALE .o that the next report happily reads. During iteration, build with
+   `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN=` (empty command-line override beats the
+   target-specific var) and re-pin once at the end (last-sym end, here 62F08+0x50).
+3. **Dispatcher-form table confirmed again** (17 sparse cases incl. one far outlier 113):
+   plain `switch` → slti-split + dense jumptable (NOT the target chain); ==-else-chain →
+   bnel+inline arms; goto-ladder → out-of-line for call-bearing arms but uopt re-inlines
+   small call-free arms; nested-`!=` → full beq-to-body chain in source order (target shape).
+   uopt lays nested-!= else-arm bodies in TEXTUAL (innermost-first) order — reversed vs the
+   target's chain-order bodies — and the gui-kit entry already calls this placement residual
+   fuzzy-neutral-ish; here the whole-body zero made it moot.
+
+Decode furniture that transfers: command-stream fetch idiom (`cp=(int*)s[0]; cur=(int*)*cp;
+*cp=(int)(cur+1); w=*cur; s[1]=w;`), 76-byte struct passed BY VALUE (12-byte-stride copy loop
+into the arg area + a0-a3 loads = `GlCmd76 tmp = *(GlCmd76*)s; f(tmp);`), vtable default arm
+(`obj=s[4]; cls=*(char**)(obj+40); fn=*(int*)(cls+60); fn(obj + *(short*)(cls+56), &vt)` with
+cursor writeback), case-113 falling INTO the default body, direct global store via `$at`
+(`D_00000000 = w`) vs pointer-materialized RMW (`p = (int*)&D_00000000; p[1] |= w`).
