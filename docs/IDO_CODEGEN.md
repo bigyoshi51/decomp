@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Shared-tmp struct-copy addiu web (`tmp=d; dst=tmp;` x5 stages, one slot) is an s-reg/recompute TIE uopt breaks toward s-regs — NO respell reaches the target's recompute form: block-scope `Vec3 *tp=&tmp` merges by value-numbering, union members share the web, `register` params no-op, if(0)-escape of the STRUCT still s-regs its ADDRESS and escaping ptr args over-homes them (per-use reloads, scored WORSE 66.3->64.6) (post0b 3A58C 11.7->66.3, 2026-07-31 agent-f)](#shared-tmp-addiu-web-tie-3a58c) — _Decl-order slot sculpting (pads + scalars-as-ghost-spill-homes) still lands frame+ALL slots exact even with the 2 parasitic s-regs: IDO packs s-saves into the target's unused 0x1C/0x20 save-area gap, same -0x140 frame._
 - [Volatile-BRIDGE copy (`char *volatile vb; vb=s; r=vb;`) defeats copy-prop of a homed alias into pre-redefinition stores — cracks the 6CF0 "split-at-spill non-steerable" class for serial-s0 constructors (timproc D14C 69.0->81.7, D884 69.0->81.4, 2026-07-31 agent-g)](#volatile-bridge-serial-s0-d14c-d884) — _Retracts D550's "no spelling stops t2=r propagating" note and D884's "regalloc divergence intractable" cap; &r-if(0)-escape alternative over-reloads (address-taken aliases every store)._
 - [D550 port of the volatile-bridge kit (74.1->82.4): strict decl-order top-down slot mapping makes frame offsets source-steerable via pad[N]+decl reordering; if(0)-escape kills reload-CSE — repair with block-scope cluster temps; baked reloc-free lui0/lwc1 must be spelled sym+off (absolute literal folds to $zero-base) (2026-07-31 agent-g)](#volatile-bridge-d550-slot-sculpting) — _Per-access folded-lo16 flag reads are pressure-driven remat, probe-immune (char/array/struct/volatile all materialize once per region)._
 - [Array-FIRST decl claims TOP frame block, named scalars ghost-descend below it (spill/CSE temps land at their homes); ||-alloc sentinel polarity reads from the FALLTHROUGH arm; tail-table CSE is the element ADDRESS not the element; dead-web var reuse steers a post-call load to $a1 (bootup B1B4 93.1->96.1, 2026-07-31 agent-g)](#array-first-decl-top-block-b1b4) — _Residual class confirmed probe-immune: post-call constant-group mats in source order with the store group emitted REVERSED (as1/ugen pair-order); mat order = store order = source order in every C spelling._
@@ -22783,6 +22784,38 @@ two-var ternary fabs `q=(t<0)?-t:t` (bc1fl+mov / b+neg / dead-mov shape).
 3. **Iterator ctor/copy idiom (recurs in post0b node walkers):** ctor-with-alloc `||` exactly as gl_func_00048A74 (`self || (self=alloc(0xC))` then idx=-1/list/end init), then a DOUBLE struct copy `tmp = *p; itB = tmp;` where `tmp` is ONE shared function-scope NodeIter (inline-function return temp) reused by all mutually-exclusive arms, while itA/itB pairs are per-arm slots (decl order B-before-A, function scope, allocated high-to-low in decl order).
 
 4. Related decode tells fixed same pass: pool cursor `slot = (*(int**)(g+0x3C))[1]++; buf = (*(int**)(g+0x3C))[0] + (slot<<6);` — base RE-READ between ++ and use (int-store may alias, kills CSE; caching a `pool` var is wrong); dispatch arg carries an extra deref `pool[0] + node->sh8A*8`; element access is `it.list[0][idx]` (list holds &array-holder); `lh` not `lw` at vtable+0x28.
+
+## Shared-tmp struct-copy addiu web: s-reg vs recompute tie, respell-immune; slot sculpting still lands the frame around parasitic s-regs (post0b 3A58C 11.7->66.3, 2026-07-31 agent-f) <a name="shared-tmp-addiu-web-tie-3a58c"></a>
+
+Context: gl_func_0003A58C (0x420 sphere-vs-segment hit test), whose original source funnels
+every Vec3 result through ONE shared temp (`d.x=..; d.y=..; d.z=..; tmp=d; dst=tmp;` x5
+stages, 3 calls between them) and a `q1=src; q2=q1; out[0..2]=q2.*` write-out chain. Target
+codegen: NO s-regs at all — `&tmp` is re-materialized (`addiu v0,sp,0xEC`) after each call,
+c stays in $a2 with per-call arg-home spills, a rides $a0->`move a3,a0`.
+
+1. **The web is a cost TIE uopt breaks the other way.** &tmp: 3 post-call materializations
+   (3 insns) vs s-reg (save+restore+1 addiu = 3 insns). Our IDO run always picks s1=&tmp,
+   s0=c. Every respell fails to flip it:
+   - block-scope `{ Vec3 *tp=&tmp; *tp=d; dst=*tp; }` per stage — identical addiu VALUES
+     get value-numbered into one web again (var identity is irrelevant);
+   - `union { Vec3 t1..t5 } tmp` distinct members — same address, same web;
+   - `register` on the pointer params — no-op at -O2;
+   - `if (0) dead(&tmp)` — homes tmp's VALUE but its address still takes s0;
+   - `if (0) dead(&a,&b,&c)` — kills the arg s-regs BUT over-homes them (alias-reload per
+     use-cluster, loads via $t regs): scored 64.6 vs 66.3 without. Escaping ptr args is a
+     net LOSS when the target keeps them in arg regs with per-call spills only.
+   - genuinely distinct block-scope `Vec3 tmp` per stage DOES break the web (recompute
+     form appears) but each tmp gets its OWN slot near the frame BOTTOM — target's single
+     0xEC slot is unreachable that way. Class residual: accept the 2 s-regs.
+2. **Decl-order slot sculpting works AROUND parasitic s-regs.** With decl list
+   `step,v_oc,v_ca,dir,dot,disc,v_bc,len2,tmp,t,d1,pad[5],d2,d3,d4,pad[7],q1,pt,pad[5],
+   q2,pad[2],d5,sc` (volatile int pads), frame lands -0x140 and EVERY named slot matches —
+   including float scalars dot/disc placed mid-list so their ghost words become the exact
+   spill homes 0x10C/0x108 the target uses across call 2. IDO tucks the extra s0/s1 saves
+   into 0x1C/0x20, which the target leaves as save-area slack (its ra sits at 0x1C, ours
+   at 0x24) — so parasitic s-regs cost prologue/epilogue + web rows only, not the layout.
+3. Chained `dst = tmp = d;` is NOT the copy idiom: it double-reads tmp (`lw;lw` debris).
+   Spell as two statements; the interleaved lw/sw ladder then matches the target exactly.
 
 ## Volatile-BRIDGE copy defeats copy-prop into pre-redefinition stores; serial-s0 constructor recipe (timproc D14C 69.0->81.7 / D884 69.0->81.4, 2026-07-31 agent-g) <a name="volatile-bridge-serial-s0-d14c-d884"></a>
 
