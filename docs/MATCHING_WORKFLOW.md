@@ -230,7 +230,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Cross-function fuzzy regression from a preceding NM body's size delta: trailing-pad shape depends on .text offset mod 16 — diff the victim's disasm first; fix the size donor (66A50/64DEC, 2026-07-30)](#nm-size-delta-shifts-downstream-pad-parity)
 - [Full refresh-expected-baseline.py run surfaces PRE-EXISTING drift in untouched units (blank 0x0C000000 jals bake once callee symbols gain addresses since last refresh) — revert drift-unit .o, commit only the units your land touches (agent-h 2026-07-30)](#expected-refresh-drift-revert-untouched)
 - [Expected-refresh drift AUDITED (agent-g 2026-08-22): all 25 drifted .o mapped — real .text/.rel drift confined to game_libs_post1b (+post1b2c reloc-adds); EVERY drifted site sits inside a currently-100% function, so committing the refresh REGRESSES exacts; the "placeholder callee gained a TRUE name = free NM fuzzy upgrade" vein is EMPTY for this set. Also: refresh script had been crashing since reloc-importing donor splices landed (baseline all-INCLUDE_ASM .o is reloc-free) — replace-function-body.py now creates .rel.text on demand](#expected-refresh-drift-audit-2026-08)
-- [objdiff fuzzy can hard-zero a valid NM body (MISSING/0.0 while neighbors score) — gate on best-SCORED variant, rule out the clip pin first, dispatcher-form table (55470, 2026-07-31)](#objdiff-fuzzy-hard-zero-nm-body) — _ROOT-CAUSED 2026-08-22: objdiff scorer clamp, not an anomaly — moved blocks cost delete+insert (200/insn) vs max_score of 100/left-insn, so >50% block-moved content (e.g. uopt laying inline nested-!= else-arm bodies innermost-first = reversed) clamps to exact 0.0/MISSING. Hard 0.0 on mostly-right content = block-ORDER signal, reorder the source; score dispatchers with chain-ordered bodies via goto arms (55470: 39.9 goto-ladder → 44.75 nested-head+goto-arms; inline nested = 0.0). Clip-pin trap + empty NON_MATCHING_TEXT_CLIP_KEEP_ALIGN= iteration override still apply._
+- [objdiff fuzzy can hard-zero a valid NM body (MISSING/0.0 while neighbors score) — gate on best-SCORED variant, rule out the clip pin first, dispatcher-form table (55470, 2026-07-31)](#objdiff-fuzzy-hard-zero-nm-body) — _ROOT-CAUSED 2026-08-22: objdiff scorer clamp, not an anomaly — moved blocks cost delete+insert (200/insn) vs max_score of 100/left-insn, so >50% block-moved content (e.g. uopt laying inline nested-!= else-arm bodies innermost-first = reversed) clamps to exact 0.0/MISSING. Hard 0.0 on mostly-right content = block-ORDER signal, reorder the source; score dispatchers with chain-ordered bodies via goto arms (55470: 39.9 goto-ladder → 44.75 nested-head+goto-arms; inline nested = 0.0). Clip-pin trap + empty NON_MATCHING_TEXT_CLIP_KEEP_ALIGN= iteration override still apply. CLOSED 2026-08-22 follow-up: lever does NOT generalize — [20,60) band block-layout sweep found NO other permuted-layout near-miss (tool scripts/block-layout-cmp.py); uopt goto-body order is textual-order-INVARIANT (call-free bodies hoisted ahead of call-bearing); reverse-nest inline achieves target layout but drifts every arm's registers → still 0.0 (fuzzy measures per-row register agreement more than layout); 44.9 goto form stands._
 - [Lone 1-word pad INCLUDE_ASM emits 2 words (+4 shift): fold stray nops into a neighbor's .s tail; caller-set-$t6 'cap' = stolen-prologue misread (3rd instance); sub-55 libultra identity grep kit; 27784=osAiSetNextBuffer via per-site-extern %hi-CSE-kill (277E0 = its tail, 4th caller-set retraction); refresh-expected-baseline.py: no flags + run AFTER .s merges; non-hw 5.3-fingerprint sweep: 71384=osPfsInitPak (pfs sibling family = blank jals in 70xxx-71xxx); pfs vein RESOLVED 2026-07-30: 71384/71624/717CC landed 5.3 -O1 donors, 71304/71144 = game code (size-coincidence trap)](#one-word-pad-include-asm-emits-two-words)
 
 
@@ -9895,6 +9895,37 @@ into the arg area + a0-a3 loads = `GlCmd76 tmp = *(GlCmd76*)s; f(tmp);`), vtable
 (`obj=s[4]; cls=*(char**)(obj+40); fn=*(int*)(cls+60); fn(obj + *(short*)(cls+56), &vt)` with
 cursor writeback), case-113 falling INTO the default body, direct global store via `$at`
 (`D_00000000 = w`) vs pointer-materialized RMW (`p = (int*)&D_00000000; p[1] |= w`).
+
+**2026-08-22 follow-up (agent-f): the block-order lever does NOT generalize — layout and
+register agreement trade off, and the band has no other layout-only near-misses.**
+Three results from attempting to exploit the no-block-move-detection insight:
+
+1. **Band sweep negative.** Mnemonic-hash basic-block layout comparison (build-NM vs
+   expected .o; block = branch-target-delimited region, fingerprint = md5 of mnemonic
+   sequence; tool: 1080 `scripts/block-layout-cmp.py`) across ALL 150 NM wraps in the
+   [20,60) fuzzy band: 55470 is the ONLY function with high block-content agreement
+   (0.88) + permuted order. Every other band member diverges in CONTENT (block-match
+   <0.3; apparent "inversions" on e.g. 201B8 are hash collisions between generic 2-insn
+   `bne`/`b` blocks). Wrong-block-order is not a hidden vein — don't re-sweep.
+2. **uopt goto-body placement is INVARIANT to textual order.** Reversing the textual
+   order of all six call-free arm bodies (L1016..L1007) reproduced the byte-identical
+   .o — uopt orders out-of-line goto bodies internally, grouping CALL-FREE bodies ahead
+   of call-bearing ones (build `[1005,1004,1007,1006,1008,1016][1012,1015,1010,1011]`
+   vs target pure chain order). You cannot fix goto-arm block order by moving labels.
+3. **Reverse-nest inline gets the target LAYOUT but zeroes anyway (register drift).**
+   Nesting the `!=` chain in REVERSE chain order (1018 outermost → 1014 innermost, all
+   bodies inline) exploits innermost-first layout to land every body block in target
+   position (verified: arm blocks 18-23 and 31-39 all in place, only the reversed
+   2-insn head compares moved) — yet objdiff STILL reports 0.0/MISSING. Cause: uopt's
+   temp-register assignment tracks its internal emission structure, so the inline form
+   drifts registers in every arm; strict-row LCS agreement falls to 91/268 rows and the
+   aligner loses its anchors (delete+insert cascade >= max_score). Mnemonic-only LCS on
+   the same pair estimates 72.8% — i.e. **objdiff fuzzy on IDO dispatchers measures
+   per-row register agreement more than block layout**; a layout-true rewrite that
+   disturbs regalloc can score WORSE than a block-moved body with right registers.
+   Goto-arm form (right regs, moved blocks) = 44.9 stands as the scored best; the
+   residual is uopt's invariant call-free-hoist grouping = structural cap for the
+   fuzzy metric, not for a true match.
 
 ## Expected-refresh drift audit: full drift map, all sites inside 100% functions — no free NM upgrades; refresh script .rel.text crash fixed (agent-g 2026-08-22) <a name="expected-refresh-drift-audit-2026-08"></a>
 
