@@ -12,6 +12,7 @@
 
 _75 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
+- [objcopy --redefine-sym on a donor .o mangles local section symbols -> imported relocs degrade to *ABS* and ship unbaked; use rename-elf-symbol.py (74554/_Litob, 2026-08-22)](#objcopy-redefine-sym-donor-abs-reloc) — _ROM-cmp-only failure class: .o word-diff looks fine (fields are reloc-class), the link ships them unresolved._
 - [Resolved-jal m2c overlay pipeline: full-body redecode of big raw-.word USO NM fns (8FC8 41.5→65.8, B624 20.7→62.6, 2026-07-23)](#resolved-jal-m2c-overlay-pipeline) — _disasm expected-.o (NOT default search: build/non_matching hits first!), overlay .s jal/lui symbols by insn index, %lo every consumer of every lui (multi-consumer + dual-lui-branch-join + bc1fl-label-space gotchas), fabricate .text-invisible jtbl entries, m2c --valid-syntax, char*-only locals, reuse sibling-block decls. Hand-paraphrase 'FP-schedule cap / fuzzy=None' verdicts do NOT transfer to the m2c emission — re-test them._
 - [Donor-spliced switch jumptables ARE landable: rename donor-local .rodata reloc to <func>_rodata + pin baked %lo in undefined_syms_auto (6DD14 __osDevMgrMain 46.2->100, 2026-07-30)](#donor-splice-switch-jumptable-rodata-rename) — _30AF4 "external jumptable permanent cap" holds only for in-unit compiles; for REPLACE_FUNC_BODY donors the table already ships in the USO data segment. Also: 74 entries -> 75._
 - [GOTCHA: disasm-func.py can return a wrong/stale body — expected/<unit>.c.o is the only ground truth (B154 2026-07-23)](#disasm-func-stale-vs-expected-obj) — _script gave a 123-insn frame-176 shape diffing ~identical to the NM build while objdiff said 58%; real target in expected/.o was 133-insn frame-168 at a different address._
@@ -9948,3 +9949,7 @@ ROM byte-identical, non_matching exit 0, refresh-report exact-set diff vs
 origin/main = 0 lost / 0 gained (2322 exact). If a future land needs a
 narrow post1b refresh, budget for re-verifying all ~15 exact fns listed
 above — they WILL move.
+
+## objcopy --redefine-sym on a DONOR .o mangles local section symbols -> imported relocs degrade to *ABS* and ship UNBAKED (74554/_Litob, 2026-08-22) {#objcopy-redefine-sym-donor-abs-reloc}
+
+Renaming compiler-generated extern jals in a REPLACE_FUNC_BODY donor (e.g. `__ull_rem`/`__ull_div` from a u64 `%`/`/`, which must NOT link to their kernel pins because the USO ships those jals blank) must NOT use `objcopy --redefine-sym`: objcopy rewrites the whole symtab and drops/renames the LOCAL SECTION symbols (`.data`, `.rodata`) that `replace-function-body.py`'s reloc import keys its `<func>_<section>` rename on. The imported relocs then show `*ABS*` in `objdump -r`, the linker leaves the %hi/%lo fields unresolved, and the ROM regresses ONLY at those words (cmp catches it; the .o-level word-diff looks fine because the fields were reloc-class anyway). Use `scripts/rename-elf-symbol.py` (1080 repo) — strtab-append + st_name repoint, nothing else touched. Companion: `scripts/add-elf-func-symbol.py` for -O3 donors whose statics have no symtab entries (see IDO_CODEGEN -O3 whole-TU entry).
