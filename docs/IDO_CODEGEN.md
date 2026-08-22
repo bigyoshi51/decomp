@@ -13954,6 +13954,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [do-while(0) statement macro = 2 BBs per expansion: Chow span denominator bloat turns EVERY loop var priority negative (-168 frame, t-regs + spill around jals, zero s-regs); plain-brace macro restores the full s0-s8 prologue in one step; mixed temp scoping (fn-scope _c/_q/_n + block register _e) is load-bearing for stable-vs-ring colors + exact frame (46050 48.5->80.1, 2026-07-30 agent-f)](#dowhile0-macro-bb-bloat-span-demotion-46050) — _Also: if/else-if chain (not switch) hoists compare literals 10/9/0x30 into s5-s7 loop-constant regs; dead if(charw){} flips an s1/s2 priority tie; jal-delay-slot w0 store identifies true emit statement order._
 - [Block-scope prototyped ALIAS extern = unpromoted single-word f32 arg + direct jal (fn-ptr cast=jalr; same-name block prototype=cfe error); NM-only since alias never links (36224 82.1->85.1, 2026-07-31 agent-f)](#blockscope-alias-prototype-f32-arg-36224) — _`swc1 32(sp)` single-word float arg to a K&R placeholder needs a nested-block prototyped alias name; safe because non_matching .o is compile-only + expected/ .o reloc-free._
 - [IDO -O3 whole-TU interprocedural custom linkage: static fns take args in $s0-$s4 + small statics integrate into callers; compile the whole reference TU at -O3, donor-splice with POST_COMPILE symbol injection (73904/_Genld + 73E74/_Ldtob = xldtob.c, 2026-08-22 agent-h)](#ido-o3-whole-tu-sreg-custom-linkage) — _"caller-set s-reg args" caps on statics from a known source file are the -O3 signature, not permanent; asm-processor rejects -O3 (direct CC rule); statics lose symtab entries at -O3 (add-elf-func-symbol.py)._
+- [All-4-args-homed + zero-s-reg + float-in-a1-home -O2 prologue = K&R all-int params + reinterpret-cast access (`*(char**)&arg0` / `*(f32*)&arg1`); not -O1/varargs/-g3/struct-byval; unused int pad arrays reproduce decl-order frame gaps (63964 22.6->73.3, 2026-08-22 agent-g)](#knr-int-args-reinterpret-all-homed-2026-08-22)
 - [Union-member overwrite defeats dead-store elim while keeping reg forwarding; volatile-cast store forces reloads, BB-breaks nuke the frame (36224, 2026-07-31 agent-f)](#union-member-overwrite-dse-defeat-36224) — _`union {Vec3 v; f32 p[3];}` + copies/overwrites through different members = plain store survives + subs still use forwarded regs; member choice canonicalized (either direction identical)._
 - [do-while(0) BB-bloat DOSED in reverse: 3 wraps demote only lui-const/FP-const hoist webs (s6/f22) keeping s0-s5+f20 exact, 6+ wraps = 46050 all-s-regs-die wall; char*volatile memory-homes list cur/next iterators (454C4 29.8->62.1, 2026-07-30 agent-f)](#dowhile0-bb-bloat-dosing-454C4) — _Add one wrap at a time at original-macro-shaped sites (DL appends) and re-diff; caps: unified 255.0f web insists on f22 vs target f0-remat-after-jal; elem copy-pair coalesces to one lw._
 
@@ -23269,3 +23270,21 @@ Same-function coloring notes (95.4 final):
 5. One donor TU serves multiple REPLACE_FUNC_BODY specs (`fnA=$(D) fnB=$(D)`); splice order follows the spec list, layout self-heals per splice.
 
 **Where else to look:** any "caller-set s-reg/v-reg arg" cap whose fn sits next to siblings from one known source file (libc, libgcc, middleware) — the whole file is one -O3 TU. The 73904 wrap sat 2+ months as a documented permanent cap ("IDO C cannot receive args in s-regs") and fell to the first -O3 TU compile.
+
+## All-4-args-homed + zero-s-reg prologue at -O2 = K&R INT params reinterpret-cast in body (63964, 2026-08-22 agent-g) {#knr-int-args-reinterpret-all-homed-2026-08-22}
+
+Shape: `-O2` scheduling but prologue homes ALL FOUR reg args (`sw a3,frame+C; move a3,a0; sw a0,frame+0; sw ra; sw a1; sw a2`), NO s-regs saved, arg0 cached briefly in **a3** and re-loaded `lw a3,frame+0(sp)` after every call, and a float spilled into an ARG HOME slot (`swc1 $fN,frame+4(sp)` = a1's home).
+
+That combination is NOT -O1 (7.1/5.3 -O1 probe gives a different, longer body), not varargs, not struct-by-value, not `-g3`, and plain `&arg;` statements fold dead. The trigger is a **K&R definition with all params declared `int`, with the body accessing them through reinterpret casts**:
+
+```c
+void f(arg0, arg1, arg2, arg3)
+char *arg0; int arg1, arg2, arg3;
+{
+#define parg0 (*(char **)&arg0)   /* every use */
+#define farg1 (*(f32 *)&arg1)    /* f32 accumulator living in a1's HOME slot */
+```
+
+The `&arg` inside a real access is address-taken-in-use, so uopt keeps the param memory-resident in its home slot (reload per region, a3 as the scratch), uses no s-regs, and float writes hit the a1 home directly. Prototyped ANSI or bare K&R WITHOUT the casts still promotes arg0 to s0. (Found on gl_func_00063964 22.6->73.3; residuals there: one extra 8-byte compiler temp slot (frame 0x150 vs 0x148) and target reloading va/vb components after their own stores where build forwards — forwarding-kill lever not yet found; f32*-alias rewrite was inert.)
+
+Frame-gap corollary: the decl-order local map had 6 interior gaps (0x20/0xC/4/0x10/8/8) reproduced exactly by `int padN[k]` arrays between the Vec3 decls — unused int arrays DO take stack at -O2 and slot in decl order.
