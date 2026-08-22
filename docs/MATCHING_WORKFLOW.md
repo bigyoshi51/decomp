@@ -228,6 +228,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Clip re-probe: LAST symbol keeps FULL expected size (clip=last_sym+expected_size, not old_clip+body_delta); partial window = length-ratio score (62F08 100->65); missing fuzzy key (None) = over-clip fingerprint](#clip-last-symbol-full-expected-size)
 - [Cross-function fuzzy regression from a preceding NM body's size delta: trailing-pad shape depends on .text offset mod 16 — diff the victim's disasm first; fix the size donor (66A50/64DEC, 2026-07-30)](#nm-size-delta-shifts-downstream-pad-parity)
 - [Full refresh-expected-baseline.py run surfaces PRE-EXISTING drift in untouched units (blank 0x0C000000 jals bake once callee symbols gain addresses since last refresh) — revert drift-unit .o, commit only the units your land touches (agent-h 2026-07-30)](#expected-refresh-drift-revert-untouched)
+- [Expected-refresh drift AUDITED (agent-g 2026-08-22): all 25 drifted .o mapped — real .text/.rel drift confined to game_libs_post1b (+post1b2c reloc-adds); EVERY drifted site sits inside a currently-100% function, so committing the refresh REGRESSES exacts; the "placeholder callee gained a TRUE name = free NM fuzzy upgrade" vein is EMPTY for this set. Also: refresh script had been crashing since reloc-importing donor splices landed (baseline all-INCLUDE_ASM .o is reloc-free) — replace-function-body.py now creates .rel.text on demand](#expected-refresh-drift-audit-2026-08)
 - [objdiff fuzzy can hard-zero a valid NM body (MISSING/0.0 while neighbors score) — gate on best-SCORED variant, rule out the clip pin first, dispatcher-form table (55470, 2026-07-31)](#objdiff-fuzzy-hard-zero-nm-body) — _Nested-!= chain (truest shape) zeroed objdiff while ==-chain/goto-ladder scored 36-40; bisect showed a full-body scorer interaction, not jalr/HI16-LO16-split/struct-by-value alone. Build with empty NON_MATCHING_TEXT_CLIP_KEEP_ALIGN= override during iteration; re-pin at end._
 - [Lone 1-word pad INCLUDE_ASM emits 2 words (+4 shift): fold stray nops into a neighbor's .s tail; caller-set-$t6 'cap' = stolen-prologue misread (3rd instance); sub-55 libultra identity grep kit; 27784=osAiSetNextBuffer via per-site-extern %hi-CSE-kill (277E0 = its tail, 4th caller-set retraction); refresh-expected-baseline.py: no flags + run AFTER .s merges; non-hw 5.3-fingerprint sweep: 71384=osPfsInitPak (pfs sibling family = blank jals in 70xxx-71xxx); pfs vein RESOLVED 2026-07-30: 71384/71624/717CC landed 5.3 -O1 donors, 71304/71144 = game code (size-coincidence trap)](#one-word-pad-include-asm-emits-two-words)
 
@@ -9865,3 +9866,57 @@ into the arg area + a0-a3 loads = `GlCmd76 tmp = *(GlCmd76*)s; f(tmp);`), vtable
 (`obj=s[4]; cls=*(char**)(obj+40); fn=*(int*)(cls+60); fn(obj + *(short*)(cls+56), &vt)` with
 cursor writeback), case-113 falling INTO the default body, direct global store via `$at`
 (`D_00000000 = w`) vs pointer-materialized RMW (`p = (int*)&D_00000000; p[1] |= w`).
+
+## Expected-refresh drift audit: full drift map, all sites inside 100% functions — no free NM upgrades; refresh script .rel.text crash fixed (agent-g 2026-08-22) <a name="expected-refresh-drift-audit-2026-08"></a>
+
+Follow-up audit of the 2026-07-30 "revert drift-unit .o, commit narrowly"
+entry: ran a THROWAWAY full `scripts/refresh-expected-baseline.py`, then
+old-vs-new per-.o `.text` word diff + `.rel.text` diff (readelf -S/-sW/-rW,
+map each differing offset to its containing FUNC symbol) on every modified
+expected .o. Findings:
+
+**1. Script was broken.** The refresh crashed on `game_libs_post1b2c.c.o`
+ever since the reloc-importing donor splices (6DD14/6FB54/6FE5C/6F3E4)
+landed: the EXPECTED_BASELINE build swaps every body to INCLUDE_ASM, the
+unit .o comes out reloc-free, and `import_donor_relocs →
+append_text_relocs` raised ".rel.text section missing". Fixed in
+`scripts/replace-function-body.py` (1080 repo, agent-g `e4f0138`):
+`_create_rel_text_section()` appends a new SHT_REL header
+(link=.symtab, info=.text, entsize=8) and lets `_grow_section` place the
+entries. Normal builds never hit the path (compiled C always has relocs).
+
+**2. Full drift map (25 modified .o).** 23 of 25 are metadata-only
+(.text bytes AND .rel.text identical; symtab/strtab churn — 9 bootup_uso
+units, game_libs.c/post/post0b/post1c/g3+o1 shards, game_uso,
+mgrproc_uso_head, 3 timproc_b5 units + spine). Real drift:
+- `game_libs_post1b.c.o` — 24 word-level bakes: blank `0x0C000000` jals →
+  baked `jal` for gl_ref_00076488/76584 (in gl_func_0006370C),
+  77DB0/77DEC/77E28/77E98 (65DDC/65E0C/65E84/65EB4), 7C89C (68350),
+  func_7C860 (68524), 7D594/7D5D0 (69C58), 7FE04/7FEEC (6B0FC ×14,
+  6B7A0); two lui/addiu pairs baking gl_ref_000416C0/16D0 (67134/67168)
+  and D_00041710 (6A304). Plus ~200 reloc-DROPS where the word bytes are
+  identical (placeholder-name relocs like gl_func_00000000/D_00000000
+  vanish because the assembler now resolves them, address 0 → same blank
+  word, reloc gone).
+- `game_libs_post1b2c.c.o` — 8 reloc-ADDS at gl_func_0006F3E4 (the donor
+  relocs the old baseline never had, courtesy of the crash above; the fix
+  makes the baseline finally carry them).
+
+**3. Key negative result: every drifted site sits inside a function that
+is currently 100%.** The matched C build .o emits blank jal + named
+reloc; the refreshed expected would carry baked jal + NO reloc → those
+exacts would score BELOW 100 after a refresh. Conversely, NO function
+below 100% appears anywhere in the drift map — meaning no NM wrap's
+placeholder callee gained an address since the last refresh. The
+hypothesis "drifted units hide NM wraps whose placeholder callees now
+have TRUE names = free fuzzy upgrades" is EMPTY for this drift set: the
+true names surfaced (gl_ref_00076488/76584/416C0/416D0, 77DB0/77DEC/
+77E28/77E98, 7C860/7C89C, 7D594/7D5D0, 7FE04/7FEEC, D_00041710) are all
+already referenced by exact functions' C. Disposition: full
+`git checkout HEAD -- expected/` (plus deleting the refresh's untracked
+`game_libs_o1_6F3E4.c.o` expected copy — donor units are not
+objdiff-tracked), zero expected/ commits. Gate after restore: full make,
+ROM byte-identical, non_matching exit 0, refresh-report exact-set diff vs
+origin/main = 0 lost / 0 gained (2322 exact). If a future land needs a
+narrow post1b refresh, budget for re-verifying all ~15 exact fns listed
+above — they WILL move.
