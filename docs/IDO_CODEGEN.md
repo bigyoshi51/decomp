@@ -13959,6 +13959,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [All-4-args-homed + zero-s-reg + float-in-a1-home -O2 prologue = K&R all-int params + reinterpret-cast access (`*(char**)&arg0` / `*(f32*)&arg1`); not -O1/varargs/-g3/struct-byval; unused int pad arrays reproduce decl-order frame gaps (63964 22.6->73.3, 2026-08-22 agent-g)](#knr-int-args-reinterpret-all-homed-2026-08-22)
 - [mtc1-before-lui / live-in FP regs at raw-.word "entry" = stolen PRE-prologue in predecessor .s (forward-merge, addiu-sp not insn 1); alias-ladder: per-site scalar extern aliases keep singleton D-loads on $at, array alias = based triple at &D+0x128 w/ post-jal remat; volatile-pad hole ladder + single trailing return-0 (4F2DC/4F2F4 12.6->83.8, 2026-08-22 agent-f)](#stolen-preprologue-livein-fp-alias-ladder-4f2dc)
 - [guOrthoF twins: natural nested loop -> IDO pipeliner emits guard/preheader itself (never hand-pipeline); f32 reg-arg reloads vs stack-arg caching = mixed-decl tell; operand-order/drain cells TU-context-sensitive — re-sweep spellings per TU (5F3E0 97.6 / 70694 100, 2026-08-22)](#guorthof-natural-loop-pipeliner-mixed-f32-args-2026-08-22) — _Variable bound triggers outer unroll (literal only); *mf++ coalesces j into ptr IV (v0/v1/a0) vs mf[j]+mf+=4 j-phantom +1 rotation but store-first drain; splice-script end<start duplication poisons sweeps._
+- [guOrthoF drain-tie RESOLVED: while-outer vs for-outer spelling flips pipeline-drain swc1/addiu order — not TU-positional, not flag-reachable; 15+ negative matrix inside (5F3E0 97.6->100, 2026-08-22)](#guorthof-while-outer-drain-flip-2026-08-22) — _Twin targets differ in exactly those 2 words (likely original for vs while spelling); promoted USO body needs pinned-zero jal alias or ROM gains a resolved-jal 2-byte diff._
 - [Union-member overwrite defeats dead-store elim while keeping reg forwarding; volatile-cast store forces reloads, BB-breaks nuke the frame (36224, 2026-07-31 agent-f)](#union-member-overwrite-dse-defeat-36224) — _`union {Vec3 v; f32 p[3];}` + copies/overwrites through different members = plain store survives + subs still use forwarded regs; member choice canonicalized (either direction identical)._
 - [do-while(0) BB-bloat DOSED in reverse: 3 wraps demote only lui-const/FP-const hoist webs (s6/f22) keeping s0-s5+f20 exact, 6+ wraps = 46050 all-s-regs-die wall; char*volatile memory-homes list cur/next iterators (454C4 29.8->62.1, 2026-07-30 agent-f)](#dowhile0-bb-bloat-dosing-454C4) — _Add one wrap at a time at original-macro-shaped sites (DL appends) and re-diff; caps: unified 255.0f web insists on f22 vs target f0-remat-after-jal; elem copy-pair coalesces to one lw._
 
@@ -23379,3 +23380,31 @@ Gotcha (workflow): a python splice `s[:start]+new+s[end:]` with end<start
 silently DUPLICATES the region between — the corrupted double-TU still compiled
 (dupes inside #ifdef NM range) and poisoned a 16-combo negative sweep. Assert
 start<end in splice scripts; rebuild from HEAD on any unexplained +30k-line diff.
+
+## guOrthoF drain-tie RESOLVED: `while`-outer vs `for`-outer flips the pipeline-drain swc1/addiu order — NOT TU-positional, NOT flag-reachable (5F3E0 97.6->100, 2026-08-22 agent-g) {#guorthof-while-outer-drain-flip-2026-08-22}
+
+Closes the "2-word cap" left in the guOrthoF-twins entry above (and corrects
+its point 3/4 framing): the pipeline-DRAIN store/increment order is a pure
+source-spelling lever, independent of TU position.
+
+- Twin targets genuinely differ in exactly 2 words: 70694 drain =
+  `addiu v0,16; swc1 f12,-16(v0)`; 5F3E0 drain = `swc1 f12,0(v0); addiu v0,16`
+  (rest of all 85 words identical).
+- The verbatim libreultra `for (i=0;i<4;i++) for (j=0;j<4;j++) mf[i][j] *= scale;`
+  emits addiu-first (= 70694's target) under EVERY flag combo probed: IDO 5.3
+  and 7.1 x -O2/-O3 x -mips1/2/3 x -g0/-g3, walker `*mf++` form, index form,
+  `*=` vs explicit multiply, `++i`, `i!=4`, `i<=3`, flat i<16 — all addiu-first.
+  In-TU (post0b, 7.1 -O2 asm-processor) bytes were IDENTICAL to standalone cc,
+  refuting the "TU context flips the drain" hypothesis for this cell.
+- **The flip: spell the OUTER loop as `i = 0; while (i < 4) { for (j...) ...; i++; }`
+  (do-while works too) with the inner `for` unchanged.** 85/85 including colors
+  — the uopt loop-tail placement of the outer IV update changes just the drain
+  emission order; body/guard/preheader untouched. Plausibly the ORIGINAL two
+  gu copies were literally spelled for-outer vs while-outer.
+- Both twins keep the natural-nested-loop + f32 reg/stack asymmetry findings
+  of the parent entry; 5F3E0 needed the plain ANSI `f32 mf[4][4]` signature
+  (int*+casts also matched — signature not the lever).
+- USO blank-jal reminder: promoted body must call the identity-ctor slot via a
+  pinned-zero alias (`gl_func_00000000_5f3e0 = 0` in undefined_syms_auto.txt),
+  else the linker bakes the resolved local jal (0x0C00D116) and the ROM gains
+  a 2-byte diff at the call site only (fn .o bytes still verify — check ROM).
