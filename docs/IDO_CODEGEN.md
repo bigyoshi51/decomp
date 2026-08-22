@@ -13958,6 +13958,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Whole-TU donor generalizes beyond -O3: vimgr.c pair exact at -O1; in-TU global DEFINITION flips $at-sharing on store bursts; as1 32-byte-aligns dead epilogues (74EFC+7507C = vimgr.c, 2026-08-22 agent-h)](#whole-tu-o1-in-tu-def-at-share-dead-epilogue-align) — _whole-TU is the lever, not -O3; mid-fn zero-runs before dead epilogues = alignment, fixed by neighbor sizes; blank-looking lui/lo 0 in 0-based USO data segment = real address 0; statics are *UND* in symtab at -O1 too (add-elf-func-symbol.py); standalone-probe phantom frame slots can be single-fn-compile artifacts -> retracts 7507C uoptlist verdict._
 - [All-4-args-homed + zero-s-reg + float-in-a1-home -O2 prologue = K&R all-int params + reinterpret-cast access (`*(char**)&arg0` / `*(f32*)&arg1`); not -O1/varargs/-g3/struct-byval; unused int pad arrays reproduce decl-order frame gaps (63964 22.6->73.3, 2026-08-22 agent-g)](#knr-int-args-reinterpret-all-homed-2026-08-22)
 - [mtc1-before-lui / live-in FP regs at raw-.word "entry" = stolen PRE-prologue in predecessor .s (forward-merge, addiu-sp not insn 1); alias-ladder: per-site scalar extern aliases keep singleton D-loads on $at, array alias = based triple at &D+0x128 w/ post-jal remat; volatile-pad hole ladder + single trailing return-0 (4F2DC/4F2F4 12.6->83.8, 2026-08-22 agent-f)](#stolen-preprologue-livein-fp-alias-ladder-4f2dc)
+- [guOrthoF twins: natural nested loop -> IDO pipeliner emits guard/preheader itself (never hand-pipeline); f32 reg-arg reloads vs stack-arg caching = mixed-decl tell; operand-order/drain cells TU-context-sensitive — re-sweep spellings per TU (5F3E0 97.6 / 70694 100, 2026-08-22)](#guorthof-natural-loop-pipeliner-mixed-f32-args-2026-08-22) — _Variable bound triggers outer unroll (literal only); *mf++ coalesces j into ptr IV (v0/v1/a0) vs mf[j]+mf+=4 j-phantom +1 rotation but store-first drain; splice-script end<start duplication poisons sweeps._
 - [Union-member overwrite defeats dead-store elim while keeping reg forwarding; volatile-cast store forces reloads, BB-breaks nuke the frame (36224, 2026-07-31 agent-f)](#union-member-overwrite-dse-defeat-36224) — _`union {Vec3 v; f32 p[3];}` + copies/overwrites through different members = plain store survives + subs still use forwarded regs; member choice canonicalized (either direction identical)._
 - [do-while(0) BB-bloat DOSED in reverse: 3 wraps demote only lui-const/FP-const hoist webs (s6/f22) keeping s0-s5+f20 exact, 6+ wraps = 46050 all-s-regs-die wall; char*volatile memory-homes list cur/next iterators (454C4 29.8->62.1, 2026-07-30 agent-f)](#dowhile0-bb-bloat-dosing-454C4) — _Add one wrap at a time at original-macro-shaped sites (DL appends) and re-diff; caps: unified 255.0f web insists on f22 vs target f0-remat-after-jal; elem copy-pair coalesces to one lw._
 
@@ -23330,3 +23331,51 @@ Neutral/negative probes: if(1){} barrier after vecC8[0] (-3.9pp — killed the l
 6. **Prototyped jal-0 callees for float args:** baked-USO callees needing `mfc1 a3,$fN` (single float 4th arg) or a bare `$f12` first arg must be locally-prototyped unique externs (`extern s32 gl_func_00000000_3cbb4r(f32*,f32*,f32*,f32,f32*)`); K&R would double-promote.
 
 Residual ~8% = whole-fn FP temp-ring rotation + int copy-addr coloring (gate temp v0-vs-t6, ret t0-vs-t1, addr temps) — the documented 4F2DC endgame class, no structural diffs left. Gate note: shrinking the NM body shrank .text below the pinned clip; re-probe = last-symbol offset + full expected size (62F08 @0x2c734 + 0x50 -> clip 0x2c784), else the last sentinel silently drops from 100.
+
+## guOrthoF twins crack: write the NATURAL nested loop and let the pipeliner emit the guard; f32 reg-arg-vs-stack-arg reload/cache asymmetry IS the mixed-decl tell; operand-order + drain cells are TU-CONTEXT-sensitive (5F3E0 52.49->97.6 / 70694 52.49->100, 2026-08-22 agent-g) {#guorthof-natural-loop-pipeliner-mixed-f32-args-2026-08-22}
+
+Byte-twins gl_func_0005F3E0 (post0b) / gl_func_00070694 (post1c), guOrthoF-shaped
+(setup 7 matrix cells then scale all 16 by arg7; jal at top = identity ctor).
+Four independently reusable findings:
+
+1. **Software-pipelined loop shape (preheader loads + rotated body + drain
+   block + `beq` guard + `move v1,zero` + `addiu v1,v1,1`-not-`li 1`) is IDO's
+   OWN pipeliner output from a plain nested `for` — do NOT hand-pipeline the C.**
+   Hand-written rotated do-while (m2c's shape) fights the scheduler: hoisted
+   preheader loads, f20/f22 spills, +8 insns. `for(i=0;i<4;i++) for(j=0;j<4;j++)
+   *mf++ *= s;` reproduces the whole pipeline exactly (inner unrolled x4, outer
+   pipelined; guard/counter oddities are pipeliner artifacts, unfoldable
+   because they're created AFTER const-prop). A VARIABLE loop bound (`i != n`
+   local) instead triggers the x4 UNROLLER on the outer loop — literal bound
+   only. Manual `mf[0..3]` inner unroll flattens 16x (no loop at all).
+
+2. **Mixed f32 param classes = the reload/cache tell.** ANSI signature
+   `(int *m, f32 a1..a3, f32 a4..a7)`: REGISTER-passed floats (a1-a3, int regs
+   homed to arg slots) RELOAD from home at EVERY use — never cached; STACK-passed
+   floats (5th+) load ONCE into a caller-saved f-reg (f14/f16/f18 in first-use
+   order) and behave as candidates. When target asm reloads some float args
+   per-use but caches others, the split IS the register/stack boundary — declare
+   them all plain f32 and the asymmetry falls out (no casts, no locals needed).
+   Extends the K&R-reinterpret lever family: this fn needed NO K&R at all.
+
+3. **Walker-form drives int coloring:** `*mf++` inner-inc coalesces the inner
+   counter j into the pointer IV -> ptr=v0, ctr=v1, lim=a0 (li a0,4). Indexed
+   `mf[j]` + outer `mf+=4` leaves a j-IV phantom that eats v0 and rotates all
+   int colors +1 (dead-if and while(0) ref-boosts do NOT un-rotate it); but the
+   outer-inc form orders the pipeline-DRAIN block store-then-addiu while
+   inner-inc pins addiu-before-stores. If the target wants inner-inc colors AND
+   outer-inc drain order (5F3E0), that combination was spelling-unreachable
+   (16-combo sweep) — 2-word cap. Twin 70694's TU wanted inner-inc both ways = exact.
+
+4. **TU context flips commutative-operand and load-order cells for IDENTICAL
+   source.** Same body in post0b vs post1c: [12]'s l/r load order needs
+   -(arg1+arg2) in one TU and -(arg2+arg1) in the other; [13]'s add.s fs/ft and
+   the drain order also flipped between TUs (callee defined in-TU vs extern is
+   the suspected input). Consequence: when porting a cracked body to a byte-twin
+   in another file, RE-SWEEP the commutative operand orders there — and never
+   conclude "spelling-unreachable" for a twin from probes run in the other TU.
+
+Gotcha (workflow): a python splice `s[:start]+new+s[end:]` with end<start
+silently DUPLICATES the region between — the corrupted double-TU still compiled
+(dupes inside #ifdef NM range) and poisoned a 16-combo negative sweep. Assert
+start<end in splice scripts; rebuild from HEAD on any unexplained +30k-line diff.
