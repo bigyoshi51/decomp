@@ -22,7 +22,28 @@ _10 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [game_uso D_807FE6xx/9xx data symbols are HI16-ONLY-UNPAIRED in expected — any fn referencing them is a reloc-form cap (decode-only)](#game-uso-hi16-only-unpaired-reloc-cap) — _expected/game_uso.c.o references these data syms with R_MIPS_HI16 and NO R_MIPS_LO16 anywhere (LO16/displacement baked at assembly time, syms = 0). IDO from any C extern-symbol form always emits a HI16+LO16 PAIR (verified: `&SYM+K`, `*(int*)((char*)&SYM+K)`, and the `extern int SYM[]; SYM[K/4]` array-fold all emit the pair), so the reloc SET is unreproducible. Classify with `objdump -r game_uso.c.o | grep 807FE | grep -c LO16` (== 0) BEFORE attempting; reconstruct callees/globals for decode value but leave NON_MATCHING. game_uso_func_00003018/000018FC (2026-06-22)._
 - [1080 game_libs contains IDO-compiled libultra ports — recognize __osViSwapContext by the VI register block (0xA4400000..34) write fan-out](#feedback-game-libs-libultra-ports-vi-fingerprint) — _A game_libs fn that fans out stores to the absolute VI register block (`*(s32*)0xA4400000`..`0xA4400034`) preceded by a VI_CURRENT(0xA4400010)&1 field-parity read IS libultra's `__osViSwapContext`. Copy the structure from references/libreultra/src/io/viswapcontext.c. Caps at ~52% because __osViNext/__osViCurr are distinct globals that reloc-collapse to &D_00000000. Verified gl_func_00070C44 2026-06-03._
 - [Splat-bundled "function" with 100+ jr-ra-byte patterns is opaque data — but its TYPE (RSP ucode vs GFX DL data vs other) needs forensic check](#feedback-rsp-microcode-mistaken-for-code) — _When a bundled "function" has anomalous size (50+ KB) with high `grep -c 03E00008` count, it's NOT CPU code — that part of the original claim still holds. (See 2026-05-18 ADDENDUM in that section: the SMALL sub-16 KB "tiny real fn + misID-data tail" variant — realjr/`grep 03E00008` is inflated by the data tail and is NOT a bundle signal unless inter-return words are valid o32. ADDENDUM 18b: no-frame-leaf bundles read as a FALSE single function — use jr-spacing not prologue count. ADDENDUM 18c: `grep 03E00008` UNDER-counts — register-indirect `jr $rN` jump-table dispatch is invisible to it; use `grep -nE '0[0-3][0-9A-F]00008'` on dispatch-heavy code.)_
+- [game_libs 0x31DF8..0x32D74 is an RSP-microcode blob mis-split as 5 fake CPU fns — reclassified to a LOCAL-glabel data blob (denominator -5 fns / -3964 code bytes, ROM-neutral)](#game-libs-rsp-ucode-31df8-reclass) — _The five "functions" 31DF8/31F20/31F4C/32884/32934 are SP scalar+vector code (IMEM jal targets 0x04001xxx, RSP-COP0 mfc0/mtc0 misread as CPU CP0, COP2 0x4A ops, ldv/sqv 0xC8/0xE8). Mechanism: one pad-style GLOBAL_ASM with `glabel NAME, local` (asm-processor strips local labels → no FUNC symbol → objdiff drops it) + symtab surgery on expected/.o (delete FUNC + .NON_MATCHING entries, renumber reloc r_sym — retype FUNC→OBJECT does NOT work, objdiff classifies by section)._
 
+---
+
+<a id="game-libs-rsp-ucode-31df8-reclass"></a>
+## game_libs 0x31DF8..0x32D74 is RSP microcode mis-split as 5 fake CPU fns — reclassified as a local data blob (2026-08-22)
+
+_2026-08-22 (agent-f). Region map (game_libs-local offsets; ROM = offset + 0xDE5238-ish, e.g. 31F4C @ ROM 0xE17024):_
+
+- **CPU code ends at 0x31DF8**: 31D70/31D78/31DA4/31DD8 are genuine IDO CPU fns (sp frames, `addiu`, reloc-zeroed `jal 0x0`), followed by the 4-word `_pad_gl_func_00031DD8` pad.
+- **Ucode blob = [0x31DF8, 0x32D74), 0xF7C bytes**, splat-split into five fake fns: `game_libs_func_00031DF8` (0x128), `00031F20` (0x2C), `00031F4C` (0x938), `00032884` (0xB0), `00032934` (0x440).
+- **CPU code resumes at 0x32D84** (gl_func_00032D84, normal IDO body) after a 0x10 pad.
+
+_Opcode evidence (why it's RSP, not CPU): `jal`/`j` targets in SP IMEM space (`0x0D0006B4` → 0x4001AD0, `0x09000422` → 0x4001088 — impossible CPU link targets); mfc0/mtc0 of RSP COP0 regs (SP status/semaphore/DP — the old game_libs_post.c comments misread these `0x40xxxxxx` words as CPU CP0 and called the region "HANDWRITTEN CP0/system block"); COP2 vector ops (top byte 0x4A: vmudn/vmadh family); `lwc2`/`swc2` = `ldv`/`sqv` vector loads (0xC8xx/0xE8xx, e.g. `E8401800`); `addi` used throughout where IDO emits `addiu`; k0/k1/gp used as scratch. 31F4C alone has 306/590 words in the COP2/lwc2/swc2 opcode space._
+
+_Mechanism (ROM-neutral, denominator-only):_
+
+1. Concatenate the five .s bodies into one pad-style file `asm/nonmatchings/game_libs/game_libs/game_libs_rsp_ucode_31DF8.s` with **`glabel game_libs_rsp_ucode_31DF8, local` + `endlabel`** (same idiom as the `_pad_*.s` files). asm-processor **strips local labels from the output symtab entirely**, so the bytes land in .text with no symbol → objdiff never sees a function.
+2. Replace the five `INCLUDE_ASM` entries (incl. 32884's NM wrap) in `src/game_libs/game_libs_post.c` with one `#pragma GLOBAL_ASM(...)` of the blob.
+3. **expected/.o needs symtab surgery, and retype FUNC→OBJECT does NOT work** — objdiff classifies symbols by *section kind* (executable .text), not `st_type`, so an OBJECT-typed global in .text still counts as a function. You must **delete** the symtab entries (the 5 FUNC + their 5 `.NON_MATCHING` companions) and renumber every reloc `r_sym` above the removed indices (all-global tail, so `sh_info` unchanged; zero the freed symtab tail and shrink `sh_size`).
+
+_Effect: total_functions 3457→3452, total_code -3964 bytes, matched_code_percent 33.6700→33.8451, matched set unchanged (0 exacts lost), ROM byte-identical. Generalizes: any splat fake-fn region can leave the denominator via the local-glabel blob + expected symtab-delete pair; retype-only is a trap._
 
 ---
 
