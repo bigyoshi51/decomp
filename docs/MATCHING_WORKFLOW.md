@@ -229,7 +229,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Cross-function fuzzy regression from a preceding NM body's size delta: trailing-pad shape depends on .text offset mod 16 — diff the victim's disasm first; fix the size donor (66A50/64DEC, 2026-07-30)](#nm-size-delta-shifts-downstream-pad-parity)
 - [Full refresh-expected-baseline.py run surfaces PRE-EXISTING drift in untouched units (blank 0x0C000000 jals bake once callee symbols gain addresses since last refresh) — revert drift-unit .o, commit only the units your land touches (agent-h 2026-07-30)](#expected-refresh-drift-revert-untouched)
 - [Expected-refresh drift AUDITED (agent-g 2026-08-22): all 25 drifted .o mapped — real .text/.rel drift confined to game_libs_post1b (+post1b2c reloc-adds); EVERY drifted site sits inside a currently-100% function, so committing the refresh REGRESSES exacts; the "placeholder callee gained a TRUE name = free NM fuzzy upgrade" vein is EMPTY for this set. Also: refresh script had been crashing since reloc-importing donor splices landed (baseline all-INCLUDE_ASM .o is reloc-free) — replace-function-body.py now creates .rel.text on demand](#expected-refresh-drift-audit-2026-08)
-- [objdiff fuzzy can hard-zero a valid NM body (MISSING/0.0 while neighbors score) — gate on best-SCORED variant, rule out the clip pin first, dispatcher-form table (55470, 2026-07-31)](#objdiff-fuzzy-hard-zero-nm-body) — _Nested-!= chain (truest shape) zeroed objdiff while ==-chain/goto-ladder scored 36-40; bisect showed a full-body scorer interaction, not jalr/HI16-LO16-split/struct-by-value alone. Build with empty NON_MATCHING_TEXT_CLIP_KEEP_ALIGN= override during iteration; re-pin at end._
+- [objdiff fuzzy can hard-zero a valid NM body (MISSING/0.0 while neighbors score) — gate on best-SCORED variant, rule out the clip pin first, dispatcher-form table (55470, 2026-07-31)](#objdiff-fuzzy-hard-zero-nm-body) — _ROOT-CAUSED 2026-08-22: objdiff scorer clamp, not an anomaly — moved blocks cost delete+insert (200/insn) vs max_score of 100/left-insn, so >50% block-moved content (e.g. uopt laying inline nested-!= else-arm bodies innermost-first = reversed) clamps to exact 0.0/MISSING. Hard 0.0 on mostly-right content = block-ORDER signal, reorder the source; score dispatchers with chain-ordered bodies via goto arms (55470: 39.9 goto-ladder → 44.75 nested-head+goto-arms; inline nested = 0.0). Clip-pin trap + empty NON_MATCHING_TEXT_CLIP_KEEP_ALIGN= iteration override still apply._
 - [Lone 1-word pad INCLUDE_ASM emits 2 words (+4 shift): fold stray nops into a neighbor's .s tail; caller-set-$t6 'cap' = stolen-prologue misread (3rd instance); sub-55 libultra identity grep kit; 27784=osAiSetNextBuffer via per-site-extern %hi-CSE-kill (277E0 = its tail, 4th caller-set retraction); refresh-expected-baseline.py: no flags + run AFTER .s merges; non-hw 5.3-fingerprint sweep: 71384=osPfsInitPak (pfs sibling family = blank jals in 70xxx-71xxx); pfs vein RESOLVED 2026-07-30: 71384/71624/717CC landed 5.3 -O1 donors, 71304/71144 = game code (size-coincidence trap)](#one-word-pad-include-asm-emits-two-words)
 
 
@@ -9829,6 +9829,34 @@ baseline for dozens of unrelated functions. (Batch-7 6FB54/6FE5C +
 3395C session: 23 modified expected .o, only 2 belonged to the land.)
 
 ## objdiff fuzzy can hard-zero a valid NM body (fuzzy MISSING/0.0 while neighbors score) — bisect the BODY, and know the clip-pin can silently fabricate the zero (55470, 2026-07-31 agent-f) <a name="objdiff-fuzzy-hard-zero-nm-body"></a>
+
+**ROOT-CAUSED 2026-08-22 (agent-f): objdiff scorer clamp on block-moved code — no anomaly, a
+formula property.** objdiff (3.7.0, objdiff-core diff/code.rs) scores a function as
+`match_percent = (1 - min(diff_score, max_score)/max_score) * 100` with
+`max_score = left_insn_count * PENALTY_INSERT_DELETE(100)` and penalties
+insert/delete = 100 each, opcode-replace = 60, reg diff = 5, imm diff = 1. Its instruction
+diff is a plain sequence alignment with **no block-move detection**, so a correct body whose
+basic blocks are emitted in a different ORDER turns every moved instruction into a
+delete + insert pair = 200 points against a 100/insn budget. Once >~50% of instructions sit
+in moved blocks, `diff_score >= max_score` → clamped to **exactly 0.0** (report omits
+`fuzzy_match_percent` = "MISSING"), regardless of how many rows also match. Verified on
+55470: fully-inline nested-`!=` body → 470 diff rows = 32 match + 40 arg-mismatch +
+195 delete + 202 insert → (195+202)·100 alone > 268·100 → 0.0; the same arms behind a
+nested-`!=` chain head with **goto arms** (bodies kept in chain order) → 44.75. The
+39.9-era "full-body interaction" was simply the fraction of moved content crossing the
+clamp threshold as arms were added (bisect 18.4 → 10.9 → 0.0). Mechanism trigger here:
+uopt lays inline nested-`!=` else-arm bodies innermost-first (textual order) = reversed vs
+the target's chain-order bodies. Consequences:
+
+- **Score dispatchers with chain-ordered bodies (goto arms), never inline else-arms**, when
+  the target lays bodies in chain order — this both is shape-truer AND avoids the clamp
+  (55470: goto-ladder 39.9 < nested-head+goto-arms 44.75; inline nested = 0.0).
+- **A hard 0.0 on a body whose content is mostly right = "your block ORDER is wrong",** not
+  "your decode is wrong". Interpret 0.0/MISSING as a layout signal and reorder the source.
+- Fuzzy % on block-reordered bodies is UNDERSTATED generally (each moved insn costs 2x);
+  the clamp is just the extreme. Sweep check 2026-08-22: no other NM body in-tree scores
+  exactly 0.0 (all 105 other zero-scored fns >=0x40 are bare INCLUDE_ASM) — 55470 was the
+  only live instance, fixed at 44.75.
 
 While decoding gl_func_00055470 (0x430 17-value opcode dispatcher, game_libs_post0b), the
 shape-truest spelling — the NESTED-`!=` chain (per the gui 27A0 kit entry, which correctly
