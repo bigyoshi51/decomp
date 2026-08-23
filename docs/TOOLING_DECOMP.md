@@ -7,6 +7,7 @@ _10 entries. Auto-generated from per-memo notes; content may be rough on first p
 ## Index
 
 - [decode-sweep.py: automated objdiff-gated m2c-graft decode transforms (2026-06-16)](#decode-sweeppy-automated-objdiff-gated-m2c-graft-decode-transforms-2026-06-16) — _`scripts/decode-sweep.py` automates the three biggest mechanical post-graft %-movers (graft-cleanup items 21/22 + struct-copy collapse): builds a per-(base-register,offset) WIDTH CATALOG from the target's own `.s` (lb/lbu/lh/lhu/lw/lwc1...; handles BOTH raw-.word USO and mnemonic kernel/bootup formats), then (1) retypes mistyped `*(s32*)((char*)BASE+0xOFF)` derefs to the cataloged sub-word type, (2) splits absolute `*(T*)0xADDR` derefs to `&D_00000000+0xADDR` (also strips `(unaligned sN)` artifacts — a COMPILE-ENABLER, not just a %-mover), (3) collapses >=4 contiguous word-copies into Quad4 (16B exact, no whole-struct overshoot). Each transform is OBJDIFF-GATED (rebuild + re-read fuzzy, revert on regression) and idempotent. Validated: retype +2.58pp (gl_func_00021498 28.20->30.79), +3.77pp (gl_func_00064588 48.67->52.44); revert path byte-verified. NO-OP on already-correctly-typed fns (no false gains)._
+- [disasm-raw.py dropped pinned jal/lui reloc-alias lines from raw-.word .s (FIXED 2026-08-22)](#disasm-rawpy-dropped-pinned-jallui-reloc-alias-lines-from-raw-word-s-fixed-2026-08-22) — _Pre-fix, its `.word`-regex scan silently dropped pinned `jal sym` / `lui $r,%hi(sym)` lines (word only in the `/* OFF WORD -> sym */` comment): calls vanished, every later offset shifted -4. Now parses line-by-line, shows callee names, and has `--selftest`. Distrust pre-2026-08-22 disasm-raw output for any USO fn with pinned relocs._
 - [coloring-solve.py: inverse register-coloring solver from the uopt trace (2026-06-15)](#coloring-solvepy-inverse-register-coloring-solver-from-the-uopt-trace-2026-06-15) — _`scripts/coloring-solve.py` parses a `-Wo,-zdbug:6` coloring trace for one function (decodes LR bitpos -> register, constrained/unconstrained, priority/bitpos color order, spills, splits) and, given target+build `.s`, aligns the two instruction streams to separate REGISTER-RENUMBER residuals (shape-correct, wrong reg) from STRUCTURAL diffs, emitting the target<-build register-pairing histogram + algorithm-derived levers. The generalizable regalloc-cap diagnostic instrument: tells you WHICH LR is mis-colored and WHY before you touch the C._
 - [permuter-factory: unattended permuter queue-runner over the 90-99 long tail (2026-06-15)](#permuter-factory-unattended-permuter-queue-runner-over-the-90-99-long-tail-2026-06-15) — _`scripts/permuter-factory.py` auto-discovers the 90<=fuzzy<100 band from a fresh objdiff report (size-sorted, cap-comment-filtered), runs `import.py` per-fn then a wall-clock-bounded `permuter.py --best-only --stop-on-zero -jN`, splices the best output back, and OBJDIFF-VERIFIES (the permuter score lies). Checkpoints to `.permuter-factory/` for crash-resume; commits verified 100.0 cracks as "<fn> permuter-factory crack to 100.0 (NM body, pending land)" (no land/push). Kills children by PGID, never pkill -f._
 - [references/ido: the decompiled uopt source + dump-flag instrumentation (2026-06-11)](#referencesido-the-decompiled-uopt-source--dump-flag-instrumentation-2026-06-11) — _n64decomp/ido clone = uopt allocator source with original symbol names; -Wo,-zdbug:1/2/5/6, -dowhyuncolor, pass kill-switches, -zmovc. Grep it before theorizing about regalloc caps; derived rules in IDO_CODEGEN._
@@ -1586,3 +1587,29 @@ CONSEQUENCES for the mid-band decomp marathon:
   meaningful fraction (caller-arg coloring class, per caller_set_int_reg_cap memo) to
   floor below 100% no matter the structure. Budget accordingly — this is a marathon of
   hundreds of multi-pass functions, not a near-miss mop-up.
+
+## disasm-raw.py dropped pinned jal/lui reloc-alias lines from raw-.word .s (FIXED 2026-08-22)
+
+Raw USO `.s` files under `asm/nonmatchings/` contain two line kinds: plain
+`/* OFF ADDR WORD */  .word 0xWORD`, and PINNED reloc aliases whose word lives
+only in the trailing comment:
+
+    jal mgrproc_uso_func_055904   /* 0009C0 0C000000 -> mgrproc_uso_func_055904 */
+    lui $v0, %hi(import_800201CC)   /* 001B68 3C020000 -> import_800201CC */
+
+`scripts/disasm-raw.py`'s original loader was a whole-file regex for
+`.word 0x[hex]{8}` — pinned lines produced NO word, so every pinned call/lui
+was silently dropped and all subsequent offsets shifted -4. Any agent decoding
+a pinned-reloc function from its output saw a fiction (missing calls, wrong
+branch targets). ~2106 pinned `jal` + ~1399 pinned `lui` lines exist across
+the 1080 tree, so this affected a large share of USO functions.
+
+Fix (2026-08-22, agent-h): parse line-by-line; pinned lines take the word from
+the `/* OFF WORD -> sym */` comment and record the symbol, so the output shows
+`jal <real_callee>` (and `--m2c` emits real callee names, not `func_000000`).
+`scripts/disasm-raw.py --selftest` is the regression check: a synthetic .s with
+pinned jal+lui lines must round-trip at 7/7 insns with correct offsets.
+
+Rule: if you decoded a USO function with pre-fix disasm-raw output and the
+reconstruction "mysteriously" missed calls or had -4-shifted branch targets,
+re-derive from the fixed tool before concluding anything about the function.
