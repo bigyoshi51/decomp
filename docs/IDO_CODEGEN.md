@@ -14347,6 +14347,8 @@ The `mflo` result `rR` mathematically equals `2^N` (the `<<N` then `/x` cancel),
 
 Verified 2026-05-31 on `gui_func_00000D04` (gui_uso): two `1024` stack args on the 2nd glyph-render call were `(scale<<10)/scale` and `(glyph[2]<<10)/glyph[2]`; modeling both (plus an unrelated `a0[4]`→byte-4 field fix and a re-deref'd `cmd_list[0]`) lifted the NM body 45.34→71.01%. Residual is then ordinary 9-saved-reg allocation + frame/scheduling.
 
+COROLLARY (gui_func_00002BB0 2026-08-22, part of 70.56->93.91): if `x` itself is a compile-time constant in your C (`(32 << 10) / 32`), IDO const-folds the whole thing and the div+guards vanish just like the literal-1024 case. When the target divides by a small constant tile/step (cue: `addiu s3,zero,32` held in an s-reg + `div` by that reg + the same value passed as a call arg via `or a3,s3`), hold the constant in a VARIABLE (`s3 = 32;` then `(s3 << 10) / s3` and pass `s3`) — the variable defeats compile-time visibility, materializes the held-reg li, the real div, and both break guards.
+
 ## Target keeps dead-init stack stores (e.g. 4× `1.0f`) that natural C drops — `volatile` forces them back
 <a name="feedback-ido-volatile-keeps-dead-init-stores"></a>
 
