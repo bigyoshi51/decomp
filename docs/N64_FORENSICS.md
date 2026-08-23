@@ -64,6 +64,8 @@ _Mechanism (ROM-neutral, denominator-only):_
 
 _Effect: total_functions 3457→3452, total_code -3964 bytes, matched_code_percent 33.6700→33.8451, matched set unchanged (0 exacts lost), ROM byte-identical. Generalizes: any splat fake-fn region can leave the denominator via the local-glabel blob + expected symtab-delete pair; retype-only is a trap._
 
+_Addendum 2026-08-22 (func_80008454, kernel_021/022): **st_size=0 resize is ALSO a trap when the absorbed fragment has no same-.o parent symbol resized over the gap** — objdiff re-infers the size from the uncovered address range to the next symbol (8454 zeroed to size 0 still reported at size 68). The kernel_000_b absorptions only got away with size-0 because the parent FUNC in the SAME expected .o was resized to cover the bytes. Cross-.o absorption (fragment at the head of the next TU, moved to the previous TU via TRUNCATE_TEXT rebalance) requires the full symtab-DELETE + r_sym renumber; check first that no reloc references the deleted indices (`readelf -rW`)._
+
 ---
 
 <a id="game-uso-hi16-only-unpaired-reloc-cap"></a>
