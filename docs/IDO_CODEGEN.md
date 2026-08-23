@@ -14038,6 +14038,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Memory-pinned iterator kit: address-taken pointer chain stack-pins a struct; (u32)&local>0U anti-fold for STACK addresses; struct-assign forces addiu %lo(sym+K); (int)-arith addu CSE break (4B0A8 44.7->91.9, 2026-08-22 agent-g)](#memory-pinned-iterator-4b0a8) — _Static-helper inline probe fails (real jal); volatile deref reloads but shares addu; else-form advance keeps loop-next off s-regs._
 - [Reloc-free-expected refinement: external-jumptable dispatcher is NOT a cap in baked-expected units — plain switch + post-inc-temp (reassign-between fold blocker) + arg-direct regs + if(1) v0v1 (3AC5C 46.1->97.5, 2026-08-22 agent-g)](#relocfree-external-jumptable-switch-3ac5c) — _Table-base lw word sits at a reloc site = objdiff-matched; goto-ret alloc guard for shared epilogue; case order .text-invariant._
 - [3AC5C transfer at scale: whole game_libs_post.c.o is reloc-free — 30AF4/2C7A4/2BB7C/2AD1C jumptable caps ALL retest as %-open (30AF4 49.0->84.8); volatile selector-copy local is what unlocks ghost frame slots (volatile/plain/dead pads alone get TRIMMED at -O2); baked lui/addiu big-constant = extern address, not int literal (30AF4, 2026-08-22 agent-g)](#relocfree-transfer-30af4-volatile-selector-ghost-slots) — _for(;;)+break kills while-rotation guard dup when the condition contains the call; named-const web with mid-chain reassign (c14=14 then 16) rebuilds bnel+orphan-store chains; residual -1 temp-ring phase from head sll reuse._
+- [Shared spill-temp homes NOT C-reachable: merge->s-reg promotion vs block-locals->no scope overlay; target shared homes = uopt spill POOL (90CC frame cap, 2026-08-23)](#shared-spill-home-cap-90cc) — _Do not half-close frames: nonzero frame delta breaks all sp-immediates equally; chase the collapsed-callee reconstruction gap instead._
 - [Sparse-switch beq-chain: compares value-sorted ascending, bodies in SOURCE case order; descending source order = reversed bodies + beql-delay first body (2FB74 89.4->97.0, 2026-08-23 agent-g)](#sparse-switch-body-source-order-2FB74) — _Also: (v&0x80)==0 else-shape mirror; goto-ladder-head (not c+=1;goto mid) for the beql likely-fill; per-site distinct extern aliases match baked-abs lui/%lo (cast-constant macro materializes lui/ori = wrong)._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -23767,3 +23768,14 @@ body) and forward bodies. Same tick, two more shape reads for the kit:
   / `g += 1`) break address-CSE so every access is its own `lui/%lo` pair,
   matching baked-abs (reloc-free USO) 2-insn shapes; a `*(s32 *)0x1C908`
   macro instead materializes lui/ori pointer = wrong shape.
+
+## Shared spill-temp homes are NOT C-reachable: the 90CC frame cap (m2c local-explosion endgame) {#shared-spill-home-cap-90cc}
+
+Context: bootup_uso func_000090CC (8424B, 77.0), frame build 736 vs target 376. The target's ~41 disjoint per-cascade pointer webs are all colored $a0 and spill to THREE shared homes (12 pairs -> 0x108, 28 -> 0x80, 1 -> 0x8C). Both C routes to close the frame were measured and both fail non-monotonically:
+
+- **Merge the 41 m2c cascade locals into shared variables**: frame 736->576 but the merged variable becomes ONE uopt candidate and gets PROMOTED to callee-saved $s3 (`sw s3,48(sp)` appears in prologue) — fuzzy 77.0->71.7. A merged variable's ref-count makes s-reg promotion strictly profitable; storage class is not preservable through the merge.
+- **Per-cascade block-scoped locals** (`{ char *pw; ... }` x41, one candidate each): s3 promotion gone (correct s0-s2), but **IDO 7.1 -O2 does NOT overlay sibling-scope block locals** — each block local gets its own distinct frame slot (41 slots, 0xA0-0x150). Frame only 736->728, fuzzy 76.85.
+
+The shared home is uopt's internal spill-temp POOL, not a variable home — i.e. in the original source the cascade pointer was a non-candidate temporary (construct unknown). No C-level construct found that yields "41 separate webs + shared spill home". Treat "N disjoint same-reg webs sharing K<<N spill slots" in a big fn as this cap class.
+
+Higher-yield residuals on such fns (90CC's ranked list): (1) m2c-collapsed-callee reconstruction gap (addiu -47 / lw -31 histogram delta ~ +4pp), (2) blanked-symbol store sites (baked-USO-symbol cap class), (3) li/sh/ori fall-through regions decoded as if/else, (4) 0.0f $f0-reuse CSE, (5) bnel/beqzl loop-form flips. Frame-delta work yields ~0 fuzzy until the frame is EXACT (any nonzero delta breaks all sp-immediates equally) — do not half-close frames.
