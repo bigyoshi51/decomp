@@ -13967,6 +13967,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [GUARDED 0x4C struct block-copy: uopt refuses destructive induction on the guarded home-reload (`or tX,v0,zero` +1 insn, t-ring renumber cascade); unguarded copy coalesces; 7 spellings inert — but the SHAPE kit (K&R params + dead ptr-decl frame shim + v0-guard + struct-by-value tail) is worth 43pp (5591C 53.7->96.7, 2026-08-22 agent-g)](#guarded-struct-copy-induction-orcopy-5591c) — _`if (a3) s = *a3;` (19-word struct): the a3 home-reload feeds beq + end-addiu + copy loop; uopt copies it to a fresh induction temp instead of destroying it, and the web then colors $v0 (not t9), renumbering both copy loops. Removing the guard coalesces (destructive `lw t9`), so the branch is the blocker. Inert probes: top-level ptr local (copy-prop'd), (unsigned)-laundering, `register`, assign-inside-guard, member-expr src via outer struct, same-line join, while+break. Working shape levers: address-of-param (`s.f0 = &a0`) forces all four a0-a3 home saves; struct-by-value K&R call = second block-copy into sp+0 + lw a0-a3 from 0/4/8/C; a DEAD `T *p;` decl before the struct local supplies 8 frame bytes (0xA8->0xB0) putting the struct at its exact slot; 5 same-value global clears need distinct externs (lui-CSE bust)._
 - [Union-member overwrite defeats dead-store elim while keeping reg forwarding; volatile-cast store forces reloads, BB-breaks nuke the frame (36224, 2026-07-31 agent-f)](#union-member-overwrite-dse-defeat-36224) — _`union {Vec3 v; f32 p[3];}` + copies/overwrites through different members = plain store survives + subs still use forwarded regs; member choice canonicalized (either direction identical)._
 - [do-while(0) BB-bloat DOSED in reverse: 3 wraps demote only lui-const/FP-const hoist webs (s6/f22) keeping s0-s5+f20 exact, 6+ wraps = 46050 all-s-regs-die wall; char*volatile memory-homes list cur/next iterators (454C4 29.8->62.1, 2026-07-30 agent-f)](#dowhile0-bb-bloat-dosing-454C4) — _Add one wrap at a time at original-macro-shaped sites (DL appends) and re-diff; caps: unified 255.0f web insists on f22 vs target f0-remat-after-jal; elem copy-pair coalesces to one lw._
+- [Batched stack-arg loads before a many-arg call: block-scope temps flip lw/sw interleave to load-run-then-store-run (4C5E4 57.4->76.8 leg, 2026-08-22 agent-g)](#batched-stack-arg-temps-4c5e4) — _Target shows load-run then sw-run into arg area = source pre-read fields into locals; also negative: (f32)2 cast-literal did NOT break 2.0f CSE here._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -23527,3 +23528,19 @@ Same-function levers (all verified against target bytes):
 - **Raw vs s16 guard split**: X-block guard tests `(s16)(ulx<<2)`, Y-block B4-guard tests the RAW `uly<<2` (32-bit) while the scissor clamp uses `(s16)` — keep both spellings (`u = idx << 2;` guard on u; `slot1 = (s16)u;` clamp).
 
 RESIDUAL (~72.7): target holds the one big multi-role scratch (gctx/mode/x0/x1/x-scroll) in $s0 with no web actually live across a jal — suspected register-pressure cascade once $11 is occupied; my build keeps it in $7 with no s-reg save. Plus missing mid-region $11 remats (target re-derives after the FP-pressure region) and 2 copy insns in the scroll copy-chains.
+
+## Batched stack-arg loads before a many-arg call: block-scope temps flip lw/sw interleave to load-run-then-store-run (gl_func_0004C5E4 57.4->76.8 leg, 2026-08-22 agent-g) {#batched-stack-arg-temps-4c5e4}
+
+When a >4-arg call passes several struct-field loads as stack args, IDO's lazy
+arg evaluation emits interleaved `lw tN,field(s0); sw tN,off(sp)` pairs. If the
+target instead shows a RUN of loads (v0/t0/t1/t2/t4...) followed by a run of
+`sw` into the arg area, the original source pre-read the fields into locals.
+Lever: wrap the call in a block and assign each stack arg to a fresh block-scope
+`s32` temp, then pass the temps. On gl_func_0004C5E4 this one edit re-serialized
+the whole else-path call region and was worth ~19pp of fuzzy on its own (the
+rest of the reconstruction pass — alias externs, s1v web merge, f32[4] zero
+buffer, s16 stores — carried 42.7->57.4 first). Sibling of
+#scalar-homes-are-the-holes: both recover "original had real locals" shapes.
+Negative result from the same pass: `(f32)2` vs `2.0f` mixed spellings did NOT
+break FP-const CSE here (single lui 0x4000 either way, vs target's two) — the
+cast-literal CSE-break is not unconditional; don't burn time re-spelling.

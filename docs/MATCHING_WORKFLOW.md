@@ -236,6 +236,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Expected-refresh drift AUDITED (agent-g 2026-08-22): all 25 drifted .o mapped — real .text/.rel drift confined to game_libs_post1b (+post1b2c reloc-adds); EVERY drifted site sits inside a currently-100% function, so committing the refresh REGRESSES exacts; the "placeholder callee gained a TRUE name = free NM fuzzy upgrade" vein is EMPTY for this set. Also: refresh script had been crashing since reloc-importing donor splices landed (baseline all-INCLUDE_ASM .o is reloc-free) — replace-function-body.py now creates .rel.text on demand](#expected-refresh-drift-audit-2026-08)
 - [objdiff fuzzy can hard-zero a valid NM body (MISSING/0.0 while neighbors score) — gate on best-SCORED variant, rule out the clip pin first, dispatcher-form table (55470, 2026-07-31)](#objdiff-fuzzy-hard-zero-nm-body) — _ROOT-CAUSED 2026-08-22: objdiff scorer clamp, not an anomaly — moved blocks cost delete+insert (200/insn) vs max_score of 100/left-insn, so >50% block-moved content (e.g. uopt laying inline nested-!= else-arm bodies innermost-first = reversed) clamps to exact 0.0/MISSING. Hard 0.0 on mostly-right content = block-ORDER signal, reorder the source; score dispatchers with chain-ordered bodies via goto arms (55470: 39.9 goto-ladder → 44.75 nested-head+goto-arms; inline nested = 0.0). Clip-pin trap + empty NON_MATCHING_TEXT_CLIP_KEEP_ALIGN= iteration override still apply. CLOSED 2026-08-22 follow-up: lever does NOT generalize — [20,60) band block-layout sweep found NO other permuted-layout near-miss (tool scripts/block-layout-cmp.py); uopt goto-body order is textual-order-INVARIANT (call-free bodies hoisted ahead of call-bearing); reverse-nest inline achieves target layout but drifts every arm's registers → still 0.0 (fuzzy measures per-row register agreement more than layout); 44.9 goto form stands._
 - [Lone 1-word pad INCLUDE_ASM emits 2 words (+4 shift): fold stray nops into a neighbor's .s tail; caller-set-$t6 'cap' = stolen-prologue misread (3rd instance); sub-55 libultra identity grep kit; 27784=osAiSetNextBuffer via per-site-extern %hi-CSE-kill (277E0 = its tail, 4th caller-set retraction); refresh-expected-baseline.py: no flags + run AFTER .s merges; non-hw 5.3-fingerprint sweep: 71384=osPfsInitPak (pfs sibling family = blank jals in 70xxx-71xxx); pfs vein RESOLVED 2026-07-30: 71384/71624/717CC landed 5.3 -O1 donors, 71304/71144 = game code (size-coincidence trap)](#one-word-pad-include-asm-emits-two-words)
+- [post0b clip re-probe must be SPLICE-AWARE: probe the post-replace-body .o (make prints true .text size), not a standalone compile (4C5E4, 2026-08-22 agent-g)](#clip-reprobe-splice-aware) — _Donor splices grow .text before the clip; standalone probe truncated sentinel 62F08 to 30%._
 
 
 ---
@@ -10040,3 +10041,15 @@ Systematic sweep of remaining game_libs NM wraps against libreultra/Plauger sour
 - **70AC0/70AE4 = __osDisableInt/__osRestoreInt** clones (mfc0/mtc0) — handwritten asm class, not C-landable.
 
 **META-LESSONS:** (1) fuzzy % is NO identity signal — these landed from 0.0%, 54.8%, and two 0.0% "fragments". (2) When a near-miss note says "caller-set $reg cap", check whether the .s block contains extra words BEFORE the glabel or a neighbor fragment AFTER — three retractions this session were splat-boundary misattributions ($f0 const load, $v0 loop-tail, div/mflo heads previously). (3) Exact-set gate vs a stale main report.json can show false "lost" — verify on a pristine base build before chasing (6E224/6E894 scored sub-100 on pristine base despite 100 in the committed report).
+
+## post0b clip re-probe must be SPLICE-AWARE: compute from the post-replace-body .o, not a standalone compile (4C5E4 pass, 2026-08-22 agent-g) {#clip-reprobe-splice-aware}
+
+NON_MATCHING_TEXT_CLIP_KEEP_ALIGN re-probes after an NM body-size change must
+use the .text/last-symbol offsets of the object AS MAKE BUILDS IT. The post0b
+make recipe runs replace-body donor splices (e.g. gl_func_000601DC 0x40->0x78,
++0x38) BEFORE the clip, so every downstream symbol (62F08 sentinel) sits +0x38
+past where a standalone cc invocation puts it. Probing the standalone .o gave
+clip 0x2c74c, which truncated 62F08 to 30%; correct value = make's pre-clip
+.text end (printed in the "smaller than requested"/"clipped .text" message) =
+0x2c784. Fast recipe: set a too-small clip, run make, read the true size from
+the error line, set that.
