@@ -114,6 +114,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Escaped-aggregate scratch kills f22/f24 caching of sibling fields: separate f32 locals w/ one address-taken let IDO cache the rest in FP callee-saves across jalr; single struct scratch = full escape = target reload shape; also reversed &-operand emission + *= negation webs (3C86C 71.3->100, 2026-07-17 agent-f)](#aggregate-scratch-escape-vs-f22-caching-3c86c) — _frame-tiling names the struct size; load-temps regress to f0/f2 webs; owner-store-first blocks the lwc1 hoist._
 - [while(0) dead loop = FP-web coloring lever (head f2/f12/f14/f16 rotation): promotes folded sum to first-colored web, dead-ref ORDER steers ties, 2D-index CSE beats named locals (5DBB0 74.4->99.0, 2026-07-17 agent-f)](#while0-fp-web-coloring-dbb0) — _if(0) strips, dead-store-only bodies DSE; reverse dead-ref order colors first; dead add-trees do not CSE with real sums but real-sum reassociation flips the survivor; named f32 locals color f2-first in decl order (wrong here)._
 - [Wave-3 round-2 closers (agent-g 2026-07-15): de-name expression locals = fresh-ring numbering + ghost-home kill in one move; void-alias the last jal before a CSE-temp region; pad-AFTER a lone named local re-packs spill homes (38C0 91.3->EXACT, 15FC 27->23)](#wave3-round2-38c0-15fc) — _Named OR-chain/CSE-ptr locals color in-place + cost dead homes; folding them into the call args restores t7->t8->t9->t0 fresh numbering AND the exact frame. "One CSE temp in a v-reg, the other on the ring" after a K&R int call = dead-$v0 exclusion; void-alias frees v1/v0 emission-order coloring. A lone named local + compiler CSE spills +4 with a hole below = volatile pad AFTER the local claims the stray word (frame unchanged)._
+- [28C0 twin-transfer of the 1DDC kit lands +25.5pp (43.6->69.1); member-expr direct stores (axisc.x = row-expr) kill ugen FP temp-slot churn (frame -40); uniform-shift check validates internal pad gaps (2026-08-22 agent-h)](#kit-transfer-28c0-direct-store-uniform-shift) — _float[3] respell of a register-cached homed buffer (refv2) +8.2pp + shared `zerof` local = single mtc1 zero; `char*volatile` on out/s is NEGATIVE here (param still s0-promotes, homes shift); plateau ~69 = family a2 cap._
 - [game_uso 1DDC/28C0 homing family: fresh-Vec3 two-hop fanout (+13.5pp) transfers from 0B3C; NO-s-reg target profile (param $a2+arg-home spill, &local remat per region) spelling-unreachable — 4 probes negative; 7538 ret-pair coloring same class (2026-07-30 agent-g)](#no-sreg-homing-family-1ddc) — _key3 flavor trichotomy: plain local caches / array reloads per-use / homed-copy reads back once; (float)0 cast re-mats late mtc1 zero on compares (9B88)._
 - [Wave-3 game_uso transfer: RANK typed-member lever flips FP POOL BINDING; same-line join hoists 1.0f-store quads + sinks a store past a spill into the jal delay; FD0 void-alias works on import calls](#wave3-game-uso-transfer-2026-07-15) — _F360 ldc1/cvt f6<->f18 swap EXACT via `extern struct{char pad[N]; double v;}` base-0 alias (plain-global-load rank -> textual order); D9CC 98.96->99.40 (join 0/0/0/1.0f quads on ONE line: as1 hoists the 1.0f chain, numbering stays source-order; `sp30=0; call;` join sinks sw past the a3 spill); 102CC v0/v1 family swap = dead-\$v0 exclusion from an unused import int return, void-alias -> 100 (return-capture inert at immediate redef); 3AC0 staging cap sharpened (member-store counts as copy, no scope-home overlay, frame-ptr arith poisons); dead-if at fn head leaks 4 param home-stores._
 - [SWITCH-SORT vs GOTO-LADDER: final-beq tail-dup inversion blocks source-order chains; K&R precolor composes with switch; objdiff fuzzy punishes block moves >> word diffs (52144 99.4)](#switch-sort-goto-ladder-52144) — _goto ladder gets chain order but last beq+b always inverts (+3 dup arm, 12 probes negative); 4th-K&R-param self spills to arg-home instead of `or a3,a0` (use a plain local); 26-diff shifted layout scored 25.9 fuzzy vs 11 aligned diffs 99.4._
@@ -22615,6 +22616,36 @@ From two game_libs [45,50)-band redecodes (gl_func_000693A4 47.8->89.5, gl_func_
 6. Companion shapes validated again: 12-byte struct carrier chains (`t = d; e = t;`) for the interleaved
    lw/sw copy trains; s0=arg0 with a1-a3 homed at entry when each has 1-2 post-call uses; per-site
    prototyped zero-alias callees for f12-arg sqrt / (ptr,ptr,f32) K&R-bit passing.
+
+## 28C0 twin transfer of the 1DDC kit: direct member-expr stores kill ugen temp churn; uniform-shift check proves the pad ladder (43.6->69.1, 2026-08-22 agent-h) <a name="kit-transfer-28c0-direct-store-uniform-shift"></a>
+
+game_uso 28C0 (1000B twin of 1DDC, identical no-s-reg target profile) redecoded with the
+family kit; confirms the kit transfers wholesale. Ranked levers (measured in-tree):
+
+1. **Redecode-before-grind paid again**: prior body's else-arm matrix base was `out`;
+   expected/.o shows `lw v1,224(sp)` = the CACHED `(a0->0x3C)->0x38`, and the mode==3
+   compare RELOADS `a0->0x40` (`lw t1,64(a2)`) — spell a fresh `*(int*)(a0+0x40)` there.
+2. **Uniform-shift check**: after laying the descending decl ladder with `volatile s32`
+   dead-gap pads, diff build-vs-target sp offsets: if ALL homed slots differ by one
+   constant, the internal gap ladder is EXACT and only frame-base padding is wrong —
+   tune only below-locals/top pads, never the internal ones.
+3. **Direct member stores beat scalar staging**: `rx = row-expr; ...; axisc.x = rx;`
+   made ugen spill FP temps to 32/36(sp) (churny swc1/lwc1 shuffle) and reserve a fat
+   temp area; `axisc.x = row-expr;` (store straight from the add) killed the temp slots
+   and shrank frame 288->248 (+0.9pp and enables offset alignment). Preload the source
+   vec once into scalars (`ax=axisc.x;...`) so rows reuse regs like target f18/f8/f16.
+4. **float[3] respell of a register-cached buffer**: refv2 stayed entirely in f-regs
+   (no call intervenes before its use) while target homes+reloads it; `float refv2[3]`
+   forced the array (per-use reload) flavor: +8.2pp together with a shared
+   `zerof = 0.0f;` local (target holds ONE `mtc1 zero,$f2` for both axis.x/y stores;
+   two `0.0f` literals re-mat two zeros).
+5. **NEGATIVE probe banked**: `char * volatile out/s` does NOT reach the target's
+   homed-pointer profile — the param still promotes to $s0 and every home shifts;
+   -1.9pp. The family a2 cap (out->$s0/a0->$s1) stands; plateau ~69 like 1DDC.
+
+Residual: +16 uniform local shift (build reserves 36B below locals vs target 28B;
+composition unknown — likely reserved homes for the s-colored webs), s-save prologue,
+else-arm row eval-order drift (zterm+sum vs sum+zterm).
 
 ## game_uso 1DDC/28C0 homing-family: fresh-Vec3 two-hop fanout lands +13.5pp; NO-s-reg target profile (param->$a2+arg-home spill, &local remat) is spelling-unreachable (2026-07-30 agent-g) <a name="no-sreg-homing-family-1ddc"></a>
 
