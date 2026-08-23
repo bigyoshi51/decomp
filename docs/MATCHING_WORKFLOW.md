@@ -13,6 +13,7 @@
 _75 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 - [Mnemonic-histogram diff triages giant NM bodies in one pass — swc1-deficit + trunc.w.s-surplus = s32-cast float stores; sw-zero at vtable offset = blanked-reloc decoded as 0; check frame size before chasing sp offsets (90CC, agent-f 2026-08-22)](#mnemonic-histogram-giant-fn-triage)
+- [USO expected-side reloc injection (spimdisasm-migration phase 1) is score-NEGATIVE: objdiff 3.7 already fully credits blind literal-0 vs reloc-to-blank; C234/55A0/6808 residuals are structural, NOT reloc rendering (bootup_uso 526-site prototype, agent-f 2026-08-23)](#uso-expected-reloc-injection-negative)
 - [NM-body GROWTH in a clipped unit shifts tail symbols past NON_MATCHING_TEXT_CLIP_KEEP_ALIGN — sentinel false-drops (62F08 100->20) until the Makefile clip is advanced to the tail's new end (54E78 pass, 2026-08-22)](#nm-clip-advance-on-body-growth) — _clip = last real fn's end in the NM object; recompute as st_value+st_size of the tail symbol after `make non_matching_objects` prints the resize warnings; sentinels re-probe 100 after. Baseline-vs-edit stash test distinguishes this from a real regression._
 - [Whole-TU identity vein extends into gu/+libc: "anonymous float math" NM wraps can be library shapes (ortho.c 111/111 FULL-word first compile incl. blank-jal reloc fields; internal-call rename + add-elf-func-symbol splice-key re-inject; REPLACE_FUNC_BODY := parse-time donor-var order gotcha; 70320=bcopy handwritten .s not C-landable) (agent-h 2026-08-22)](#whole-tu-gu-libc-identity-vein) — _verify with the raw .s, disasm-func.py windowed a fictional body._
 - [kernel/bootup identity sweep (agent-f 2026-08-22): 5C50=__osDevMgrMain + 4E50=osLeoDiskInit EXACT (2 permanent-cap retractions: "debugger dispatcher" and "D6/D7 shared-$at no-compiler-family"); method + donor gotchas + negatives inside](#kernel-bootup-identity-sweep-2026-08-22)
@@ -10086,3 +10087,55 @@ On a 2000+-insn NM body, per-insn alignment diffing slips on repeated near-ident
 - `sw zero,K(rs)` where expected has `lui/addiu/sw` reloc pair = blanked-USO vtable pointer decoded as literal 0; fresh alias extern restores the pair byte-identically at site.
 - `addiu`+`lw` deficit with equal `jal` counts = build holds cascade pointers in s-regs where target uses arg-reg + spill-slot web (structure right, regalloc web wrong — separate grind).
 Also mind frame size first line of prologue: 736 vs 376 here (excess decode locals) — every sp-offset mismatch stems from it; don't chase individual spill offsets before shrinking the frame.
+
+## USO expected-side reloc injection (spimdisasm-migration phase 1) is score-NEGATIVE — objdiff 3.7 already credits blind import sites; the "reloc-blind cap" family is structural (bootup_uso prototype, agent-f 2026-08-23) {#uso-expected-reloc-injection-negative}
+
+**Question answered:** would making expected/ .o reloc-aware (injecting real
+R_MIPS relocs from the USO's own TextReloc table) un-cap the bootup_uso
+"reloc-blind" family (C234/55A0/6808 — e.g. 55A0's 44 zero-page GOT refs)?
+**No. Measured net-negative; do not do it.**
+
+**Pipeline map (what "reloc-blind" actually is today):**
+- expected/ .o = snapshot of build/src (Makefile `expected` target); USO fns
+  come from raw-.word or partially-symbolized `asm/nonmatchings/<mod>/*.s`
+  via INCLUDE_ASM.
+- The .s-level symbolization (`scripts/uso-reloc-symbolize.py`, already
+  APPLIED to bootup_uso) covers module-INTERNAL reloc sites (baked nonzero
+  imm -> `%hi(D_00007E20)` reloc form, full-resolved-target naming). Those
+  sites already compare reloc-vs-reloc, same name as the C side => matched.
+- The residual blind class = IMPORT sites (cross-module targets; 4593 of
+  bootup's 15543 TextReloc entries): USO ships them imm==0 (load-time Sym
+  resolution), .s keeps them literal `lui $rt, (0x0 >> 16)` / `jal 0`, no
+  ELF reloc; the C build side emits a reloc to a blank (D_00000000-family /
+  pinned-alias) extern that resolves 0.
+
+**Prototype (kept, not applied):** `scripts/inject-uso-import-relocs.py` —
+metadata-only ELF surgery (reuses replace-function-body.py's Elf class:
+find_or_add_global_undef_symbol + append_text_relocs + **realign_sections()
+— without the realign the grown strtab misaligns .text/.rel.text and objdiff
+rejects the ELF**). Injects R_MIPS_26/HI16/LO16 at zero-imm TextReloc sites
+inside an allowlist of sub-100 fns; .text bytes untouched (verified
+byte-identical); ROM unaffected (expected/ is measurement-only).
+
+**Measured (bootup_uso, 526 sites, 86 sub-100 fns, objdiff-cli 3.7.0):**
+- Exact 2344 and matched_code 258004 EXACTLY unchanged; 0 delta outside bootup.
+- 15 fns moved, ALL DOWN: 2C94 -0.21, 0CA0 -0.15, 53E8 -0.09, 87A4/CAE8 -0.08,
+  6808 -0.07, 2DA4/31C0/55A0/7EC8 -0.04, 1A44/12E00 -0.03, 90CC/C234/CFA0 -0.01.
+- IDENTICAL deltas whether injected names are truthful `import_<addr>` or the
+  base-matching blank `D_00000000` => the loss is NOT reloc-name mismatch;
+  objdiff already gives full credit to the literal-0-vs-reloc-to-blank pairing
+  (value relax), and adding a target-side reloc only perturbs fuzzy alignment
+  second-order. There is NO upside to harvest.
+
+**Consequences:**
+- The C234/55A0/6808 family's sub-100 residual is register-allocation /
+  scheduling / structure (their diff rows are ARG_MISMATCH on regs +
+  INSERT/DELETE on schedule), not reloc rendering. "needs USO-reloc migration"
+  as a score lever is RETRACTED for the expected/ side.
+- Full-migration effort estimate is therefore moot for scoring; the only
+  remaining values of a reloc-aware expected/ are (a) land-script byte_verify /
+  episode eligibility on flipped USO fns and (b) real-name call graphs — both
+  policy questions, not score work (see RELOC_BLIND_FLIP_PLAN.md STOPPED note,
+  which this re-confirms from the opposite direction: 2026-05-31 measured the
+  build-side flip as zero-gain; 2026-08-23 measured the expected-side injection
+  as slightly negative).
