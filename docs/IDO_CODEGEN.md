@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Frame layout is DECL-ORDER TOP-DOWN with aggregates pinned to frame top: a scalar declared ABOVE volatile locals reserves the topmost slot; tail-padded wrapper structs (`{V3 v; s32 pad[N];}`) sculpt aggregate bases exactly; scalar homes stack bottom-up so adding one shifts the arg-derived temp's home -4 (54E78 45.4->77.3, 2026-08-22 agent-g)](#decl-order-topdown-frame-54e78) — _Also: `two=(f32)2` local keeps mul.s-by-2.0 in STRAIGHT-LINE (x+x fold defeated, extends D9E4/329C); volatile f32 outputs keep member-copy swc1 stores (plain locals DSE); 1.0f literal-form splits (1.0f/(f32)1/(f32)1.0/(f32)1u) ALL unify — per-site mtc1 remat of a repeated FP const not yet C-reachable; two/zero f0<->f2 web-priority swap + row-mul fs=const operand order open._
 - [Scalar-candidate HOMES are frame-mapped at DECL POSITION: unused 4B homes of pointer/float locals ARE the target's frame holes — declare `av/bv` between `ret` and the top Vec3 (= the 0xC4/0xC8 gap) and the f0/f2/f12/f14 temp quartet (`tx/ty/tz/fzero`) IN the 16B hole instead of `volatile int pad[4]` (3CBB4 30.2->91.9, 2026-08-22 agent-f)](#scalar-homes-are-the-holes-3cbb4) — _Also: ABS(assignment-expr) store+reload roundtrip needs a STRUCT MEMBER lvalue (Vec3 .z reloads; f32 d[2] array element compare uses the reg, no reload); Tri3i cast struct-assign dst routes through precolored call-arg regs a0/a2 where member-wise s32 copies go sp-direct; ptr vars hoisted ONE block out survive as 0/4/8 bases (same-block assignment folds into s1-offsets); `register` and block-scope decls do NOT suppress or relocate the homes (decl position does)._
 - [Shared-tmp struct-copy addiu web (`tmp=d; dst=tmp;` x5 stages, one slot) is an s-reg/recompute TIE uopt breaks toward s-regs — NO respell reaches the target's recompute form: block-scope `Vec3 *tp=&tmp` merges by value-numbering, union members share the web, `register` params no-op, if(0)-escape of the STRUCT still s-regs its ADDRESS and escaping ptr args over-homes them (per-use reloads, scored WORSE 66.3->64.6) (post0b 3A58C 11.7->66.3, 2026-07-31 agent-f)](#shared-tmp-addiu-web-tie-3a58c) — _Decl-order slot sculpting (pads + scalars-as-ghost-spill-homes) still lands frame+ALL slots exact even with the 2 parasitic s-regs: IDO packs s-saves into the target's unused 0x1C/0x20 save-area gap, same -0x140 frame._
 - [Volatile-BRIDGE copy (`char *volatile vb; vb=s; r=vb;`) defeats copy-prop of a homed alias into pre-redefinition stores — cracks the 6CF0 "split-at-spill non-steerable" class for serial-s0 constructors (timproc D14C 69.0->81.7, D884 69.0->81.4, 2026-07-31 agent-g)](#volatile-bridge-serial-s0-d14c-d884) — _Retracts D550's "no spelling stops t2=r propagating" note and D884's "regalloc divergence intractable" cap; &r-if(0)-escape alternative over-reloads (address-taken aliases every store)._
@@ -612,6 +613,47 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 ---
 
 <a id="byte-rmw-mask-width-2a260"></a>
+## Frame layout is decl-order top-down; scalar-above-volatiles reserves the top slot; tail-padded wrapper structs sculpt aggregate bases (gl_func_00054E78 45.44->77.25, 2026-08-22 agent-g) <a name="decl-order-topdown-frame-54e78"></a>
+
+Quat-to-3x3-matrix writer (arg0+0x12C..0x168 from quat at arg1) with three 12-byte
+Vec3 stack temps chained by struct assigns (sp50->sp64->sp2C = the interleaved
+integer lw/sw copy blocks) + three float member-copies. Frame-matching rules
+learned by probe (all offsets verified against expected/ .o):
+
+- **Local region packs TOP-DOWN from the frame top in DECLARATION order.**
+  First-declared local gets the HIGHEST offset. Frame = round8(content), so a
+  4-byte deficit at the bottom shows up as everything shifted +4, not as slack.
+- **A promoted scalar still reserves its home at its decl position.** Target had
+  an invisible 4B slot ABOVE the volatile floats (offset 148): reproduced by
+  declaring the (fully promoted, never-stored) `f32 w` BEFORE the volatiles.
+  Chasing it with volatile pads or leading-pad structs fails — those change
+  the aggregate sizes instead.
+- **Tail-padded wrapper structs** `typedef struct {V3 v; s32 pad[6];} V3P24;`
+  place aggregate bases exactly (44/80/100) while keeping the struct ASSIGN a
+  12-byte (3-word lw/sw) copy of `.v` only. No 8-alignment constraint observed
+  on aggregate bases (84/104 mid-region are fine).
+- **Scalar homes stack bottom-up**: {temp,two} put temp@32 (target); adding a
+  third scalar pushed temp to 28. The arg-derived `temp` home offset is a free
+  diagnostic for scalar-candidate count.
+- `two = (f32)2;` named local + INT-cast literal keeps `mul.s` by 2.0 in a
+  STRAIGHT-LINE body (IDO otherwise strength-reduces `2.0f*x` to `add.s x,x`) —
+  extends the D9E4/329C (float)N lever beyond div/goto-join contexts; colors
+  register-resident across all 10 sites.
+- `volatile f32` on the three output copies keeps the swc1 stores (plain f32
+  locals get dead-store-eliminated); loads from the non-volatile source still
+  CSE into the following dot-product, matching the target.
+- Direct K&R call (`gl_func_00034458(temp)`) not a fn-ptr cast — the cast form
+  costs lui/addiu/jalr + a t9 web and re-shuffles the post-call a1/a2 arg webs.
+
+NEGATIVES banked: 1.0f per-site mtc1 remat is NOT reached by literal-form
+splits (1.0f, (f32)1, (f32)1.0, (f32)1u all value-number together, held in one
+reg); two/zero f0<->f2 web priority resists init order, decl order, and
+dual-role zero/dot merge (target has 0.0-web AND dot BOTH in f0 — the merged-`d`
+spelling compiles fine but doesn't flip the two/zero coloring). Row-mul
+`fs=two` operand order (cfe deref-chain rank) untried with the (t=two)
+assignment-pin due to session budget — next lever to probe. Left NM at 77.25,
+552/552 sized, frame exact.
+
 ## Word-bitfield-union stack scratch + if(0){&param} escape kills s-promote (args home to incoming slots around a single call) + audit old "stripped-reloc unrecoverable" cap notes (gl_func_00027804 44.78->78.10, 2026-07-30 agent-h) <a name="bitfield-union-scratch-arg-escape-27804"></a>
 
 game_libs raw-word USO redecode, three transferable findings:
