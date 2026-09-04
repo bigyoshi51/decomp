@@ -616,6 +616,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ---
+- [Big-offset `(char*)&D+K` (K>=0x8000) CSEs as the 32K-ALIGNED base (`lui/addiu -0x8000` + low-15-bit offsets), not the exact address; dead-if `if(x){}` un-substitutes a single-use conversion temp (2D37C 20->95, 31A74 16->86, 2026-09-04)](#big-offset-cast-base-32k-aligned-2026-09-04)
 
 <a id="byte-rmw-mask-width-2a260"></a>
 ## Frame layout is decl-order top-down; scalar-above-volatiles reserves the top slot; tail-padded wrapper structs sculpt aggregate bases (gl_func_00054E78 45.44->77.25, 2026-08-22 agent-g) <a name="decl-order-topdown-frame-54e78"></a>
@@ -23842,3 +23843,12 @@ Jal-anchored segment diff (151 jals -> 156 segments; `objdump` both .o, split at
 7. `arg7 |= 0x1000` in place (drop m2c's `var_t0 = arg7` copy): stack params reload from home per block (`lw t0,K(sp)` at each first use), the copy made an extra `or t2,v0,zero` web.
 
 Negatives banked this session: `default:` spelled first in the 2-case switch does NOT flip the 6-then-7 compare order (still value-ascending; target 7-then-6 remains open); a local copy `mode1 = arg1` does not make arg1 load-once-and-hold (target holds arg1 in a3 across the switch; build reloads per block); `if (1) { p = &D; }` does NOT block copy-prop of a global address into `*(s32 *)p` (the doc's non-dominating-def trick needs a real preceding `if` body); a hoisted `end = alias + 36` loop bound turns the 3-iteration store loop into IDO's generic unrolled-by-4 loop — keep constant bounds inline. Remaining 90CC residual: seg 93 mode-select (switch compare order, arg1 web, ~10 words), 2nd `bu_90cc_vt548` site GCSE'd into s1 (needs a `_b` alias in C + .s + expected refresh), `lui/addiu` hoisted above `if (0xA58&3)` at seg 137, the dual mtc1-zero at 0xABE8 (known cap), frame (known cap).
+
+<a id="big-offset-cast-base-32k-aligned-2026-09-04"></a>
+## Big-offset `(char*)&D+K` CSE base is 32K-aligned, not exact; dead-if un-substitutes conversion temps (game_libs_post 2D37C / 31A74, 2026-09-04 agent-g)
+
+- **32K-aligned CSE base.** `*(int*)((char*)&D_x + 0x1CAA8)` used twice (load+store) does NOT materialize `lui v0,2; addiu v0,-13656; lw 0(v0)` (the target shape when the original symbol lives AT 0x1CAA8). uopt CSEs `&D_x + (K & ~0x7FFF)` = `lui 2; addiu -0x8000` and leaves `+0x4AA8` in the load/store offsets. A named pointer `cp = (int*)((char*)&D+K)` and a direct `&sym` (alias valued 0x1CAA8) both fold to fused `lui/lw`. Exact-base materialization needs a symbol whose address IS the target (value-0x1CAA8 alias + inline addend 0), whose bytes objdiff can't score against a reloc-free expected .o (ROM bake path only). Small offsets (0..0x18, gl_func_0002D37C) CSE fine as `lui a2,0; addiu a2,a2,0` + field offsets — struct/array spellings of the same fields fuse per access instead.
+- **Dead-if candidate flip for a sunk conversion.** `fr = (f32)raw_u32; ... store A; store B; D = fr;` — uopt forward-substitutes the single-use `fr` to its store, so the u32->f32 `bgez/add 4f80` sequence lands AFTER the earlier stores. `if (fr) {}` (and `if (z) {}` for a 0.0f local, `if (half) {}` for an int) turns each into a candidate: computed up front, colored f0/f2/a0-class, ZERO home stores. `if (0) { f(&fr); }` escape also un-sinks but adds dead home stores in-tree (frame +24). `while(0)`, `if(0){f(z,fr)}` (by value) = no effect.
+- **Float-in-a1 callee.** `mfc1 a1,$fN; jal` = prototyped `(int, float)` callee (`gl_func_00000000_f`); a `0.0f` literal there is `addiu a1,zero,0` (int 0 is `or a1,zero,zero`).
+- **Compound `*=`** puts the destination variable FIRST in `mul.s fd,fd,ft`; `x = pool * x` and `x = x * pool` both emitted `ft,fd` here.
+- **Hoisted `lp = &tbl[i]` before an if whose else-arm loads `*lp`** reproduces `lui at; addu at,at,t9` scheduled above the `bc1f` with the `lwc1 0(at)` left in the arm (ugen keeps the fused at-form; no t-reg pointer appears).
