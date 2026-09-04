@@ -14,6 +14,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Pointer-form Vec3 macros (`pd->x = rx_` through `Vec3 *pc=&C` aliases + fn-scope shared x/y/z float temps) keep field-wise locals memory vars AND stop uopt folding the temps (all 3 ops held, then stored); tmp for `tmp=A; B=tmp;` must be a SEPARATE fn-scope local (as a frame-struct member the ladder reloads all 3); unnamed-load pointer var = addiu base fold after first access; int `/ 2` keeps div.s (2.0f -> *0.5, `* 2.0f` -> x+x); nested-!= pair ladder (bootup 4948 14.8->94.1, 2026-09-04 agent-f)](#pointer-form-vec3-macros-4948)
 - [Escaping frame STRUCT keeps dead-field math alive + makes every field a memory var (bootup 63B4 23.4->76.0): plain Vec3 locals DCE the unused x/y of an in-place M*v; Vec3-temp+struct-copy result = memcpy form; MIN/MAX ternary into a FLOAT temp then cast (cast-on-ternary duplicates trunc per arm); float locals cost 8B homes (2026-09-04 agent-f)](#escaping-frame-struct-63b4)
 - [NO-DEFAULT switch arm = loop-carried conditionally-assigned local: uopt gives it a MEMORY home + in-loop s-reg promotion (uninit `lw sN,home` pre-loop / `sw sN,home` post-loop) + a 5th saved reg falls out; named `idx = field + i` subscript temp blocks (field+i)<<2 byte-IV strength reduction (mgrproc 2B7C 85.4->92.9, 2026-08-22 agent-h)](#no-default-switch-loop-carried-home-2b7c) — _Tell: unreachable `addiu sN,base,K` right before the switch join = IDO's leftover lexically-last case block after beql conversion, proving NO default arm existed (a `case N: default:` spelling collapses the whole 5-reg/home shape to 4 regs). Companion: `volatile int pad` as FIRST decl claims the top frame word so volatile-float ghost slots + the carried local's home land one word lower. NEGATIVES on same fn: a held `v = p + K` used once after a call folds v+K2 back to p+K+K2 on EVERY spelling (plain/multi-def/if(1)/volatile/while(0) 2nd use) - target's pre-call addiu + spill unreached; while(0) ref-boosts on loop counter inert or harmful here._
 - [volatile extern defeats the loop-invariant-global saved-reg hoist that distinct externs cannot — but ONLY with C read-site count == target static load count (E68 dim-A, agent-f 2026-08-22)](#volatile-defeats-invariant-hoist-load-count)
@@ -23901,3 +23902,45 @@ Target: two Vec3 (A at 0x84, B at 0x78) + a float[4] {0,0,0,1} at 0x5C, `&A.x/&A
 - **Frame accounting**: in this fn each named FLOAT local costs 8 bytes of frame (dropping 3 float temps = -24), ints/pointers here cost 0 — count float temps against the target's home area (target 0x20..0x5B = 60B). `off`-style int temps are free to keep or drop.
 - **Function-typed base `(char *)&func_00000000 + K`** as a pointer var blocks the CSE of `*(base+0x254)` across the address-taken-local stores (target has 3 distinct ctx loads off a held `lui a2; addiu a2,a2,0` base) but ALSO demotes the a0 param to entry-store + per-use home reloads (obj `lw v0,K(sp)` per block) — net negative here (74 -> 72.6). `char * volatile *` gives the 3 loads with lo16 folded (`lw K(lui)`), no addiu. Open: how the target keeps the D base in a2 without demoting obj.
 - Negative: pointer-form macro (`Vec3 *pv_=&(v)`, with or without the `pv_=0; if(1){...}` barrier) folds the loads back to sp-direct but keeps pointer STORES → kills the ctx CSE (wanted) yet moves the a0 home store to entry and drops the f18 zero-constant web (60.7).
+
+## Pointer-form Vec3 macros: memory vars + held x/y/z temps without a frame struct; separate shared tmp; unnamed-load pointer fold; int-2 divisor (bootup 4948 14.8->94.1, agent-f 2026-09-04) {#pointer-form-vec3-macros-4948}
+
+Target (func_00004948, 426 insns, 5 Vec3 blocks): every Vec3 local is a memory var
+(`swc1` per field, reload before use), the 3 subs/muls of a block land in HELD
+candidates (f14/f2/f12) before any store, `tmp = A; B = tmp;` is the forwarded
+`lw t8;sw;lw t7;lw t0(reload x);sw t7;lw t8;sw t7,4(a1);sw t0,0(a1);sw t8;sw t8` ladder,
+and the record read is `lwc1 f8,0xA0(v0); addiu v0,v0,0x70; lwc1 0x34(v0); lwc1 0x38(v0)`.
+
+- **Pointer-form macros, not a frame struct.** `Vec3 *pc = &C, *pe = &E, *pd = &D;`
+  then `pc->x = q->pos.x; ...; rx_ = pc->x - pe->x; ry_ = ..; rz_ = ..; pd->x = rx_; ...`
+  with `rx_/ry_/rz_` declared ONCE at function scope. The address-taken locals become
+  memory vars (63B4's escaping-struct effect) and — the new part — the pointer derefs
+  may alias the stores, so uopt cannot fold `ry_` into `pd->y = ...` past `pd->x = rx_`:
+  the three temps stay candidates, computed first, stored after. The same three
+  temps spelled through an all-in-one frame struct (`fr.D.x = fr.C.x - fr.E.x`) DO get
+  folded (disjoint offsets of one symbol = provably no alias) and the stores interleave
+  (87.6 vs 92.7). Splitting the temps per macro (`dx_/dy_/dz_` for the sub, `rx_..`
+  for the scale) or block-scoping them drops to 87.3 — one shared trio is the shape.
+- **`tmp` must be a separate local.** With `tmp` a member of the same struct as A/B,
+  `tmp = fr.A; fr.B = tmp;` reloads all three words (`lw t9,4(v1); sw`); as its own
+  fn-scope `Vec3 tmp` (A/B block-scope or struct members) the ladder is exact. Same
+  ladder either way for plain locals (q2/q4 probes).
+- **Unnamed-load pointer var** `q = (Sub *)(*(char **)(obj + 0xF4) + 0x70);` reproduces
+  `lwc1 0xA0(v0); addiu v0,v0,0x70; lwc1 0x34(v0)` (first access folded, base
+  materialized for the rest). A named `char *s = *(..); q = (Sub*)(s+0x70)`, typed
+  `s->sub.pos.x`, `((Sub*)s)[1].pos`, int-cast, or `s += 0x70` all fold to three direct
+  offsets. (The target's SNAP has a fully-dead `addiu v0,v0,0x318` sv def with all
+  three loads folded — not reached; ours DCEs it.)
+- **`b / 2` (int constant) = `lui 0x4000; mtc1; div.s`.** `b / 2.0f` folds to `* 0.5f`
+  (`lui 0x3f00`) and `x * 2.0f` to `add.s x,x`; `x * 2` keeps `mul.s` by 2.0. A `float
+  two = 2.0f` local also folds. Use the int literal.
+- **Nested-!= pair ladder** `idx = 0; if (st != 19 && st != 24) { if (st != 20 && st
+  != 25) { ... if (st == 23 || st == 28) idx = 4; } else idx = 3; } else idx = 1; }`
+  gives the target's beq-to-out-of-line arms (flat `||` else-if chains give
+  bnel+inline arms; switch = jumptable at 10 dense cases; goto/do-while-break forms
+  = inline). Residual: IDO emits the else arms innermost-first (4,3,2,1) where the
+  target has 1..4 and a `beql`+`li` last arm — unresolved.
+- **`unsigned` state var** for `sltiu` range tests (`(st >= 0x13 && st < 0x18) ||
+  (st >= 0x18 && st < 0x1D)` reproduces the bne/bne/bne/beql sltiu quartet).
+- Residual cap: the shared temps color f2/f14/f16 here vs f14/f2/f12 in the target —
+  decl-order permutations, `register`, temps-first, tmp-last are all inert.
