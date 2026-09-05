@@ -14117,6 +14117,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
 - [Sparse-case `switch` table RANGE follows min..max CASE LABEL, not the used arms: add `case MAX: default:` (semantically dead) to widen `slti`/`sltiu` bounds to the target's; case arms are laid out in SOURCE order; the shipped USO table CONTENT is irrelevant to the .text match (2E290 49/49 via donor splice, 2026-09-05 agent-g)](#switch-case-max-default-widens-jumptable-range-2e290) -- _Table range off (0x12/0x11 vs 0x21/0x20) with everything else exact = add the boundary label to default. Sibling of 6DD14's `case 15: case 16:`._
 - [Goto-chain dispatcher: a `return K;` on the fall-through/default path gets its OWN `jr ra; li v0,K` and the last arm's `li` is hoisted into the final beq's delay; the target's `li v0,K` IN the last beq delay + `b end` to a trailing shared `jr ra; nop` = the default flowing into the function's FINAL `return r;` (`r = K; goto end;`), plus the inverted-skip last test (560E4 49/49, 2026-09-05 agent-g)](#goto-chain-default-flow-to-final-return-560e4) -- _Tell: N `li at,K; beq` tests landing on N 2-word `jr ra; li v0,N` blocks, then `li v0,DEF; b end; nop`, the blocks, then `jr ra; nop`. `switch` = binary search (60w); if-else-if = interleaved bodies._
+- [A `switch`-terminated fn's FINAL return block keeps an UNFILLED `jr ra; nop` at plain -O2 (`lui; addiu; jr ra; nop` / `move v0,zero; jr ra; nop`), while in-switch `return` arms are filled (`jr ra; li v0,K`) -- so a tiny `-O2 -g3` + TRUNCATE_TEXT carve-out unit whose only content is such a block right after a run of return stubs is a MIS-SPLIT default block, not a codegen need (343F4 25/25 first compile, g3_34448 unit retired; 2026-09-05 agent-g)](#switch-final-return-block-unfilled-jr-delay-not-g3-343f4) -- _Written inside the switch (`case 8: default: return X;`) or after it (`default: break; } return X;`) gives the same bytes. Same class as 2E290's exit and 560E4's `end: jr ra; nop`. Candidate to retire next: timproc_uso_b5_g3_87E8.c (87A0's default)._
 - [CHAINED / TESTED ASSIGNMENT to a `signed char` FIELD sign-extends the register value (`sll 24; sra 24`) for the test while the `sb` keeps the raw reg -- a plain local assigned 0/1 is never extended; the two extra words also shift the whole later tN ring by two (game_libs 3AA5C 128/128 EXACT, 2026-09-05 agent-c)](#chained-assignment-field-conversion-sign-extend-tn-ring) -- _Target `li v0,1 ... or v0,zero,zero; sll t6,v0,24; sra t7,t6,24; beqz t7; sb v0,2(a0)` = `axis = o->axis = cond ? 0 : 1; if (axis)` (or `if (o->axis = ...)`). `signed char axis = cond ? 0 : 1; if (axis)` / `switch (axis)` / casts give a bare `beqz v0`; `o->axis = ...; if (o->axis)` reloads. Also: Vec3 FIELD access vs float[] indexing flips the final `add.s` operand order of a 3-term dot product (`f4,f16` vs `f16,f4`); `x = cond ? K : o->f; o->f = x;` = value select + one store, `o->f = cond ? K : o->f;` = two stores with K hoisted._
 - [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
@@ -24569,3 +24570,39 @@ keep the arms as direct `return`s, and split the last equality test.
 
 Full case: `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
 (twelfth case).
+
+<a id="switch-final-return-block-unfilled-jr-delay-not-g3-343f4"></a>
+## A `switch`-terminated function's FINAL return block keeps an unfilled `jr ra; nop` at plain -O2 -- a `-g3` carve-out for it is a mis-split default block (game_libs 343F4 25/25, 2026-09-05 agent-g)
+
+**Symptom.** After a `jr tN` jumptable dispatcher and a run of filled 2/3-word return arms
+(`jr ra; li v0,K`, `lui v0,2; jr ra; addiu v0,v0,K`) the target has ONE block with the value
+insn(s) BEFORE the jr and a bare `nop` in the delay: `lui v0,2; addiu v0,v0,-0x1C14; jr ra; nop`
+(343F4/34448) or `move v0,zero; jr ra; nop` (timproc_b5 87A0/87E8, 2E290's exit). Because plain
+-O2 fills a lone leaf's jr delay, earlier passes concluded "-O2-with-reorder region, this block
+needs `-O2 -g3`" and carved it into its own `TRUNCATE_TEXT` unit (`game_libs_g3_34448.c`,
+`timproc_uso_b5_g3_87E8.c`).
+
+**Fact.** It is the switch's `default:` (the `beqz at` range check lands on it, and so do the
+out-of-range table entries). In a switch-terminated function IDO does NOT delay-fill the final
+return block, while every in-switch `return` arm IS filled. Both spellings
+
+```c
+switch (a0) { case 2: return A; case 3: return B; case 5: return C; case 1: return D;
+              case 8: default: return E; }
+/* or */      case 8: default: break; }  return E;
+```
+
+emit the identical 25 words, the default as `lui; addiu; jr ra; nop`. No `-g3`, no carve-out,
+no TRUNCATE_TEXT gymnastics -- merge the block into the function and delete the unit (Makefile
+OPT_FLAGS/TRUNCATE lines, `tenshoe.ld` line, `objdiff.json` unit, `expected/` .o, host
+TRUNCATE_TEXT grows by the carve-out's size).
+
+**Other levers confirmed on 343F4:** case arms lay out in SOURCE order (2,3,5,1 -> arms at
+34418/34424/34430/3443C); `case 8:` sharing `default:` widens `sltiu` to 8 (the 2E290/6DD14
+lever); the jumptable itself needs the donor splice + `<fn>_rodata` pin
+([docs/MATCHING_WORKFLOW.md#donor-splice-switch-jumptable-rodata-rename](../docs/MATCHING_WORKFLOW.md#donor-splice-switch-jumptable-rodata-rename)).
+Sibling of [#switch-case-max-default-widens-jumptable-range-2e290](#switch-case-max-default-widens-jumptable-range-2e290)
+and [#goto-chain-default-flow-to-final-return-560e4](#goto-chain-default-flow-to-final-return-560e4).
+
+Full case: `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
+(seventeenth case).
