@@ -14111,6 +14111,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [for-loop `blez` guard folds whenever the count is a compile-time constant at the guard (store-forwarded `li` literal included); FP `x / 255.0f` divisor becomes an f2 candidate only with a literal divisor + `(float)N` or int-literal numerators, a var divisor merges with a same-valued numerator var into `div.s f0,f2,f2` (timproc_b5 8FC8 81.3 / 5BF0 88.7 negatives, 2026-09-04 agent-h)](#blez-guard-constant-fold-fp-divisor-candidate-8fc8-5bf0) — _17-spelling standalone guard study + 7-spelling divisor study; both in-tree unchanged._
 - [Two-s-reg constructor kit transfers cross-USO: volatile-homed cascade temp (store-in-delay + reload-every-use signature) + guard extent read off fail-branch targets (arcproc A3C 64.5->87.9, 2026-08-23 agent-h)](#two-s-reg-kit-transfer-volatile-third-a3c)
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
+- [SINGLE-EXIT clamp-in-place vs TWO `return`s: a second `if` whose target is a `mov.s f0,fX; jr ra` return block gets the branch-likely dup transform (`bc1fl` + dup move, jr delay left `nop`); write the clamp IN PLACE on the arg with one `return a` and the exit is `jr ra; mov.s f0,f12` so the test stays a plain `bc1f` onto the `jr` (game_libs 5BBEC, 2026-09-05)](#single-exit-clamp-in-place-vs-two-returns-branch-likely) -- _Target inner test = `bc1f +2; nop` landing ON `jr ra` with the return move in its delay => single exit, no `ret` local (adds moves), no early `return b`._
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
 - [N compare tests sharing ONE `jr ra; move v0,zero` block = a single `||` guard: `if (a != b || c != d) return 0; return 1;` (13w exact); separate `if (!=) return 0;` statements each get their own block (first becomes `beql` + inline return-0, 15w); the `&&`-return-1 spelling flips the last branch to `bne` (3 diffs); named `ret` local = `move v0,v1` form (game_libs 9944, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Count the target's return-0 blocks before choosing separate returns vs `||`. Also: unsigned-char range-test chain with early returns + final `else return 0` (4FB34) puts the preset `move v0,zero` in the last bnez delay; a `ret` local is 13w off._
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
@@ -24148,6 +24149,39 @@ the 13-insn shape as an unreachable cross-function tail-share cap. See
 `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
 for the boundary-merge side.
 
+
+
+<a id="single-exit-clamp-in-place-vs-two-returns-branch-likely"></a>
+## SINGLE-EXIT clamp-in-place vs TWO `return`s: which one keeps the inner test a plain `bc1f` onto `jr ra` (game_libs 5BBEC, 2026-09-05 agent-c)
+
+Target (14 words, clamp `a` into `[-b, b]`, IDO 7.1 -O2 -mips2):
+```
+c.lt.s f14,f12; nop; bc1fl +4; neg.s f0,f14      <- dup of the else block's first insn
+jr ra; mov.s f0,f14                              <- "return b" arm
+neg.s f0,f14 (dead); c.lt.s f12,f0; nop; bc1f +2; nop; mov.s f12,f0
+jr ra; mov.s f0,f12                              <- bc1f lands ON the jr, move in the delay
+```
+| C | words | diff |
+|---|---|---|
+| `if (b < a) { a = b; } else { neg_b = -b; if (a < neg_b) a = neg_b; } return a;` | 14 | **exact** |
+| `if (b < a) return b; neg_b = -b; if (a < neg_b) a = neg_b; return a;` | 14 | inner test `bc1fl +3` + dup `mov.s f0,f12`; exit `mov.s f0,f12; jr ra; nop` (4 words) |
+| same with explicit `else { ... return a; }` | 14 | same 4 |
+| `float ret; ... ret = b / ret = a; return ret;` | 16 | extra `mov.s` shuffles |
+| `return (b < a) ? b : ((a < -b) ? -b : a);` | 18 | value-select form |
+
+Mechanism: with two `return` statements each exit is its own `mov.s f0,fX; jr ra` block.
+The inner `bc1f` onto the second one is eligible for the branch-likely dup-first-insn
+transform (copy `mov.s f0,f12` into the delay, retarget to the `jr`), and once the branch
+enters at `jr ra` the move can no longer be filled into the jr delay -> trailing `nop`.
+With the high clamp written in place (`a = b`) and one `return a`, ugen builds a single exit
+`jr ra; mov.s f0,f12` (fill happens first); its first insn is the `jr`, which cannot be
+duplicated, so the inner test stays `bc1f` + nop landing on the `jr`. The outer test is
+unaffected either way (its target block starts with a duplicable `neg.s`).
+
+Tell: target inner branch = plain `bc1f` landing ON a `jr ra` whose delay holds the return
+move => single exit, clamp in place, no early `return`, no `ret` local. Case write-up:
+`docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
+(ninth case).
 
 
 <a id="ido-last-test-ge-return0-return1-hoists-li-v0-1"></a>
