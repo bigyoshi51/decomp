@@ -37,7 +37,22 @@ Then, in order:
 4. **Worktrees** — `scripts/spin-up-agent.sh 1080` per parallel agent
    (auto-picks the next free letter, runs the `.agent-setup` recipe). Don't
    hand-roll the recipe.
-5. **Build** — `make RUN_CC_CHECK=0 -j8` then
+5. **Python build deps** — the Makefile shells out to a bare `python3`, so the
+   interpreter first on `PATH` needs `crunch64`, `pyelftools` and
+   `splat64[mips]`. A distro `/usr/bin/python3` typically has none of them and
+   no `pip`. Make a venv and put it on `PATH` for builds:
+   ```bash
+   uv venv --python python3 tools/build-venv
+   uv pip install --python tools/build-venv/bin/python crunch64 pyelftools 'splat64[mips]'
+   export PATH="$PWD/tools/build-venv/bin:$PATH"
+   ```
+   `splat64` alone does **not** pull `spimdisasm` — you need the `[mips]` extra.
+6. **Assets** — `make setup` once, to extract `assets/*.bin` from the ROM.
+   Without it the link fails with `cannot find build/assets/header.bin.o`.
+   It is `--modes bin` on purpose and is safe to re-run; never "fix" it into a
+   full `splat split` (see MATCHING_WORKFLOW "make setup must split ONLY bin
+   segments" — a full re-split makes `ld` segfault).
+7. **Build** — `make RUN_CC_CHECK=0 -j8` then
    `make non_matching_objects RUN_CC_CHECK=0 -j8`.
 
 ## 2. The gate — run this before every commit, no exceptions

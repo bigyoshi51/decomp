@@ -10,7 +10,7 @@
 
 > Operational recipes for the matching workflow: NM wraps, fragment merging, objdiff scoring quirks, expected/ baseline care, file split mechanics, build hygiene.
 
-_75 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
+_76 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
 - [Mnemonic-histogram diff triages giant NM bodies in one pass — swc1-deficit + trunc.w.s-surplus = s32-cast float stores; sw-zero at vtable offset = blanked-reloc decoded as 0; check frame size before chasing sp offsets (90CC, agent-f 2026-08-22)](#mnemonic-histogram-giant-fn-triage)
 - [USO expected-side reloc injection (spimdisasm-migration phase 1) is score-NEGATIVE: objdiff 3.7 already fully credits blind literal-0 vs reloc-to-blank; C234/55A0/6808 residuals are structural, NOT reloc rendering (bootup_uso 526-site prototype, agent-f 2026-08-23)](#uso-expected-reloc-injection-negative)
@@ -24,6 +24,7 @@ _75 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Donor-spliced switch jumptables ARE landable: rename donor-local .rodata reloc to <func>_rodata + pin baked %lo in undefined_syms_auto (6DD14 __osDevMgrMain 46.2->100, 2026-07-30)](#donor-splice-switch-jumptable-rodata-rename) — _30AF4 "external jumptable permanent cap" holds only for in-unit compiles; for REPLACE_FUNC_BODY donors the table already ships in the USO data segment. Also: 74 entries -> 75._
 - [GOTCHA: disasm-func.py can return a wrong/stale body — expected/<unit>.c.o is the only ground truth (B154 2026-07-23)](#disasm-func-stale-vs-expected-obj) — _script gave a 123-insn frame-176 shape diffing ~identical to the NM build while objdiff said 58%; real target in expected/.o was 133-insn frame-168 at a different address._
 
+- [`make setup` must never run a FULL `splat split` — a re-split emits 41 of undefined_syms_auto.txt's 3395 lines and mips-linux-gnu-ld SEGFAULTS (1080, new-machine bring-up 2026-09-05)](#make-setup-modes-bin-only) — _asm/, tenshoe.ld, include_asm.h and the auto-sym files are curated source of truth here, not regenerable splat output. Fix: `--modes bin` + `create_undefined_{syms,funcs}_auto: False`. Also: 75 entries -> 76._
 ## Quick reference by sub-topic
 
 ### NM wrap mechanics
@@ -10139,3 +10140,59 @@ byte-identical); ROM unaffected (expected/ is measurement-only).
   which this re-confirms from the opposite direction: 2026-05-31 measured the
   build-side flip as zero-gain; 2026-08-23 measured the expected-side injection
   as slightly negative).
+
+
+<a id="make-setup-modes-bin-only"></a>
+## `make setup` must split ONLY bin segments — a full `splat split` breaks the link (2026-09-05)
+
+Discovered bringing 1080 up on a second machine, where `make setup` had to run
+for the first time (it can only run once a user-supplied `baserom.z64` is in
+place, so a long-lived checkout never re-runs it).
+
+**The trap.** `setup` used to be `python3 -m splat split tenshoe.yaml`. That
+regenerates *everything* splat knows how to emit — but this project stopped
+treating splat output as regenerable a long time ago. `asm/`, `tenshoe.ld`,
+`include/include_asm.h` and `undefined_syms_auto.txt` are **curated source of
+truth** (that is what `/refine-splat` and `landwip/` have been editing). A full
+re-split silently discards that curation: 402 modified `asm/` files, a rewritten
+`tenshoe.ld`, and stray `src/kernel.c` / `src/bootup_uso.c`.
+
+**It is not cosmetic — it breaks the build.** The Makefile links with
+`-T undefined_syms_auto.txt`. A fresh splat run emits **41 lines where the
+committed file has 3395**, and `mips-linux-gnu-ld` then dies:
+
+```
+warning: dot moved backwards before `.arcproc_uso_240_jtbl'
+mips-linux-gnu-ld: Segmentation fault (core dumped)
+```
+
+A segfault, not an "undefined reference" — so the failure does not name the
+cause and reads like a broken toolchain.
+
+**Why CI never caught it.** `.github/workflows/build.yml` builds `objects` /
+`non_matching_objects` only. It never installs splat and never runs `make setup`
+(no baserom in CI). The whole asset path is local-only.
+
+**The fix** (landed in 1080-decomp `82514a273`):
+
+- `Makefile`: `python3 -m splat split tenshoe.yaml --modes bin`. The 111 `bin`
+  segments produce `assets/*.bin`, which is the *only* ROM-derived build input
+  not tracked in git (`assets/*.bin` is gitignored). Nothing else is emitted.
+- `tenshoe.yaml`: `create_undefined_syms_auto: False` +
+  `create_undefined_funcs_auto: False` — splat writes those two regardless of
+  `--modes`, so restricting the mode alone is not enough.
+
+Verified: wiping `assets/*.bin`, running `make setup`, and rebuilding gives 111
+assets md5-identical to the known-good set and a ROM byte-identical to
+`baserom.z64`; a second `make setup` leaves `git status` clean. Idempotent.
+
+**Gotcha for the argparse.** `--modes` is `nargs="+"`, so
+`splat split --modes bin tenshoe.yaml` swallows the config path and errors with
+"the following arguments are required: config". Put the config first.
+
+**Incidental.** 8 files that predated the split (`game_uso_block_1.bin`,
+`kernel.data.bin`, `timproc_uso_block_{1,3,5}.bin`, ...) use a different naming
+convention from splat's and are *not* produced by it. The ROM is byte-identical
+without them — stale leftovers, not inputs. Separately,
+`assets/game_libs_{pre,post}.bin` are force-added to git despite the ignore
+rule; splat regenerates them identically.
