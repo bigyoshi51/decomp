@@ -69,6 +69,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [A {leaf-branch-past-end cap} immediately followed by a {caller-set-$vN cap} is OFTEN a single mis-split function — RECHECK such adjacent cap pairs](#feedback-adjacent-branchpastend-callerset-cap-pair-is-misplit) — _Splat's jr-ra heuristic over-splits a function at an EARLY-RETURN `jr ra` (mid-body `if(x)return 0;`) when a `bnel`/`beq` branches OVER that early return into the rest of the body. The two halves then look like two unrelated caps in isolation: the predecessor is a "leaf-branch-past-end" (its branch targets past its truncated end) and the successor is a "caller-set $vN cap" (it reads $vN uninitialized — but $vN was set in the predecessor, e.g. `lw v1,0(a0)`). Neither is a real cap. RECHECK heuristic: any NM-wrap/comment labeled caller-set-$v0/$v1/$tN whose IMMEDIATE PREDECESSOR is labeled leaf-branch-past-end (or vice-versa) — check if the predecessor's branch lands inside the successor and sets that very register; if so, merge (per [[feedback-branch-past-end-unshared-epilogue-merge]] mechanics) and decompile as ONE function. Verified 2026-05-28 byte-exact: game_libs_func_0002A8C4 (+0002A8D8, dlist node-detach, 16/16) — both were documented caps. Tail subtlety: the detach decremented `a0->count` but returned `v1->count` (different objects) — the cross-object access is what forces IDO's trailing store-then-reload (no volatile needed; same-object would CSE)._
 - [A "caller-set `$t6`" cap preceded by a tiny NO-`jr ra` orphan .s is a HOISTED PROLOGUE mis-split — check for a libultra identity before accepting the cap](#feedback-callerset-t6-orphan-head-is-hoisted-prologue) — _gl_func_0006C2AC sat 5 rounds as a documented "caller-set $t6 == 0xA6000000 gate cap"; the 0x8 orphan game_libs_func_0006C2A4 right before it (`lui t6; lw t6,0xC(t6)`, no jr ra) was the function's own gate load, hoisted above `addiu sp` by IDO 5.3 -O1's scheduler. Merged = libultra osDriveRomInit verbatim (0xA6000000 = PHYS_TO_K1(PI_DOM1_ADDR1)), 54/54 via the 6F088 osLeoDiskInit donor recipe. 2026-07-17. UPDATE 2026-07-23: head-store reporter family (1FF28/1FFAC/20030/200F4) 4-for-4 to fuzzy-100 by merge + `*(D+X+4)=*(D+X)` stash re-decode, no donor — see SWEEP block at section end for recipe + remaining orphan queue. Wave 2: the orphan generalizes to range-check/loop-bound loads (23F98 sltiu-gate 70.5→74.4, 1FBCC blez-bound 53.2→fuzzy-100); orphan addressing form = spelling oracle (lui+addiu → array-extern held base, lui-only folded → scalar &D+off)._
 - [Hoisted-prologue mis-split also occurs in REVERSE: the orphan word sits at the PARENT's tail (inside its .s), belonging to the NEXT function — move the boundary; label shift is reloc-safe iff nothing references the successor](#hoisted-prologue-reverse-tail-orphan-65494) — _13th instance (65494/659D0, 2026-07-30, agent-h): last `.word` of gl_func_00065494.s (`lw t6,924(a0)`) fed the successor's `sw t6,100(sp)` — 659D0's first insn hoisted above its `addiu sp`, splat attached it to the parent's range. Fix: move the word into the successor's .s head, adjust both `nonmatching` sizes (0x53C→0x538 / 0x170→0x174); the successor's glabel shifts -4 — safe ONLY after grepping all src + `objdump -r` on every expected/.o for references. ROM bytes unchanged (raw-word concat identical); force-touch the .c (make does NOT track .s deps of INCLUDE_ASM) then refresh expected/.o. Same tick's reconstruction levers (see full section): reverse-decl-order local layout with dead-local pads; outparam-block-as-one-struct (callee-write invisibility); `char *it[2]` vs scalarized struct; `char * volatile` for a loop-invariant arg slot. 42.3→79.5; residual = uniform +72 sp-offset shift (unexplained ~76B reservation below locals) + s8-vs-slot coloring._
+- [Hoisted-head orphan whose "alias entry" is the WORD BEFORE every caller's jal target: the orphan is the function's own `n` copy, the callers' address is a mid-function alt-entry — merge, pin the caller address in undefined_syms_auto.txt, retire the post-hoist unit](#hoisted-head-orphan-callers-jal-post-hoist-word-66ec) — _kernel func_800066EC (1 word, `or a3,a2,zero`) sat since 2026-05 as a "1-insn alias entry, not reproducible from C"; kernel_048.c reproduced only func_800066F0 (the post-hoist 12 words) via a fake 4th arg `ctr` + `char pad[4]`. Merged 0x34 = `while (n--) *dst++ = *src++;` at -O1, 13/13 in BOTH IDO 7.1 and 5.3 (so the hoist is not 5.3-only). Tell: zero `jal` to the orphan symbol, every caller jal's the word after it. 2026-09-05, agent-g._
 - [split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`](#feedback-split-fragments-clobbers-prior-merge) — _When the bundle you split has a successor that was previously merged via `merge-fragments` (e.g. `game_libs_func_0003AA5C` had absorbed `0003AC50` via fca252b8, growing size 0x1F4 → 0x200), recursive split-fragments can re-split it back, leaving size 0x1F4 + a separate 0xC stub for AC50. Combined with TRUNCATE_TEXT this breaks objdiff with "Symbol data out of bounds: 0xN..0xM". Diagnostic: `objdiff-cli report generate` fails immediately after a split commit. Fix: revert the split commit, run `make expected` to refresh expected/.o. Before recursing split-fragments, run `git log -3 -- <successor>.s` for each newly-split-off — if a `Merge fragment` commit appears, stop._
 - [split-fragments.py over-splits a single function that has an internal early-return `jr ra` — re-split ONCE, don't recurse blindly](#feedback-split-fragments-over-splits-on-internal-early-return) — _split-fragments.py boundaries on every `jr ra` (03E00008). A function with an early-return (e.g. `bnel`/`beq` to a shared epilogue with a mid-body `jr ra`) has 2+ `jr ra` and gets wrongly cut. Diagnostic: after a recursive split, disassemble the split-off piece — if a branch in the PREDECESSOR (`bnel`/`bne`/`beq`) targets an address INSIDE the split-off piece, or both share a trailing `jr ra` epilogue, they are ONE function. Fix: `git checkout -- <bundle>.s src/.../*.c`, `rm` the wrongly-split `.s` files, then run split-fragments.py ONCE per real boundary (don't recurse past a piece whose predecessor branches into it). Verified 2026-05-17: titproc_uso_func_000015F4 bundle — naive recurse made 15F4/16B8/16E8 (jr=3), but 16B8's `bnel 0x16BC→0x16EC` jumps into "16E8" → correct is 15F4(0xC4)+16B8(0x60, jr=2 internal early-return)._
 - [split-fragments.py auto-appends a duplicate `INCLUDE_ASM(successor)` even when the successor already has a C wrap in the same .c file](#feedback-split-fragments-duplicate-include-asm-when-successor-already-wrapped) — _The script's "add INCLUDE_ASM for the new symbol after the parent" step doesn't grep for an existing wrap/def of the split-off name. If `void <successor>(...)` is already defined a few lines down (because splat had it as a separate symbol all along — the parent's size was just over-extended), the auto-add produces a duplicate definition → link error. Fix: after running split-fragments, `grep -c "<successor>" src/<seg>/<file>.c` — if >1 hit and one is a real def, manually delete the auto-added `INCLUDE_ASM(<successor>)` from the parent's `#else` branch. Verified 2026-05-27 on h2hproc_uso_func_000009F8 → 00000A80 split: A80 already had `void h2hproc_uso_func_00000A80(int *a0) { *(int*)(a0+0x504) = 0; }` below; the auto-added INCLUDE_ASM conflicted._
@@ -11207,3 +11208,53 @@ at -O0). The same-fingerprint sibling `timproc_uso_b5_func_00001CF0` -> `_00001D
 the -O2 flavour (filled delay slots, `move v0,zero` in the bne slot): merge + non-null-arm-first C was
 byte-exact at plain -O2 with no carve -- see the SIXTH CASE under
 [#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block).
+
+## Hoisted-head orphan whose "alias entry" is the word before every caller's jal target (kernel 66EC/66F0)
+<a name="hoisted-head-orphan-callers-jal-post-hoist-word-66ec"></a>
+
+**Symptom.** A 1-word `.s` with a single register copy (`or $a3, $a2, $zero`) and no
+`jr ra`, immediately followed by a function whose loop guard is that register. Its
+source comment called it a "1-insn alias entry point that falls through into the next
+function -- callers either jal the alias or jal the body; not reproducible from
+standalone C; INCLUDE_ASM stays." The successor unit (kernel_048.c) was "exact" only by
+declaring a fake 4th parameter for the guard register (`(dst, src, n, ctr)`) plus
+`char pad[4]` for the frame.
+
+**Check that kills the alias theory in one grep:** `grep -rn "jal.*func_800066EC" asm/`
+returns nothing. Every one of the 10 callers jal's `func_800066F0`, the word AFTER the
+orphan. An alias entry nobody uses is not an alias entry; it is a hoisted head
+(`#feedback-callerset-t6-orphan-head-is-hoisted-prologue`). IDO -O1 scheduled the
+function's first statement (`c = n`) above `addiu sp` and splat cut there.
+
+**Fix (13/13, BYTE-EXACT, ROM byte-identical):**
+```c
+void func_800066EC(u8 *dst, u8 *src, s32 n) {
+    while (n--) {
+        *dst++ = *src++;
+    }
+}
+```
+compiled at `-O1` (kernel default flags). `while (n--)` is load-bearing: `for (; n-- != 0;)`
+turns the copy into `sltu a3,zero,a2`; a named `c = n; while (c) { n--; ...; c = n; }`
+spills to the stack. Identical output from IDO 7.1 and IDO 5.3 -O1, so this hoist is
+NOT a 5.3-only artifact as earlier entries implied -- 7.1 -O1 does it for a leading
+register copy too.
+
+**Wiring.** Merged `.s` (0x34) replaces the orphan `.s`; the successor `.s`, its
+`.c`, its `expected/*.o`, its objdiff.json unit, its `tenshoe.ld` slot and Makefile
+OPT line are removed; the merged unit's `TRUNCATE_TEXT` goes 0x4 -> 0x34 (IDO pads a
+0x34 `.text` to 0x40 and the ROM is contiguous at 0x80006720). Callers' jal target is
+pinned `func_800066F0 = 0x800066F0;` in undefined_syms_auto.txt -- same mechanism as
+`func_800066D0` inside the C-compiled func_80006698. The successor's episode
+(func_800066F0.json) is deleted: its C is no longer on the build path. Net exact count
+unchanged (-66F0 +66EC), +4 code bytes, -1 unit.
+
+**Why the callers land mid-function.** They pass `(buf, size, RDB_TYPE_GtoH_*)` and
+accumulate the return -- the `__osRdbSend` contract -- into a byte copy that reads `size`
+as a pointer. This is dead rdb plumbing in the retail kernel; the link resolved
+`__osRdbSend` to the post-hoist word. Do not "fix" the callers' C to call 66EC; they
+really do jal 66F0. Record it and move on.
+
+**Generalisation for the orphan queue:** when a tiny no-`jr ra` orphan is
+documented as an "alias/alt entry", grep for jal's TO THE ORPHAN. Zero hits = hoisted
+head; merge it. Hits = a real alt-entry; keep the `alabel` convention.
