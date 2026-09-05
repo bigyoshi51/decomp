@@ -14132,6 +14132,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
 - [Per-site `&D` alias budget = one alias per CALL-FREE same-symbol pair: IDO holds a `lui v0; addiu v0` base only for two accesses to the same symbol with no call between them; accesses on opposite sides of a call re-`lui` by themselves, `volatile` does not split a pair (game_libs 349E0 29/29 + 33444 27/27 EXACT, 2026-09-05 agent-g)](#alias-budget-call-free-same-symbol-pair-349e0) -- _Target with every access folded under its own lui: `flag |= 4` off one symbol = held base (13 diffs); `D_a = D | 4; ... D = D_a & ~4;` + ONE alias shared by three call-site args = exact. Don't alias per access, alias per call-free pair._
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
+- [Absolute-constant address casts (`*(int*)0x3B8FC`) CSE into one `lui;ori` register; the target's per-access `lui at,%hi; sb %lo(at)` chain means a SYMBOL (base-0 USO data + offset) -- per-site aliases may carry a NONZERO absolute (`gl_ref_0003B8F4 = 0x0003B8F4`); store + address-value on one symbol does NOT CSE, two stores on one symbol DO (held base + LIFO store order) (gl_func_00034A78 63->91%, 2026-09-05 agent-g)](#constant-address-cast-vs-symbol-form-per-access-lui-at-34a78) -- _Tell: build 3 words SHORT with `lui 3; ori 0xb8fc` reused vs target `lui at,4` before every store. Fix = extern per address. Open residual: target puts an adjacent same-hi byte pair `li 13; li 2; sb F7(at); sb F6(at)` under ONE `lui at`; every same-symbol C form (array/struct/volatile/TU-defined/static/short-cast) gives the LIFO pair but materializes `lui v0; addiu v0`; IDO never splits an even-offset short (pack(1) even = `sh`, odd = `sb;srl;sb`)._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -24719,3 +24720,54 @@ Also: a `while ((u32)cb() < 480) {}` with the call INSIDE the condition emits ID
 form exactly -- call; sltiu; beqz exit; [loop: call; sltiu; bnez loop] -- so a preceding bare
 `cb();` plus this loop is `jal; nop; jal; nop; sltiu; beqz`, NOT `v = cb(); ... while (v < 480) v = cb();`
 (that spills the first return to the frame: 0x30 vs 0x18).
+
+<a id="constant-address-cast-vs-symbol-form-per-access-lui-at-34a78"></a>
+## Absolute-constant address casts CSE into one register; per-access `lui at` chains mean a symbol (per-site aliases may be non-zero absolutes) -- gl_func_00034A78 63->91% (2026-09-05 agent-g)
+
+**Tell.** Target body has a run of stores each preceded by its own `lui at,0x4`
+(`sb t1,-18188(at); lui at,4; sw v1,-18180(at); lui at,4; ...`) and a load
+`lui t0,4; lw t0,-18180(t0)`; the build is 3 words SHORT and instead holds
+`lui a3,3; ori a3,a3,0xb8fc` in a register and reuses it (`lw t8,0(a3)`,
+`sw a2,0(a3)`), with `lui/ori` for the `la a0` args too. The old wrap wrote the
+block as `*(int *)0x0003B8FC`, `*(signed char *)0x0003B8F4 = 3`, ... --
+compile-time-constant addresses, which uopt treats as an integer constant:
+materialized once with `lui;ori` and CSE'd across every use. The target's
+`lui at,%hi; op %lo(at)` per access is the assembler-macro form of a SYMBOL
+reference (`sb t1, SYM`), so the original wrote named globals (or fields of a
+global struct). In the raw-word USO units the "address" 0x3B8xx is a base-0 data
+symbol + offset, and `undefined_syms_auto.txt` per-site aliases may carry the
+absolute directly: `gl_ref_0003B8F4 = 0x0003B8F4;` gives exactly
+`lui at,4; sb t1,-18188(at)` (hi/lo split with the sign carry).
+
+**Alias budget observed (extends `#alias-budget-call-free-same-symbol-pair-349e0`).**
+- Record pointer read twice with a store between (`*(R**)&D` at +0x8C and +0x90):
+  ONE alias -- adjacent same-symbol reads hold the `lui v0; addiu v0` base and
+  re-load through it (`lw t7,0(v0) ... lw t9,0(v0)`), which is what the target
+  does. The two STORED `&D` values need their own aliases (`lui t6; addiu t6` /
+  `lui t8; addiu t8`), else `sw v1,140(t6); sw v1,144(t7)` off the held base.
+- Gate load + store of the same word across a branch (`if (X != K) { ... X = K; }`):
+  two aliases, else the lo folds under one base.
+- A store and an ADDRESS-VALUE of the same symbol (`q.count = 0;
+  init(q.buf, 96)`) do NOT CSE -- `lui at; sw zero,lo(at)` plus a separate
+  `lui a0; addiu a0` -- so struct-typing those two together is free.
+- Two STORES to one symbol (array `p[0]=13; p[1]=2`, struct `.a/.b`, volatile,
+  TU-defined or static, `((s8*)&hw)[i]`) ALWAYS materialize `lui v0; addiu v0`
+  hoisted above the branch and emit the pair LIFO (`li t4,13; li t5,2;
+  sb t5,1(v0); sb t4,0(v0)`).
+
+**Open residual (the 91% floor).** The target has that same LIFO pair but under
+ONE `lui at`: `lui at,4; li t4,13; li t5,2; sb t5,-18185(at); sb t4,-18186(at)`,
+i.e. two symbol-relative byte stores IDO grouped without materializing a base;
+and `addiu a0,a0,0xB904` scheduled ahead of `sw zero,0xB900(at)`. Two separate
+scalar externs give `lui;li;sb;lui;li;sb` (5 insns off, +1 word). Not it:
+`#pragma pack(1)` (even offset = `sh`; odd offset = `sb; srl 8; sb` of the
+16-bit value, no folded bytes), `short` symbol (`sh`), locals `x=13,y=2`,
+`F7 = F6 - 11`, -O3, -O1, -mips1, -O2 -g3, volatile zero-store, pointer-typed
+zero-store. Next: uopt dump (`-Wo,-zdbug:6`) on the pair to see which u-code
+shape keeps `STR sym+off` unmaterialized; suspect an aggregate/initializer form.
+
+**Gate gotcha re-hit.** Growing the NM body +16 bytes pushed post0b's tail
+symbol `game_libs_func_00062F08` (NM offset 0x2d554, expected size 0x50) past
+`NON_MATCHING_TEXT_CLIP_KEEP_ALIGN := 0x2d584` -> sentinel read 60.0. Clip =
+tail offset + full expected size (0x2d5a4); `rm` the NM `.o` before re-gating
+(docs/HANDOFF_NEW_MACHINE.md section 5).
