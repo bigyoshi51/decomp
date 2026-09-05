@@ -161,6 +161,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Cross-function tail-share — beql/b targets an insn inside the ADJACENT function to reuse its `jr ra` return code](#feedback-cross-function-tail-share) — _If a function's branch target computes to an address PAST its own declared end and lands inside the next function's body, it's using the adjacent function's return-code tail for code-size (or because the compiler laid…
 - [cross-function tail-share via beql to sibling body produces unmatchable standalone signature](#feedback-cross-function-tail-share-unmatchable-standalone) — When function A's beql lands inside function B's body (e.g.
 - [RETRACTION: `beql` landing at NEXT-SYMBOL+4 whose first insn equals the beql delay slot = IDO branch-likely dup-first-insn idiom, a MIS-SPLIT null block, not a tail-share cap — merge + non-null arm FIRST (game_uso 7A98+7ABC exact)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _The target block's first insn is copied into the beql delay slot and the branch retargets to block+4; the USO splitter cuts at the preceding `jr ra`. Merge the .s, write `if (nonnull) {...} else {0}` with a named single-return local._
+- [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
 - [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — _When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.c at -O1, fragments in kernel_018.c at -O2 because they're across an opt-level…
 - [When the full N-way fragment merge is cross-file-blocked, a same-.c-file partial subset merge IS still safe](#feedback-merge-fragments-partial-safe-subset) — _feedback_merge_fragments_blocked_across_o_files.md says "don't merge" when parent + fragments span different .c files.
@@ -10283,6 +10284,58 @@ last `beql`/`bnel` delay-slot word and whose address is that branch's target
 minus 4. Each is a merge + arm-order fix, not a cap. Do NOT trust the
 "tail-share cap" verdict in `src/` comments without re-checking this
 fingerprint first.
+
+**Second worked case (2026-09-05, agent-c): game_libs_func_00009A50 — a FIVE-deep
+chain + a "matched empty function".** `9A50 (7w) -> 9A6C (5w) -> 9A80 (7w) ->
+9A9C (5w) -> 9AB0 (8w) -> 9AD0 (2w)`: every successor's first word equals the
+preceding `beql`'s delay slot and each `beql` targets successor+4; the final
+`bnez at,+3` lands on 9AD0 = `jr ra; nop`, which had been "matched" as
+`void game_libs_func_00009AD0(void) {}` (with an episode) — it was the
+function's own `return 1` block. All six carried "leaf-branch-past-end CAP"
+notes. Merged (0x88, 34 insns), exact on first in-tree build:
+```c
+int game_libs_func_00009A50(unsigned char *a0, unsigned char *a1) {
+    if (a0[5] < a1[0]) return 0;
+    if (a1[0] < a0[5]) return 1;
+    if (a0[6] < a1[1]) return 0;
+    if (a1[1] < a0[6]) return 1;
+    if (a1[2] >= a0[7]) return 0;   /* NOT `if (a1[2] < a0[7]) return 1; return 0;` */
+    return 1;
+}
+```
+(the last-test shape is load-bearing — see `docs/IDO_CODEGEN.md`
+`#ido-last-test-ge-return0-return1-hoists-li-v0-1`). Delete the merged-away
+stub's episode (`episodes/game_libs_func_00009AD0.json`) — decomp.dev scores
+bytes, not symbol count.
+
+**Scanner:** `scripts/find-beql-dup-misplits.py` (project `scripts/`) prints
+every adjacent A→B pair with the fingerprint (`DUP-FIRST-INSN`), `--all` for
+any branch into the next symbol. Remaining queue at 2026-09-05 (all game_libs
+unless noted, all INCLUDE_ASM or NM): 27300+27348, 28E28+28E6C,
+29D08+29FDC+29FFC, 3AA5C+3AC50, 5BBEC+5BC04(matched stub!), 5CA78+5CAEC+5CB5C,
+624EC+62524, 66620+66650, 67FD8+68004, 453D8+45418, 57194+571E4,
+timproc_b5 88A0+8940(matched g3 stub). Note 5CAEC's six `beql`s all land on
+5CB5C+4 — a shared `return 0` block, same idiom, not a tail-share.
+
+**expected/ refresh GOTCHA for units with pinned symbol sizes:** do NOT `cp
+build/src/<unit>.c.o expected/…` in a unit whose Makefile has
+`NON_MATCHING_TEXT_CLIP_KEEP_ALIGN … sym=0xNN` pins (game_libs_tail:
+`gl_func_0000EBC8=0x2c`, `gl_func_0000C5B0=0x8c`). The C-built object carries
+IDO's trailing jr-delay nop in those symbols (EBC8 0x30 vs pinned 0x2c) AND
+`jal 0`+reloc call sites; the sentinel EBC8 dropped 100→91.7 and the unit's
+`.text` diverged from the old baseline at a jal word. The committed baseline is
+the PURE-INCLUDE_ASM build. Single-unit recipe (avoids the whole-tree
+`make clean` + serial rebuild of `refresh-expected-baseline.py`):
+```python
+spec=importlib.util.spec_from_file_location("reb","scripts/refresh-expected-baseline.py")
+reb=importlib.util.module_from_spec(spec); spec.loader.exec_module(reb)
+new,n=reb.strip_decomp_in_file(open(p).read(), reb.func_map(), None); open(p,"w").write(new)
+```
+then `rm build/src/<unit>.c.o && make build/src/<unit>.c.o RUN_CC_CHECK=0
+EXPECTED_BASELINE=1`, `cp` that to `expected/`, restore the `.c`, `rm` the
+`.o` again and rebuild normally. Verify with `objcopy -O binary -j .text` that
+the new baseline's `.text` is byte-identical to the old one and `readelf -sW`
+differs only in the merged symbols.
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 

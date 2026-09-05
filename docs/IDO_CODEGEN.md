@@ -14032,7 +14032,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [-O1 LOCAL-DECL order pins stack slots in REVERSE (last-declared = lowest slot); use it to fix a frame-SIZE diff, not just naming — plus `register` flags -> s0/s1 + accumulator reuse (kernel func_80006790 ~84.5%->byte-exact)](#feedback-ido-o1-decl-order-reverse-slot-pin) — _An -O1 rmon handler near-miss whose frame was 8-16 bytes too big with a scrambled/reversed local slot layout: at -O1 IDO assigns sp-resident locals to stack slots in REVERSE declaration order (the LAST-declared spilled local gets the LOWEST offset). When the target slot order low->high is A,B,C,...,decl them HIGH->LOW (`...; C; B; A;`) — this both reorders the slots AND can shrink the frame to match (here decl `p; sp38; sp34; sp30(arg0); sp2C(ub); addr;` produced target order addr=0x28,ub=0x2C,arg0=0x30,sp34=0x34,sp38=0x38,p=0x3C, frame 0x50->0x40). Combine with: (1) `register s32 flagA, flagB;` to force two short-lived if/else validity flags into callee-saved s0/s1 (target saves both) — and route a later loop accumulator through `flagA = call(); counter += flagA;` so it REUSES s0 after the flags die instead of promoting a 3rd s-reg (frame stays tight); (2) write a commutative `addr+len` SP-window bound as `FW(0x14)+FW(0x10)` (load-order operand) to flip IDO's addu operand order; (3) order `buf = len+0x10;` BEFORE `p = &buf;` so the len reload fills the token-loop load-delay slot instead of the p-store; (4) INLINE field reads (drop named `temp` locals that live across a `||` short-circuit branch) to kill spurious cross-branch spills. Took func_80006790 ~84.5%->byte-exact (49->14->6->0 diffs), LANDED full-ROM cmp-clean 2026-06-23 agent-b. Permuter floored here (base score 285, random mode never beat it) — these are all source-shapeable, do them by hand. Sibling of the line-13458 statement-reorder levers; this adds the decl-order=reverse-slot rule + register-flag/accumulator-reuse._
 - [Thread the live arg-register variable into a tail call to suppress a spurious `move a1,zero` and reproduce the caller-saved save/restore pair (game_uso_func_00006CF0, 2026-06-23, NM 77.75->82.40)](#thread-the-live-arg-register-variable-into-a-tail-call-to-suppress-a-spurious-move-a1zero-and-reproduce-the-caller-saved-saverestore-pair-game_uso_func_00006cf0-2026-06-23-nm-7775-8240) — _A dispatch flag (`register int flag`) computed once early, passed as a1 to two mutually-exclusive mid-body calls AND needed by the tail call: pass the SAME variable to the tail (`tail_fn(a0, flag)`), not a fresh `0`. a1 already holds it → tail emits only `move a0,a2; jal` (no new `li/move a1`), AND the allocator now keeps flag live across each mid-call, reproducing the target's a1+a2 spill/restore pair around every jal. Passing `0` instead emits a trailing `move a1,zero` and drops the a1-spill (~7pp cost). Mid-call to a 1-arg-defined fn that target passes 2 args: use implicit K&R `void fn();` decl so the call stays a direct jal+R_MIPS_26 (a fn-ptr cast → lui/jalr). Residual = pure IDO scheduling/coloring, left NM._
 - [Natural both-store RMW pair (`field++; field &= K;`) beats the temp+volatile lever kit — the folded reload burns a temp-rotation slot (andi t9-reuse -> fresh t5) (game_libs_func_00031784 25/27->27/27 EXACT)](#natural-both-store-rmw-pair-beats-the-tempvolatile-lever-kit-the-folded-reload-burns-a-temp-rotation-slot-andi-t9-reuse---fresh-t5-2026-07-02) — _When the only residual is the RESULT reg of the 2nd statement of a two-statement RMW on one field (fresh $t wanted, reuse built) and your C routes it through `t = f + (long long)1; volatile-store; (t&K)&0xFFFF`: write BOTH statements naturally on the field (`a0[N]=a0[N]+1; a0[N]=a0[N]&0xF;`). The 2nd statement's reload keeps store 1 live (no volatile) and CSE-folds onto t3 AFTER dead-store elim — the folded reload candidate consumes the t4 rotation slot so the andi lands t5; load/incr come out fresh t2/t3 for free. Target keeping both stores at -O2 IS the tell the original re-read the field. 96-cell add-form x mask-form sweep proved no expression tweak moves the andi in the temp form._
-- [-O0 scalar-vs-deref ==/!= eval order is a toolchain-binary gap: 7.1/5.3 always deref-first; two 1080 USO sites are scalar-first (bootup 10FEC/10540 cap) + assignment-operand-hoist `+` lever + NOLOAD jumptable pin](#feedback-ido-o0-eq-eval-order-gap) — _cfe canonicalizes scalar ==/!= deref so the deref side always evaluates first (both compiler versions, ~25 spellings + flag matrix, all deref-first; `<`/`>` stay left-first). Value-first `lw HOME;lw HOME;lw K(t);beq` blocks are unreachable = cap; FIFO t0/t1 swaps downstream are knock-ons of the one block. Lever: in `A + B` where B contains an embedded assignment, put A FIRST or cfe snapshots the assignment value into an s-reg. USO C-switch jumptables: pin unit .rodata at the module table offset with a NOLOAD ld section._
+- [-O0 scalar-vs-deref ==/!= eval order: RETRACTED as cap 2026-09-05 — RIGHT-side comma `deref != (0, scalar)` flips cfe to scalar-first in a plain t-reg (bootup 10FEC 415->439 EXACT); left-side `(0, scalar) != deref` s-reg-promotes (wrong) + assignment-operand-hoist `+` lever + NOLOAD jumptable pin](#feedback-ido-o0-eq-eval-order-gap) — _cfe canonicalizes plain scalar ==/!= deref so the deref side evaluates first (both compiler versions, ~25 plain spellings + flag matrix). Recognition `lw HOME;lw HOME;lw K(t);beq` value-first block = write the compare as `<deref> != (0, <scalar>)` (comma on the RIGHT, deref on the LEFT); the downstream t0/t1 FIFO swaps collapse with it. Lever: in `A + B` where B contains an embedded assignment, put A FIRST or cfe snapshots the assignment value into an s-reg. USO C-switch jumptables: pin unit .rodata at the module table offset with a NOLOAD ld section._
 - [Char-scanner kit: `p=str;str++;c=*p` increment-between kills load-PRE + offset-fold; repeated `*p` = the CSE-temp/var pair (NOT two vars); NAMED int consts win beq rs slot + t0/t1/t2; goto-loop + early sign-continue keeps bnel dead-dup (game_libs 67D8C 92/92 EXACT 2026-07-07)](#feedback-ido-char-scanner-kit-67d8c) — _Merged strtol-lite (hex+decimal). FOUR coupled levers for byte-scanner loops: (1) cursor idiom `p = str; str++; c = *p;` — increment BETWEEN copy and load keeps `move a1,a0` alive; `p=str;c=*p;str++` lets uopt fold to `lbu N(a0)`+combined addiu AND load-PRE the loop-head char into entry (back-edge reload insertion, `lbu` into a candidate not a temp). (2) When target tests some ranges on \$a2 and others on \$a3 with `move a3,a2` in a branch delay: that is repeated `*p` (CSE temp \$a2) + ONE named `c = *p` (\$a3) — writing two vars c/c2 coalesces them (a3 freed, const steals it, t-file cascades). (3) `beq t0,a3`/`multu v1,t2` with const-side-first: consts must be NAMED int locals (`minus='-'; dot='.'; ten=10;`) — they color t0/t1/t2 in first-use order, win the rs slot, and `value *= ten` emits multu+mflo (literal 10 strength-reduces); literal compares emit var-first regardless of source operand order (8-perm sweep). (4) infinite scan loop as `dec: ... goto dec;` with EARLY `if (minus == c) { sign=1; goto dec; }` — reproduces bnel + orphaned dead `lbu` dup; if/else form loses the likely-conversion; while/for forms invite the PRE. Also: 29w sibling 67B04 cracked by dead in-guard `q = arg1;` (flips p/q↔c0 coalesce, legalizes guard-delay fill, kills beqzl+sltu dup) + `int r = 0;` dead init (r colors v1 not a0)._
 - [7BC kit at 32 expansions w/ K&R callee: memcpy-form t-carrier load-bearing, ||-fallback must compare s1, per-site alias x34, val-dependent store order; 2-sw eval-order + t@uopt-slot residual (game_uso_func_0000C48C 67.09->99.74, 2026-07-17 agent-g)](#c48c-struct-arg-32x-memcpy-form) — _32x sw a2,8(sp) delay homes = struct-by-value; explicit shared `t=u` carrier required even for unprototyped callee (direct-u drops the 0(s2) staging hop); `s1 != -OFF || (obj=alloc())` keeps li/bne-s1 + stage-skip beqz; param-as-p homes at arg slot; 34 base-0 aliases bust template-addr spill-CSE; zero-val ctor stages store 0xC,0x14,0x10 vs nonzero 0xC,0x10,0x14._
 - [ptr+int addu operand-order INVERTS vs spelling: `(char*)p + off` -> `addu rd,OFF,p`, `off + (char*)p` -> `addu rd,p,OFF`; loop-array element re-spelled `self[1][i]` per use (never s-reg'd across calls) + de-named owner CSE temp = the no-s3 constructor-loop shape (gl_func_000683D4 77.46->99.44, 2026-07-17 agent-h)](#addu-order-respell-element-683d4) — _Naming the element made an s3 web (wrong saves/frame); the original reloads lw t?,4(s1)+addu+lw at EVERY use because calls kill the array memory. Named parent colors v0 only when the owner ptr (self[3]) is a DE-NAMED CSE temp (colors v1, feeds the bnezl-annulled delay reload); naming both flips v0/v1. Residual class: second vtable temp a1-vs-v0, immune to naming/de-naming/decl-order/web-merge._
@@ -14088,6 +14088,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [for-loop `blez` guard folds whenever the count is a compile-time constant at the guard (store-forwarded `li` literal included); FP `x / 255.0f` divisor becomes an f2 candidate only with a literal divisor + `(float)N` or int-literal numerators, a var divisor merges with a same-valued numerator var into `div.s f0,f2,f2` (timproc_b5 8FC8 81.3 / 5BF0 88.7 negatives, 2026-09-04 agent-h)](#blez-guard-constant-fold-fp-divisor-candidate-8fc8-5bf0) — _17-spelling standalone guard study + 7-spelling divisor study; both in-tree unchanged._
 - [Two-s-reg constructor kit transfers cross-USO: volatile-homed cascade temp (store-in-delay + reload-every-use signature) + guard extent read off fail-branch targets (arcproc A3C 64.5->87.9, 2026-08-23 agent-h)](#two-s-reg-kit-transfer-volatile-third-a3c)
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
+- [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -19455,7 +19456,7 @@ return; hi-temp register a1-vs-a3 for a fused global load). Immune to named-temp
 if(1), volatile-store, deref-spelling, +0-disguise probes — same allocator/scheduler-internal
 family as the 478 spill-vs-copy residual. Take the 97-99% rise.
 
-## -O0 scalar-vs-deref ==/!= eval order is a toolchain-binary gap: 7.1/5.3 always evaluate the memory-deref side first; some 1080 USO targets evaluate the scalar first (bootup 10FEC 94.5% cap + 10540 while-head, 2026-07-10) <a name="feedback-ido-o0-eq-eval-order-gap"></a>
+## -O0 scalar-vs-deref ==/!= eval order: 7.1/5.3 evaluate the memory-deref side first for every PLAIN spelling — RETRACTED as a toolchain gap 2026-09-05: `deref != (0, scalar)` (comma on the RIGHT) yields scalar-first in a plain t-reg (bootup 10FEC 415->439 EXACT; 10540 while-head is the other site) <a name="feedback-ido-o0-eq-eval-order-gap"></a>
 
 _2026-07-10, agent-g, bootup_uso func_00010FEC (439w -O0 jumptable dispatcher,
 415/439) and func_00010540 (while-loop head)._
@@ -19498,6 +19499,50 @@ temp, +1 word). Also: a 9-case dense C switch inside a USO unit needs the
 local .rodata jumptable pinned at the module's table offset via a NOLOAD ld
 section (zero ROM bytes, bakes %hi/%lo of the real table addr) — see
 tenshoe.ld `.bootup_uso_10FEC_jtbl 0xC20 (NOLOAD)`.
+
+**2026-09-05 RETRACTION (agent-g): the scalar-first block IS reachable from C —
+put a comma expression on the SCALAR side and the scalar on the RIGHT.**
+`func_00010FEC` went 415/439 -> 439/439 EXACT (ROM cmp byte-identical, C on
+the build path) with the one-line change
+
+```c
+if (arg1 != *(int *)((char *)arg0 + 0x38))          /* deref-first: lw a0;lw 0x38(a0);lw a1;beq */
+if (*(int *)((char *)arg0 + 0x38) != (0, arg1))     /* TARGET:      lw a1;lw a0;lw 0x38(a0);beq */
+```
+
+Standalone matrix (IDO 7.1 -O0, `void f(char*a0,int a1){g(); if(COND) g();}`):
+
+| COND spelling | emitted order | regs |
+|---|---|---|
+| `a1 != *(int*)(a0+0x38)` / operand-swapped / casts / `(0, deref)` / `(0, a1 != deref)` / `1 ? a1 : 0` | deref, scalar | t,t |
+| `(0, a1) != deref` (the "comma hoist" the 2026-07-10 sweep tried) | **scalar first BUT into $s0** (+frame, s0 save/restore) | s0,t |
+| `(a1, a1) != deref`, `(0,(0,a1)) != deref`, `(0,(int)a1) != deref`, `!((0,a1) == deref)`, `(0,a1) - deref` | scalar first into $s0 | s0,t |
+| **`deref != (0, a1)`** | **scalar first, plain t-reg, byte-exact block** | t,t |
+
+Mechanism (inferred): cfe's ==/!= canonicalization keys on operand NODE KIND
+and places the "heavier"/non-leaf tree on the left for evaluation; a plain
+variable leaf loses to a deref and goes second, but a comma node counts as
+non-leaf so it is evaluated first. When the comma node is the LEFT source
+operand cfe materializes its value as a temporary that must survive the
+right operand's evaluation -> `register`-class temp -> $s0. When the comma
+node is the RIGHT source operand, canonicalization moves it to be evaluated
+first *without* the cross-operand temp, so it lands in the ordinary t
+rotation. The downstream t0/t1 FIFO swaps (20 words in 10FEC) are knock-ons
+of that one block and collapse with it; no other C change was needed.
+
+Recognition (unchanged): a `lw tA,HOME(sp); lw tB,HOME(sp); lw tC,K(tB); beq
+tA,tC` value-first block in -O0 asm. Fix: write it as
+`<deref-expr> != (0, <scalar>)` (also for `==`). The other census site,
+`func_00010540`'s while-head (`i != a0->cur7C`, LOCAL vs STRUCT MEMBER), was
+landed 2026-09-04 with a different rank lever -- `(unsigned)i != a0->cur7C`
+(see bootup_uso_o0_10540.c). That cast lever does NOT transfer to 10FEC's
+PARAMETER vs raw `*(int*)(p+K)` shape (`(unsigned)arg1 != deref`, `arg1 !=
+(unsigned)deref`, both-unsigned, and `deref != (unsigned)arg1` all stay
+deref-first, verified 2026-09-05), so keep both levers: try the unsigned
+cast first for local-vs-member, the right-side comma for param-vs-cast-deref.
+Both census sites are now EXACT, which retracts the "toolchain-binary gap"
+verdict above: the ROM's C reached scalar-first through ordinary source
+shapes, not a different cc binary.
 
 **TWO USO C-switch jumptable pin forms — check the target's lw %lo field to
 pick the VMA (2026-07-10, agent-g, arcproc_uso_func_00000240 226/226 land):**
@@ -24073,3 +24118,29 @@ the 13-insn shape as an unreachable cross-function tail-share cap. See
 `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
 for the boundary-merge side.
 
+
+
+<a id="ido-last-test-ge-return0-return1-hoists-li-v0-1"></a>
+## LAST test of a return-0/1 compare ladder: `>= … return 0; return 1;` hoists `li v0,1` above the `bnez` (game_libs 9A50, 2026-09-05)
+
+Target tail of a 5-test byte-compare ladder (all `lbu` operands, so `slt` is
+used even for unsigned char):
+```
+lbu t6,2(a1); lbu t7,7(a0); li v0,1; slt at,t6,t7; bnez at,+3; nop
+jr ra; move v0,zero
+jr ra; nop                      <- trailing return-1 block (was a "matched empty fn")
+```
+Three spellings of the same predicate, IDO 7.1 -O2 -mips2:
+
+| C for the last test | words | result |
+|---|---|---|
+| `if (a1[2] >= a0[7]) return 0; return 1;` | 34 | **exact** — `li v0,1` hoisted above `bnez`, `bnez` to trailing `jr ra; nop` |
+| `if (a1[2] < a0[7]) return 1; return 0;` | 34 | 3 words differ — `li v0,1` lands in the taken-branch delay slot, fall-through `jr ra; move v0,zero` |
+| `return a1[2] < a0[7];` | 29 | `slt v0,…` result form, no final branch |
+
+The earlier tests (`if (a < b) return 0; if (b < a) return 1;` pairs) are
+insensitive to spelling; only the final one — where the fall-through is the
+*true* return — needs the `>=`/return 0/return 1 form. Rule of thumb: when the
+target's last block is `jr ra; nop` with the `li v0,1` sitting *before* the
+final `bnez`, write the final condition so that the **return 0 is the branch
+body and return 1 is the fall-through**.
