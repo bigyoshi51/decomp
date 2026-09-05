@@ -24453,9 +24453,14 @@ layout mechanism, not instruction patching).
 therefore always the preceding fn's `$exit` pair; a `-O2 -g3` "empty fn" carve unit holding one
 (bootup_uso_tail3a_bot.c, retired) encodes the wrong model. Fall-off fns with a body emit
 `X; j $31; nop` in-symbol + the `$exit` pair after (102A4 -> "102E8"); framed fns `b .+1` to the
-epilogue and emit no extra pair. See docs/MATCHING_WORKFLOW.md twentieth beql case for the sweep
-list (11D78+"11DB4", 11DBC+"11DF8", 102A4+"102E8", 102F0+"10308", 10324+"10344", 10A9C+"10AA8",
-12BF8+"12C08").
+epilogue and emit no extra pair. See docs/MATCHING_WORKFLOW.md twenty-first beql case for the sweep
+list -- ALL landed 2026-09-05 (11D78+"11DB4", 11DBC+"11DF8", 102A4+"102E8", 102F0+"10308",
+10324+"10344", 10A9C+"10AA8", 12BF8+"12C08"); the four "-g3 head" cases needed NO C change and no
+carve: the `-O2 -g3` body of each tiny leaf was word-for-word its -O0 body, so the two-symbol -g3
+unit was renamed to an -O0 unit of the same .text size. Flavour rule for unit layout: return-X fns
+(TWO dead pairs) must be file-terminal under TRUNCATE_TEXT; fall-off fns (ONE pair each) may sit
+anywhere in an -O0 unit -- a run of them (1207C+"12088", 12090+"120A0", still open in
+tail3a_bot_11DF8) compiles to the ROM layout as one TU.
 
 ## Duff's-device `case N:` label INSIDE a loop body suppresses uopt code motion for that loop (no preheader; `$at` constants; invariant loads stay) -- game_libs_func_00029CCC 207/207 EXACT (2026-09-05, agent-c) <a name="duff-case-label-inside-loop-suppresses-licm"></a>
 
