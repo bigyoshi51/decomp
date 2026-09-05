@@ -166,6 +166,8 @@ explicit shared blocks (goto a common label), not regeneration.
 - [FIFTH CASE: game_libs 29CCC+29D08+29FDC+29FFC -- the scanner's "A" (181w case bodies) was the body of a `jr t6` JUMPTABLE dispatcher 15 words earlier; the whole 207-word switch went EXACT via a REPLACE_FUNC_BODY donor (jumptable .rodata rename+pin) plus the Duff's-device `case N:`-inside-the-loop layout that suppresses uopt code motion (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk back past any `jr tN` dispatcher: its case bodies are the "A". Jumptable + in-unit compile = donor splice (6DD14 recipe). A jumptable-entered loop the target never hoisted out of = put the `case` label INSIDE the loop body (see docs/IDO_CODEGEN.md#duff-case-label-inside-loop-suppresses-licm)._
 - [FIFTH CASE, -O0 VARIANT: mgrproc 140+15C+168 and 170+188+194 — plain `bne` into the next symbol + a 2-word "empty stub" after it inside an -O0 run = one frameless -O0 predicate + ugen's dead fall-off pair; merge, compile at -O0 file-terminal with TRUNCATE_TEXT (our -O0 emits 2 dead pairs, ROM has 1), delete the stub episodes (agent-g 2026-09-05)](#o0-predicate-misplit-merge-recipe) — _Read the opt level of the RUN before believing an "-O2 collapses to 9 insns" cap sweep; the founding case of the branch-into-adjacent-return-leaf cap was -O0._
 - [SIXTH CASE, -O2 plain-`bne` VARIANT: timproc_uso_b5 1CF0+1D14 -- `bne` past the symbol end with the preset-default `move v0,zero` IN the bne delay slot and a filled `jr ra` slot, next symbol = 2-word `jr ra; nop` "empty fn" = the fn's own return-0 exit block; merge alone + non-null arm FIRST is byte-exact at plain -O2, no carve (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Filled delay slots = -O2, so NO file-terminal/TRUNCATE_TEXT machinery; `if (==2) return load; return 0;` puts return-0 as the bne target, the inverted `if (!=2) return 0;` flips to beq + return-0 fallthrough (same 11 words, 42%). The old "leaf-branch-past-end = cross-fn epilogue" verdict was this._
+- [NINTH CASE: game_libs 9944+9970 -- 2-word equality compare; the "matched" `jr ra; nop` stub was the return-1 exit; the branch-delay `nop`s were load-dependency fills, NOT -g/-O0 (filled `jr` delay + preset `li v0,1` = plain -O2); both `return 0`s share ONE `jr ra; move v0,zero` block so the C is a single `||` guard `if (a0[0] != a1[0] || a0[1] != a1[1]) return 0; return 1;` -- two separate `if (!=) return 0;` give beql + inline return-0 (15w), `&&`-return-1 flips the last branch (3 diffs); 13w EXACT (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Count the target's return-0 blocks: one block reached from N tests = one `||`-joined guard._
+- [TENTH CASE: game_libs 4FB34+4FB5C+4FB78+4FB9C -- scanner's A (4FB78) read caller-set $v1, head was TWO symbols back; hex-digit char->value, `unsigned char` param (homed `sw a0` + eager andi) and `unsigned char` return (andi in every jr delay), if/else-if chain with early returns + final `else return 0`; the shipped third test is `c <= 'A'` (slti 0x42); 28w EXACT, three "leaf-branch-past-end CAP class" notes retired (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk back until a symbol homes/zero-extends its own arg; a named `ret` local instead of early returns is 13 words off._
 - [EIGHTH CASE: game_libs 3AA5C+3AC50 -- the 3-word "caller-set $t2 CAP" stub was the fn's own `sign = -1` else block; 128-word FP leaf exact on the first in-tree build; the two-word `sll/sra` before the `beqz` came from a CHAINED `axis = o->axis = cond ? 0 : 1` (assignment-expression value converted to the field's signed char), and that extension is what lines up the whole later tN ring (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk both directions first (3AA40 = matched jr-ra leaf, 3AC5C = own prologue). Levers: Vec3 fields (float[] swaps the last add.s operands), `axis = cond ? 2 : o->axis; o->axis = axis;` per arm (value select + one store), `axis = o->axis; switch (axis)`. See docs/IDO_CODEGEN.md#chained-assignment-field-conversion-sign-extend-tn-ring._
 - [SEVENTH CASE + GENERAL SCANNER: game_libs 986C+9920+993C -- the scanner's `A` (9920, reads caller-set t4/v0/v1/a3) was itself the return-block tail of the 44-word checksum VERIFIER 986C (sibling of the exact writer 97B4); its `beq` lands ON 9920 and 9920's `beq` (preset `li v0,1` in the delay) lands ON the `jr ra; nop` "empty fn" 993C = the return-1 exit; merged 54w EXACT; `scripts/find-stub-misplits.py` generalises the scan to ANY branch onto an adjacent 1-3 word `jr ra` stub incl. already-"matched" C stubs (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk BACK from the scanner's A until the head has no caller-set reads; a plain `beq` landing ON B+0 with the preset return value in ITS delay slot is the -O2 exit-block flavour. Last-word lever: `var + load` emits the inline load as addu rs in BOTH source orders -- pin the var first via `load + (t = var)` (integer assignment-expr lever). Remaining hits: 9944+9970, 2E290+2E2F8, 4FB78+4FB9C, 560E4+56150._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
@@ -10569,6 +10571,53 @@ was left alone (merge churn). Remaining queue after this: 5BBEC+5BC04 (matched s
 5CAEC+5CB5C (six beqls to one `return 0` block), 624EC+62524, 66620+66650, 6F1D8+6F1FC,
 timproc_b5 88A0+8940 (matched g3 stub); 67FD8+68004, 453D8+45418, 57194+571E4 no longer
 show in the scanner output (already merged or renamed -- re-run `--all` before assuming).
+
+**NINTH CASE (2026-09-05 agent-g): game_libs_func_00009944 + "9970" -- the two `return 0`s
+share ONE block, so the C must be a single `||` guard.** Scanner pair `9944 (11w) -> 9970 (2w)`,
+`beq t8,t9,+3` with preset `li v0,1` in front lands ON 9970 = `jr ra; nop`, "matched" as
+`void game_libs_func_00009970(void) {}` with an episode (deleted). 9944 reads only a0/a1, so it
+is the head. The delay-slot `nop`s after `bne t6,t7` / `beq t8,t9` do NOT mean -g/-O0: they
+follow immediately-dependent loads (`lw t7,0(a1); bne t6,t7`), the ordinary IDO -O2 shape --
+the filled `jr ra; move v0,zero` and the preset return value are the tell. Plain -O2, merged
+0x34, 13/13 exact:
+```c
+int game_libs_func_00009944(s32 *a0, s32 *a1) {
+    if (a0[0] != a1[0] || a0[1] != a1[1]) return 0;
+    return 1;
+}
+```
+Load-bearing: the target's first `bne` lands on the SECOND test's `jr ra; move v0,zero` -- one
+shared return-0 block. Two separate `if (a0[0] != a1[0]) return 0; if (a0[1] != a1[1]) return 0;`
+statements emit a `beql` + its own inline return-0 (15w); `if (== && ==) return 1; return 0;`
+(and the nested-if form) flips the last branch to `bne` with `li v0,1` in the jr delay (13w, 3
+diffs); a named `ret` local is 12w with a `move v0,v1` epilogue. Rule: count the `jr ra` return-0
+blocks in the target -- ONE block reached from N tests = one `||`-joined guard.
+
+**TENTH CASE (2026-09-05 agent-g): game_libs_func_0004FB34 + "4FB5C" + "4FB78" + "4FB9C" -- the
+scanner's A read caller-set $v1; the head was two symbols back.** Scanner pair `4FB78 (9w) ->
+4FB9C (2w)`, but 4FB78 opens `slti at,v1,0x41` on a live $v1, so it is a tail; 4FB5C before it
+also reads $v1; 4FB34 (`sw a0,0(sp); andi a0,a0,0xFF; ...; move v1,a0` in the first bnez delay)
+is the head. Real function = [0x4FB34,0x4FBA4) = 0x70, 28 words, mis-split at each internal
+`jr ra`; 4FB9C = `jr ra; nop` was the return-0 exit ("matched" `void f(void){}` + episode,
+deleted). All three fragments carried a "0x4FBxx leaf-branch-past-end cluster ... CAP class" note.
+Hex-digit char -> value, plain -O2, 28/28 exact standalone and in-tree:
+```c
+unsigned char game_libs_func_0004FB34(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    else if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    else if (c >= 'A' && c <= 'A') return c - 'a' + 10;   /* slti 0x42 as shipped: 'A' only */
+    else return 0;
+}
+```
+Keys: `unsigned char` param = homed `sw a0,0(sp)` + eager `andi a0,0xFF` (the 9988 rule);
+`unsigned char` return = `andi v0,v0,0xFF` in every jr delay (an `int` return with
+`(unsigned char)` casts is byte-identical); early `return`s in an if/else-if chain with a final
+`else return 0` give the preset `move v0,zero` in the LAST test's bnez delay + the trailing
+`jr ra; nop` block; routing the chain through a named `ret` local is 13 words off. The
+`move v1,a0` copy is IDO's own (the first range test keeps using a0, the later ones v1) -- no
+local needed. Baseline: single-unit strip + `EXPECTED_BASELINE=1` (post0b is pinned), `.text`
+byte-identical, symtab 4FB34 40->112, three symbols removed. Remaining scanner hits after this
+(agent-g side): 2E290+2E2F8 (`jr ra; li v0,0x10`), 560E4+56150 (`jr ra; li v0,1`).
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 

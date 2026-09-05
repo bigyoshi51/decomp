@@ -14112,6 +14112,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Two-s-reg constructor kit transfers cross-USO: volatile-homed cascade temp (store-in-delay + reload-every-use signature) + guard extent read off fail-branch targets (arcproc A3C 64.5->87.9, 2026-08-23 agent-h)](#two-s-reg-kit-transfer-volatile-third-a3c)
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
+- [N compare tests sharing ONE `jr ra; move v0,zero` block = a single `||` guard: `if (a != b || c != d) return 0; return 1;` (13w exact); separate `if (!=) return 0;` statements each get their own block (first becomes `beql` + inline return-0, 15w); the `&&`-return-1 spelling flips the last branch to `bne` (3 diffs); named `ret` local = `move v0,v1` form (game_libs 9944, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Count the target's return-0 blocks before choosing separate returns vs `||`. Also: unsigned-char range-test chain with early returns + final `else return 0` (4FB34) puts the preset `move v0,zero` in the last bnez delay; a `ret` local is 13w off._
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
 - [CHAINED / TESTED ASSIGNMENT to a `signed char` FIELD sign-extends the register value (`sll 24; sra 24`) for the test while the `sb` keeps the raw reg -- a plain local assigned 0/1 is never extended; the two extra words also shift the whole later tN ring by two (game_libs 3AA5C 128/128 EXACT, 2026-09-05 agent-c)](#chained-assignment-field-conversion-sign-extend-tn-ring) -- _Target `li v0,1 ... or v0,zero,zero; sll t6,v0,24; sra t7,t6,24; beqz t7; sb v0,2(a0)` = `axis = o->axis = cond ? 0 : 1; if (axis)` (or `if (o->axis = ...)`). `signed char axis = cond ? 0 : 1; if (axis)` / `switch (axis)` / casts give a bare `beqz v0`; `o->axis = ...; if (o->axis)` reloads. Also: Vec3 FIELD access vs float[] indexing flips the final `add.s` operand order of a 3-term dot product (`f4,f16` vs `f16,f4`); `x = cond ? K : o->f; o->f = x;` = value select + one store, `o->f = cond ? K : o->f;` = two stores with K hoisted._
 - [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
@@ -24173,6 +24174,29 @@ insensitive to spelling; only the final one — where the fall-through is the
 target's last block is `jr ra; nop` with the `li v0,1` sitting *before* the
 final `bnez`, write the final condition so that the **return 0 is the branch
 body and return 1 is the fall-through**.
+
+**Addendum -- N tests sharing ONE return-0 block = a single `||` guard (game_libs 9944,
+2026-09-05 agent-g).** Target: `lw;lw; bne t6,t7,RET0; nop; lw;lw; li v0,1; beq t8,t9,RET1; nop;
+RET0: jr ra; move v0,zero; RET1: jr ra; nop` -- the FIRST test's `bne` lands on the SECOND test's
+fall-through return-0. IDO 7.1 -O2 -mips2:
+
+| C | words | result |
+|---|---|---|
+| `if (a0[0] != a1[0] \|\| a0[1] != a1[1]) return 0; return 1;` | 13 | **exact** -- one shared `jr ra; move v0,zero`, `li v0,1` hoisted above the final `beq` |
+| `if (a0[0] != a1[0]) return 0; if (a0[1] != a1[1]) return 0; return 1;` | 15 | first test becomes `beql` with its OWN inline `jr ra; move v0,zero` |
+| `if (a0[0] == a1[0] && a0[1] == a1[1]) return 1; return 0;` (or nested ifs) | 13 | last branch flips to `bne` with `li v0,1` in the jr delay, 3 words differ |
+| `int ret = 0; if (== && ==) ret = 1; return ret;` | 12 | `move v0,v1` epilogue form |
+
+Separate `return 0;` statements are separate blocks to IDO (the first gets the branch-likely
+treatment); `||` merges them into one. Count the target's return-0 `jr ra` blocks before choosing.
+
+**Addendum -- range-test chain with early returns (game_libs 4FB34, 28w exact, 2026-09-05
+agent-g).** `if (c >= '0' && c <= '9') return c-'0'; else if (...) return ...; else return 0;`
+with `unsigned char c` and an `unsigned char` return type: each arm is `slti; bnez at,NEXT;
+<copy/preset in delay>; slti; beqz at,NEXT; <addiu in delay>; jr ra; andi v0,v0,0xFF`, the LAST
+arm's bnez delay carries the preset `move v0,zero` and the final block is `jr ra; nop`. The same
+chain via a named `ret` local is 13 words off. `unsigned char` param = homed `sw a0,0(sp)` + eager
+`andi a0,a0,0xFF`; IDO copies the param to `v1` in the first delay slot by itself.
 
 ---
 
