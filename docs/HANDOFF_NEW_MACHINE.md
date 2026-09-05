@@ -23,9 +23,14 @@ Then, in order:
    Place your own copy at `projects/1080 Snowboarding (USA)/baserom.z64`.
    It must be md5 `fa27089c425dbab99f19245c5c997613`, 16777216 bytes.
    Worktrees symlink to it; don't copy it 26 times.
-2. **tools/** (~1.9G, gitignored) — build/download IDO, asm-processor, permuter,
-   KMC GCC per the project README. Then apply `tools-patches/` (the uopt
-   regalloc dump depends on it).
+2. **tools/** (gitignored) — run `bash scripts/bootstrap-1080-tools.sh`.
+   It is idempotent and safe to rerun: downloads SHA-pinned IDO 5.3/7.1 and
+   objdiff binaries, installs unprivileged MIPS binutils when the host lacks
+   them, and shallow-clones `references/` + the permuter.
+   **Caveat:** it installs *prebuilt* IDO. The `tools-patches/` ecvt patch (the
+   `-Wo,-zdbug:6` regalloc dump) requires a *source* build of
+   ido-static-recomp — if you need `./uoptlist`, build IDO from source and
+   apply the patch there; the prebuilt binary cannot take it.
 3. **Memory** — untar the memory bundle into
    `~/.claude/projects/<project-slug>/memory/`. 729 memos: user preferences,
    project state, and gotchas that are deliberately NOT in the repo.
