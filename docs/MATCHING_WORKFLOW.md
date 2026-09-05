@@ -168,9 +168,12 @@ explicit shared blocks (goto a common label), not regeneration.
 - [SIXTH CASE, -O2 plain-`bne` VARIANT: timproc_uso_b5 1CF0+1D14 -- `bne` past the symbol end with the preset-default `move v0,zero` IN the bne delay slot and a filled `jr ra` slot, next symbol = 2-word `jr ra; nop` "empty fn" = the fn's own return-0 exit block; merge alone + non-null arm FIRST is byte-exact at plain -O2, no carve (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Filled delay slots = -O2, so NO file-terminal/TRUNCATE_TEXT machinery; `if (==2) return load; return 0;` puts return-0 as the bne target, the inverted `if (!=2) return 0;` flips to beq + return-0 fallthrough (same 11 words, 42%). The old "leaf-branch-past-end = cross-fn epilogue" verdict was this._
 - [NINTH CASE: game_libs 9944+9970 -- 2-word equality compare; the "matched" `jr ra; nop` stub was the return-1 exit; the branch-delay `nop`s were load-dependency fills, NOT -g/-O0 (filled `jr` delay + preset `li v0,1` = plain -O2); both `return 0`s share ONE `jr ra; move v0,zero` block so the C is a single `||` guard `if (a0[0] != a1[0] || a0[1] != a1[1]) return 0; return 1;` -- two separate `if (!=) return 0;` give beql + inline return-0 (15w), `&&`-return-1 flips the last branch (3 diffs); 13w EXACT (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Count the target's return-0 blocks: one block reached from N tests = one `||`-joined guard._
 - [TENTH CASE: game_libs 4FB34+4FB5C+4FB78+4FB9C -- scanner's A (4FB78) read caller-set $v1, head was TWO symbols back; hex-digit char->value, `unsigned char` param (homed `sw a0` + eager andi) and `unsigned char` return (andi in every jr delay), if/else-if chain with early returns + final `else return 0`; the shipped third test is `c <= 'A'` (slti 0x42); 28w EXACT, three "leaf-branch-past-end CAP class" notes retired (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk back until a symbol homes/zero-extends its own arg; a named `ret` local instead of early returns is 13 words off._
+- [THIRTEENTH CASE, JUMPTABLE flavour: game_libs 2E290 + seven `jr ra; li v0,K` "return K" C stubs 2E2F8..2E328 (all with fake-exact episodes) + the 2E330 "caller-set $v0/$a1 loop tail CAP" -- the stubs were the CASE ARMS of a `jr t6` switch and the tail its `default:`; read the table with `extract-uso-jumptable.py --shim 0x1466C` (targets = value - shim), donor-splice it (29CCC/6DD14 recipe, `<fn>_rodata = 0x1660`), `case 32: default:` widens the table range to the target's 1..32; 49/49 EXACT (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _`find-stub-misplits.py` only sees the branch onto the FIRST stub; when the head ends in `jr tN`, EVERY 2-word `return K` symbol between it and the next real prologue is a case arm -- merge the whole run plus the loop/default tail. Case arms lay out in SOURCE order (2,3,5,9,17,1,0x40)._
+- [FOURTEENTH CASE, COMPARE-CHAIN flavour: game_libs 560E4 + ten `jr ra; li v0,N` stubs 56150..56198 + the 561A0 `jr ra; nop` "empty fn" (eleven fake-exact episodes) -- a 12-way `li at,K; beq` chain whose every beq lands ON a stub and whose `b` lands on the empty fn (= the shared epilogue); `switch` gives binary-search+jumptable, the `if (bit == K) goto cK;` chain + `r = 11; goto end;` default flowing to the FINAL `return r;` + inverted-skip last test = 49/49 EXACT in-unit (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Scanner shows `A -> B` for the first stub only; count the beq targets: N compares landing on N consecutive 2-word return stubs = one function. Codegen levers in docs/IDO_CODEGEN.md#goto-chain-default-flow-to-final-return-560e4._
 - [EIGHTH CASE: game_libs 3AA5C+3AC50 -- the 3-word "caller-set $t2 CAP" stub was the fn's own `sign = -1` else block; 128-word FP leaf exact on the first in-tree build; the two-word `sll/sra` before the `beqz` came from a CHAINED `axis = o->axis = cond ? 0 : 1` (assignment-expression value converted to the field's signed char), and that extension is what lines up the whole later tN ring (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk both directions first (3AA40 = matched jr-ra leaf, 3AC5C = own prologue). Levers: Vec3 fields (float[] swaps the last add.s operands), `axis = cond ? 2 : o->axis; o->axis = axis;` per arm (value select + one store), `axis = o->axis; switch (axis)`. See docs/IDO_CODEGEN.md#chained-assignment-field-conversion-sign-extend-tn-ring._
 - [ELEVENTH CASE: game_libs 5BBEC+5BC04 -- the 8-word "matched" clamp-min stub (with an episode) was the fn's own else arm; clamp-into-[-b,b] exact ONLY as a single-exit `if (b < a) { a = b; } else { ... if (a < neg_b) a = neg_b; } return a;` -- two `return`s make IDO branch-likely the SECOND test too (dup `mov.s f0,f12`, 4 words off), a `ret` local adds moves (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _When the target's inner test is a plain `bc1f` straight onto `jr ra` with the return move in the jr delay, the return block must have a SINGLE predecessor shape: clamp in place on the arg, one `return`. See docs/IDO_CODEGEN.md#single-exit-clamp-in-place-vs-two-returns-branch-likely._
 - [TWELFTH CASE: game_libs 5CA78+5CAEC+5CB5C -- twelve beql hits, two six-test `&&` ladders + a `move v0,zero; jr ra; nop` return-0 block; 60w exact as two plain `if (&&...) return 1;` + `return 0;` (`if (A || B)` breaks the last test of ladder 1 into `bne`+nop; `return A || B` = 56w value form). DECODE GOTCHA: branch-likely delay slots are NULLIFIED on fall-through -- the dup'd `lw v0,0xC(a0)` never runs on the not-taken path, so the old note compared against the wrong field (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Read fall-through register state PAST a beql/bnel/bc1fl as if the delay slot were absent. The value loaded before the first branch (b->x1 in v1) dominates both ladders and is CSE'd; loads inside a ladder are on only some paths and get reloaded -- not volatile._
+- [THIRTEENTH CASE: game_libs 624EC+62524 -- the 7-word "loop-bottom tail-fragment with caller-set v0/v1/a2" was the fn's own loop-increment + shared return(-1) block (two bnel -> 62524+4, blezl -> its jr ra); 21w slot-table linear search EXACT via goto-loop (a `for` auto-unrolls x4) + `while (0) { i = key1; }` ucode-slot ordering so key1 is coloured BEFORE the entry pointer (pointer takes a2, key2 displaced to a3) (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _A displaced param can only land in a3 (a0-a2 hold incoming values); WHICH param gets displaced = first-occurrence order of the params vs the pointer's definition. Decl order, operand order, `register`, `(void)x`, `x += 0` all fold away; only the while(0) dead body moves the ucode slot._
 - [SEVENTH CASE + GENERAL SCANNER: game_libs 986C+9920+993C -- the scanner's `A` (9920, reads caller-set t4/v0/v1/a3) was itself the return-block tail of the 44-word checksum VERIFIER 986C (sibling of the exact writer 97B4); its `beq` lands ON 9920 and 9920's `beq` (preset `li v0,1` in the delay) lands ON the `jr ra; nop` "empty fn" 993C = the return-1 exit; merged 54w EXACT; `scripts/find-stub-misplits.py` generalises the scan to ANY branch onto an adjacent 1-3 word `jr ra` stub incl. already-"matched" C stubs (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk BACK from the scanner's A until the head has no caller-set reads; a plain `beq` landing ON B+0 with the preset return value in ITS delay slot is the -O2 exit-block flavour. Last-word lever: `var + load` emits the inline load as addu rs in BOTH source orders -- pin the var first via `load + (t = var)` (integer assignment-expr lever). Remaining hits: 9944+9970, 2E290+2E2F8, 4FB78+4FB9C, 560E4+56150._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
@@ -10683,6 +10686,130 @@ the LAST test of ladder 1 into a plain `bne`+nop that skips into ladder 2 (39 wo
 `EXPECTED_BASELINE=1` route (`.text` identical, symtab 5CA78 116->240, 5CAEC/5CB5C removed).
 Remaining beql-scanner queue after this (agent-c side): 624EC+62524, 66620+66650,
 6F1D8+6F1FC, 67FD8+68004, 453D8+45418, 57194+571E4, timproc_b5 88A0+8940 (matched g3 stub).
+
+**THIRTEENTH CASE (2026-09-05 agent-c): game_libs_func_000624EC + "62524" -- a loop
+whose increment block AND shared return(-1) block were cut off as a 7-word "tail fragment";
+the exact needed the `while(0){}` ucode-slot lever to pick WHICH param gets displaced.**
+Scanner pair `624EC (14w) -> 62524 (7w)`: both `bnel` at 0x62508/0x62514 land on 0x62528 =
+62524+4 with 62524's first word `addiu v1,v1,1` duplicated into their delay slots, and the
+`blezl v0` at 0x624F8 lands on 0x62538 = the `jr ra` of the trailing `li v0,-1; jr ra; nop`.
+The stub's note read it as a "loop-bottom tail fragment with caller-set v0/v1/a2 + backward
+branch before .s start" -- correct observation, wrong conclusion: it is the loop's own
+increment block (`slt at,v1,v0; bnez at,loop; addiu a2,a2,0x14`) followed by the shared
+not-found exit. Both directions checked (62444 before ends `jr ra; nop`, 624EC reads only
+a0-a2; gl_func_00062540 after has its own frame). Merged 0x38+0x1C = 0x54, 21/21 exact:
+```c
+int game_libs_func_000624EC(SlotPool624EC *p, int key1, int key2) {
+    int i; SlotEntry624EC *e; int count;
+    count = p->count; i = 0;
+    if (count <= 0) goto fail;
+    while (0) { i = key1; }          /* ucode-slot lever, zero emission */
+    e = p->entries;
+loop:
+    if (e->key1 == key1 && e->key2 == key2) return i;   /* key1 at +8, key2 at +4 */
+    i++; e++;
+    if (i < count) goto loop;
+fail:
+    return -1;
+}
+```
+1. **goto-loop, not `for`.** `for (i = 0; i < count; i++, e++)` is auto-unrolled x4 by
+   IDO -O2 (68 words with an `andi v0,3` remainder prologue); the goto form (as in the
+   sibling gl_func_00062484 in the same unit) gives the target's rotated
+   `blezl` zero-trip test + bottom-tested loop. `do {} while` and `while(1){break}` also
+   changed the layout.
+2. **Which param gets displaced.** Target: `or a3,a2,zero` (key2 -> a3), pointer in a2,
+   key1 stays a1. Every plain form gave `or a3,a1,zero` + pointer in a1 (7 words off, same
+   size). Per `docs/IDO_CODEGEN.md#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules`
+   unconstrained LRs are coloured in FIRST-OCCURRENCE order, lowest free register first,
+   and a displaced param can only take a3 (a0-a2 hold incoming values at entry, a0 is
+   forbidden for the pointer because `p` is live at its defining load). Natural order
+   p,count,i,e,key1,key2 -> e takes a1, key1 evicted. `while (0) { i = key1; }` placed
+   before `e = p->entries;` moves key1's first ucode occurrence ahead of e (the dead body
+   still occupies ucode slots), so key1 is coloured first (home a1), e takes a2, key2 is
+   evicted to a3 -- the target. Declaration order (all 6 permutations), `key1 == e->key1`
+   operand order, `register`, `(void)key1;`, `key1 += 0;`, `key1 = key1;`,
+   `if (0) { e = (Entry *)key1; }` all fold away in cfe and change nothing; the
+   `while(0)` body is the only zero-emission form that survives to uopt.
+Baseline refreshed via the single-unit strip + `EXPECTED_BASELINE=1` route (post0b is a
+pinned-symbol unit): `.text` byte-identical, symtab 624EC 56->84, 62524 removed. Remaining
+queue after this: 66620+66650, 6F1D8+6F1FC, timproc_b5 88A0+8940 (matched g3 stub).
+
+**Thirteenth worked case (2026-09-05, agent-g): game_libs_func_0002E290 = 2E290 + 2E2F8 + 2E300 +
+2E308 + 2E310 + 2E318 + 2E320 + 2E328 + 2E330 -- the JUMPTABLE flavour of the mis-split.**
+`find-stub-misplits.py` reported only `2E290 (26w) -> 2E2F8 [jr ra; li v0,0x10]`. The head ends in
+`sll t6,t6,2; lui at,0; addu; lw t6,0x1660(at); jr t6` -- a switch dispatcher -- so the SEVEN 2-word
+`jr ra; li v0,K` symbols that follow (2E2F8/2E300/2E308/2E310/2E318/2E320/2E328, all "matched" as
+`int f(void) { return K; }` WITH episodes) are its case arms, and 2E330 (9 words, `sll v0; andi;
+and v1,a1,v0; andi a1; bnel a1,zero,-0xA4; slti; move v0,zero; jr ra; nop`, an INCLUDE_ASM
+"caller-set $v0/$a1 loop tail CAP") is the `default:` mask/retry block plus the `return 0` exit.
+One function, 0x2E290..0x2E354 = 0xC4 / 49 words. Read the table straight out of the ROM:
+`python3 scripts/extract-uso-jumptable.py <fn> --module 0xD9FE28 --shim 0x1466C --vaddr 0x2E290
+--size 0xC4` (game_libs-local target = shipped value - 0x1466C; 32 entries at rodata +0x1660,
+sel 2 -> 2E2D8, 3 -> 2E300, 5 -> 2E308, 9 -> 2E310, 17 -> 2E318, everything else -> 2E330; the
+shipped entry for sel 1 is a zero-addend reloc and the 2E320 `return 8` address sits UNRELOCATED
+just past the table at +0x16E0 -- an original-linker quirk; only the .text matters for the match).
+Exact C is `src/game_libs/game_libs_o2_2E290.c` (IDO 7.1 -O2 donor, REPLACE_FUNC_BODY into
+game_libs_post.c.o with `game_libs_func_0002E290_rodata = 0x00001660` -- the
+[29CCC/6DD14 recipe](#donor-splice-switch-jumptable-rodata-rename)):
+
+```c
+unsigned char mask = 0xFF; unsigned char sel = o[0x31];
+do {
+    switch (sel) {
+    case 2:  if (o[0x14] == 1) return (unsigned char)(o[0x15] + 12); return 16;
+    case 3:  return 0;   case 5: return 2;   case 9: return 4;   case 17: return 6;
+    case 1:  return 8;   /* laid out AFTER case 17: arms are in SOURCE order */
+    case 0x40: return 10;
+    case 32: default: mask <<= 1; sel &= mask;   /* case 32 widens the table to 1..32 */
+    }
+} while (sel != 0);
+return 0;
+```
+
+First compile was 49 words with the table sized 1..17 (`slti 0x12` / `sltiu 0x11`); `case 32:`
+sharing `default:` fixed both words (6DD14's `case 15: case 16:` lever). The `do{}while(sel!=0)`
+gives the `bnel` back edge with the loop-top `slti` duplicated in its delay slot; the hoisted
+`li a2,0x40` is the out-of-table compare constant made loop-invariant. Baseline via the
+single-unit strip + `EXPECTED_BASELINE=1` route: `.text` differs from the old only at the
+jumptable `%lo` word (the splice carries the reloc), symtab 2E290 104->196, eight removed.
+**Scanner lesson:** when the head ends in `jr tN`, every 2-word `return K` symbol between it and
+the next real prologue is a case arm -- merge the whole run plus the loop/default tail.
+**Landing note:** the Makefile line is `REPLACE_FUNC_BODY +=` so it composes with origin/main's
+`:=` line for 29CCC on the same unit; keep it AFTER that line.
+
+**Fourteenth worked case (2026-09-05, agent-g): game_libs_func_000560E4 = 560E4 + 56150 .. 56198 +
+561A0 -- the COMPARE-CHAIN flavour.** Scanner: `560E4 (27w) -> 56150 [jr ra; li v0,1]`. The
+head is eleven `li at,K; beq a0,at,+0x17` tests (K = 1,2,4,...,0x400, each beq 8 bytes later and
+landing 8 bytes later = on the TEN consecutive 2-word `jr ra; li v0,N` stubs 56150..56198, all
+"matched" `return N` WITH episodes), then `li v0,0xB; b +0x17; nop` landing on 561A0 = the 2-word
+`jr ra; nop` "empty fn" (also with an episode) = the shared epilogue, then `jr ra; move v0,zero`
+(the `return 0` block). One function, 0xC4 / 49 words: single-bit mask -> bit index, 11 = none.
+Exact C (in-unit, plain -O2, `src/game_libs/game_libs_post0b.c`):
+
+```c
+if (bit == 0x001) goto c0;  /* ... */  if (bit == 0x200) goto c9;
+if (bit != 0x400) goto def;  goto c10;          /* inverted skip + explicit goto */
+def: r = 11; goto end;                           /* flows to the FINAL return */
+c0: return 0;  /* ... */  c10: return 10;
+end: return r;
+```
+
+Three levers, each isolated by a standalone compile: (1) a `switch` emits IDO's binary-search +
+jumptable dispatch (60 words, and a .rodata table); the linear compares-at-top / bodies-after
+layout is the `if (bit == K) goto cK;` chain
+([goto-chain beats switch](../docs/IDO_CODEGEN.md#feedback-ido-dispatch-goto-chain-beats-switch-and-ifelse));
+(2) `return 11;` on the default path gets its OWN `jr ra; li v0,0xB` and c10's `li v0,10` is then
+hoisted into the last beq's delay slot (48 words, 6 diffs) -- the target's `li v0,0xB` in the beq
+delay + `b end` to a trailing shared `jr ra; nop` is the default path flowing into the function's
+FINAL `return r;` (`r = 11; goto end;`); (3) a plain `if (bit == 0x400) goto c10;` as the last test
+flips to `bne` with c10 laid out inline (3 diffs) --
+[split the last test](../docs/IDO_CODEGEN.md#feedback-ido-split-last-eq-test-to-suppress-bnel).
+Write-up: `docs/IDO_CODEGEN.md#goto-chain-default-flow-to-final-return-560e4`. Baseline via the
+strip + `EXPECTED_BASELINE=1` route (post0b is pinned): `.text` byte-identical, symtab 560E4
+108->196, eleven removed. Remaining scanner hits after this: none outside agent-c's queue
+(5CAEC+5CB5C, 66620+66650, timproc_b5 88A0+8940, 27300 already landed on main).
+
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 

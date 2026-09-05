@@ -14115,6 +14115,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
 - [N compare tests sharing ONE `jr ra; move v0,zero` block = a single `||` guard: `if (a != b || c != d) return 0; return 1;` (13w exact); separate `if (!=) return 0;` statements each get their own block (first becomes `beql` + inline return-0, 15w); the `&&`-return-1 spelling flips the last branch to `bne` (3 diffs); named `ret` local = `move v0,v1` form (game_libs 9944, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Count the target's return-0 blocks before choosing separate returns vs `||`. Also: unsigned-char range-test chain with early returns + final `else return 0` (4FB34) puts the preset `move v0,zero` in the last bnez delay; a `ret` local is 13w off._
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
+- [Sparse-case `switch` table RANGE follows min..max CASE LABEL, not the used arms: add `case MAX: default:` (semantically dead) to widen `slti`/`sltiu` bounds to the target's; case arms are laid out in SOURCE order; the shipped USO table CONTENT is irrelevant to the .text match (2E290 49/49 via donor splice, 2026-09-05 agent-g)](#switch-case-max-default-widens-jumptable-range-2e290) -- _Table range off (0x12/0x11 vs 0x21/0x20) with everything else exact = add the boundary label to default. Sibling of 6DD14's `case 15: case 16:`._
+- [Goto-chain dispatcher: a `return K;` on the fall-through/default path gets its OWN `jr ra; li v0,K` and the last arm's `li` is hoisted into the final beq's delay; the target's `li v0,K` IN the last beq delay + `b end` to a trailing shared `jr ra; nop` = the default flowing into the function's FINAL `return r;` (`r = K; goto end;`), plus the inverted-skip last test (560E4 49/49, 2026-09-05 agent-g)](#goto-chain-default-flow-to-final-return-560e4) -- _Tell: N `li at,K; beq` tests landing on N 2-word `jr ra; li v0,N` blocks, then `li v0,DEF; b end; nop`, the blocks, then `jr ra; nop`. `switch` = binary search (60w); if-else-if = interleaved bodies._
 - [CHAINED / TESTED ASSIGNMENT to a `signed char` FIELD sign-extends the register value (`sll 24; sra 24`) for the test while the `sb` keeps the raw reg -- a plain local assigned 0/1 is never extended; the two extra words also shift the whole later tN ring by two (game_libs 3AA5C 128/128 EXACT, 2026-09-05 agent-c)](#chained-assignment-field-conversion-sign-extend-tn-ring) -- _Target `li v0,1 ... or v0,zero,zero; sll t6,v0,24; sra t7,t6,24; beqz t7; sb v0,2(a0)` = `axis = o->axis = cond ? 0 : 1; if (axis)` (or `if (o->axis = ...)`). `signed char axis = cond ? 0 : 1; if (axis)` / `switch (axis)` / casts give a bare `beqz v0`; `o->axis = ...; if (o->axis)` reloads. Also: Vec3 FIELD access vs float[] indexing flips the final `add.s` operand order of a 3-term dot product (`f4,f16` vs `f16,f4`); `x = cond ? K : o->f; o->f = x;` = value select + one store, `o->f = cond ? K : o->f;` = two stores with K hoisted._
 - [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
@@ -24506,3 +24508,64 @@ uniformly renumbered, fix the N words -- do not chase the renumbering.
 
 Full case: `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
 (eighth case, 3AA5C).
+
+
+<a id="switch-case-max-default-widens-jumptable-range-2e290"></a>
+## Sparse-case `switch`: the jumptable RANGE follows the min..max case LABELS -- add `case MAX: default:` to widen it; arms lay out in SOURCE order; shipped table content is irrelevant (game_libs 2E290 49/49, 2026-09-05 agent-g)
+
+**Symptom.** A jumptable `switch` compiles word-for-word except the two range words:
+build `slti at,sel,0x12` / `sltiu at,idx,0x11`, target `slti at,sel,0x21` / `sltiu at,idx,0x20`.
+IDO sizes the table from the smallest to the LARGEST case label that reaches the table, so a
+switch whose highest real arm is `case 17` gets a 1..17 table even if the USO ships 32 entries.
+
+**Lever.** Add the boundary label to the default arm: `case 32: default: ...`. Semantically dead
+(32 was already default), it widens the range to 1..32 and both words match. Same lever as
+6DD14's `case 15: case 16:` sharing `default:` (there to reach `sltiu 7`).
+
+**Layout facts confirmed on 2E290** (`src/game_libs/game_libs_o2_2E290.c`):
+- Case BODIES are emitted in SOURCE order (the table itself is value-indexed). The target had
+  `return 8` between `return 6` (case 17) and `return 10` (case 0x40) => `case 1: return 8;`
+  written AFTER `case 17`, not first.
+- An out-of-table label (`case 0x40`) becomes `slti at,sel,MAX+1; bnez -> table; li a2,0x40;
+  beq sel,a2 -> arm; b default` -- and inside a loop the `li a2,0x40` is hoisted above the loop.
+- `unsigned char` locals: `mask <<= 1` = `sll; andi 0xFF`, `sel &= mask` = `and; andi 0xFF`.
+- `do { switch (sel) {...} } while (sel != 0); return 0;` = `bnel sel,zero,top` with the loop-top
+  `slti` duplicated into the bnel delay slot, then `move v0,zero; jr ra; nop`.
+- The USO's shipped table CONTENT does not affect the .text match: the splice discards the
+  donor's .rodata and pins the reloc (`<fn>_rodata = 0x1660`). 2E290's shipped table even has a
+  zero-addend entry for sel 1 and the `return 8` arm's address unrelocated past the table end --
+  read the table for the case->arm mapping, then stop worrying about it.
+
+Full case: `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
+(eleventh case).
+
+<a id="goto-chain-default-flow-to-final-return-560e4"></a>
+## Goto-chain dispatcher: default `return K;` duplicates the epilogue and steals the last arm's `li`; the target's `li v0,K` in the last beq delay + `b end` to a shared `jr ra; nop` is the default FLOWING INTO the final `return r;` (game_libs 560E4 49/49, 2026-09-05 agent-g)
+
+**Target shape.** `li at,K1; beq a0,at,c1; li at,K2; beq a0,at,c2; ...; li at,Kn; beq a0,at,cn;
+li v0,DEF; b end; nop; c1: jr ra; li v0,V1; ... cn: jr ra; li v0,Vn; end: jr ra; nop` (plus any
+`jr ra; move v0,zero` arm). Compares grouped at the top, 2-word return arms after, one shared
+2-word epilogue last. splat cuts this into head + N "return N" stubs + an "empty fn".
+
+**What each C spelling emits (all standalone -O2, 11 tests):**
+- `switch` with the sparse labels: binary search + jumptable, 60 words (and a .rodata table).
+- `if/else if` chain assigning `r`: interleaved compare/return pairs (`bne; ...; jr ra; li`), 56w.
+- `if (bit == K) goto cK;` chain + `return DEF;` + labeled `cK: return VK;`: 48 words -- the
+  chain is right, but `return DEF;` becomes its OWN `jr ra; li v0,DEF`, and because the last
+  labeled return is then the function's final block, its `li v0,Vn` is hoisted into the last
+  beq's delay slot leaving `cn: jr ra; nop`.
+- Same chain with the default written as a FLOW to the final return -- `def: r = DEF; goto end;`
+  ... `end: return r;` -- gives `li v0,DEF` in the last beq's delay + `b end; nop` + intact
+  `cn: jr ra; li v0,Vn` + trailing `end: jr ra; nop`: the target's structure. One residual: the
+  final `if (bit == Kn) goto cn;` flips to `bne a0,at,end` with cn inline (3 diffs).
+- Add the documented inverted-skip split for the last test
+  (`if (bit != Kn) goto def; goto cn;`, [#feedback-ido-split-last-eq-test-to-suppress-bnel](#feedback-ido-split-last-eq-test-to-suppress-bnel)):
+  49/49.
+
+**Rule.** In a leaf goto-chain dispatcher, every `return X;` statement is its own `jr ra` + value;
+the ONE shared `jr ra; nop` at the end belongs to whichever path reaches the function's final
+statement by fall-through/`b`. Put the default there (`r = DEF; goto end; ... end: return r;`),
+keep the arms as direct `return`s, and split the last equality test.
+
+Full case: `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
+(twelfth case).
