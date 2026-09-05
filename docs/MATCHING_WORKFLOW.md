@@ -9673,6 +9673,31 @@ for the reloc-FREE int-literal spelling, which emits lui/ori). Full tiny-orphan 
 
 **SWEEP 2026-07-23 (agent-f) — the head-store REPORTER FAMILY, 4-for-4 to fuzzy-100 by merge alone (no donor needed):** the game_libs `&D_21xx` diagnostic-reporter family (1FF28+1FF34, 1FFAC+1FFB8, 20030+2003C, 200F4+20100) all share ONE mis-split shape: a 3-insn orphan `lui v0,%hi(D); addiu; lw t6,X(v0)` immediately before the fn = the fn's own hoisted HEAD-STORE load — the body's first act is `sw t6,(X+4)(v0)`, i.e. C is `*(int*)(D+X+4) = *(int*)(D+X);` (a "last-report handle" stash). Pre-merge these sat at 70–90% as "structural pass, byte-match deferred" with the stash mis-decoded (`= (int)obj` or an invented `D_00000001` extern). Recipe: concat orphan words into the parent .s under the ORPHAN's (earlier-address) name, rewrite the stash as the D-relative copy, and model each label/value reporter-call pair as `r = pr(D+lbl, val); r = pr(D+fmt, r, val);` (the chained return feeds `move a1,v0`; the value reloads land in jal delay slots naturally). All four went to fuzzy-100 in one build; they STAY NM wraps (jal-0 placeholder callees) — no episode. Plus 2A258+2A260 (orphan = hoisted lui/addiu sentinel-base pair, 87.8→90.5 merged). **Wave 2 (2026-07-23 agent-f, +2 merges — the family generalizes past pure head-store stashes):** the hoisted orphan can be the fn's own RANGE-CHECK or LOOP-BOUND load, not just a stash source. (a) **23F98+23FA4** (70.5→74.4 merged 0xD8): orphan `lui v0; addiu; lw t6,0x215C(v0)` feeds `sltiu $at,$t6,0x11` — the gate reads the GLOBAL count `*(D+0x215C)`, not the ptr arg; mode is a real `switch` (the dead duplicated `b exit; move v0,zero` after the last case = IDO switch layout tell); the held-base v0 (orphan lui+addiu bytes + `lw 0x1644/0x1648(v0)` case loads) is reachable via the IDO_CODEGEN **array-extern held-base lever** (`extern u8 gl_d_23f98[]`) while the SAME fn's fnptr load stays folded via scalar `&D_00000000` — i.e. MIX addressing spellings per-access: array extern where the target holds the base, scalar `&D+off` where it folds. Banked residual (probe-immune): `s` colors $s0/frame 0x20 in target vs free-unused-param $a2/0x18 ours (no C-visible s-reg reason; while(0)-liveness x3, volatile-pad x3 (pads ELIDE in this TU), if(1)-store-barrier all inert) + const-2 CSE (target keeps macro `li at,2` compare + fresh `li t1,2` store). (b) **1FBCC+1FBD4** (53.2→**fuzzy-100**, all 33 words, merged 0x84): orphan `lui v0; lh v0,0x2048(v0)` (FOLDED form — no addiu) = the sweep's hoisted loop bound; re-decode fixes: `blez` entry gate reads the global bound (old body gated on arg a0), byte-gate polarity `==` (bnel skips on !=), record base = HELD `&D` in s0 with big offsets (`lw 0x2D00(s0)`, `lbu 0x2D04(s0)`, call arg `p+0x2D00`, stride `p+=0x160` on the base) — array extern for the base + inline scalar `*(short*)((char*)&D_00000000+0x2048)` for both bound loads (initial hoisted + post-call reload emerge naturally from uopt call-clobber). **Orphan addressing form is the spelling oracle: `lui;addiu;op K(v0)` = array-extern held base; `lui;op %lo+K(v0)` (no addiu) = scalar folded.** Remaining known-orphan queue from the full `0x03E00008 not in words` enumeration, NOT yet merged: ~55 more tiny orphans in game_libs (many already documented as predecessor pad/stolen-prologue — check each fn's comment before touching); mgrproc orphan_00002E34→2E3C (97.5), arcproc 1C74 (92.3, preamble = prior .s TAIL words not an orphan file), titproc 1710 (95.4) re-verified as identified-but-unmerged boundary cases.
 
+**TWENTIETH case (2026-09-05, agent-g) -- `game_libs_func_00034180` + `gl_func_00034188`, the
+orphan is a FOLDED-SCALAR device-pointer load and the merged function goes EXACT from pure C.**
+The 8-byte orphan `lui v1,0; lw v1,0(v1)` (no jr ra, no prologue) sat as a "deferred USO
+boundary re-split" note for months while its successor 34188 was a 78% "byte-match deferred"
+NM wrap; the plain -O2 NM build already emitted the successor's own first load `lui v0; lw
+v0,0x240(v0)` ABOVE `addiu sp` -- i.e. the orphan was never a boundary problem, just the
+hoisted head. Forward-merge (concat the 2 words under the orphan's earlier-address name, size
+0x8+0xB8 -> 0xC0, delete the successor .s + wrap; nothing referenced `gl_func_00034188` except
+comments) and it matched 48/48. Two things worth keeping from it:
+(1) **The orphan's lo16 field is the SYMBOL oracle, not just the spelling oracle.** game_libs
+ROM words bake lo16 addends (21D2C's `lw v1,0x2534(v1)`), so an orphan `lw rX,0(rX)` is a
+DISTINCT symbol -- a base-0 alias in `undefined_syms_auto.txt` (`gl_d_34180_dev = 0x0`) --
+while the same function's later `lw v1,0x240(a1)` off a held `lui a1; addiu a1` base is
+`&D_00000000 + 0x240`. Spelling the head as `*(char**)((char*)&D_00000000+0x240)` bakes 0x240
+and can never match the ROM word.
+(2) The whole-function v0/v1 + held-base residual that would have looked like a "first-temp
+coloring cascade" fell to four C levers in one standalone session; see
+`docs/IDO_CODEGEN.md#device-tick-coloring-kit-34180` (inline fn-ptr call -> `jalr t9`; named
+`vt` claims v0 over the inline device temp; `&D` as a CALL ARG holds the base pre-call;
+compound `x = (g ^= 1)` -> temp-only coloring; `if (1) {}` before an empty delay loop flips
+counter/bound).
+Remaining sibling in the same shape: `game_libs_func_00033444` (+`gl_func_0003344C`, 18%),
+`game_libs_func_000349E0` (+`gl_func_000349E8`, 56%) -- both `lui tN; lw tN,K(tN)` orphans
+in game_libs_post/post0b with the same "deferred re-split" note.
+
 ## Hoisted-prologue mis-split, REVERSE direction: orphan word at the PARENT's tail (65494/659D0)
 <a name="hoisted-prologue-reverse-tail-orphan-65494"></a>
 

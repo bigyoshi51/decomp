@@ -175,6 +175,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Custom guLookAtF decode (5F5F0 45.3->82.3): gu-shape first; (f32)1 CSE-break; low-rank guard-sqrt var memory-homes; escape-array + join-scalar clamp (2026-07-30 agent-f)](#gulookatf-clamp-5f5f0) — _clamped guLookAtF variant; direct-jal not fnptr-cast; v[3] escape array + join scalars; (f32)1 splits 1.0f compare/assign CSE (callee-saved waste); slen own-var memory-homes (volatile = +1 reload, wrong); up-vector must reuse Up params; residual = entry-anchored written-param blocks f22 timeshare with 10.0f const._
 - [Memory-serialized FP sampler kit: volatile state-ptr loads + VOLATILE Vec3 locals + interleaved-scalar frame gaps + multu-by-u32-var (54264 49.2->85.1, 2026-08-22 agent-g)](#volatile-vec3-serialized-sampler-54264) — _volatile deref macro for per-vertex base reloads; volatile struct locals serialize cvt/store blocks + slot-resident row operands; frame gaps = reserved homes of register scalars by decl order (spilled var FIRST -> top slot); u32 var for multu; product-first vs base-first fetch spelling flips addu operand order per site._
 
+- [Device-tick coloring kit (game_libs_func_00034180 78->EXACT, 2026-09-05 agent-g): inline fn-ptr call -> `jalr t9`; named `vt` + inline device temp fixes v0/v1; `&D` passed as a CALL ARG makes IDO HOLD the base pre-call (`lui a1; addiu a1; lw v1,K(a1)`) where a lone use folds; compound `x = (g ^= 1)` colors temps t8/t0/t2 (named flag -> a0); `if (1) {}` before an empty i++ delay loop flips counter/bound v1/v0 -> v0/v1](#device-tick-coloring-kit-34180) — _33 -> 0 diffs in six standalone variants; the whole-function v0/v1 swap was NOT a first-temp cascade cap._
+
 ## Quick reference by sub-topic
 
 ### uopt internals (allocator opened, 2026-06-11)
@@ -24626,3 +24628,45 @@ four sparse labels 1/2/4/8 IDO lowers to a compare chain; the four EXPLICIT labe
 `sw a0,0(sp)` in the range-check `beqz` delay slot with NO jal in the function
 ([#feedback-ido-unused-arg-save](#feedback-ido-unused-arg-save) says "when the function
 contains a jal" -- the indirect table jump counts); `if (a0) {}` removes it.
+
+## Device-tick coloring kit: inline fn-ptr `jalr t9`, named-vt v0 claim, `&D` call-arg HOLDS the pre-call base, compound `^=` temp coloring, `if(1){}` before an empty delay loop (game_libs_func_00034180 78->EXACT, 2026-09-05 agent-g) <a name="device-tick-coloring-kit-34180"></a>
+
+Target (48 words, after the hoisted-orphan merge in
+`docs/MATCHING_WORKFLOW.md#feedback-callerset-t6-orphan-head-is-hoisted-prologue`):
+
+```
+lui v1,%hi(dev); lw v1,%lo(dev)(v1)      <- hoisted above addiu sp (distinct base-0 alias)
+addiu sp,-0x18; sw ra
+lw v0,0x28(v1); lw t9,0x1C(v0); lh t6,0x18(v0); jalr t9; addu a0,t6,v1
+jal 0; nop; jal 0; nop
+sltiu at,v0,0x1E0; beqz at,exit; nop
+loop: jal 0; nop; sltiu at,v0,0x1E0; bnez at,loop; nop
+exit: lui a1,%hi(D); addiu a1,%lo(D); lw v1,0x240(a1); lw v0,0x28(v1); lw t9,0x64(v0)
+lh t7,0x60(v0); jalr t9; addu a0,t7,v1
+jal 0; or a0,v0,zero
+lui a1; addiu a1; lw t8,0x204(a1); lw t2,0x240(a1); lui v1,0x1E; xori t0,t8,1
+sw t0,0x204(a1); ori v1,0x8480; or v0,zero,zero; sw t0,0x144(t2)
+addiu v0,4; L: bnel v0,v1,L; addiu v0,4
+```
+
+The first honest C (named `h`/`vt`/`f`/`flag` locals, `*(char**)(&D+0x240)` for every device
+load, `for (i=0;i<2000000;i++);`) is count-exact but 33 words off -- ALL register/hold
+residuals. Each fell to a C spelling; none needed the regalloc dump:
+
+| residual | build | lever |
+|---|---|---|
+| `jalr a1` vs `jalr t9` | fn ptr held in a named local `f` (assigned twice) colors a1 | call the pointer INLINE as an expression: `(*(int (**)())(vt + 0x1C))(...)` -> t9 |
+| h/vt in v0/v1 vs target v1/v0 (both halves) | first-defined named `h` claims v0 | NAME `vt`, leave the device pointer INLINE (CSE'd twice -> a temp); the named web claims v0 ([#feedback-ido-named-deref-web-claims-v0](#feedback-ido-named-deref-web-claims-v0)), the temp takes v1 |
+| pre-call `lui v0; lw v0,0x240(v0)` (folded) vs `lui a1; addiu a1; lw v1,0x240(a1)` (held) | one `&D` use in the BB -> fold | the callee takes `&D` as its 2nd ARG: `f2(h + off, &D_00000000)` -> two uses of the `&D` expression in the BB (arg + load base) -> IDO materializes it once, in a1 because that is where the arg must land, and the load reads off it. After the call the 3-use region re-materializes `lui a1; addiu a1` on its own |
+| `lw a0; xori a0,a0,1; sw a0; sw a0` vs `lw t8; xori t0,t8,1; sw t0; sw t0` + dev in t2 | a named `flag` local colors a0 and reuses one reg for old/new | write it as ONE compound expression: `dev->f144 = (D->f204 ^= 1);` -> old value / xor result / dev pointer are three temps t8/t0/t2 |
+| loop counter v1 / bound v0 vs target v0 / v1 | `for (i=0;i<2000000;i++){}` right after the store | `if (1) {}` immediately before the loop -- the BB barrier renumbers the loop's webs so the counter takes v0. Decl order, `register`, `u32`, `!= K; i += 4`, do-while, `char*` counter all inert (6 diffs each); a named bound `n` made it worse (14) |
+
+The empty `for (i = 0; i < 2000000; i++) {}` is IDO's classic delay loop: -O2 unrolls the
+dead-body i++ x4 into `addiu v0,4; bnel v0,v1,L; addiu v0,4` against the UNSCALED bound
+0x1E8480 (so a target `addiu 4` step does NOT mean `i += 4` in the source; `i += 4` un-unrolled
+also emits it but a body store makes `i += 4` unroll to `addiu 16`).
+
+Also: a `while ((u32)cb() < 480) {}` with the call INSIDE the condition emits IDO's rotated
+form exactly -- call; sltiu; beqz exit; [loop: call; sltiu; bnez loop] -- so a preceding bare
+`cb();` plus this loop is `jal; nop; jal; nop; sltiu; beqz`, NOT `v = cb(); ... while (v < 480) v = cb();`
+(that spills the first return to the frame: 0x30 vs 0x18).
