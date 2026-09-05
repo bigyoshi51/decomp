@@ -178,6 +178,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [SIXTEENTH CASE: game_libs 66620+66650+6665C -- THREE-symbol chain: the 3w "caller-set v0/v1 CAP" stub was the prev->next unlink arm and the 6w "tail fragment" was the loop advance + shared return; 21w singly-linked-list remove-by-key EXACT with `cur` initialised BEFORE `prev` (first-occurrence colouring cur=v0/prev=v1) and the null-prev arm written first (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _The scanner reports only the FIRST link; follow every branch-likely out of B too. Also: post1b's committed expected/ baseline is the C-build object (donor-splice `jal 0`+relocs), NOT the strip route -- `cp build/.o` there, strip + EXPECTED_BASELINE=1 only for pinned units (post0b/tail)._
 - [EIGHTEENTH CASE, JUMPTABLE + `-g3` CARVE-OUT flavour: game_libs 343F4 + three 3-word `lui v0,2; jr ra; addiu` "return &D_00000000+K" C stubs 34424/34430/3443C (fake-exact episodes) + 34448, the 4-word UNFILLED `lui; addiu; jr ra; nop` default block that had its OWN -O2 -g3 TRUNCATE_TEXT 0x10 unit -- `addiu t6,a0,-1; sltiu at,t6,8; beqz -> 34448; jr t6` is a `switch (a0)` 1..8; cases 2,3,5,1 in SOURCE order + `case 8: default:` = 25/25 EXACT via the 2E290 donor-splice recipe (`<fn>_rodata = 0x19B8`); the unfilled default `jr ra; nop` comes out of plain -O2 by itself, so the -g3 carve-out unit was a mis-split artefact (retired: .c + Makefile lines + tenshoe.ld line + objdiff.json unit + expected .o; host TRUNCATE_TEXT +0x10). First hit of `find-stub-misplits.py --runs` (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _A tiny -g3 `TRUNCATE_TEXT` carve-out whose only content is `X; jr ra; nop` right after a run of return stubs = the switch's default block, not a codegen need (docs/IDO_CODEGEN.md#switch-final-return-block-unfilled-jr-delay-not-g3-343f4). `--runs` sweeps whole dispatcher+stub runs; remaining hit = timproc_uso_b5 87A0 + 87D0/87D8/87E0/87E8 (same shape, own g3_87E8 carve-out). "64 C callers" of a 3-word arm were placeholder decodes (raw jal word resolves via the TextReloc table to another symIdx) -- check the reloc table, not grep counts._
 - [NINETEENTH CASE, YAY0 JUMPTABLE + `-g3` CARVE-OUT flavour: timproc_uso_b5 87F4+"8894" (88A0's twin: default `beqz` ON the 3-word `-g3` carve leaf, three `beql` on leaf+4, C unchanged, 43/43) and 87A0 + 87D0/87D8/87E0 `return 1/2/3` stubs + 87E8 `move v0,zero; jr ra; nop` `-g3` carve = ONE `jr t6` switch (21/21): unused `char *a0` param supplies the `sw a0,0(sp)` in the beqz delay (`if (a0) {}` kills it), explicit `case 3: case 5: case 6: case 7:` on default cross the 5-label jumptable threshold for the 1..8 range, arms in SOURCE order; block-5 splice rule reduced to the plain single-TU form -- NO carves remain in timproc_uso_b5 (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _`--runs` last hit closed. A `sw a0,0(sp)` in a frameless `jr tN` head is NOT an -O1 callback tell (that filter is for `jr ra; sw a0,0(sp)` STUBS): it is the unused leading arg homed by the switch. In-unit compile is fine for a Yay0 block: the three switch tables land at .rodata 0/0x20/0x40 and each fn differs from ROM only at its `lw %lo(.rodata)` word (verify-blocks lo16 class). Table CONTENT is unextractable without an RDRAM dump; the case->arm mapping is irrelevant to .text and was inferred from the callers._
+- [TWENTY-FIRST CASE, -O0 `$exit` DEAD-PAIR CARVE flavour: bootup_uso 11D40 + "11D70" -- the 2-word `jr ra; nop` "empty fn" that had its OWN `-O2 -g3` TRUNCATE_TEXT 0x8 unit (bootup_uso_tail3a_bot.c, fake glover-labelled episode) was ugen's dead `$exit: j $31` block of the preceding -O0 frameless predicate; nothing branches to it, but a STANDALONE -O0 empty fn is `b .+1; nop; jr ra; nop` (func_00010310), never a bare pair, so inside an -O0 run a 2-word `jr ra; nop` symbol can only be the predecessor's exit block. Our -O0 emits the 0x30 body + TWO dead pairs, shipped ONE: TRUNCATE_TEXT 0x30 -> 0x38, carve unit + tenshoe.ld line + objdiff unit + expected .o + stub episode retired, C unchanged, 14/14 (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Sweep rule for tiny `-O2 -g3` carve units inside an -O0 run: a bare `jr ra; nop` after a fn whose last statement is a return = its `$exit` pair; `X; jr ra; nop` + `jr ra; nop` after a framed -O0 fn = an -O0 FALL-OFF fn (`X; j $31` fall-off + `$exit: j $31`, cf. 102A4+"102E8" in o0_1024C where our -O0 emits exactly that shape + one extra pair). Remaining bootup_uso hits of both shapes: 11D78+"11DB4" (tail3a_bot_11DB4 unit), 11DBC+"11DF8", 102A4+"102E8", 102F0+"10308", 10324+"10344", 10A9C+"10AA8", 12BF8+"12C08" -- each currently a -g3 stub with a fake-exact episode. NOT hits: o0_10310 (genuine -O0 empty fn, 5 words), g3_62F58 (62F08 ends `jr ra; swc1` filled, nothing branches in)._
 - [SEVENTH CASE + GENERAL SCANNER: game_libs 986C+9920+993C -- the scanner's `A` (9920, reads caller-set t4/v0/v1/a3) was itself the return-block tail of the 44-word checksum VERIFIER 986C (sibling of the exact writer 97B4); its `beq` lands ON 9920 and 9920's `beq` (preset `li v0,1` in the delay) lands ON the `jr ra; nop` "empty fn" 993C = the return-1 exit; merged 54w EXACT; `scripts/find-stub-misplits.py` generalises the scan to ANY branch onto an adjacent 1-3 word `jr ra` stub incl. already-"matched" C stubs (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk BACK from the scanner's A until the head has no caller-set reads; a plain `beq` landing ON B+0 with the preset return value in ITS delay slot is the -O2 exit-block flavour. Last-word lever: `var + load` emits the inline load as addu rs in BOTH source orders -- pin the var first via `load + (t = var)` (integer assignment-expr lever). Remaining hits: 9944+9970, 2E290+2E2F8, 4FB78+4FB9C, 560E4+56150._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
@@ -11002,6 +11003,51 @@ the block gate already classifies the `%lo(.rodata)` word as reloc-class -- the 
 for game_libs units whose `.o`-level byte_verify has no such allowance. (3) A carve-out unit
 list in a Makefile splice rule is a to-do list: every one of block 5's four carves (1DA4, 87E8,
 8894, 8940) turned out to be a predecessor switch's return block.
+
+**TWENTY-FIRST CASE (2026-09-05 agent-c): bootup_uso func_00011D40 + "func_00011D70" -- the -O0
+`$exit` dead-pair flavour, no branch involved.** `find-beql-dup-misplits.py` cannot see this one:
+nothing in 11D40 branches to 0x11D70. The tell is the opt level of the RUN. 11D40 is
+`lw t6,0x120(a0); slt at,t6,a1; beqz at,+4; nop; move v0,zero; jr ra; nop; sll; addu; lw v0; jr ra; nop`
+(a frameless -O0 predicate, MATCHED at -O0 in its own file-terminal unit with TRUNCATE_TEXT 0x30
+since 2026-07-10); "11D70" is `jr ra; nop`, given its own `-O2 -g3` unit `bootup_uso_tail3a_bot.c`
+with TRUNCATE_TEXT 0x8, an objdiff unit and a fake-exact episode (labelled game "glover",
+compiler gcc). Compile o0_11D40.c at -O0 WITHOUT the truncate: the 0x30 body is followed by TWO
+`jr ra; nop` pairs (0x30, 0x38) -- ugen's unreachable fall-off `j $31` plus the `$exit: j $31`
+label block, exactly as documented for mgrproc 140+168
+(docs/IDO_CODEGEN.md#o0-two-block-predicate-not-adjacent-leaf-cap). The shipped build keeps ONE
+of them, and that one is "11D70". Why it cannot be a separate function: the shipped -O0 shape of
+a standalone empty function is `sw a0,0(sp); b .+1; nop; jr ra; nop` (func_00010310, matched at
+-O0 in o0_10310.c) -- the fall-off path BRANCHES to `$exit`, so an -O0 empty fn is >= 4 words and
+a bare 2-word `jr ra; nop` symbol inside an -O0 run can only be the predecessor's exit block. The
+`-O2 -g3` unit encoded the wrong model (a -O2 empty fn happens to be 2 words too).
+
+**Landing:** TRUNCATE_TEXT / NON_MATCHING_TRUNCATE_TEXT 0x30 -> 0x38 on o0_11D40 (keeps one dead
+pair, clips the second); `git rm` the carve .c, its expected .o, its stub episode and `.s`; drop its
+tenshoe.ld `(.text)` line and objdiff.json unit; append the two words to func_00011D40.s (0x30 ->
+0x38); expected/o0_11D40.c.o = `cp` of the rebuilt object (bootup_uso is a direct multi-.o link, so
+`cmp tenshoe.z64 baserom.z64` is the real gate and it stayed byte-identical); C body unchanged;
+report 11D40 100.0 size 56, 11D70 gone. Episode logged for 11D40 (14 words).
+
+**The two -O0 exit shapes, for the sweep:**
+- last statement is `return X;` (frameless): `...; X; jr ra; nop` ends the symbol, the `$exit`
+  pair follows as a separate 2-word "empty fn" (11D40+"11D70", 11D78+"11DB4", 11DBC+"11DF8";
+  11D78/11DBC additionally carry an interior dead pair from a lexically dead `return;`).
+- fall-off (no return statement, frameless): ugen emits the fall-off `j $31; nop` INSIDE the fn
+  and the `$exit` pair after it, i.e. `X; jr ra; nop | jr ra; nop` -- o0_1024C's 102A4 compiles
+  to exactly `swc1; jr ra; nop; jr ra; nop` (+ one extra pair) and the ROM has "func_000102E8"
+  `jr ra; nop` right after it. Same for 102F0+"10308", 10324+"10344", 10A9C+"10AA8",
+  12BF8+"12C08" -- all currently matched as `-O2 -g3` leaves whose only -g3 purpose is the
+  unfilled `jr` delay that -O0 gives for free. Their heads live in -g3 units, so absorbing them
+  means moving the head to its own -O0 file-terminal unit (TRUNCATE = body + 8) and deleting the
+  stub, one per commit.
+- framed -O0 fns branch `b .+1` to their epilogue (10540, 12B7C, 12C10) and emit NO extra pair, so
+  a `jr ra; nop` after a framed fn is NOT this class -- check the predecessor's frame first.
+
+**Not hits:** o0_10310 (5 words, the genuine standalone -O0 empty fn); game_libs_g3_62F58
+(`sw a0,0(sp); jr ra; nop` -- 62F08 ends `jr ra; swc1 $f4,0x78(a0)` filled, nothing branches into
+62F58, and at -O0 it would need the `b .+1`; a real `-g3`/homed-arg leaf); kernel_018 (0x4, the
+`or a3,a2,zero` alias entry) and kernel_018_c (0xC `li v0,-1; jr ra; nop` -O1 stub, predecessor
+has a normal epilogue).
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 

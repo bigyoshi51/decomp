@@ -24407,6 +24407,16 @@ both at O0 — there is no flag in 7.1/5.3 (-g/-g3/-mips1/-mips3/-cckr/-ansi/-Xc
 yields exactly one. TRUNCATE_TEXT is the honest fix (all-zero/dead-word clipping is a genuine
 layout mechanism, not instruction patching).
 
+**Empty-fn discriminator (bootup 11D40+"11D70", agent-c 2026-09-05):** a shipped -O0 EMPTY function is
+`[sw a0,0(sp);] b .+1; nop; jr ra; nop` (func_00010310) -- the fall-off path branches to `$exit`
+-- so it is never a bare 2-word `jr ra; nop`. Inside an -O0 run a 2-word `jr ra; nop` symbol is
+therefore always the preceding fn's `$exit` pair; a `-O2 -g3` "empty fn" carve unit holding one
+(bootup_uso_tail3a_bot.c, retired) encodes the wrong model. Fall-off fns with a body emit
+`X; j $31; nop` in-symbol + the `$exit` pair after (102A4 -> "102E8"); framed fns `b .+1` to the
+epilogue and emit no extra pair. See docs/MATCHING_WORKFLOW.md twentieth beql case for the sweep
+list (11D78+"11DB4", 11DBC+"11DF8", 102A4+"102E8", 102F0+"10308", 10324+"10344", 10A9C+"10AA8",
+12BF8+"12C08").
+
 ## Duff's-device `case N:` label INSIDE a loop body suppresses uopt code motion for that loop (no preheader; `$at` constants; invariant loads stay) -- game_libs_func_00029CCC 207/207 EXACT (2026-09-05, agent-c) <a name="duff-case-label-inside-loop-suppresses-licm"></a>
 
 **Symptom.** A `switch` case that is a loop (here: read keyframes until a non-jump entry) whose
