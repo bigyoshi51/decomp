@@ -170,11 +170,13 @@ explicit shared blocks (goto a common label), not regeneration.
 - [TENTH CASE: game_libs 4FB34+4FB5C+4FB78+4FB9C -- scanner's A (4FB78) read caller-set $v1, head was TWO symbols back; hex-digit char->value, `unsigned char` param (homed `sw a0` + eager andi) and `unsigned char` return (andi in every jr delay), if/else-if chain with early returns + final `else return 0`; the shipped third test is `c <= 'A'` (slti 0x42); 28w EXACT, three "leaf-branch-past-end CAP class" notes retired (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk back until a symbol homes/zero-extends its own arg; a named `ret` local instead of early returns is 13 words off._
 - [THIRTEENTH CASE, JUMPTABLE flavour: game_libs 2E290 + seven `jr ra; li v0,K` "return K" C stubs 2E2F8..2E328 (all with fake-exact episodes) + the 2E330 "caller-set $v0/$a1 loop tail CAP" -- the stubs were the CASE ARMS of a `jr t6` switch and the tail its `default:`; read the table with `extract-uso-jumptable.py --shim 0x1466C` (targets = value - shim), donor-splice it (29CCC/6DD14 recipe, `<fn>_rodata = 0x1660`), `case 32: default:` widens the table range to the target's 1..32; 49/49 EXACT (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _`find-stub-misplits.py` only sees the branch onto the FIRST stub; when the head ends in `jr tN`, EVERY 2-word `return K` symbol between it and the next real prologue is a case arm -- merge the whole run plus the loop/default tail. Case arms lay out in SOURCE order (2,3,5,9,17,1,0x40)._
 - [FOURTEENTH CASE, COMPARE-CHAIN flavour: game_libs 560E4 + ten `jr ra; li v0,N` stubs 56150..56198 + the 561A0 `jr ra; nop` "empty fn" (eleven fake-exact episodes) -- a 12-way `li at,K; beq` chain whose every beq lands ON a stub and whose `b` lands on the empty fn (= the shared epilogue); `switch` gives binary-search+jumptable, the `if (bit == K) goto cK;` chain + `r = 11; goto end;` default flowing to the FINAL `return r;` + inverted-skip last test = 49/49 EXACT in-unit (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Scanner shows `A -> B` for the first stub only; count the beq targets: N compares landing on N consecutive 2-word return stubs = one function. Codegen levers in docs/IDO_CODEGEN.md#goto-chain-default-flow-to-final-return-560e4._
+- [SEVENTEENTH CASE, YAY0 -g3-CARVE flavour: timproc_uso_b5 88A0+8940 -- the "matched" 3-word `-O2 -g3` carve leaf (`move v0,zero; jr ra; nop`, its own sub-unit + block-5 splice term + objdiff unit) was the switch's shared return-0 block: the default `beqz at` lands ON 0x8940, the three `beql tN,zero` land on 0x8944 with the dup'd `move v0,zero` in their delay slots; the `jr ra` delay is unfilled at plain -O2 because 0x8944 is a branch target, so NO carve; merge + drop the carve, C unchanged from the 2026-06-10 NM body, 43/43 (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _The 2026-06-10 "corrupted .s merge" retraction was right about expected/ poisoning and WRONG about the boundary. Yay0 gate = decompressed built block vs ROM asset over the fn range: only the jumptable `lw %lo(.rodata)` reloc word may differ (target bakes the original TU's .rodata offset, 0x214). 6F1D8+6F1FC is NOT a mis-split (two-key strchr donor splice, both 100.0) -- the scanner flags it only because both `.s` still exist._
 - [EIGHTH CASE: game_libs 3AA5C+3AC50 -- the 3-word "caller-set $t2 CAP" stub was the fn's own `sign = -1` else block; 128-word FP leaf exact on the first in-tree build; the two-word `sll/sra` before the `beqz` came from a CHAINED `axis = o->axis = cond ? 0 : 1` (assignment-expression value converted to the field's signed char), and that extension is what lines up the whole later tN ring (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk both directions first (3AA40 = matched jr-ra leaf, 3AC5C = own prologue). Levers: Vec3 fields (float[] swaps the last add.s operands), `axis = cond ? 2 : o->axis; o->axis = axis;` per arm (value select + one store), `axis = o->axis; switch (axis)`. See docs/IDO_CODEGEN.md#chained-assignment-field-conversion-sign-extend-tn-ring._
 - [ELEVENTH CASE: game_libs 5BBEC+5BC04 -- the 8-word "matched" clamp-min stub (with an episode) was the fn's own else arm; clamp-into-[-b,b] exact ONLY as a single-exit `if (b < a) { a = b; } else { ... if (a < neg_b) a = neg_b; } return a;` -- two `return`s make IDO branch-likely the SECOND test too (dup `mov.s f0,f12`, 4 words off), a `ret` local adds moves (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _When the target's inner test is a plain `bc1f` straight onto `jr ra` with the return move in the jr delay, the return block must have a SINGLE predecessor shape: clamp in place on the arg, one `return`. See docs/IDO_CODEGEN.md#single-exit-clamp-in-place-vs-two-returns-branch-likely._
 - [TWELFTH CASE: game_libs 5CA78+5CAEC+5CB5C -- twelve beql hits, two six-test `&&` ladders + a `move v0,zero; jr ra; nop` return-0 block; 60w exact as two plain `if (&&...) return 1;` + `return 0;` (`if (A || B)` breaks the last test of ladder 1 into `bne`+nop; `return A || B` = 56w value form). DECODE GOTCHA: branch-likely delay slots are NULLIFIED on fall-through -- the dup'd `lw v0,0xC(a0)` never runs on the not-taken path, so the old note compared against the wrong field (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Read fall-through register state PAST a beql/bnel/bc1fl as if the delay slot were absent. The value loaded before the first branch (b->x1 in v1) dominates both ladders and is CSE'd; loads inside a ladder are on only some paths and get reloaded -- not volatile._
 - [FIFTEENTH CASE: game_libs 624EC+62524 -- the 7-word "loop-bottom tail-fragment with caller-set v0/v1/a2" was the fn's own loop-increment + shared return(-1) block (two bnel -> 62524+4, blezl -> its jr ra); 21w slot-table linear search EXACT via goto-loop (a `for` auto-unrolls x4) + `while (0) { i = key1; }` ucode-slot ordering so key1 is coloured BEFORE the entry pointer (pointer takes a2, key2 displaced to a3) (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _A displaced param can only land in a3 (a0-a2 hold incoming values); WHICH param gets displaced = first-occurrence order of the params vs the pointer's definition. Decl order, operand order, `register`, `(void)x`, `x += 0` all fold away; only the while(0) dead body moves the ucode slot._
 - [SIXTEENTH CASE: game_libs 66620+66650+6665C -- THREE-symbol chain: the 3w "caller-set v0/v1 CAP" stub was the prev->next unlink arm and the 6w "tail fragment" was the loop advance + shared return; 21w singly-linked-list remove-by-key EXACT with `cur` initialised BEFORE `prev` (first-occurrence colouring cur=v0/prev=v1) and the null-prev arm written first (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _The scanner reports only the FIRST link; follow every branch-likely out of B too. Also: post1b's committed expected/ baseline is the C-build object (donor-splice `jal 0`+relocs), NOT the strip route -- `cp build/.o` there, strip + EXPECTED_BASELINE=1 only for pinned units (post0b/tail)._
+- [SEVENTEENTH CASE, JUMPTABLE + `-g3` CARVE-OUT flavour: game_libs 343F4 + three 3-word `lui v0,2; jr ra; addiu` "return &D_00000000+K" C stubs 34424/34430/3443C (fake-exact episodes) + 34448, the 4-word UNFILLED `lui; addiu; jr ra; nop` default block that had its OWN -O2 -g3 TRUNCATE_TEXT 0x10 unit -- `addiu t6,a0,-1; sltiu at,t6,8; beqz -> 34448; jr t6` is a `switch (a0)` 1..8; cases 2,3,5,1 in SOURCE order + `case 8: default:` = 25/25 EXACT via the 2E290 donor-splice recipe (`<fn>_rodata = 0x19B8`); the unfilled default `jr ra; nop` comes out of plain -O2 by itself, so the -g3 carve-out unit was a mis-split artefact (retired: .c + Makefile lines + tenshoe.ld line + objdiff.json unit + expected .o; host TRUNCATE_TEXT +0x10). First hit of `find-stub-misplits.py --runs` (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _A tiny -g3 `TRUNCATE_TEXT` carve-out whose only content is `X; jr ra; nop` right after a run of return stubs = the switch's default block, not a codegen need (docs/IDO_CODEGEN.md#switch-final-return-block-unfilled-jr-delay-not-g3-343f4). `--runs` sweeps whole dispatcher+stub runs; remaining hit = timproc_uso_b5 87A0 + 87D0/87D8/87E0/87E8 (same shape, own g3_87E8 carve-out). "64 C callers" of a 3-word arm were placeholder decodes (raw jal word resolves via the TextReloc table to another symIdx) -- check the reloc table, not grep counts._
 - [SEVENTH CASE + GENERAL SCANNER: game_libs 986C+9920+993C -- the scanner's `A` (9920, reads caller-set t4/v0/v1/a3) was itself the return-block tail of the 44-word checksum VERIFIER 986C (sibling of the exact writer 97B4); its `beq` lands ON 9920 and 9920's `beq` (preset `li v0,1` in the delay) lands ON the `jr ra; nop` "empty fn" 993C = the return-1 exit; merged 54w EXACT; `scripts/find-stub-misplits.py` generalises the scan to ANY branch onto an adjacent 1-3 word `jr ra` stub incl. already-"matched" C stubs (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk BACK from the scanner's A until the head has no caller-set reads; a plain `beq` landing ON B+0 with the preset return value in ITS delay slot is the -O2 exit-block flavour. Last-word lever: `var + load` emits the inline load as addu rs in BOTH source orders -- pin the var first via `load + (t = var)` (integer assignment-expr lever). Remaining hits: 9944+9970, 2E290+2E2F8, 4FB78+4FB9C, 560E4+56150._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
@@ -1234,6 +1236,8 @@ IDO -O2 emits the parent's N words PLUS the 3-word `move v0,zero; jr ra; nop` ta
 **Landing (absorb + drop the carve).** (1) Make the parent the merged (N+3)-word C function (unwrap any `#ifdef NON_MATCHING`/`#else INCLUDE_ASM`). (2) `git rm` the leaf's `<seg>_g3_<off>.c` donor. (3) In the Makefile, remove the leaf from: the g3 `OPT_FLAGS` line, its two `TRUNCATE_TEXT` lines, the block's prereq list, the `OBJCOPY ... $(word K,$^)` line, and the splice python (drop the `gN`/`pN` term and renumber `sys.argv` indices + the `n=int(sys.argv[...])` size arg). The splice offsets of EARLIER carves are unchanged. (4) Gate = block decompress vs ROM asset: exact length + 0 non-reloc word diffs (the parent's jumptable `lw $t7,off($at)` LO16 stays a reloc-class diff). The block size (`YAY0_TEXT_SIZE`) is unchanged: the 3 words the parent gained = the 3 words the dropped carve would have inserted.
 
 Verified 2026-06-20 on `timproc_uso_b5_func_000088A0` (absorbed `func_00008940`): block5 `len 0xE620/0xE620, jal=8 lo16=8, other=0`.
+
+**LANDED 2026-09-05 (agent-c, `4f3f7ded7` on agent-c):** exactly the recipe above; block5 `len 0xE620/0xE620, other=0`, lo16 23->24 (the new one is 88A0's jumptable `lw t7,%lo(.rodata)`, target bakes 0x214), fn-range diff over [0x88A0,0x894C) = that one reloc word only. Also remove the leaf's `objdiff.json` unit and `expected/.../_g3_8940.c.o`, and rebuild the parent unit's expected/ via the single-unit strip + `EXPECTED_BASELINE=1` route (this unit's committed baseline is the raw-word build: `.text` differed from the old one only by the 3 inserted words, symtab only 88A0 160->172). See the seventeenth beql case for why the earlier retraction of this absorb was itself wrong.
 
 ## FALSE-MATCH TRAP: `verify-blocks other=0` + `make verify` ROM-OK do NOT prove a Yay0-block function is byte-exact — spill/frame-offset diffs hide in `lo16`, and the ROM links the STORED asset not the rebuild
 
@@ -7986,6 +7990,8 @@ stale g3 .o); (7) promote the parent C, rebuild both paths, re-score.
 
 ## CIRCULAR FALSE POSITIVES: .s-merge corruption -> self-verified C -> poisoned expected/ (87F4/88A0 retraction)
 
+_UPDATE 2026-09-05 (agent-c): the expected/-poisoning lesson stands, but this entry's BOUNDARY verdict for 88A0 was wrong -- 8940 IS 88A0's own return-0 block (default `beqz` lands ON it, the `beql`s on it+4 with its first insn dup'd in their delay slots), and the merged 43-word fn is byte-exact vs the ROM asset with the 2026-06-10 C unchanged. 87F4+8894 is the same shape (its `beqzl` lands on 0x8898 = 8894+4) and is still carved -- same fix pending. The ROM-truth gate for a Yay0 block is the decompressed built block vs `assets/<blk>.bin`, never the `.s`._
+
 The worst failure mode found to date (2026-06-10, two landed episodes
 retracted). Chain: (1) a boundary merge wrongly absorbs an adjacent
 leaf into a fn's .s; (2) C is byte-verified against that corrupted .s
@@ -10329,7 +10335,7 @@ any branch into the next symbol. Remaining queue at 2026-09-05 (all game_libs
 unless noted, all INCLUDE_ASM or NM): ~~27300+27348~~ (landed 2026-09-05, third case below), ~~28E28+28E6C~~ (agent-c 2026-09-05, fourth case below -- was really 28E14+28E28+28E6C+28E8C),
 ~~29D08+29FDC+29FFC~~ (agent-c 2026-09-05, fifth case below -- was really 29CCC+29D08+29FDC+29FFC), ~~3AA5C+3AC50~~ (agent-c 2026-09-05, eighth case below), ~~5BBEC+5BC04~~ (agent-c 2026-09-05, ninth case below), ~~5CA78+5CAEC+5CB5C~~ (agent-c 2026-09-05, tenth case below),
 624EC+62524, 66620+66650, 67FD8+68004, 453D8+45418, 57194+571E4,
-timproc_b5 88A0+8940(matched g3 stub). Note 5CAEC's six `beql`s all land on
+~~timproc_b5 88A0+8940~~ (agent-c 2026-09-05, seventeenth case below -- the "matched g3 stub" was the return-0 block). 6F1D8+6F1FC is NOT a mis-split: both keys are byte-exact on the build path via the `GAMELIBS_6F1D8_DONOR` two-key strchr splice in game_libs_post1b2c (the scanner flags the pair only because both `.s` files still exist) -- legit skip. Note 5CAEC's six `beql`s all land on
 5CB5C+4 — a shared `return 0` block, same idiom, not a tail-share.
 
 **Third worked case (2026-09-05, agent-c): game_libs_func_00027300 + "27348"
@@ -10846,6 +10852,86 @@ strip route; unpinned units whose old baseline `.text` equals the build's `.text
 `cp build/src/<unit>.c.o expected/...`. Always verify `.text` identical + symtab diff limited to
 the merged symbols before committing either. Remaining queue: 6F1D8+6F1FC (already donor-spliced
 in post1b2c -- check REPLACE_FUNC_BODY first), timproc_b5 88A0+8940 (matched g3 stub).
+
+**SEVENTEENTH CASE (2026-09-05 agent-c): timproc_uso_b5_func_000088A0 + "8940" -- the mis-split
+block was a "matched" `-O2 -g3` CARVE in a Yay0 block.** Target 43 words:
+```
+88A0 lw t6,0x3C8(a0); addiu t7,t6,-1; sltiu at,t7,8; beqz at,-> 8940   <- default lands ON the leaf
+     sll/lui/addu/lw t7,0x214(at)/jr t7/nop                              <- 8-entry jumptable
+88C8 lw t8,0x3C0(a0); andi t9,t8,8; beql t9,zero,-> 8944; move v0,zero; jr ra; li v0,8
+88E0 ... andi 1 / beqz +3 / andi 8 / jr ra; li v0,1 / beql -> 8944; move v0,zero / jr ra; li v0,8
+8908 ... andi 2 / andi 1 / andi 8 chain, last beql -> 8944; move v0,zero / jr ra; li v0,8
+8940 move v0,zero; jr ra; nop                                            <- "func_00008940"
+```
+`8940` had been carved into `timproc_uso_b5_g3_8940.c` (`int f(void){return 0;}` at `-O2 -g3`,
+`TRUNCATE_TEXT 0xC`, a `g4`/`p4` term in the block-5 splice python, its own `objdiff.json` unit and
+`expected/` object) because its `jr ra` delay is unfilled -- but the delay is unfilled at plain -O2
+simply because 0x8944 is a branch target (the `beql`s jump straight to the `jr ra`, carrying the
+dup'd `move v0,zero` in their annulled slots). The 2026-06-10 "exact" had done the right merge, was
+retracted as a "corrupted .s merge / branch-into-adjacent cap" when the block-5 assembly tripped on
+the un-removed splice term, and the leaf was re-carved. Fix = the absorb recipe
+(`#feedback-absorb-forward-branched-g3-return0-tail`): merge the `.s` (0xA0 -> 0xAC), unwrap the
+existing NM body unchanged (three case bodies 8 / 1,8 / 2,1,8, cases 4..8 stacked on `goto z`,
+`z: return 0;` LAST), delete the `_g3_8940.c`, its two `TRUNCATE_TEXT` lines and OPT_FLAGS entry, the
+block prereq + `OBJCOPY` line + `g4`/`p4` splice term (renumber `sys.argv`), the `objdiff.json` unit
+and `expected/.../_g3_8940.c.o`. First in-tree build: decompressed block vs
+`assets/timproc_uso_block_5.bin` over [0x88A0,0x894C) differs ONLY at 0x88BC, the jumptable
+`lw t7,%lo(.rodata)` (target bakes the original TU's `.rodata+0x214`; the build `.o` has a 0x20
+`.rodata` with `R_MIPS_LO16 .rodata`) -- the same reloc class as this block's other 23 accepted
+`lo16` words (the `lwc1 %lo(.rodata+0x234..)` literal-pool loads that follow the tables).
+`make verify-blocks` `len 0xE620/0xE620 other=0`; report 100.0.
+
+Three lessons: (1) **a "matched" `-g3` return-0 carve whose predecessor's branches land on it and
+on it+4 is this idiom**, not an unfilled-delay leaf -- check the predecessor's branch targets
+before building (or trusting) carve machinery; (2) **for a Yay0 block, `cmp tenshoe.z64` and the
+per-`.o` gate are both blind** -- the ROM links the STORED asset -- so the boundary question is
+settled ONLY by the decompressed built block vs `assets/<blk>.bin` over the merged range; (3) a
+retraction can itself be wrong: 2026-06-10 read "fn ends at the leaf and branches INTO it" as a
+cap when it is the fingerprint of a mis-split. Sibling **87F4+8894** in the same unit is the
+identical shape (`beqzl -> 0x8898`, carve `_g3_8894.c`) and is still pending; do it in the same
+landing wave since it edits the same splice rule and `expected/` object.
+
+**SEVENTEENTH CASE (2026-09-05 agent-g): game_libs_func_000343F4 + "34424" + "34430" +
+"3443C" + "34448" -- the JUMPTABLE flavour again, this time with the default block hidden in
+a `-g3` carve-out unit.** New sweep mode `scripts/find-stub-misplits.py --runs` (written for
+this case) walks the address ladder of every segment (all `.s` plus every C fn def in
+`src/<seg>/`) for runs of >=2 ADJACENT 1-3-word `jr ra` symbols whose immediately preceding
+symbol ends in `jr tN`, carries an `li at,K; beq/bne` compare chain, or branches into the run.
+343F4 was the first hit: a 12-word head `addiu t6,a0,-1; sltiu at,t6,8; beqz at -> 34448;
+sll; lui at; addu; lw t6,0x19B8(at); jr t6; nop` + one arm, then three 3-word
+`lui v0,2; jr ra; addiu v0,v0,K` arms "matched" as `return (int)((char *)&D_00000000 + K);`
+stubs WITH episodes, then 34448 = `lui v0,2; addiu v0,v0,-0x1C14; jr ra; nop` -- which had
+been given its OWN `-O2 -g3` + `TRUNCATE_TEXT := 0x10` unit (`game_libs_g3_34448.c`, listed
+in `tenshoe.ld` between `game_libs_post.c.o` and `game_libs_post0b.c.o`) purely to reproduce
+the unfilled jr delay. The beqz lands on it: it is the switch's `default:`. Table read from the
+raw USO rodata words at +0x19B8 (entry 0 = quirk word `0x20000000`, entries 1..7 = 34418 /
+34424 / 34448 / 34430 / 34448 / 34448 / 34448 in bootup coordinates, and the 3443C arm's
+address parked just past the table at +0x19D8 -- the identical original-linker quirk 2E290
+shows), so case 2 -> k0, 3 -> k1, 5 -> k2, 1 -> k3, 4/6/7/8 -> default. `switch (a0)` with
+cases in SOURCE order 2,3,5,1 + `case 8: default: return &D+0x1E3EC;` = 25/25 on the FIRST
+standalone compile, including the unfilled `lui; addiu; jr ra; nop` default -- plain -O2 does
+not delay-fill a switch fn's final return block (same as 2E290's `move v0,zero; jr ra; nop`
+exit and 560E4's `end: jr ra; nop`), see
+`docs/IDO_CODEGEN.md#switch-final-return-block-unfilled-jr-delay-not-g3-343f4`. Wiring = the
+2E290 recipe (`REPLACE_FUNC_BODY +=` donor `game_libs_o2_343F4.c`, `<fn>_rodata = 0x19B8`) PLUS
+retiring the carve-out: `git rm` the unit `.c` and its `expected/` `.o`, drop its two Makefile
+lines and its `tenshoe.ld` line, delete its `objdiff.json` unit entry (else
+`refresh-report.sh` dies on the missing expected `.o`), grow the host's `TRUNCATE_TEXT`
+0x17a38 -> 0x17a48, refresh the host's expected `.o` via strip + `EXPECTED_BASELINE=1`
+(`.text` identical up to the fn, then +0x10; symtab 48->100, three removed).
+**Two lessons:** (1) 3443C had 64 C call sites (`game_libs_func_0003443C(code, 0xC80, ...)`)
+and a comment claiming "real callee per expected .o reloc" -- the expected `.o` has zero
+relocs to it, and the callers' raw jal word `0x0C00C7EC` resolves through the bootup.uso
+TextReloc table to symIdx 3, not to 0x3443C. A 3-word pointer-returning leaf "called" with
+4 args is a placeholder decode; check the reloc table before letting grep counts veto a merge.
+(2) Runs of `jr ra; sw a0,0(sp)` after a `jr tN` head (game_libs 7324.., 76C8.., 38B6C..)
+are NOT case arms -- a case arm never homes an argument; they are -O1 empty callbacks and
+`--runs` now filters any stub storing to `$sp`. Remaining `--runs` hit after this land:
+`timproc_uso_b5_func_000087A0` (11w, same `addiu t6,a1,-1; sltiu 8; beqz; jr t6` head with
+`sw a0,0(sp)` in the beqz delay) + 87D0/87D8/87E0 `return 1/2/3` + 87E8 `move v0,zero; jr
+ra; nop` -- which likewise lives in its own `-g3` carve-out (`timproc_uso_b5_g3_87E8.c`,
+spliced by the block5 Yay0 rule). Open: the a0 homing (struct-by-value or K&R narrow arg?)
+and the compressed-block table read (needs the decompressed block, not `--shim`).
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 
