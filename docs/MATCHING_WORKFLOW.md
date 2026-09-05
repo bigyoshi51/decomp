@@ -162,6 +162,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [cross-function tail-share via beql to sibling body produces unmatchable standalone signature](#feedback-cross-function-tail-share-unmatchable-standalone) — When function A's beql lands inside function B's body (e.g.
 - [RETRACTION: `beql` landing at NEXT-SYMBOL+4 whose first insn equals the beql delay slot = IDO branch-likely dup-first-insn idiom, a MIS-SPLIT null block, not a tail-share cap — merge + non-null arm FIRST (game_uso 7A98+7ABC exact)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _The target block's first insn is copied into the beql delay slot and the branch retargets to block+4; the USO splitter cuts at the preceding `jr ra`. Merge the .s, write `if (nonnull) {...} else {0}` with a named single-return local._
 - [THIRD CASE: game_libs 27300+27348 — the NM body's own "exact except an appended 3-word -1 epilogue" note described the mis-split next symbol; merge alone made it exact, C unchanged (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _"Exact except for an appended N-word epilogue" + next symbol is exactly N words = this idiom. Read the next .s before believing the cap._
+- [FOURTH CASE: game_libs 28E14+28E28+28E6C+28E8C -- the scanner's `A` was itself a tail (plain `bne` from its predecessor), the chain ended in a "matched empty fn"; an in-loop reload your C hoists means a DIFFERENT base register in the original, not `volatile` (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk the chain both directions from the scanner pair; decode `lw` base regs by hex before trying volatile._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
 - [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — _When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.c at -O1, fragments in kernel_018.c at -O2 because they're across an opt-level…
@@ -10312,7 +10313,7 @@ bytes, not symbol count.
 **Scanner:** `scripts/find-beql-dup-misplits.py` (project `scripts/`) prints
 every adjacent A→B pair with the fingerprint (`DUP-FIRST-INSN`), `--all` for
 any branch into the next symbol. Remaining queue at 2026-09-05 (all game_libs
-unless noted, all INCLUDE_ASM or NM): ~~27300+27348~~ (landed 2026-09-05, third case below), 28E28+28E6C,
+unless noted, all INCLUDE_ASM or NM): ~~27300+27348~~ (landed 2026-09-05, third case below), ~~28E28+28E6C~~ (agent-c 2026-09-05, fourth case below -- was really 28E14+28E28+28E6C+28E8C),
 29D08+29FDC+29FFC, 3AA5C+3AC50, 5BBEC+5BC04(matched stub!), 5CA78+5CAEC+5CB5C,
 624EC+62524, 66620+66650, 67FD8+68004, 453D8+45418, 57194+571E4,
 timproc_b5 88A0+8940(matched g3 stub). Note 5CAEC's six `beql`s all land on
@@ -10356,6 +10357,48 @@ EXPECTED_BASELINE=1`, `cp` that to `expected/`, restore the `.c`, `rm` the
 `.o` again and rebuild normally. Verify with `objcopy -O binary -j .text` that
 the new baseline's `.text` is byte-identical to the old one and `readelf -sW`
 differs only in the merged symbols.
+
+**Fourth worked case (2026-09-05, agent-c): game_libs_func_00028E14 -- the
+scanner's "A" was itself a tail; the chain was FOUR symbols, and the compare
+base register decides hoisting.** `find-beql-dup-misplits.py` reported
+`28E28 (17w) -> 28E6C (8w)`. But 28E28 has no prologue and reads `$v0` live at
+entry: it is the fall-through of the PRECEDING symbol 28E14's plain `bne v0,a0`
+(not branch-likely, so the scanner cannot see it). And 28E6C's final
+`bnez at,+3` lands on 28E8C = `jr ra; nop`, "matched" as an empty void fn with
+an episode (the 9AD0 pattern again). Real function = 28E14+28E28+28E6C+28E8C =
+0x80, 32 words; exact C:
+```c
+PrioObj *game_libs_func_00028E14(PrioNode *head, int lim) {
+    PrioNode *cur = head->next, *pos; PrioObj *obj;
+    if (cur == head) return 0;
+    pos = cur;
+    while (cur != head) {
+        if (pos->obj->prio >= cur->obj->prio) pos = cur;   /* CUR, not head */
+        cur = cur->next;
+    }
+    if (pos == 0) return 0;                 /* null arm first -> inline epilogue + fwd bnel */
+    obj = pos->obj;
+    if (obj->prio >= lim) return 0;         /* return-0 as branch body, return obj fall-through */
+    return obj;
+}
+```
+Two lessons on top of the idiom itself:
+1. **Walk the chain in BOTH directions from the scanner's pair.** Check whether
+   `A` itself lacks a prologue / reads `$v0`,`$v1`,`$tN` at entry (then merge
+   its predecessor), and whether `B`'s last branch lands on the NEXT symbol
+   (then merge that too -- especially a "matched" `void f(void) {}` stub).
+   The `--all` mode of the scanner shows non-likely branches into the next
+   symbol; the plain-`bne` 28E14->28E28 link only shows there.
+2. **Decode the base register of every in-loop load before guessing at
+   volatile.** `8C580008` is `lw t8,8(v0)` (cur), not `8(a0)` (head). With
+   `head->obj->prio` the expression is loop-invariant and IDO -O2 hoists both
+   loads into the preheader (33 words, `lim` shuffled a1->a2); nine variants
+   including `volatile` fields/pointers chased that phantom before re-reading
+   the hex. Rule: if the target reloads something inside a loop that your C
+   makes invariant, first suspect that the ORIGINAL expression is not invariant
+   (different base register), not that the field is volatile.
+Baseline refreshed via the single-unit strip + `EXPECTED_BASELINE=1` route
+(`.text` identical, symtab: 28E14 20->128, three symbols removed).
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 
