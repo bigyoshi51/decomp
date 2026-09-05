@@ -10190,9 +10190,25 @@ assets md5-identical to the known-good set and a ROM byte-identical to
 `splat split --modes bin tenshoe.yaml` swallows the config path and errors with
 "the following arguments are required: config". Put the config first.
 
-**Incidental.** 8 files that predated the split (`game_uso_block_1.bin`,
-`kernel.data.bin`, `timproc_uso_block_{1,3,5}.bin`, ...) use a different naming
-convention from splat's and are *not* produced by it. The ROM is byte-identical
-without them — stale leftovers, not inputs. Separately,
-`assets/game_libs_{pre,post}.bin` are force-added to git despite the ignore
-rule; splat regenerates them identically.
+**The 8 assets splat does NOT produce (correction, same day).** A fresh
+worktree then failed to link: `cannot find build/assets/kernel.data.bin.o`.
+Eight `assets/*.bin` files have no splat producer and I had wrongly written them
+off as stale leftovers -- the main checkout only kept building because its
+`build/` still held their `.o` files. They are:
+
+- `kernel.data.bin`, `game_uso.bin` -- hand-carved **linker inputs** referenced
+  directly by `tenshoe.ld` (`build/assets/kernel.data.bin.o(.data)`), carved
+  once in March 2026 and never described in `tenshoe.yaml`. ROM offset =
+  segment ROM start + (VRAM - segment VRAM) from `build/tenshoe.map`; don't
+  forget the segment's ROM base (kernel is `0x1000 + 0x9FD0`, not `0x9FD0` --
+  the latter decodes as instructions, which is the tell).
+- `game_uso_block_1.bin`, `map4_data_uso_block_2.bin`, `mgrproc_uso_block_1.bin`,
+  `timproc_uso_block_{1,3,5}.bin` -- Yay0 **decompressions** of the compressed
+  blocks splat extracts; the ground truth `scripts/verify-yay0-blocks.py`
+  (`make verify-blocks`) diffs against.
+
+`scripts/extract-derived-assets.py` (called by `make setup` after splat) now
+produces all eight, each md5-checked against the original. Wiping `assets/`
+and re-running `make setup` yields 119 files md5-identical to the original set.
+`assets/game_libs_{pre,post}.bin` are separately force-added to git despite the
+ignore rule; splat regenerates them identically.

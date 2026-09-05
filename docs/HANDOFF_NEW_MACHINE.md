@@ -47,8 +47,11 @@ Then, in order:
    export PATH="$PWD/tools/build-venv/bin:$PATH"
    ```
    `splat64` alone does **not** pull `spimdisasm` — you need the `[mips]` extra.
-6. **Assets** — `make setup` once, to extract `assets/*.bin` from the ROM.
-   Without it the link fails with `cannot find build/assets/header.bin.o`.
+6. **Assets** — `make setup` once, to extract `assets/*.bin` from the ROM
+   (119 files: 111 from splat plus 8 derived by
+   `scripts/extract-derived-assets.py` — two hand-carved linker inputs and six
+   decompressed Yay0 blocks, all md5-checked). Without it the link fails with
+   `cannot find build/assets/header.bin.o` (or `kernel.data.bin.o`).
    It is `--modes bin` on purpose and is safe to re-run; never "fix" it into a
    full `splat split` (see MATCHING_WORKFLOW "make setup must split ONLY bin
    segments" — a full re-split makes `ld` segfault).
