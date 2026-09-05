@@ -14089,6 +14089,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Two-s-reg constructor kit transfers cross-USO: volatile-homed cascade temp (store-in-delay + reload-every-use signature) + guard extent read off fail-branch targets (arcproc A3C 64.5->87.9, 2026-08-23 agent-h)](#two-s-reg-kit-transfer-volatile-third-a3c)
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
+- [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -24144,3 +24145,49 @@ insensitive to spelling; only the final one — where the fall-through is the
 target's last block is `jr ra; nop` with the `li v0,1` sitting *before* the
 final `bnez`, write the final condition so that the **return 0 is the branch
 body and return 1 is the fall-through**.
+
+---
+
+## SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay slot — the "dead-arg-home delay-slot cap" (game_uso_func_0000C3E8) was a source-line-layout artifact, 0 -> 100 EXACT 2026-09-05 (agent-g) <a name="same-line-brace-return-sinks-arg-home-c3e8"></a>
+
+**Target** (4-insn leaf, unused `int` param):
+```
+lui   v0,%hi(X)
+lw    v0,%lo(X)(v0)
+jr    ra
+sw    a0,0(sp)        # dead home store of the unused a0, in the delay slot
+```
+The wrap note called this a genuine cap: `int f(int a0) { return X; }` was said to
+emit `lui; sw a0,0(sp); jr; lw` (load in the delay) both in-TU and standalone, and
+every barrier/volatile/self-store variant was negative.
+
+**Actual cause — source LINE layout, nothing else.** IDO 7.1 -O2 tie-breaks the two
+independent instructions (arg-home store vs return load) by source line number:
+
+| spelling | emit |
+|---|---|
+| `int f(int a0) {`⏎`    return X;`⏎`}` | `lui; sw; jr; lw` (WRONG) |
+| `int f(int a0)`⏎`{`⏎`    return X;`⏎`}` | WRONG |
+| `int f(int a0) {`⏎`    return X; }` | WRONG |
+| `int f(int a0) { return X; }` | `lui; lw; jr; sw` (TARGET) |
+| `int f(int a0) { return X;`⏎`}` | TARGET |
+| `int f(int a0)`⏎`{ return X; }` | TARGET |
+
+The store is attributed to the function-entry line (the line holding the `{`); the
+load to the `return` line. When they differ, the scheduler keeps line order (store
+first) and the assembler fills the `jr` delay with the load. When `return` shares
+the `{` line, the store sinks to the end and takes the delay slot. Named-temp forms
+(`int r; r = X; return r;`) inherit the same rule. `-g0` does not change it; `-g`/
+`-g3` add a frame (out of scope). Struct-by-value / union / `&a0` / K&R prior decl /
+prototype prior decl / preceding-function context / .text offset were all tested
+and are irrelevant — only the line split matters.
+
+**Why the old standalone test "confirmed" the cap:** it was written in the project's
+house style (`return` on its own line), so isolation reproduced the same wrong order
+and the miss was misattributed to the toolchain.
+
+**Recipe:** for any NM wrap whose ONLY residual is a delay-slot swap between a dead
+`sw aN,0(sp)`/`sw aN,4(sp)` arg home and the last load, re-test with the whole
+definition on ONE line (or at least `{ return ...;` on the same line). Keep a
+comment telling future formatters not to re-wrap it. Landed: game_uso_func_0000C3E8
+(game_uso.c), ROM byte-identical.
