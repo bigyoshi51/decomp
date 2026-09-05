@@ -14067,6 +14067,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Merged multi-role web promotes to a NEW s-reg? ONE `if (1) {}` BB barrier keeps it caller-saved with the shared spill home; vestigial "beqzl re-tests" = literal redundant `else if (p!=0)` / `&& x==0` in the source, not a cross-jump cap (h2h 620 81.7->94.2 / 17A0 84.5->95.7, 2026-09-04 agent-h)](#if1-barrier-demotes-merged-web-vestigial-retests-620-17a0) — _620: 251C kit transfer; `char * volatile r` home is reused by a later alloc'd child (sw v0 in jal delay); target `or a0,v0` from a separate v0-colored alloc temp is NOT reachable (a named temp live into the call colors a1). 17A0: 5 decode errors masqueraded as a "branch-likely shared-tail cap" — re-read every call's a1 and every branch target off the raw words._
 - [for-loop `blez` guard folds whenever the count is a compile-time constant at the guard (store-forwarded `li` literal included); FP `x / 255.0f` divisor becomes an f2 candidate only with a literal divisor + `(float)N` or int-literal numerators, a var divisor merges with a same-valued numerator var into `div.s f0,f2,f2` (timproc_b5 8FC8 81.3 / 5BF0 88.7 negatives, 2026-09-04 agent-h)](#blez-guard-constant-fold-fp-divisor-candidate-8fc8-5bf0) — _17-spelling standalone guard study + 7-spelling divisor study; both in-tree unchanged._
 - [Two-s-reg constructor kit transfers cross-USO: volatile-homed cascade temp (store-in-delay + reload-every-use signature) + guard extent read off fail-branch targets (arcproc A3C 64.5->87.9, 2026-08-23 agent-h)](#two-s-reg-kit-transfer-volatile-third-a3c)
+- [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -24028,3 +24029,27 @@ is only kept as a separate temp when it enters through a conversion node
 (`(float)255`) or an int literal, never via a second float-literal variable.
 In-tree 5BF0 already uses the winning spelling yet colors the divisor `$f14`: the
 divergence is context (jalr cluster pressure before the block), not spelling.
+
+---
+
+<a id="ido-arm-order-picks-beql-layout-dup-first-insn"></a>
+## if/else ARM ORDER picks the branch-likely layout (forward `beql` + dup-first-insn null block vs `bnezl` skip)
+
+IDO emits if/else arms in source order and fills a branch-likely delay slot by
+duplicating the target block's first instruction (retargeting to block+4, the
+original stays as dead code). So for `ptr ? expr : 0.0f` with a named
+single-return local:
+
+| C arm order | emit |
+|---|---|
+| `if (v1 != 0) {ret=expr;} else {ret=0;}` | `beql v1,zero,NULL+4 ; mtc1 zero,f2` / expr / `jr ra; mov.s f0,f2` / `mtc1 zero,f2; nop; jr ra; mov.s f0,f2` (13) |
+| `if (v1 == 0) {ret=0;} else {ret=expr;}` | `bnezl v1,EXPR ; lwc1 f4,...` / `mtc1 zero,f2; jr ra; mov.s f0,f2` / expr / `jr ra; mov.s f0,f2` (12) |
+
+The two are byte-different and instruction-count-different; only the arm
+order moves between them. If the target's `beql` delay slot is the first insn
+of a later block (and that copy looks dead), put the branch-TAKEN arm SECOND.
+Proven on game_uso_func_00007A98 (2026-09-05) after five sessions had filed
+the 13-insn shape as an unreachable cross-function tail-share cap. See
+`docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
+for the boundary-merge side.
+

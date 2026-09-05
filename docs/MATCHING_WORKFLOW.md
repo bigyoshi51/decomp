@@ -159,6 +159,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Epilogue-only "function" = cross-function tail-entry used by other callers — not matchable standalone](#feedback-cross-function-epilogue-entry) — _When a "function" at address X has ONLY an epilogue-style body (`addiu $sp, +N; jr $ra; nop`) with no prologue, it's not a real function.
 - [Cross-function tail-share — beql/b targets an insn inside the ADJACENT function to reuse its `jr ra` return code](#feedback-cross-function-tail-share) — _If a function's branch target computes to an address PAST its own declared end and lands inside the next function's body, it's using the adjacent function's return-code tail for code-size (or because the compiler laid…
 - [cross-function tail-share via beql to sibling body produces unmatchable standalone signature](#feedback-cross-function-tail-share-unmatchable-standalone) — When function A's beql lands inside function B's body (e.g.
+- [RETRACTION: `beql` landing at NEXT-SYMBOL+4 whose first insn equals the beql delay slot = IDO branch-likely dup-first-insn idiom, a MIS-SPLIT null block, not a tail-share cap — merge + non-null arm FIRST (game_uso 7A98+7ABC exact)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _The target block's first insn is copied into the beql delay slot and the branch retargets to block+4; the USO splitter cuts at the preceding `jr ra`. Merge the .s, write `if (nonnull) {...} else {0}` with a named single-return local._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
 - [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — _When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.c at -O1, fragments in kernel_018.c at -O2 because they're across an opt-level…
 - [When the full N-way fragment merge is cross-file-blocked, a same-.c-file partial subset merge IS still safe](#feedback-merge-fragments-partial-safe-subset) — _feedback_merge_fragments_blocked_across_o_files.md says "don't merge" when parent + fragments span different .c files.
@@ -1456,6 +1457,8 @@ Both are cross-function code-sharing optimizations the original compiler did tha
 <a id="feedback-cross-function-tail-share"></a>
 ## Cross-function tail-share — beql/b targets an insn inside the ADJACENT function to reuse its `jr ra` return code
 
+> **RETRACTED for the 7A98/7ABC case (2026-09-05):** this was not a cross-function tail-share; 7ABC was 7A98's own mis-split null block (IDO branch-likely dup-first-insn idiom). Merge + non-null-arm-first C matched byte-exact. See [the retraction entry](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) before applying this entry to any other pair.
+
 _If a function's branch target computes to an address PAST its own declared end and lands inside the next function's body, it's using the adjacent function's return-code tail for code-size (or because the compiler laid out two functions that share a return sequence as contiguous bytes). This is unreproducible from standalone C at -O2 — any `if (cond) return X;` emits its own epilogue, not a jump into another function's middle. Keep as INCLUDE_ASM._
 
 **Recognition:** decode the branch target offset and check if it exceeds the current function's declared size.
@@ -1519,6 +1522,8 @@ IDO can't generate a branch to a symbol it doesn't see as part of this function.
 
 <a id="feedback-cross-function-tail-share-unmatchable-standalone"></a>
 ## cross-function tail-share via beql to sibling body produces unmatchable standalone signature
+
+> **RETRACTED for the 7A98/7ABC case (2026-09-05):** this was not a cross-function tail-share; 7ABC was 7A98's own mis-split null block (IDO branch-likely dup-first-insn idiom). Merge + non-null-arm-first C matched byte-exact. See [the retraction entry](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) before applying this entry to any other pair.
 
 _When function A's beql lands inside function B's body (e.g. B's 2nd insn), B's standalone shape includes setup that depends on A's register state. No C-only emit reproduces it for B._
 
@@ -10212,3 +10217,69 @@ produces all eight, each md5-checked against the original. Wiping `assets/`
 and re-running `make setup` yields 119 files md5-identical to the original set.
 `assets/game_libs_{pre,post}.bin` are separately force-added to git despite the
 ignore rule; splat regenerates them identically.
+
+---
+
+<a id="feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block"></a>
+## RETRACTION: `beql` landing at NEXT-SYMBOL+4 whose first insn equals the beql delay slot = IDO branch-likely dup-first-insn idiom (mis-split null block), not a tail-share cap
+
+_Fingerprint: function A ends `jr ra; <delay>`; the next symbol B is a tiny no-prologue block whose FIRST insn is byte-identical to A's `beql` delay slot, and A's `beql` target is exactly B+4. Nothing else references B. That is ONE function; B is A's else/null block._
+
+**What IDO does.** For `beql/bnel` IDO copies the *first instruction of the
+target block* into the branch-likely delay slot and retargets the branch to
+`block+4`. The original first instruction stays in place (the pass runs after
+layout and does not prove it dead). When the fall-through arm ends in `jr ra`,
+the null block after it starts with that now-dead instruction and looks like a
+separate 3-4 insn "function" to `generate-uso-asm` / splat, which cut at the
+first `jr ra`.
+
+**Worked case (2026-09-05, agent-c): game_uso_func_00007A98 + "7ABC".**
+Target 13 words:
+```
+lw v0,0x30(a0); lw v1,0x908(v0); beql v1,zero,+7 ; mtc1 zero,f2   <- delay = block first insn
+lwc1 f4,0xBC(v1); lwc1 f6,0xBC(v0); sub.s f2,f4,f6; jr ra; mov.s f0,f2
+mtc1 zero,f2 (dead, ex-"7ABC" entry); nop; jr ra; mov.s f0,f2       <- beql target = here+4
+```
+Five prior sessions had filed this as a "permanent cross-function tail-share
+cap" (17+, 22+, 6x3 variant sweeps; a "combined merge sandbox tested and
+failed"). The merge *was* the fix; the sandbox failed only because the C kept
+the NULL arm first. Exact C:
+```c
+float game_uso_func_00007A98(int *a0) {
+    int *v0 = (int *)a0[0x30 / 4];
+    int *v1 = (int *)v0[0x908 / 4];
+    float ret;
+    if (v1 != 0) {
+        ret = *(float *)((char *)v1 + 0xBC) - *(float *)((char *)v0 + 0xBC);
+    } else {
+        ret = 0.0f;
+    }
+    return ret;
+}
+```
+Two keys, both required:
+1. **Named single-return local** (`float ret; ...; return ret;`) — routes both
+   arms through `$f2` and gives the shared `jr ra; mov.s f0,f2` epilogue
+   (already known, 2026-05-31). Two `return` statements give `$f0` directly
+   and a `mtc1 zero,f0` delay slot.
+2. **Non-null arm written FIRST** (`if (v1 != 0) {...} else {0}`). IDO lays
+   arms out in source order: null-first yields `bnezl v1,+5` skipping an
+   inline null epilogue (12 insns — the shape every prior note called the
+   cap); non-null-first yields the forward `beql` to the trailing null block
+   with the dup-first-insn (13 insns, byte-exact).
+
+**Mechanics of the merge (game_uso, Yay0 USO):** extend the parent `.s`
+(`nonmatching NAME, 0xOLD+0xTAIL`, append the tail's words, `endlabel` parent),
+`git rm` the tail `.s`, drop the tail's INCLUDE_ASM/NM block from the `.c`, put
+the real C on the build path, `make` + `cmp tenshoe.z64 baserom.z64`, then
+refresh `expected/src/game_uso/game_uso.c.o` from the verified build (the
+target symbol's size changes, so objdiff needs the new baseline) and log the
+episode against the merged `.s`. No `undefined_syms_auto.txt` change needed.
+
+**How to apply elsewhere:** grep `asm/nonmatchings/*/` for 3-5 word
+no-prologue `.s` files whose first word equals the preceding function's
+last `beql`/`bnel` delay-slot word and whose address is that branch's target
+minus 4. Each is a merge + arm-order fix, not a cap. Do NOT trust the
+"tail-share cap" verdict in `src/` comments without re-checking this
+fingerprint first.
+
