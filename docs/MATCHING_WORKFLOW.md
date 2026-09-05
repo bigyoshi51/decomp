@@ -163,6 +163,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [RETRACTION: `beql` landing at NEXT-SYMBOL+4 whose first insn equals the beql delay slot = IDO branch-likely dup-first-insn idiom, a MIS-SPLIT null block, not a tail-share cap — merge + non-null arm FIRST (game_uso 7A98+7ABC exact)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _The target block's first insn is copied into the beql delay slot and the branch retargets to block+4; the USO splitter cuts at the preceding `jr ra`. Merge the .s, write `if (nonnull) {...} else {0}` with a named single-return local._
 - [THIRD CASE: game_libs 27300+27348 — the NM body's own "exact except an appended 3-word -1 epilogue" note described the mis-split next symbol; merge alone made it exact, C unchanged (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _"Exact except for an appended N-word epilogue" + next symbol is exactly N words = this idiom. Read the next .s before believing the cap._
 - [FOURTH CASE: game_libs 28E14+28E28+28E6C+28E8C -- the scanner's `A` was itself a tail (plain `bne` from its predecessor), the chain ended in a "matched empty fn"; an in-loop reload your C hoists means a DIFFERENT base register in the original, not `volatile` (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk the chain both directions from the scanner pair; decode `lw` base regs by hex before trying volatile._
+- [FIFTH CASE, -O0 VARIANT: mgrproc 140+15C+168 and 170+188+194 — plain `bne` into the next symbol + a 2-word "empty stub" after it inside an -O0 run = one frameless -O0 predicate + ugen's dead fall-off pair; merge, compile at -O0 file-terminal with TRUNCATE_TEXT (our -O0 emits 2 dead pairs, ROM has 1), delete the stub episodes (agent-g 2026-09-05)](#o0-predicate-misplit-merge-recipe) — _Read the opt level of the RUN before believing an "-O2 collapses to 9 insns" cap sweep; the founding case of the branch-into-adjacent-return-leaf cap was -O0._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
 - [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — _When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.c at -O1, fragments in kernel_018.c at -O2 because they're across an opt-level…
@@ -10412,3 +10413,34 @@ Baseline refreshed via the single-unit strip + `EXPECTED_BASELINE=1` route
 
 **Meta-lesson for source-3 (size-sort) rolls.** Filter the bare list to entries containing `03E00008`, then look at the NEIGHBORS of each tiny cap: a run of 3+ adjacent sub-0x100 symbols where the middle ones lack a prologue and the notes say "caller-set", "prologue-stolen", or "alternate entry" is one function. Concatenate their `.word` lists and compare against libreultra gu/libc by size (112 words = sinf, 90 = cosf, 45 = guMtxL2F ...). The ROM's game_libs data holds TWO copies of the sin P[] table (0xDA215C for sinf @0x2310, 0xDA232C for cosf @0x24E0) -- a `find` of `BFC55554BC83656D` in baserom.z64 confirms the identity in seconds.
 
+## -O0 predicate mis-split merge recipe: guard fn + "return-0 leaf" + "empty stub" = ONE -O0 function (mgrproc_uso 140 / 170, 2026-09-05 agent-g) <a name="o0-predicate-misplit-merge-recipe"></a>
+
+_Fingerprint: A = tiny guard ending `li v0,1; jr ra; nop` whose `bne/bnez` offset lands exactly on
+the next symbol B = `move v0,zero; jr ra; nop`; the symbol after B is C = `jr ra; nop`; the
+neighbours show -O0 fingerprints (homed `sw a0,N(sp)`, unfilled `jal` delays, `b .+1`). A+B+C is
+one frameless -O0 predicate `if (cond) { return 1; } return 0;` plus ugen's dead fall-off return.
+Codegen analysis in `docs/IDO_CODEGEN.md#o0-two-block-predicate-not-adjacent-leaf-cap`._
+
+1. **Merge the `.s`:** A's `nonmatching` size += B + C sizes, append B's and C's `.word`s before
+   `endlabel`, `git rm` B.s and C.s (and `episodes/B.json`, `episodes/C.json` if they were
+   "matched" as `int f(void){return 0;}` / `void f(void){}` — they were never functions).
+2. **Put the predicate at the END of an -O0 unit** (or give it its own unit). Our 7.1 -O0 emits
+   TWO dead trailing `jr ra; nop` pairs; the ROM has ONE, so the fn must be file-terminal with
+   `TRUNCATE_TEXT := <unit end>` and `NON_MATCHING_TRUNCATE_TEXT` to match (o0_11D78 precedent).
+   A caller in the same .o is fine: an intra-object `jal` still assembles to raw `0c000000` +
+   R_MIPS_26, so USO blank-jal bytes do not change.
+3. **Write the C** with the compare operands in ROM load order — IDO -O0 evaluates the RIGHT
+   operand of `==` first (`a0[2] == a0[1]` -> `lw t6,4(a0); lw t7,8(a0)`).
+4. **Refresh `expected/` for the touched units only** from the pure-INCLUDE_ASM build: import
+   `strip_decomp_in_file`/`func_map` from `scripts/refresh-expected-baseline.py`, strip just those
+   .c files, `rm` their .o, `make <objs> RUN_CC_CHECK=0 EXPECTED_BASELINE=1 -j1`, `cp` to
+   `expected/`, restore the sources, rebuild. (The full script does `make clean` + a serial
+   whole-tree build and surfaces unrelated drift.) The merged symbol's size changes, so the
+   baseline must be refreshed or objdiff scores the old 7/6-word symbol.
+5. Gate: `make` + `cmp tenshoe.z64 baserom.z64`, `make non_matching_objects`, `refresh-report.sh`,
+   exact-set diff vs `origin/main:report.json` (expect B and C to disappear as symbols, A to go
+   100). Log episodes for A only.
+
+Result: mgrproc_uso_func_00000140 (99.29 -> 100, 12w) and _00000170 (99.17 -> 100, 11w), ROM
+byte-identical, 6 symbols -> 2, unit count unchanged (head unit kept its name, now [0x170,0x19C)
+at -O0). Same-fingerprint sibling still open: `timproc_uso_b5_func_00001CF0` -> `_00001D14`.

@@ -14100,6 +14100,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
+- [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -14131,6 +14132,8 @@ The clean body is byte-exact at -O0 (47/47 words). The recorded table had simply
 ## BRANCH-INTO-ADJACENT-RETURN-LEAF-CAP
 
 <a name="branch-into-adjacent-return-leaf-cap"></a>
+
+> **RETRACTED for the founding case (mgrproc_uso_func_00000140 / _00000170, 2026-09-05 agent-g):** both were -O0 frameless predicates mis-split at every `jr ra`; the "adjacent return-0 leaf" was each function's own else arm and the "empty stub" after it was ugen's dead fall-off return. `if (c) { return 1; } return 0;` at -O0 is byte-exact (no uopt => no preset-default hoist). Every "-O2 -g3 collapses to 9 insns" sweep below was run at the wrong opt level. See [#o0-two-block-predicate-not-adjacent-leaf-cap](#o0-two-block-predicate-not-adjacent-leaf-cap). Before accepting this cap on any guard+leaf pair, check whether the surrounding run is -O0 (homed args `sw a0,N(sp)`, unfilled `jal` delays, `b .+1`) — the timproc 1D1C/1DA4 discriminator addendum below still applies to genuine -O2 code.
 
 **A tiny guard function whose conditional branch offset points PAST its own end, into the next function, is a genuine cap — but NOT for the reason "the offset is linker-set."** In raw-`.word` USO code the branch offset is baked into the instruction word and is SELF-RELATIVE (PC-relative, link-independent). So `15CF0004` (`bne $14,$15,+4`) is a fixed +4 that lands 4 instructions past the branch — past the guard's own `jr ra` and into the adjacent function.
 
@@ -24259,3 +24262,62 @@ class: its NM build is +2 insns (`mtc1 a1,$f12; mtc1 a2,$f14` at entry) with the
 otherwise byte-exact — the o32 int-a0 + float-in-$f12 arg-passing cap (same as
 gl_func_0002DF68), unrelated to source-line layout. Remaining open members of the swap
 family are only the `void(void)` pair bootup func_00006204 / func_0000E9FC.
+
+## RETRACTION: "branch-into-adjacent-return-0-leaf CAP" = an -O0 frameless predicate mis-split at every `jr ra` (mgrproc_uso 140+15C+168 / 170+188+194, both 0 -> 100 EXACT 2026-09-05 agent-g) <a name="o0-two-block-predicate-not-adjacent-leaf-cap"></a>
+
+**Target (two instances, 12 and 11 words):**
+```
+140: lw t6,4(a0); lw t7,8(a0); bne t6,t7,+4; nop; li v0,1; jr ra; nop   <- "guard fn", NM 99.3%
+15C: move v0,zero; jr ra; nop                                          <- "return-0 leaf", matched -O2 -g3
+168: jr ra; nop                                                        <- "empty stub", matched
+170: lw t6,0(a0);  bnez t6,+4;    nop; li v0,1; jr ra; nop             <- "guard fn", NM 99.2%
+188: move v0,zero; jr ra; nop
+194: jr ra; nop
+```
+Since 2026-05-30 this pair was the FOUNDING case of the "branch-into-adjacent-return-leaf cap"
+entry above: "C can't reproduce a regular `bne` + NOP delay + two separate `jr ra` blocks because
+IDO's -O2 preset-default hoists `move v0,zero` above the branch (9 insns) or emits `bnel` with the
+constant in the delay slot". Every sweep (if/return, goto, if/else, named temps, 7.1 -O1/-O2, -g3,
+permuter) confirmed the collapse — **at -O2**. The whole `[0x0, 0xAE0)` run of the mgrproc_uso
+Yay0 block is **-O0** (`func_00000000..F8` are the -O0 accessor/refcount wrappers with homed `a0`,
+unfilled `jal` delays and `b .+1`; `func_0000019C..A14` is the `mgrproc_uso_o0_19C` unit). The
+"-O2 -g3 head unit" [0x140,0x19C) was carved between them purely so the leaves would emit unfilled
+`move v0,zero; jr ra; nop` — which -O0 also does.
+
+**What -O0 actually emits** (7.1 and 5.3 identical, any -g level, any dialect switch):
+```c
+int mgrproc_uso_func_00000170(int *a0) { if (a0[0] == 0) { return 1; } return 0; }
+```
+```
+lw t6,0(a0); bnez t6,+4; nop; li v0,1; jr ra; nop; move v0,zero; jr ra; nop; | jr ra; nop; jr ra; nop
+```
+No uopt at -O0 => no preset-default hoist, no branch-likely, no as1 delay fill: the two return arms
+are two blocks, each `X; jr ra; nop`, and the guard's `bne` lands on the else arm at +4. ugen then
+appends the unreachable fall-off `j $31` AND the `$exit: j $31` label block. The shipped build has
+exactly ONE of those dead pairs (0x168 / 0x194 — the same convention as bootup 11D78 -> 11DB4), so
+the predicate must be **file-terminal** and `TRUNCATE_TEXT` clips the second (o0_11D78 recipe):
+140 was appended to `mgrproc_uso_o0_0.c` (TRUNCATE 0x140 -> 0x170; its caller `func_000000B0` is
+in the same .o — an intra-object `jal` still assembles to a raw `0c000000` + R_MIPS_26, so the
+USO's blank-jal bytes are unaffected), and the head unit shrank to `func_00000170` alone at -O0
+with TRUNCATE 0x2C. generate-uso-asm cuts at every `jr ra`, which is why one -O0 predicate became
+three "functions"; the 4 stub `.s` and their episodes were deleted and both merged `.s` grew.
+
+**Operand order:** the ROM's `lw t6,4(a0); lw t7,8(a0)` for `a0->4 == a0->8` requires writing the
+compare as `a0[2] == a0[1]` — IDO -O0 evaluates the RIGHT operand of `==` first
+([#feedback-ido-o0-eq-eval-order-gap](#feedback-ido-o0-eq-eval-order-gap)); `a0[1] == a0[2]` swaps
+the two loads.
+
+**Recognition (so this is never filed as a cap again):** a tiny guard whose conditional branch
+offset points exactly at the NEXT symbol, that symbol is `move v0,zero; jr ra; nop` (or any
+`<one insn>; jr ra; nop`), and the symbol after THAT is a bare `jr ra; nop` — all three inside a
+run showing -O0 fingerprints. That is one function + one dead pair. Scanner:
+`scripts/find-beql-dup-misplits.py --all` (plain-branch-into-next-symbol rows, not just
+DUP-FIRST-INSN). Open sibling with the same fingerprint at 2026-09-05: `timproc_uso_b5_func_00001CF0`
+(9w, NM 42%) -> `_00001D14` (2w `jr ra; nop`) — check whether that run is -O0 before grinding it.
+
+**Dead-pair count is the tell for "which -O0":** our IDO -O0 emits two trailing `jr ra; nop` pairs
+after a frameless function whose last statement is `return X;` (`X; j $31; j $31; $exit: j $31`);
+the shipped 1080 build emits one. as1 removes both at `.option O1` (and fills the delay), keeps
+both at O0 — there is no flag in 7.1/5.3 (-g/-g3/-mips1/-mips3/-cckr/-ansi/-Xcpluscomm) that
+yields exactly one. TRUNCATE_TEXT is the honest fix (all-zero/dead-word clipping is a genuine
+layout mechanism, not instruction patching).
