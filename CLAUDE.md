@@ -23,6 +23,7 @@ This repo is a **multi-project N64 decompilation agent**. It wraps splat / asm-d
 - **Decompile one function:** invoke the `/decompile` skill (or run `/loop /decompile` to iterate). The skill handles project discovery, worktree selection, asm reading, matching, episode logging, and landing.
 - **Spin up a parallel agent worktree:** `scripts/spin-up-agent.sh <project>` (auto-picks the next free `agent-<letter>`).
 - **Add a new game:** `/new-project` skill.
+- **Picking this up on a new machine:** read `docs/HANDOFF_NEW_MACHINE.md` FIRST — setup order, the verification gate, the landing ritual, policy invariants, and the current live queue.
 - **Debug a stuck diff:** `objdiff-cli diff -u <unit> <func>` for mnemonic-level comparison; falls back to `objdump -M no-aliases` for exact-byte verification.
 - **Research a technique:** see `docs/` (checked into the repo, accessible to all agents):
   - `docs/IDO_CODEGEN.md` — IDO 7.1 codegen quirks (~115 entries)
