@@ -36,6 +36,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [x4-unroll addendum: int-counter `i<n` do-while + conditional array store DOES unroll (contra 1FA20 `<`-suppression); s8 counter suppresses at sll/sra-0x18 cost; original suppressor unknown (1DCB4, 2026-07-23 agent-h)](#x4-unroll-int-counter-do-while-1dcb4)
 - [Named index LOCAL makes uopt sink/remat `base+idx*sizeof` into every switch arm (multu xN); RAW memory expr as index forbids remat -> single s-reg compute (26D64 61.2->88.1, 2026-07-23 agent-h)](#raw-mem-index-defeats-addr-remat-26d64) — _Converse of remove-local-recompute; typed struct alone insufficient. Also: out-of-s16-reach mid-struct byte = per-site absolute %hi/%lo deref; (f32)(s32) kills u32->f32 fixup; sltiu N before jr = widen jumptable with empty trailing cases._
 - [4-case switch = COMPARE CHAIN below IDO's 5-label jumptable threshold; empty trailing `case N: break;` forces the table; `goto`-only case arm = block placed after post-switch code (76F0 64.9->88.5, 2026-07-23 agent-h)](#empty-trailing-case-jumptable-threshold-76f0) — _sltiu N+1 + local-rodata-table words are the only residual; pairs with external-uso-jumptable-cap. Also: m2c `func(0,X)` with target `lui/addiu a0` pair = `func(&D_00000000, X)`._
+- [Duff's-device `case N:` label INSIDE a loop body SUPPRESSES uopt code motion for that loop: no preheader, compare constants stay `$at`-materialized, invariant loads stay in the loop (game_libs 29CCC 207/207 EXACT, 2026-09-05 agent-c)](#duff-case-label-inside-loop-suppresses-licm) — _A jumptable-entered loop whose target shows `addiu at,zero,K; beq` inside the loop and a reloaded invariant = the original had the case label inside the loop. `case 3: for(;;){}` (label before the loop) gets a 3-word preheader and shifts the whole temp ring; goto/do-while/tail-recursion/outer re-dispatch/volatile/-g3/-O3/5.3 all still hoist. Also from this fn: `unsigned char` switch local -> `or v0,v1,zero; andi v0,v0,0xf`; inner case bodies laid out in SOURCE order (chain always ascending)._
 - [Int-cast base arith (`int g = (int)arr;`) UNFOLDS the $at-macro absolute store into a compiler-held lui/addiu base + disp store; pair with per-site-extern %hi-CSE-kill for cross-call rematerialization (272C4 48.3->100, 2026-07-30 agent-h)](#int-cast-base-unfold-272c4) — _Also this session: (a) 3-float-param FP-home budget cap: IDO 7.1/5.3 home at most TWO float params via mtc1->f12/f14 (+mfc1 back for onward gp-reg pass); a target homing THREE (mtc1 a3,$f16) is unreachable in every probed mode (6F834 residual). fnptr-cast calls cost lui/addiu+jalr+v0-spill vs direct typed extern jal (64.2->87.7 on the swap). (b) Per-compare $at-macro big-constant materialization (4x lui at/ori at for one repeated magic) WITH -O2 scheduling is unreachable: -O1 gives the $at macros unscheduled, -O2 (any of -g3/volatile/literal-addr/5.3/7.1) value-CSEs the constant into a reg with only call-clobber rematerialization (66AF0 residual; cap class)._
 - [Two-lever combo for "chain computed once pre-branch, arms diverge" caps: MULTI-DEF anti-fold (`v0b = base+attr*K; v0b += idx*M;`) pins the address chain pre-branch; param-as-cursor reassign (`a0 = call(...); a0 += 8; return a0;`) tips the s0 promotion (1DB88 48.6->78.6, 2026-07-30 agent-h)](#multidef-prebranch-plus-param-cursor-1db88) — _Single-expression AND per-use-macro-CSE spellings both duplicate/recompute the chain per arm; separate named result var copy-props to $a0+call-home-spill (`register` inert). Frame-slot A/B: sole named local (rest macro'd) = frame+spill-slots EXACT but folds arm loads into big offsets; extra named local = arm shape exact at +8 frame — fuzzy favors shape. `*((short*)&a1+1)` per-use-reload probe REGRESSES (address-taken kills K&R short homing shape)._
 - [jal-delay `sw v0,SLOT(sp)` + post-call `lw v0,SLOT(sp)` = spill/restore of the PRE-CALL base (call result DISCARDED), not a call-result respill — decode as base kept in v0 across calls, plain -O2 spill coloring; residual &local slot then falls to the decl-order lever (3395C 41.95->100, 2026-07-30 agent-h)](#jal-delay-sw-v0-is-base-spill-3395c)
@@ -24321,3 +24322,68 @@ the shipped 1080 build emits one. as1 removes both at `.option O1` (and fills th
 both at O0 — there is no flag in 7.1/5.3 (-g/-g3/-mips1/-mips3/-cckr/-ansi/-Xcpluscomm) that
 yields exactly one. TRUNCATE_TEXT is the honest fix (all-zero/dead-word clipping is a genuine
 layout mechanism, not instruction patching).
+
+## Duff's-device `case N:` label INSIDE a loop body suppresses uopt code motion for that loop (no preheader; `$at` constants; invariant loads stay) -- game_libs_func_00029CCC 207/207 EXACT (2026-09-05, agent-c) <a name="duff-case-label-inside-loop-suppresses-licm"></a>
+
+**Symptom.** A `switch` case that is a loop (here: read keyframes until a non-jump entry) whose
+target shows the loop body WITHOUT any loop optimization: the compare-chain constants are
+materialized inside the loop (`addiu at,zero,-3; beq a1,at`), the loop-invariant `lw t4,28(a0)`
+(`p->tbl`) is reloaded every iteration, and the loop's `cnt` colors `$a1`. The natural C
+
+```c
+case 2: p->idx = 0; p->state = 3;
+case 3:
+    for (;;) { p->cnt = p->tbl[p->idx].dur; switch (p->cnt) { ... case -2: p->idx = ...; continue; } break; }
+```
+
+makes uopt create a 3-word PREHEADER (`lw v0,28(a0); addiu t0,zero,-2; addiu a3,zero,-3`),
+redirect the jumptable's case-3 entry to it, color the hoisted constants `$a3/$t0` -> the inner
+switch temp and `cnt` get `$a2`, and EVERY downstream `$t` temp shifts by one (208 vs 207 words,
+~170 register diffs from one structural cause). Verified with `-Wo,-zdbug:6` (`numinsert=3`).
+
+**Lever.** Put the `case` label INSIDE the loop body:
+
+```c
+case 2:
+    p->idx = 0;
+    p->state = 3;
+    for (;;) {
+case 3:
+        p->cnt = p->tbl[p->idx].dur;
+        switch (p->cnt) { case 0: ...; case -1: ...; case -2: p->idx = p->tbl[p->idx].val; continue; case -3: ...; default: ... }
+        break;
+    }
+    if (p->state != 4) break;
+case 4: ...
+```
+
+Legal C (a case label may sit inside a nested statement of the switch body -- Duff's device).
+The jumptable edge now enters the loop BODY while the `continue` back edge targets the loop's
+own top; uopt no longer performs code motion on it: no preheader, `-3/-2` stay `$at`, `tbl` and
+`idx` reload per iteration, `cnt` colors `$a1`, and the emitted `b <loop top>` lands on the
+identical address (the loop top and the case label are the same block after layout). Result
+207/207 words; everything downstream re-aligned in one step.
+
+**Negative results (all still hoisted the preheader):** `goto again` with the label after
+`case 3:`; `do { } while (c == -2)` (also hoisted the FP literal addresses); tail recursion
+`return f(p)` (float return -> `jal`, int/void self tail calls DO become a loop -- uopt has
+`f_tail_recursion` -- but constants still hoist, and `p` becomes loop-variant so `p->tbl`
+reloads); `s = 3; continue/goto dispatch` through the outer switch (hoists to the function
+entry, no IJP folding); `volatile` on the table pointer or the whole struct; `(char*)p`
+cast-pointer accesses; char bitfields; one-word bitfield container; `-O2 -g3`; `-O3`;
+IDO 5.3 `-O2`. `-O1` (7.1 or 5.3) has no uopt register allocation at all (stack-homed `s`).
+
+**Companion shapes from the same function.** (a) `unsigned char s = p->state; switch (s)`
+emits `lbu v1; or v0,v1,zero; andi v0,v0,0xf` (int local: bare `andi`; short: `sll/sra 0x10`);
+`s` stays live in `$a1` for a later `s == 6` test while the loop's `cnt` reuses `$a1` on the
+disjoint path. (b) The inner switch's case BODIES are laid out in source order while the
+compare chain is always ascending: target order 0-arm, -1, -2, -3, default => write the cases
+in that order (default becomes the `bnezl` target, the 0-arm the fall-through). (c) unsigned
+int bitfields on the status word: 4-bit `state` stores narrow to `lbu; andi 0xFFF0; ori N; sb`
+(store-forwarding the register for the following `flag = 0` clear: `andi t5,t3,0xdf; sb`),
+1-bit flag TESTS read the word (`lw; sll K; bgezl`), and stores to `cnt` (`short` at +2) kill
+the `idx:8` bitfield read (same container word) so `idx` reloads after `sh cnt`. (d) The
+`[0,1]` clamp epilogue `r = p->val; if (r < 0.0f) return 0.0f; if (r > 1.0f) return 1.0f;
+return r;` is the `mtc1 zero,f12 / lui at,0x3f80 / c.lt.s / bc1fl (+dup mtc1 at,f12) /
+mov.s f0,f12` three-exit shape -- the two trailing dup-first-insn blocks were splat's
+"29FDC"/"29FFC" symbols.

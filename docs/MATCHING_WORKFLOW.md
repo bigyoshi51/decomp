@@ -163,6 +163,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [RETRACTION: `beql` landing at NEXT-SYMBOL+4 whose first insn equals the beql delay slot = IDO branch-likely dup-first-insn idiom, a MIS-SPLIT null block, not a tail-share cap — merge + non-null arm FIRST (game_uso 7A98+7ABC exact)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _The target block's first insn is copied into the beql delay slot and the branch retargets to block+4; the USO splitter cuts at the preceding `jr ra`. Merge the .s, write `if (nonnull) {...} else {0}` with a named single-return local._
 - [THIRD CASE: game_libs 27300+27348 — the NM body's own "exact except an appended 3-word -1 epilogue" note described the mis-split next symbol; merge alone made it exact, C unchanged (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _"Exact except for an appended N-word epilogue" + next symbol is exactly N words = this idiom. Read the next .s before believing the cap._
 - [FOURTH CASE: game_libs 28E14+28E28+28E6C+28E8C -- the scanner's `A` was itself a tail (plain `bne` from its predecessor), the chain ended in a "matched empty fn"; an in-loop reload your C hoists means a DIFFERENT base register in the original, not `volatile` (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk the chain both directions from the scanner pair; decode `lw` base regs by hex before trying volatile._
+- [FIFTH CASE: game_libs 29CCC+29D08+29FDC+29FFC -- the scanner's "A" (181w case bodies) was the body of a `jr t6` JUMPTABLE dispatcher 15 words earlier; the whole 207-word switch went EXACT via a REPLACE_FUNC_BODY donor (jumptable .rodata rename+pin) plus the Duff's-device `case N:`-inside-the-loop layout that suppresses uopt code motion (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk back past any `jr tN` dispatcher: its case bodies are the "A". Jumptable + in-unit compile = donor splice (6DD14 recipe). A jumptable-entered loop the target never hoisted out of = put the `case` label INSIDE the loop body (see docs/IDO_CODEGEN.md#duff-case-label-inside-loop-suppresses-licm)._
 - [FIFTH CASE, -O0 VARIANT: mgrproc 140+15C+168 and 170+188+194 — plain `bne` into the next symbol + a 2-word "empty stub" after it inside an -O0 run = one frameless -O0 predicate + ugen's dead fall-off pair; merge, compile at -O0 file-terminal with TRUNCATE_TEXT (our -O0 emits 2 dead pairs, ROM has 1), delete the stub episodes (agent-g 2026-09-05)](#o0-predicate-misplit-merge-recipe) — _Read the opt level of the RUN before believing an "-O2 collapses to 9 insns" cap sweep; the founding case of the branch-into-adjacent-return-leaf cap was -O0._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
@@ -10315,7 +10316,7 @@ bytes, not symbol count.
 every adjacent A→B pair with the fingerprint (`DUP-FIRST-INSN`), `--all` for
 any branch into the next symbol. Remaining queue at 2026-09-05 (all game_libs
 unless noted, all INCLUDE_ASM or NM): ~~27300+27348~~ (landed 2026-09-05, third case below), ~~28E28+28E6C~~ (agent-c 2026-09-05, fourth case below -- was really 28E14+28E28+28E6C+28E8C),
-29D08+29FDC+29FFC, 3AA5C+3AC50, 5BBEC+5BC04(matched stub!), 5CA78+5CAEC+5CB5C,
+~~29D08+29FDC+29FFC~~ (agent-c 2026-09-05, fifth case below -- was really 29CCC+29D08+29FDC+29FFC), 3AA5C+3AC50, 5BBEC+5BC04(matched stub!), 5CA78+5CAEC+5CB5C,
 624EC+62524, 66620+66650, 67FD8+68004, 453D8+45418, 57194+571E4,
 timproc_b5 88A0+8940(matched g3 stub). Note 5CAEC's six `beql`s all land on
 5CB5C+4 — a shared `return 0` block, same idiom, not a tail-share.
@@ -10400,6 +10401,48 @@ Two lessons on top of the idiom itself:
    (different base register), not that the field is volatile.
 Baseline refreshed via the single-unit strip + `EXPECTED_BASELINE=1` route
 (`.text` identical, symtab: 28E14 20->128, three symbols removed).
+
+**Fifth worked case (2026-09-05, agent-c): game_libs_func_00029CCC = 29CCC+29D08+29FDC+29FFC
+-- the scanner's "A" was the case-body block of a `jr` JUMPTABLE dispatcher, and the exact
+needed a donor splice + a code-motion-suppressing loop layout.** `find-beql-dup-misplits.py`
+reported `29D08 (181w) -> 29FDC (8w) -> 29FFC (3w)`. Walking backwards, the 15-word symbol
+29CCC is `lbu v1,0(a0); or v0,v1,zero; andi v0,v0,0xf; sltiu at,v0,9; beqz at,+0xA2; ...
+lui at,0; addu; lw t6,0xFF0(at); jr t6; nop; mtc1 zero,f0; jr ra; nop` -- a 9-case `switch`
+whose `beqz` default lands INSIDE 29D08 and whose table (game_libs data +0xFF0, read straight
+out of the ROM: `python3 scripts/extract-uso-jumptable.py <fn> --module 0xD9FE28 --shim 0x1466C
+--vaddr 0x29CCC --size 0x33C`, targets = reported vaddr - shim - 4) points at 29CFC/29D08/29D28/
+29D38/29E78/29F68/29EB0/29EB0/29F40. 29FDC/29FFC are the `bc1fl` dup-first-insn null blocks of
+the trailing `[0,1]` clamp. One function, 0x33C / 207 words: an envelope/keyframe stepper on a
+packed status word (`unsigned f80:1,f40:1,f20:1,f10:1,state:4; unsigned idx:8; short cnt;`
++ floats + `Key *tbl` at 0x1C). Exact C is `src/game_libs/game_libs_o2_29CCC.c`; five keys:
+
+1. **Donor splice for the in-unit jumptable.** A C `switch` always emits its table into the
+   TU's local `.rodata` with HI16/LO16 relocs, so an in-unit compile can never bake the USO's
+   `lui at,0 / lw t6,0xFF0(at)`. Compile the function in its own donor TU (IDO 7.1 -O2, same
+   flags) and REPLACE_FUNC_BODY it into game_libs_post.c.o: `import_donor_relocs` renames the
+   donor-local `.rodata` reloc to `game_libs_func_00029CCC_rodata`, pinned in
+   undefined_syms_auto.txt to `0x00000FF0` (the [6DD14 recipe](#donor-splice-switch-jumptable-rodata-rename),
+   first use for a GAME function rather than a libultra identity). The three float literals the
+   original TU also put in .rodata (+0x1014 = 32767.0f, +0x1018 = 1e-5f, +0x2058 = pi/180) are
+   plain baked extern pins (`gl_ref_00001014_f` ...). Host keeps a placeholder body (70FCC style).
+2. **`case 3:` label INSIDE the key-reading `for(;;)` body** (Duff's-device layout). With the
+   natural `case 3: for(;;){...}` uopt hoists `p->tbl` and the -2/-3 compare constants into a
+   3-word preheader (redirecting the jumptable entry to it) and the whole downstream temp ring
+   shifts; the target has NO preheader (constants in `$at`, `tbl` reloaded, `cnt` colored
+   `$a1`). Moving the label inside the loop reproduced it 207/207. Full write-up:
+   `docs/IDO_CODEGEN.md#duff-case-label-inside-loop-suppresses-licm`. Twelve other spellings
+   (goto-loop, do-while, tail recursion, re-dispatch via the outer switch, volatile fields,
+   cast pointers, -g3, -O3, IDO 5.3) all still hoisted.
+3. `unsigned char s = p->state; switch (s)` gives the head's `or v0,v1,zero; andi v0,v0,0xf`
+   (an `int` local gives a bare `andi`; `short` adds sll/sra).
+4. Inner-switch case bodies are laid out in SOURCE order: write `case 0, -1, -2, -3, default`
+   to get the target's block order (the compare chain itself is always emitted ascending).
+5. `p->idx = 0;` before `p->state = 3;` (store order follows source).
+
+Also: the merged function retires two cap notes (29FFC "caller-set $f2 float move CAP" was the
+function's own `return v` block). Baseline refreshed via the single-unit strip + build route
+below: `.text` differs from the old expected only at the 4 `%lo` reloc halfwords (the splice
+carries relocs, as in every other spliced unit), symtab 29CCC 60->828 with three symbols removed.
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 
