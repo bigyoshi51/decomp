@@ -165,6 +165,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [FOURTH CASE: game_libs 28E14+28E28+28E6C+28E8C -- the scanner's `A` was itself a tail (plain `bne` from its predecessor), the chain ended in a "matched empty fn"; an in-loop reload your C hoists means a DIFFERENT base register in the original, not `volatile` (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk the chain both directions from the scanner pair; decode `lw` base regs by hex before trying volatile._
 - [FIFTH CASE: game_libs 29CCC+29D08+29FDC+29FFC -- the scanner's "A" (181w case bodies) was the body of a `jr t6` JUMPTABLE dispatcher 15 words earlier; the whole 207-word switch went EXACT via a REPLACE_FUNC_BODY donor (jumptable .rodata rename+pin) plus the Duff's-device `case N:`-inside-the-loop layout that suppresses uopt code motion (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk back past any `jr tN` dispatcher: its case bodies are the "A". Jumptable + in-unit compile = donor splice (6DD14 recipe). A jumptable-entered loop the target never hoisted out of = put the `case` label INSIDE the loop body (see docs/IDO_CODEGEN.md#duff-case-label-inside-loop-suppresses-licm)._
 - [FIFTH CASE, -O0 VARIANT: mgrproc 140+15C+168 and 170+188+194 — plain `bne` into the next symbol + a 2-word "empty stub" after it inside an -O0 run = one frameless -O0 predicate + ugen's dead fall-off pair; merge, compile at -O0 file-terminal with TRUNCATE_TEXT (our -O0 emits 2 dead pairs, ROM has 1), delete the stub episodes (agent-g 2026-09-05)](#o0-predicate-misplit-merge-recipe) — _Read the opt level of the RUN before believing an "-O2 collapses to 9 insns" cap sweep; the founding case of the branch-into-adjacent-return-leaf cap was -O0._
+- [SIXTH CASE, -O2 plain-`bne` VARIANT: timproc_uso_b5 1CF0+1D14 -- `bne` past the symbol end with the preset-default `move v0,zero` IN the bne delay slot and a filled `jr ra` slot, next symbol = 2-word `jr ra; nop` "empty fn" = the fn's own return-0 exit block; merge alone + non-null arm FIRST is byte-exact at plain -O2, no carve (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Filled delay slots = -O2, so NO file-terminal/TRUNCATE_TEXT machinery; `if (==2) return load; return 0;` puts return-0 as the bne target, the inverted `if (!=2) return 0;` flips to beq + return-0 fallthrough (same 11 words, 42%). The old "leaf-branch-past-end = cross-fn epilogue" verdict was this._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
 - [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — _When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.c at -O1, fragments in kernel_018.c at -O2 because they're across an opt-level…
@@ -10444,6 +10445,23 @@ function's own `return v` block). Baseline refreshed via the single-unit strip +
 below: `.text` differs from the old expected only at the 4 `%lo` reloc halfwords (the splice
 carries relocs, as in every other spliced unit), symtab 29CCC 60->828 with three symbols removed.
 
+**SIXTH CASE (2026-09-05 agent-g): timproc_uso_b5_func_00001CF0 + _00001D14 -- the -O2 plain-`bne`
+flavour of the same mis-split.** Target: `lw t6,0x30(a0); li at,2; xori t7,a1,1; bne t6,at,+5;
+move v0,zero; sll t8,t7,2; addu t9,a0,t8; jr ra; lw v0,0x34(t9)` then next symbol `jr ra; nop`.
+Both delay slots are filled and the preset-default `move v0,zero` rides in the bne delay slot, so the
+run is -O2, NOT the -O0 case above -- no per-file carve, no TRUNCATE_TEXT. IDO -O2 lays a two-arm
+predicate out as `<non-null arm falls through into jr/lw delay>` + `<return-0 exit block: jr ra; nop>`
+when the non-null arm is written FIRST; the USO splitter cut at the first `jr ra` and the orphaned exit
+block became a 2-word "empty function" that was then "matched" as `void f(void){}` (stub episode
+deleted). Merge (0x24 -> 0x2C) + `if (*(int*)((char*)a0+0x30) == 2) { return *(int*)((char*)a0+0x34+4*(a1^1)); } return 0;`
+is 11/11 byte-exact; the old NM body `if (!=2) return 0; return load;` produces the SAME 11 words in
+the other layout (`beq`, return-0 as the fallthrough, `jr ra; or v0,zero,zero` then `jr ra; nop`),
+which is what the 42% wrap was. Tell for this flavour: the "cap" note says "branch past end into an
+empty next function" and the next symbol is exactly `jr ra; nop` -- decode the bne delay slot; a
+`move v0,zero` there means the fn's own preset-default return. Retracts the 1CF0
+"leaf-branch-past-end CAP per feedback_leaf_branch_past_end_is_cross_fn_epilogue" verdict; gate the
+merge with the single-unit baseline refresh (recipe below) since the merged symbol's size changes.
+
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 
 **Symptom.** A size-sorted scan of bare INCLUDE_ASM (no NM wrap) game_libs symbols is dominated by 1-3 word entries: orphan hoisted prologues (no `jr ra`), alias entries (`or a3,a2,zero` falling into a matched body), pads (`.word 0`), and "caps" annotated as caller-set-$f2 / prologue-stolen-$at / return-x tails. In the 0x6A144..0x6A303 run, six such symbols sat back-to-back: 6A144 (0x78, no comment), 6A1BC (`jr ra; lwc1 $f0,0(sp)` -- 2 words), 6A1C4 (0xFC), 6A2C0 (7-word "caller-set $f2 double polynomial CAP"), 6A2DC (c.eq.s NaN check), 6A2F8 (3-word "prologue-stolen $at CAP"). Every one of them is an interior branch target / extra return point of a single 112-word function: libultra **fsin** (`gu/sinf.c`, `#pragma weak sinf = __sinf`).
@@ -10486,4 +10504,7 @@ Codegen analysis in `docs/IDO_CODEGEN.md#o0-two-block-predicate-not-adjacent-lea
 
 Result: mgrproc_uso_func_00000140 (99.29 -> 100, 12w) and _00000170 (99.17 -> 100, 11w), ROM
 byte-identical, 6 symbols -> 2, unit count unchanged (head unit kept its name, now [0x170,0x19C)
-at -O0). Same-fingerprint sibling still open: `timproc_uso_b5_func_00001CF0` -> `_00001D14`.
+at -O0). The same-fingerprint sibling `timproc_uso_b5_func_00001CF0` -> `_00001D14` turned out to be
+the -O2 flavour (filled delay slots, `move v0,zero` in the bne slot): merge + non-null-arm-first C was
+byte-exact at plain -O2 with no carve -- see the SIXTH CASE under
+[#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block).
