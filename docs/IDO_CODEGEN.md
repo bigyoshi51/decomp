@@ -13802,6 +13802,8 @@ rather than K&R double-promoting (see #feedback-alias-extern-via-undefined-syms 
 MATCHING_WORKFLOW); (2) a stray `int _pad;` may be needed to reserve the exact frame
 slot (IDO's frame came out 8 bytes short without it).
 
+**Framed LEAF addendum (bootup 11E00/11ED4/11FA8, agent-c 2026-09-05):** the "leaf functions land" exception above is really a FRAMELESS exception. A leaf with a stack frame (`addiu sp,sp,-8` for a spilled loop counter, no `jal`) still gets a shared epilogue label (`addiu sp,sp,8; jr ra`), every `return` becomes `b epi`, and ugen's closing-brace marker is emitted after the last `return 0`'s own `b epi` — target 53 words with ONE `b epi` after `move v0,zero`, ours 55 with two. Words 0x00..0xC4 byte-exact, in-tree 96.23% each. The dead pair sits BEFORE the epilogue, so file-terminal TRUNCATE (the `$exit`-pair carve tool) cannot help. Extra negatives from this probe: K&R parameter declarations (no change), a trailing `for(;;);` (adds a `b self`), `if (1) return 0;` (no change), a trailing `goto ret0;` (adds a `b ret0`) — every dead statement after the return contributes its own branch on top of the marker. Recognition for the -O0 sweep: `X; b epi; nop; epi:` at the end of a framed -O0 fn = this gap; a unit-level -O0 move gets such a fn to ~96%, not 100.
+
 <a id="feedback-ido-regalloc-renumber-matching-techniques"></a>
 ## Register-allocation-renumber caps: the matching toolkit (researched from OoT/sm64/mm IDO guides + permuter, 2026-05-29)
 
