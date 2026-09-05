@@ -9699,7 +9699,7 @@ Remaining sibling in the same shape: `game_libs_func_00033444` (+`gl_func_000334
 `game_libs_func_000349E0` (+`gl_func_000349E8`, 56%) -- both `lui tN; lw tN,K(tN)` orphans
 in game_libs_post/post0b with the same "deferred re-split" note.
 
-**TWENTY-FIRST + TWENTY-SECOND cases (2026-09-05, agent-g) -- both siblings above went EXACT on
+**TWENTY-SECOND + TWENTY-THIRD cases (2026-09-05, agent-g) -- both siblings above went EXACT on
 the first in-tree build; the only lever was WHERE to put per-site `&D` aliases.**
 - `game_libs_func_00033444` + `gl_func_0003344C` (0x8+0x64 = 27w, 18% -> 100): `(float)(unsigned)cb(&D)
   / (float)(unsigned)*(u32*)(D+0x20C)` -- both `mtc1; bgez; cvt.s.w; lui at,0x4F80; mtc1; nop; add.s`
