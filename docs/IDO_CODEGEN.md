@@ -540,7 +540,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [IDO -O0 field-load order isn't controlled by C expression order](#feedback-ido-o0-load-order-not-expression-driven) — _At -O0, reading two fields from the same base pointer (`p[1]` and `p[2]`) inside a single boolean expression emits loads in the OPPOSITE order from what the C says — and flipping the expression doesn't flip the emitted…
 - [IDO -O0 `lui tA; lw tA, %lo(D)(tA)` reuse is the default; forcing fresh-temp `lw tB` is unreliable](#feedback-ido-o0-lui-lw-reuse) — _When the target asm reads a D_* global at -O0 with `lui tA; lw tB, %lo(D)(tA)` (fresh register for dest), plain `if (D == C)` produces the reuse form `lw tA, %lo(D)(tA)`.
 - [IDO -O0 gives target-prefix bytes for unfilled-delay-slot leaves, but adds dead trailing jr-nop — not trimmable from C](#feedback-ido-o0-prefix-match-dead-epilogue) — _For 3-insn leaf setters (`sw X, off(a0); jr ra; nop`) that IDO -O2 compacts into 2 insns (`jr ra; sw X, off(a0)`) — the classic `feedback_ido_unfilled_store_return.md` cap — -O0 DOES emit the 3 target insns as a…
-- [IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C — CLASS-WIDE: zero exacts project-wide have lui-first (2026-07-18 scan of all 261 expected .o; both compilers × 6 flag combos negative)](#feedback-ido-o2-tiny-wrapper-unflippable) — _Simple `void f(void) { func(&SYM); }` wrappers at IDO -O2 always emit `addiu sp; sw ra; lui a0; jal; addiu a0(delay)`.
+- [IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C — **PARTIALLY RETRACTED 2026-09-05: `(int a0)` wrappers flip with the call on the `{` line (333F4 EXACT); only the `void(void)` pair 6204/E9FC still holds** — CLASS-WIDE: zero exacts project-wide have lui-first (2026-07-18 scan of all 261 expected .o; both compilers × 6 flag combos negative)](#feedback-ido-o2-tiny-wrapper-unflippable) — _Simple `void f(void) { func(&SYM); }` wrappers at IDO -O2 always emit `addiu sp; sw ra; lui a0; jal; addiu a0(delay)`.
 - [Value-returning -O0 functions emit an extra return-branch this toolchain can't fold — likely a systematic cap](#feedback-ido-o0-value-return-extra-branch) — _A value-returning -O0 function ends with TWO branches (return's `b epilogue` + the body's `b +1` marker); many 1080 targets have only one. Void -O0 funcs match fine; value-returning ones are +1 insn. Suspected IDO patch-level divergence._
 - [Float function-return used in an expression is preserved in callee-saved $f20 — target uses $f0 directly (toolchain cap)](#feedback-ido-float-call-result-preserved-in-f20) — _This IDO build moves a float call-return to callee-saved $f20 (+save/restore) before the next FP operand; targets keep it in $f0. Not C-fixable. Caps float-returning-call expressions (mgrproc_uso_func_000005D0)._
 - [-O0: a dead reassignment of a `register` var reproduces a stray `lui sN; addiu sN` symbol-materialize](#feedback-ido-o0-dead-reassign-forces-s-reg-materialize) — _Reproduce a target's dead `&D` address-materialize into a callee-saved reg via `register int v; ...; v = (int)&D;` (no DCE at -O0). Reuse the same register var to keep it in s0. Took mgrproc_uso_func_00000504 byte-exact._
@@ -6645,6 +6645,16 @@ If the target asm insists on `div.s` by a power-of-2 constant, it's probably eit
 
 <a id="feedback-ido-o2-tiny-wrapper-unflippable"></a>
 ## IDO -O2 `sw ra; lui a0` order for 1-arg 1-call void wrappers is unflippable from C
+
+> **PARTIALLY RETRACTED 2026-09-05 (agent-g, gl_func_000333F4 0 -> 100 EXACT).** The `(int a0)`
+> members of this family (`int/void f(int a0) { g(&SYM, a0); }` -- gl_func_000333F4 /
+> 0003341C / 0004D05C) are NOT a scheduler cap: put the call on the SAME LINE as the
+> opening `{` and IDO emits `lui a0` BEFORE `sw ra` (source-line tie-break, see
+> [#same-line-brace-return-sinks-arg-home-c3e8](#same-line-brace-return-sinks-arg-home-c3e8)).
+> Every variant below was written in house style (call on its own line), which is why
+> "13 variants" all agreed. The `void f(void) { g(&SYM); }` members (bootup func_00006204 /
+> func_0000E9FC) still emit sw-ra-first in 6 one-line spellings -- that half of the claim stands.
+
 
 _Simple `void f(void) { func(&SYM); }` wrappers at IDO -O2 always emit `addiu sp; sw ra; lui a0; jal; addiu a0(delay)`. If the target has `addiu sp; lui a0; sw ra; jal; addiu a0(delay)` (lui before sw ra), 13+ C variants (pointer locals, register, volatile, cast, (void) return, int r = ..., etc.) don't flip it. Stops at 77 % (7/9 insns). Below NON_MATCHING threshold — keep as INCLUDE_ASM._
 
@@ -14090,6 +14100,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
+- [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 0->100 EXACT 2026-09-05 agent-g); queue: 0003341C, 0004D05C](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -24191,3 +24202,50 @@ and the miss was misattributed to the toolchain.
 definition on ONE line (or at least `{ return ...;` on the same line). Keep a
 comment telling future formatters not to re-wrap it. Landed: game_uso_func_0000C3E8
 (game_uso.c), ROM byte-identical.
+
+
+### Same-line lever, variant 2: `sw ra` / `lui a0` prologue order in 1-call wrappers (gl_func_000333F4, 0 -> 100 EXACT 2026-09-05 agent-g) <a name="same-line-brace-call-wrapper-lui-a0-sw-ra"></a>
+
+**Sweep result first.** A strict scan of EVERY NM object (`build/non_matching/**/*.c.o` vs
+`expected/**/*.c.o`, all sizes, same-size functions whose only diff is two swapped
+positions with one of them `sw a0-a3,0/4(sp)`) found **zero** further C3E8-shape
+candidates. What it did find (pure two-position swaps, all `lui a0` vs `sw ra,20(sp)`):
+gl_func_000333F4 / 0003341C (game_libs_post), gl_func_0004D05C (game_libs_post0b),
+bootup func_00006204 / func_0000E9FC — exactly the "unflippable tiny-wrapper cap" set
+from [#feedback-ido-o2-tiny-wrapper-unflippable](#feedback-ido-o2-tiny-wrapper-unflippable).
+
+**Target** (10 insns):
+```
+addiu sp,sp,-24
+or    a1,a0,zero
+lui   a0,%hi(D_00000000)      # BEFORE sw ra
+sw    ra,20(sp)
+jal   gl_func_00000000
+addiu a0,a0,%lo(D_00000000)
+lw    ra,20(sp); addiu sp,sp,24; jr ra; nop
+```
+
+**Standalone table** (IDO 7.1, project flags `-O2 -G 0 -non_shared -Xcpluscomm -Wab,-r4300_mul -mips2 -32`):
+
+| spelling | prologue |
+|---|---|
+| `int f(int a0) {`⏎`    return g(&SYM, a0);`⏎`}` | `sw ra; lui a0` (WRONG, the old "cap") |
+| `int f(int a0) { return g(&SYM, a0); }` | `lui a0; sw ra` (TARGET) |
+| `void f(int a0) { g(&SYM, a0); }` | TARGET |
+| `void f(int a0) { g(&SYM, a0); return; }` | TARGET |
+| `int f(int a0) { g(&SYM, a0); }` (no return value) | TARGET |
+| `void f(void) { g(&SYM); }` / `{ g(&SYM); return; }` / `int f(void) { return g(&SYM); }` / `void f(void) { int r = g(&SYM); }` / `void f(void)`⏎`{ g(&SYM); }` / `{ g(&SYM);`⏎`}` | `sw ra; lui a0` (NOT flipped) |
+
+Same mechanism as C3E8: `sw ra,0x14(sp)` is attributed to the function-entry line, the
+`lui a0` to the call line; different lines = line order kept. With an `(int a0)` param the
+`or a1,a0,zero` copy sits between them and the same-line spelling lets `lui a0` schedule
+ahead of the ra save. The `void(void)` wrappers do not move in any one-line spelling tried
+(6204 / E9FC remain genuinely open — a different tie-break is in play there).
+
+**Landed:** gl_func_000333F4 (`src/game_libs/game_libs_post.c`, one-line definition with a
+do-not-re-wrap comment), ROM byte-identical, episode logged.
+**Queue (same shape, single-swap residual, untested in-tree):** gl_func_0003341C
+(`void (int a0)`, game_libs_post.c, directly below 333F4), gl_func_0004D05C (`void (int a0)`,
+game_libs_post0b.c — note the wrap comment says a reloc fix already brought it to 99%; the
+remaining diff IS this swap). Also re-check gl_func_0005C810 (named in the 2026-07-18
+class-wide scan but not a pure two-position swap in the current NM build).
