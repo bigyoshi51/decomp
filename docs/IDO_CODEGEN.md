@@ -14100,7 +14100,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
-- [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 0->100 EXACT 2026-09-05 agent-g); queue: 0003341C, 0004D05C](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
+- [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -24242,10 +24242,20 @@ Same mechanism as C3E8: `sw ra,0x14(sp)` is attributed to the function-entry lin
 ahead of the ra save. The `void(void)` wrappers do not move in any one-line spelling tried
 (6204 / E9FC remain genuinely open — a different tie-break is in play there).
 
-**Landed:** gl_func_000333F4 (`src/game_libs/game_libs_post.c`, one-line definition with a
-do-not-re-wrap comment), ROM byte-identical, episode logged.
-**Queue (same shape, single-swap residual, untested in-tree):** gl_func_0003341C
-(`void (int a0)`, game_libs_post.c, directly below 333F4), gl_func_0004D05C (`void (int a0)`,
-game_libs_post0b.c — note the wrap comment says a reloc fix already brought it to 99%; the
-remaining diff IS this swap). Also re-check gl_func_0005C810 (named in the 2026-07-18
-class-wide scan but not a pure two-position swap in the current NM build).
+**Landed (all three `(int a0)` members, each one-line definition + do-not-re-wrap comment,
+ROM byte-identical, episode logged, no expected/ refresh needed since symbol size is unchanged):**
+- gl_func_000333F4 (`src/game_libs/game_libs_post.c`): `int f(int a0) { return g(&SYM, a0); }`
+- gl_func_0003341C (game_libs_post.c, directly below): `void f(int a0) { g(&SYM, a0); }`
+- gl_func_0004D05C (`src/game_libs/game_libs_post0b.c`): `void f(int a0) { g((char *)&SYM + 0x201B0); (void)a0; }`
+  — a0 is UNUSED here; target is `addiu sp; sw a0,0x18(sp); lui a0; sw ra`. The `(void)a0;`
+  after the call homes a0 (in-tree the bare body dropped the store, per the old wrap note;
+  standalone it did not matter). Standalone, every one-line spelling tried (with/without
+  `(void)a0`, `(void)a0` before the call, `return;`, `int` return) emits the target order;
+  only the multi-line house-style form keeps `sw ra` first. So the dead-arg-home store does
+  NOT disturb the tie-break — the lever is purely "call on the `{` line".
+
+The `(int a0)` queue is therefore CLOSED. gl_func_0005C810 was re-checked and is NOT this
+class: its NM build is +2 insns (`mtc1 a1,$f12; mtc1 a2,$f14` at entry) with the body
+otherwise byte-exact — the o32 int-a0 + float-in-$f12 arg-passing cap (same as
+gl_func_0002DF68), unrelated to source-line layout. Remaining open members of the swap
+family are only the `void(void)` pair bootup func_00006204 / func_0000E9FC.
