@@ -173,7 +173,8 @@ explicit shared blocks (goto a common label), not regeneration.
 - [EIGHTH CASE: game_libs 3AA5C+3AC50 -- the 3-word "caller-set $t2 CAP" stub was the fn's own `sign = -1` else block; 128-word FP leaf exact on the first in-tree build; the two-word `sll/sra` before the `beqz` came from a CHAINED `axis = o->axis = cond ? 0 : 1` (assignment-expression value converted to the field's signed char), and that extension is what lines up the whole later tN ring (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk both directions first (3AA40 = matched jr-ra leaf, 3AC5C = own prologue). Levers: Vec3 fields (float[] swaps the last add.s operands), `axis = cond ? 2 : o->axis; o->axis = axis;` per arm (value select + one store), `axis = o->axis; switch (axis)`. See docs/IDO_CODEGEN.md#chained-assignment-field-conversion-sign-extend-tn-ring._
 - [ELEVENTH CASE: game_libs 5BBEC+5BC04 -- the 8-word "matched" clamp-min stub (with an episode) was the fn's own else arm; clamp-into-[-b,b] exact ONLY as a single-exit `if (b < a) { a = b; } else { ... if (a < neg_b) a = neg_b; } return a;` -- two `return`s make IDO branch-likely the SECOND test too (dup `mov.s f0,f12`, 4 words off), a `ret` local adds moves (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _When the target's inner test is a plain `bc1f` straight onto `jr ra` with the return move in the jr delay, the return block must have a SINGLE predecessor shape: clamp in place on the arg, one `return`. See docs/IDO_CODEGEN.md#single-exit-clamp-in-place-vs-two-returns-branch-likely._
 - [TWELFTH CASE: game_libs 5CA78+5CAEC+5CB5C -- twelve beql hits, two six-test `&&` ladders + a `move v0,zero; jr ra; nop` return-0 block; 60w exact as two plain `if (&&...) return 1;` + `return 0;` (`if (A || B)` breaks the last test of ladder 1 into `bne`+nop; `return A || B` = 56w value form). DECODE GOTCHA: branch-likely delay slots are NULLIFIED on fall-through -- the dup'd `lw v0,0xC(a0)` never runs on the not-taken path, so the old note compared against the wrong field (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Read fall-through register state PAST a beql/bnel/bc1fl as if the delay slot were absent. The value loaded before the first branch (b->x1 in v1) dominates both ladders and is CSE'd; loads inside a ladder are on only some paths and get reloaded -- not volatile._
-- [THIRTEENTH CASE: game_libs 624EC+62524 -- the 7-word "loop-bottom tail-fragment with caller-set v0/v1/a2" was the fn's own loop-increment + shared return(-1) block (two bnel -> 62524+4, blezl -> its jr ra); 21w slot-table linear search EXACT via goto-loop (a `for` auto-unrolls x4) + `while (0) { i = key1; }` ucode-slot ordering so key1 is coloured BEFORE the entry pointer (pointer takes a2, key2 displaced to a3) (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _A displaced param can only land in a3 (a0-a2 hold incoming values); WHICH param gets displaced = first-occurrence order of the params vs the pointer's definition. Decl order, operand order, `register`, `(void)x`, `x += 0` all fold away; only the while(0) dead body moves the ucode slot._
+- [FIFTEENTH CASE: game_libs 624EC+62524 -- the 7-word "loop-bottom tail-fragment with caller-set v0/v1/a2" was the fn's own loop-increment + shared return(-1) block (two bnel -> 62524+4, blezl -> its jr ra); 21w slot-table linear search EXACT via goto-loop (a `for` auto-unrolls x4) + `while (0) { i = key1; }` ucode-slot ordering so key1 is coloured BEFORE the entry pointer (pointer takes a2, key2 displaced to a3) (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _A displaced param can only land in a3 (a0-a2 hold incoming values); WHICH param gets displaced = first-occurrence order of the params vs the pointer's definition. Decl order, operand order, `register`, `(void)x`, `x += 0` all fold away; only the while(0) dead body moves the ucode slot._
+- [SIXTEENTH CASE: game_libs 66620+66650+6665C -- THREE-symbol chain: the 3w "caller-set v0/v1 CAP" stub was the prev->next unlink arm and the 6w "tail fragment" was the loop advance + shared return; 21w singly-linked-list remove-by-key EXACT with `cur` initialised BEFORE `prev` (first-occurrence colouring cur=v0/prev=v1) and the null-prev arm written first (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _The scanner reports only the FIRST link; follow every branch-likely out of B too. Also: post1b's committed expected/ baseline is the C-build object (donor-splice `jal 0`+relocs), NOT the strip route -- `cp build/.o` there, strip + EXPECTED_BASELINE=1 only for pinned units (post0b/tail)._
 - [SEVENTH CASE + GENERAL SCANNER: game_libs 986C+9920+993C -- the scanner's `A` (9920, reads caller-set t4/v0/v1/a3) was itself the return-block tail of the 44-word checksum VERIFIER 986C (sibling of the exact writer 97B4); its `beq` lands ON 9920 and 9920's `beq` (preset `li v0,1` in the delay) lands ON the `jr ra; nop` "empty fn" 993C = the return-1 exit; merged 54w EXACT; `scripts/find-stub-misplits.py` generalises the scan to ANY branch onto an adjacent 1-3 word `jr ra` stub incl. already-"matched" C stubs (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk BACK from the scanner's A until the head has no caller-set reads; a plain `beq` landing ON B+0 with the preset return value in ITS delay slot is the -O2 exit-block flavour. Last-word lever: `var + load` emits the inline load as addu rs in BOTH source orders -- pin the var first via `load + (t = var)` (integer assignment-expr lever). Remaining hits: 9944+9970, 2E290+2E2F8, 4FB78+4FB9C, 560E4+56150._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
@@ -10687,7 +10688,7 @@ the LAST test of ladder 1 into a plain `bne`+nop that skips into ladder 2 (39 wo
 Remaining beql-scanner queue after this (agent-c side): 624EC+62524, 66620+66650,
 6F1D8+6F1FC, 67FD8+68004, 453D8+45418, 57194+571E4, timproc_b5 88A0+8940 (matched g3 stub).
 
-**THIRTEENTH CASE (2026-09-05 agent-c): game_libs_func_000624EC + "62524" -- a loop
+**FIFTEENTH CASE (2026-09-05 agent-c): game_libs_func_000624EC + "62524" -- a loop
 whose increment block AND shared return(-1) block were cut off as a 7-word "tail fragment";
 the exact needed the `while(0){}` ucode-slot lever to pick WHICH param gets displaced.**
 Scanner pair `624EC (14w) -> 62524 (7w)`: both `bnel` at 0x62508/0x62514 land on 0x62528 =
@@ -10810,6 +10811,41 @@ strip + `EXPECTED_BASELINE=1` route (post0b is pinned): `.text` byte-identical, 
 108->196, eleven removed. Remaining scanner hits after this: none outside agent-c's queue
 (5CAEC+5CB5C, 66620+66650, timproc_b5 88A0+8940, 27300 already landed on main).
 
+
+**SIXTEENTH CASE (2026-09-05 agent-c): game_libs_func_00066620 + "66650" + "6665C" -- a
+three-symbol chain; the scanner reports only the first link.** `find-beql-dup-misplits.py`
+printed `66620 (12w) -> 66650 (3w)`, but 66620's `bnel a1,t6` @0x66634 lands on 0x66660 =
+**6665C**+4 (dup `move v1,v0`), its `bnezl v1` @0x6663C lands on 0x66654 = 66650+4 (dup
+`lw t8,4(v0)`), 6665C's back-edge `bnel v0,zero` @0x66664 lands on 0x66634 = loop+4 (dup
+`lw t6,0(v0)` -- the idiom on a BACK edge), and the entry `beqz` lands on 6665C's `jr ra; nop`.
+Both stubs carried caps ("caller-set v0/v1 state-ptr CAP", "tail fragment, needs splat
+boundary correction"); the bundle notes above gl_func_000665B4 in post1b had already decoded
+the whole 21-word function correctly as "SUB-FUNCTION 2". Merged 0x30+0xC+0x18 = 0x54, exact:
+```c
+void game_libs_func_00066620(List66620 *list, int key) {   /* Node { int key; Node *next; } */
+    Node66620 *cur = list->head;    /* cur FIRST -> v0 */
+    Node66620 *prev = 0;            /* prev second -> v1 */
+    while (cur != 0) {
+        if (cur->key == key) {
+            if (prev == 0) { list->head = cur->next; } else { prev->next = cur->next; }
+            return;
+        }
+        prev = cur; cur = cur->next;
+    }
+}
+```
+Levers: (1) initialise `cur` before `prev` -- first-occurrence colouring order; `prev = 0`
+first swaps v0/v1 through all 21 words (14 diffs, same opcodes); (2) null-prev arm first so
+the `prev->next` store is the trailing `bnezl` target (ex-"66650"); (3) plain `while`, IDO
+rotates it into entry-beqz + bottom-bnel. do/while, `for`, and `key == cur->key` change nothing.
+**Baseline gotcha for post1b:** its committed `expected/` object is the ROM-exact C BUILD
+object (the donor-spliced libultra identities carry `jal 0` + R_MIPS_26 relocs), so the strip +
+`EXPECTED_BASELINE=1` route from the third case DIVERGES there (18 jal words, `.text` mismatch).
+Rule: pinned units (`NON_MATCHING_TEXT_CLIP_KEEP_ALIGN ... sym=0xNN`: post0b, tail) use the
+strip route; unpinned units whose old baseline `.text` equals the build's `.text` use
+`cp build/src/<unit>.c.o expected/...`. Always verify `.text` identical + symtab diff limited to
+the merged symbols before committing either. Remaining queue: 6F1D8+6F1FC (already donor-spliced
+in post1b2c -- check REPLACE_FUNC_BODY first), timproc_b5 88A0+8940 (matched g3 stub).
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 
