@@ -381,6 +381,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [`float four = 4.0f;` named local pins the FP constant to one $fN across multiple uses](#feedback-ido-named-float-const-pins-fp-reg-across-body) — _For FP literals used 2+ times in a function body, declare `float NAME = LITERAL;` as a named local — IDO -O2 pins one $f-reg and reuses, vs re-materializing `lui at, IMM; mtc1 at, $fN` per use. Different from the `register int N = 1;` constant-fold trap because FP literals need lui+mtc1 setup. Verified 2026-05-16 on game_libs_func_000086A0 (parallel) and gl_func_0000871C (this tick) — both 4.0f-pinning under `float four = 4.0f;`._
 - **INVERSE (2026-06-02): drop a spurious unused TRAILING param to free its arg-reg and ELIMINATE a stack spill the target avoids.** If the target keeps an arg in a register across a jal (`or $a3,$a0,$0` — reuses a free arg-reg to hold original-a0) but your build SPILLS it to stack (`sw a0,off(sp)` + bigger frame), check whether your C signature declares an unused trailing param (e.g. `f(a0,a1,a2,arg3)` where arg3 is never referenced). That unused param OCCUPIES `$a3`, so the allocator can't reuse it and spills original-a0 to the stack instead. **Drop the unused param** → `$a3` is free → IDO reuses it (matches the target's `or $a3,$a0`) and the spill + extra frame vanish. Verified `gl_func_00067084` 2026-06-02 (85→94% from this alone, part of an 85→99.4% run). Pairs with dropping spurious `(char)`/`(signed char)` casts (each forces a redundant `andi`/`sll;sra`).
 - [IDO spills unused `int a0` param to caller-slot sp+frame when function contains a jal](#feedback-ido-unused-arg-save) — _If the target asm has `sw a0, frame_size(sp)` at entry (into caller's arg-save slot) but you see no use of a0 later, declaring `void f(int a0) { ...jal... }` with an unused a0 parameter reproduces it — IDO -O2 does NOT…
+- [Unused leading arg is ALSO homed (`sw a0,0(sp)`, frameless) when the fn has a `jr tN` JUMPTABLE and no jal -- 87A0 21/21; `if (a0) {}` drops it (agent-c 2026-09-05)](#feedback-ido-unused-arg-save) -- _Do not read a `sw a0,0(sp)` in a switch head as an -O1 / struct-by-value / K&R-narrow tell._
 - [Dead `if (a1) {}` elides the unused-leading-a1 caller-slot home (a0-only-spill targets now reachable; F444+F4F0 EXACT)](#feedback-ido-unused-arg-save) — _2026-07-03: empty-if ref marks a1 used, zero emission; kills the documented "no C lever / permuter-class" a1-spill cap. `a1=0;`/`(void)a1;` do NOT work. Re-pad frame after (volatile-pad sandwich)._
 - [Leading `or a2,a0,zero` stolen-prologue word = fn's OWN hoisted 3rd-call-arg copy (false unused-arg-save residual; 2D710 family word-exact)](#feedback-stolen-prologue-move-is-arg-copy-for-3rd-call-arg) — _One-param fn passing arg as 3rd call arg; IDO hoists a2=a0 above the stack adjust. Re-attribute the 0x00803025 boundary word forward and re-decode._
 - [Force caller-slot spill of a USED arg via `volatile T *p = &argN;`](#feedback-ido-arg-addr-via-volatile-ptr-forces-caller-spill) — _When target has a leading `sw aN, frame+offsetN(sp)` (caller's aN slot) for an arg that IS used in the body — i.e., the unused-arg-save pattern doesn't apply — declare `volatile T *p = &argN;` to take the arg's address through a volatile-qualified pointer. IDO -O2 must materialize argN to its caller-slot since the address escapes (volatile prevents address-DCE). Verified 2026-05-08 on `gl_func_0003EA98` (82.89% → 100%)._
@@ -9123,6 +9124,13 @@ nop
 ```
 
 **Why it's non-obvious:** my intuition said IDO -O2 would strip the unused parameter and its save. It does NOT. The presence of a `jal` in the body prevents IDO from treating the incoming a0 as dead — because the called function's behavior is opaque to IDO (K&R declarations, possibly-variadic callees, etc.). Adding the save is defensive.
+
+**Jumptable variant (2026-09-05 agent-c, timproc_uso_b5_func_000087A0 21/21):** the same
+home store appears in a FRAMELESS leaf with no jal at all when the body is a `switch` lowered
+to a `jr tN` table -- `addiu t6,a1,-1; sltiu at,t6,8; beqz at,default; sw a0,0(sp)` -- for an
+unused `char *a0` / `int a0` first parameter (`&a0` changes nothing; `if (a0) {}` marks it used
+and drops the store). The indirect jump is the opaque control transfer that keeps the arg
+save alive.
 
 **Variants observed (2026-04-18 game_libs):**
 
@@ -24606,3 +24614,15 @@ and [#goto-chain-default-flow-to-final-return-560e4](#goto-chain-default-flow-to
 
 Full case: `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
 (seventeenth case).
+
+**Confirmed on the named next candidate (2026-09-05 agent-c): `timproc_uso_b5_g3_87E8.c`
+retired -- 87A0 = `switch (a1) { case 1: return 0; case 2: return 1; case 4: return 2; case 8:
+return 3; case 3: case 5: case 6: case 7: default: return 0; }`, 21/21 in-unit, the default
+`move v0,zero; jr ra; nop` unfilled at plain -O2.** Two extra notes from it: (1) with only the
+four sparse labels 1/2/4/8 IDO lowers to a compare chain; the four EXPLICIT labels on
+`default:` are what cross the 5-label jumptable threshold ([#empty-trailing-case-jumptable-threshold-76f0](#empty-trailing-case-jumptable-threshold-76f0))
+-- an alternative to the `case N: break;` spelling that also fixes the `sltiu` range to
+1..8. (2) A frameless `jr tN` switch head whose leading parameter is unused emits
+`sw a0,0(sp)` in the range-check `beqz` delay slot with NO jal in the function
+([#feedback-ido-unused-arg-save](#feedback-ido-unused-arg-save) says "when the function
+contains a jal" -- the indirect table jump counts); `if (a0) {}` removes it.
