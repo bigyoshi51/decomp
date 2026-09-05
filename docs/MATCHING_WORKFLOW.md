@@ -9699,6 +9699,35 @@ Remaining sibling in the same shape: `game_libs_func_00033444` (+`gl_func_000334
 `game_libs_func_000349E0` (+`gl_func_000349E8`, 56%) -- both `lui tN; lw tN,K(tN)` orphans
 in game_libs_post/post0b with the same "deferred re-split" note.
 
+**TWENTY-FIRST + TWENTY-SECOND cases (2026-09-05, agent-g) -- both siblings above went EXACT on
+the first in-tree build; the only lever was WHERE to put per-site `&D` aliases.**
+- `game_libs_func_00033444` + `gl_func_0003344C` (0x8+0x64 = 27w, 18% -> 100): `(float)(unsigned)cb(&D)
+  / (float)(unsigned)*(u32*)(D+0x20C)` -- both `mtc1; bgez; cvt.s.w; lui at,0x4F80; mtc1; nop; add.s`
+  blocks are IDO's u32->float conversion, the converted divisor is spilled to 0x1C(sp) across the call
+  and `div.s` fills the jr delay. The hoisted counter load is FOLDED (`lui t6; lw t6,0x20C(t6)`) while
+  the call arg is `lui a0` / `addiu a0` (jal delay): spelling both off `&D_00000000` CSEs the address
+  into a held `lui a0; addiu a0; lw t6,0x20C(a0)` (+1w, 18 diffs) -> per-site alias `D_33444_a = 0x0`
+  for the counter read (addend +0x20C stays in C; the ROM word bakes 0x20C either way).
+- `game_libs_func_000349E0` + `gl_func_000349E8` (0x8+0x6C = 29w, 56% -> 100): `flag |= 4; init(&D,
+  &D+0x1E460, 900, 900); step(*(int*)&D); fini(&D); flag &= ~4;` -- seven data accesses, EVERY one
+  folded under its own `lui`. Rule that fell out of the 6-variant probe: **IDO CSEs two accesses to
+  the same symbol only when no CALL separates them** (one call-free live range -> one held
+  `lui v0; addiu v0` base; `flag |= 4` off a single symbol = 13 diffs and `volatile` does NOT split
+  it), while accesses on opposite sides of a call re-`lui` by themselves (the base is caller-saved).
+  So the minimal spelling is TWO aliases, not seven: `D_349E0_a = D_00000000 | 4; ...
+  D_00000000 = D_349E0_a & ~4;` (each read-modify-write reads one alias and writes the other) and one
+  `D_349E0_b` shared by all three call sites. Count the call-free same-symbol pairs, alias exactly those.
+Both: forward-merge under the orphan's earlier-address name, delete the successor .s + wrap, refresh
+the unit baseline via the single-unit strip + `EXPECTED_BASELINE=1` route (post/post0b are pinned
+raw-word units: `.text` byte-identical, symtab differs only in the merged pair), no Makefile/ld/objdiff
+edits. The `lui tN; lw tN,K(tN)` orphan queue from the twentieth case is now EMPTY.
+Probed and NOT closed: `game_libs_func_0003485C` (0x20: `sw a0,0(sp); b .; nop; nop; nop; nop; jr ra;
+nop`) -- 20 infinite-loop spellings (`for(;;)`, `while(1)`, `do{}while(1)`, `goto L`, `continue`,
+trailing `return`) x IDO 7.1 + 5.3 x -O0/-O1/-O2 x +-g all give either the 5w `sw; b .; nop; jr; nop`
+(-O1/-O2) or the 8w `sw; b .; nop; b .+1; nop; jr; nop; nop` (-O0 / any -g); nothing emits three bare
+nops before the `jr ra`. Not a plain -O0 `for(;;)` stub -- leave it INCLUDE_ASM until a different
+construct is found.
+
 ## Hoisted-prologue mis-split, REVERSE direction: orphan word at the PARENT's tail (65494/659D0)
 <a name="hoisted-prologue-reverse-tail-orphan-65494"></a>
 

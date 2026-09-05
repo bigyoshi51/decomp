@@ -14130,6 +14130,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [A `switch`-terminated fn's FINAL return block keeps an UNFILLED `jr ra; nop` at plain -O2 (`lui; addiu; jr ra; nop` / `move v0,zero; jr ra; nop`), while in-switch `return` arms are filled (`jr ra; li v0,K`) -- so a tiny `-O2 -g3` + TRUNCATE_TEXT carve-out unit whose only content is such a block right after a run of return stubs is a MIS-SPLIT default block, not a codegen need (343F4 25/25 first compile, g3_34448 unit retired; 2026-09-05 agent-g)](#switch-final-return-block-unfilled-jr-delay-not-g3-343f4) -- _Written inside the switch (`case 8: default: return X;`) or after it (`default: break; } return X;`) gives the same bytes. Same class as 2E290's exit and 560E4's `end: jr ra; nop`. Candidate to retire next: timproc_uso_b5_g3_87E8.c (87A0's default)._
 - [CHAINED / TESTED ASSIGNMENT to a `signed char` FIELD sign-extends the register value (`sll 24; sra 24`) for the test while the `sb` keeps the raw reg -- a plain local assigned 0/1 is never extended; the two extra words also shift the whole later tN ring by two (game_libs 3AA5C 128/128 EXACT, 2026-09-05 agent-c)](#chained-assignment-field-conversion-sign-extend-tn-ring) -- _Target `li v0,1 ... or v0,zero,zero; sll t6,v0,24; sra t7,t6,24; beqz t7; sb v0,2(a0)` = `axis = o->axis = cond ? 0 : 1; if (axis)` (or `if (o->axis = ...)`). `signed char axis = cond ? 0 : 1; if (axis)` / `switch (axis)` / casts give a bare `beqz v0`; `o->axis = ...; if (o->axis)` reloads. Also: Vec3 FIELD access vs float[] indexing flips the final `add.s` operand order of a 3-term dot product (`f4,f16` vs `f16,f4`); `x = cond ? K : o->f; o->f = x;` = value select + one store, `o->f = cond ? K : o->f;` = two stores with K hoisted._
 - [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
+- [Per-site `&D` alias budget = one alias per CALL-FREE same-symbol pair: IDO holds a `lui v0; addiu v0` base only for two accesses to the same symbol with no call between them; accesses on opposite sides of a call re-`lui` by themselves, `volatile` does not split a pair (game_libs 349E0 29/29 + 33444 27/27 EXACT, 2026-09-05 agent-g)](#alias-budget-call-free-same-symbol-pair-349e0) -- _Target with every access folded under its own lui: `flag |= 4` off one symbol = held base (13 diffs); `D_a = D | 4; ... D = D_a & ~4;` + ONE alias shared by three call-site args = exact. Don't alias per access, alias per call-free pair._
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -24246,6 +24247,44 @@ chain via a named `ret` local is 13 words off. `unsigned char` param = homed `sw
 `andi a0,a0,0xFF`; IDO copies the param to `v1` in the first delay slot by itself.
 
 ---
+
+## Per-site `&D` alias budget: one alias per CALL-FREE same-symbol pair (game_libs_func_000349E0 56->EXACT, 33444 18->EXACT, 2026-09-05 agent-g) <a name="alias-budget-call-free-same-symbol-pair-349e0"></a>
+
+Both are hoisted-orphan merges (`docs/MATCHING_WORKFLOW.md#feedback-callerset-t6-orphan-head-is-hoisted-prologue`,
+cases 21/22) whose merged target has EVERY data access folded under its own `lui` -- no held base
+anywhere, frame 0x18 with only `ra`. 349E0 (29 words, one straight-line BB):
+
+```
+lui t6; lw t6,0(t6)                 flag read      (hoisted above addiu sp)
+lui at; ... ori t7,t6,4; sw t7,0(at) flag write
+lui a0; addiu a0,0 / lui a1,2; addiu a1,-0x1BA0; li a2,900; jal; li a3,900   init(&D, &D+0x1E460, 900, 900)
+lui a0; jal; lw a0,0(a0)            step(*(int*)&D)
+lui a0; jal; addiu a0,0             fini(&D)
+lui t8; lw t8,0(t8); li at,-5; and t9; lui at; sw t9,0(at)                flag &= ~4
+```
+
+Six standalone variants (project flags, `-O2 -mips2`):
+
+| spelling | result | why |
+|---|---|---|
+| `D_a |= 4; f(&D_b,...); f(D_c); f(&D_d); D_e &= ~4;` (one alias per statement) | 13 diffs, same size | the `|=` and `&=` each read AND write the same symbol with no call between -> `lui v0; addiu v0; lw t6,0(v0) ... sw t7,0(v0)` held base |
+| `volatile int D_a` for the flag | 13 diffs | volatile does not split the address CSE (confirms band-sweep-2026-07-15 s1) |
+| seven distinct aliases (`D_b = D_a | 4; ... D_g = D_f & ~4;`) | 0 diffs | trivially no pair shares a symbol |
+| three call sites on ONE alias `D_c` (arg, folded `lw a0,0(a0)` value, arg) | 0 diffs | a `jal` sits between every pair: the base is caller-saved, so uopt re-materialises `lui a0` each time on its own |
+| `D_a = D_00000000 | 4; ...; D_00000000 = D_a & ~4;` (D itself reused NON-adjacently) | 0 diffs | the two `D_00000000` uses are separated by three calls |
+| **shipped**: `D_349E0_a = D_00000000 | 4; f(&D_349E0_b, (char*)&D_00000000+0x1E460, 900, 900); f(D_349E0_b); f(&D_349E0_b); D_00000000 = D_349E0_a & ~4;` | 0 diffs | two aliases total |
+
+Rule: count the pairs of same-symbol accesses that lie in one call-free stretch; each such pair
+needs one of its members re-spelled through a per-site alias (`X = 0x00000000;` in
+`undefined_syms_auto.txt`, offsets kept in C so `%lo` bakes). Call-separated repeats never need one.
+`(char*)&D + 0x1E460` next to a plain `&D` is NOT a pair (different hi half -> different `lui`).
+
+33444 is the one-pair version: `(float)(unsigned)cb(&D) / (float)(unsigned)*(u32*)((char*)&D + 0x20C)`
+-- the counter load (hoisted, folded `lw t6,0x20C(t6)`) and the call arg (`lui a0; addiu a0` in the
+jal delay) share the BB, so one alias on the read (`D_33444_a`) takes it from 18 diffs / +1 word to
+27/27. The u32->float idiom `mtc1; bgez rs,+5; cvt.s.w; lui at,0x4F80; mtc1 at; nop; add.s` is just
+`(float)(unsigned int)x`; the converted divisor spills to 0x1C(sp) across the call and `div.s` fills
+the jr delay with no help.
 
 ## SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay slot — the "dead-arg-home delay-slot cap" (game_uso_func_0000C3E8) was a source-line-layout artifact, 0 -> 100 EXACT 2026-09-05 (agent-g) <a name="same-line-brace-return-sinks-arg-home-c3e8"></a>
 
