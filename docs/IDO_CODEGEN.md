@@ -14113,6 +14113,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [if/else ARM ORDER picks the branch-likely layout: non-null arm first = forward `beql` to a trailing null block with the block's first insn duplicated into the delay slot; null arm first = `bnezl` skip with the null epilogue inline (game_uso 7A98, 12 vs 13 insns)](#ido-arm-order-picks-beql-layout-dup-first-insn) — _When the target has a `beql` whose delay slot equals the first insn of a later block (and that insn looks dead), write the taken arm SECOND in C._
 - [LAST test of a return-0/1 compare ladder: `if (x >= y) return 0; return 1;` hoists `li v0,1` ABOVE the `bnez at` and branches to a trailing `jr ra; nop`; `if (x < y) return 1; return 0;` puts `li v0,1` in the taken-branch delay slot instead (3 words differ); `return x < y;` is the 29-word `slt v0` form (game_libs 9A50, 2026-09-05)](#ido-last-test-ge-return0-return1-hoists-li-v0-1) — _Target shape `li v0,1; slt at; bnez at,+3; nop; jr ra; move v0,zero; jr ra; nop` = the `>=`/return 0/return 1 spelling._
 - [SAME-LINE `{ return X; }` sinks the dead arg-home store into the jr delay; `return` on its OWN line puts the LOAD in the delay (lui;sw;jr;lw) — the C3E8 "dead-arg-home delay-slot cap" was a source-line-layout artifact (game_uso C3E8 0->100 EXACT, 2026-09-05 agent-g)](#same-line-brace-return-sinks-arg-home-c3e8) — _IDO tie-breaks two independent instructions by SOURCE LINE: the unused-param home store `sw a0,0(sp)` belongs to the function-entry line (the `{`), the return load to the `return` line. Different lines = keep line order, load takes the jr delay; same line = store sinks last. `-g0` no effect; -g/-g3 add a frame. Grep NM wraps for a single `sw aN,0(sp)`-vs-load delay-slot swap and re-test with the definition on ONE line._
+- [CHAINED / TESTED ASSIGNMENT to a `signed char` FIELD sign-extends the register value (`sll 24; sra 24`) for the test while the `sb` keeps the raw reg -- a plain local assigned 0/1 is never extended; the two extra words also shift the whole later tN ring by two (game_libs 3AA5C 128/128 EXACT, 2026-09-05 agent-c)](#chained-assignment-field-conversion-sign-extend-tn-ring) -- _Target `li v0,1 ... or v0,zero,zero; sll t6,v0,24; sra t7,t6,24; beqz t7; sb v0,2(a0)` = `axis = o->axis = cond ? 0 : 1; if (axis)` (or `if (o->axis = ...)`). `signed char axis = cond ? 0 : 1; if (axis)` / `switch (axis)` / casts give a bare `beqz v0`; `o->axis = ...; if (o->axis)` reloads. Also: Vec3 FIELD access vs float[] indexing flips the final `add.s` operand order of a 3-term dot product (`f4,f16` vs `f16,f4`); `x = cond ? K : o->f; o->f = x;` = value select + one store, `o->f = cond ? K : o->f;` = two stores with K hoisted._
 - [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
 
@@ -24399,3 +24400,51 @@ the `idx:8` bitfield read (same container word) so `idx` reloads after `sh cnt`.
 return r;` is the `mtc1 zero,f12 / lui at,0x3f80 / c.lt.s / bc1fl (+dup mtc1 at,f12) /
 mov.s f0,f12` three-exit shape -- the two trailing dup-first-insn blocks were splat's
 "29FDC"/"29FFC" symbols.
+
+<a id="chained-assignment-field-conversion-sign-extend-tn-ring"></a>
+## Chained / tested assignment to a `signed char` field sign-extends the register value for the test (and shifts the tN ring); plain 0/1 locals never do (game_libs 3AA5C, 2026-09-05 agent-c)
+
+**Symptom.** Target: `addiu v0,zero,1` hoisted to the top, later `... b .+2; or v0,zero,zero`
+(the `cond ? 0 : 1` select), then `sll t6,v0,0x18; sra t7,t6,0x18; beqz t7,ELSE; sb v0,2(a0)`.
+Every build was two words short here and, from that point on, every temp register was two
+places EARLIER than the target (`t6/t7` where the target has `t8/t9`, `t0` for `t2`, `t8/t9`
+for `t0/t1`) -- the classic "allocator renumber cap" look.
+
+**What it is.** The extension is the conversion of the ASSIGNMENT EXPRESSION's value to the
+field's type. `o->axis` is `signed char`; when the assignment's value is used (tested, or
+assigned onward), the front end emits the int->signed char->int conversion on the register,
+the store uses the raw register (the `sb` only needs the low byte), and uopt keeps the
+extension because the converted value is what the test consumes. Standalone sweep on the
+128-word function (0 diffs for every row marked yes):
+
+| shape | `sll/sra` before the test? |
+|---|---|
+| `signed char axis = cond ? 0 : 1; o->axis = axis; if (axis)` | no (`beqz v0`) |
+| ... `switch (axis)` / `if ((signed char)axis)` / `if ((int)axis)` / `if (axis == 0)` | no |
+| `axis = !(cond); ...` | no (and the select becomes `sltiu`) |
+| `o->axis = cond ? 0 : 1; if (o->axis)` | no -- `lb` reload, and the ternary splits into two `sb` |
+| `o->axis = cond ? 0 : 1; axis = o->axis; if (axis)` | `lb` reload |
+| `axis = o->axis = cond ? 0 : 1; if (axis)` | **yes** |
+| `if (o->axis = cond ? 0 : 1)` / `if ((o->axis = ...) != 0)` | **yes** |
+| `switch (o->axis = cond ? 0 : 1) { default: ... case 0: ... }` | **yes** |
+
+Contrast with the load case: `signed char c = o->f; switch (c)` extends after the `lb`
+(29CCC lesson) because the local's conversion survives; `switch (o->f)` tests the `lb` bare.
+
+**Why the ring shifts.** `t6/t7` are consumed by the extension pair, so the downstream
+temporaries (case-body constants, hoisted `-1`, the index `sll/addu`) all come out two
+registers later. Rule: when a build is N words short at one spot AND every later temp is
+uniformly renumbered, fix the N words -- do not chase the renumbering.
+
+**Two more knobs from the same function.**
+- A three-term float dot product written on `Vec3` FIELDS (`b->x*a->x + b->y*a->y + b->z*a->z`)
+  emits the last add as `add.s f8,f4,f16` (sum + p2); the same expression on `float *` arrays
+  (`b[0]*a[0] + ...`) emits `add.s f8,f16,f4`. Loads, muls and registers are otherwise identical.
+  (`b[2]*a[2] + (b[0]*a[0] + b[1]*a[1])` on arrays also gives `f4,f16`, but reorders the loads.)
+- `x = cond ? K : o->f; o->f = x;` = value select into `v0` (`bc1fl +4; lb v0` / `b; li v0,K` /
+  dead `lb` / one `sb v0`). `o->f = cond ? K : o->f;` = two `sb`s (K hoisted into a shared reg
+  across arms); IDO does not delete the reload-and-store-back as a no-op. Two arms that both end
+  in `o->f = x` are NOT cross-jumped when each is `x = ...; o->f = x;` inside its own arm.
+
+Full case: `docs/MATCHING_WORKFLOW.md#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block`
+(eighth case, 3AA5C).

@@ -166,6 +166,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [FIFTH CASE: game_libs 29CCC+29D08+29FDC+29FFC -- the scanner's "A" (181w case bodies) was the body of a `jr t6` JUMPTABLE dispatcher 15 words earlier; the whole 207-word switch went EXACT via a REPLACE_FUNC_BODY donor (jumptable .rodata rename+pin) plus the Duff's-device `case N:`-inside-the-loop layout that suppresses uopt code motion (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk back past any `jr tN` dispatcher: its case bodies are the "A". Jumptable + in-unit compile = donor splice (6DD14 recipe). A jumptable-entered loop the target never hoisted out of = put the `case` label INSIDE the loop body (see docs/IDO_CODEGEN.md#duff-case-label-inside-loop-suppresses-licm)._
 - [FIFTH CASE, -O0 VARIANT: mgrproc 140+15C+168 and 170+188+194 — plain `bne` into the next symbol + a 2-word "empty stub" after it inside an -O0 run = one frameless -O0 predicate + ugen's dead fall-off pair; merge, compile at -O0 file-terminal with TRUNCATE_TEXT (our -O0 emits 2 dead pairs, ROM has 1), delete the stub episodes (agent-g 2026-09-05)](#o0-predicate-misplit-merge-recipe) — _Read the opt level of the RUN before believing an "-O2 collapses to 9 insns" cap sweep; the founding case of the branch-into-adjacent-return-leaf cap was -O0._
 - [SIXTH CASE, -O2 plain-`bne` VARIANT: timproc_uso_b5 1CF0+1D14 -- `bne` past the symbol end with the preset-default `move v0,zero` IN the bne delay slot and a filled `jr ra` slot, next symbol = 2-word `jr ra; nop` "empty fn" = the fn's own return-0 exit block; merge alone + non-null arm FIRST is byte-exact at plain -O2, no carve (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Filled delay slots = -O2, so NO file-terminal/TRUNCATE_TEXT machinery; `if (==2) return load; return 0;` puts return-0 as the bne target, the inverted `if (!=2) return 0;` flips to beq + return-0 fallthrough (same 11 words, 42%). The old "leaf-branch-past-end = cross-fn epilogue" verdict was this._
+- [EIGHTH CASE: game_libs 3AA5C+3AC50 -- the 3-word "caller-set $t2 CAP" stub was the fn's own `sign = -1` else block; 128-word FP leaf exact on the first in-tree build; the two-word `sll/sra` before the `beqz` came from a CHAINED `axis = o->axis = cond ? 0 : 1` (assignment-expression value converted to the field's signed char), and that extension is what lines up the whole later tN ring (agent-c 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk both directions first (3AA40 = matched jr-ra leaf, 3AC5C = own prologue). Levers: Vec3 fields (float[] swaps the last add.s operands), `axis = cond ? 2 : o->axis; o->axis = axis;` per arm (value select + one store), `axis = o->axis; switch (axis)`. See docs/IDO_CODEGEN.md#chained-assignment-field-conversion-sign-extend-tn-ring._
 - [SEVENTH CASE + GENERAL SCANNER: game_libs 986C+9920+993C -- the scanner's `A` (9920, reads caller-set t4/v0/v1/a3) was itself the return-block tail of the 44-word checksum VERIFIER 986C (sibling of the exact writer 97B4); its `beq` lands ON 9920 and 9920's `beq` (preset `li v0,1` in the delay) lands ON the `jr ra; nop` "empty fn" 993C = the return-1 exit; merged 54w EXACT; `scripts/find-stub-misplits.py` generalises the scan to ANY branch onto an adjacent 1-3 word `jr ra` stub incl. already-"matched" C stubs (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk BACK from the scanner's A until the head has no caller-set reads; a plain `beq` landing ON B+0 with the preset return value in ITS delay slot is the -O2 exit-block flavour. Last-word lever: `var + load` emits the inline load as addu rs in BOTH source orders -- pin the var first via `load + (t = var)` (integer assignment-expr lever). Remaining hits: 9944+9970, 2E290+2E2F8, 4FB78+4FB9C, 560E4+56150._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
@@ -10318,7 +10319,7 @@ bytes, not symbol count.
 every adjacent A→B pair with the fingerprint (`DUP-FIRST-INSN`), `--all` for
 any branch into the next symbol. Remaining queue at 2026-09-05 (all game_libs
 unless noted, all INCLUDE_ASM or NM): ~~27300+27348~~ (landed 2026-09-05, third case below), ~~28E28+28E6C~~ (agent-c 2026-09-05, fourth case below -- was really 28E14+28E28+28E6C+28E8C),
-~~29D08+29FDC+29FFC~~ (agent-c 2026-09-05, fifth case below -- was really 29CCC+29D08+29FDC+29FFC), 3AA5C+3AC50, 5BBEC+5BC04(matched stub!), 5CA78+5CAEC+5CB5C,
+~~29D08+29FDC+29FFC~~ (agent-c 2026-09-05, fifth case below -- was really 29CCC+29D08+29FDC+29FFC), ~~3AA5C+3AC50~~ (agent-c 2026-09-05, eighth case below), 5BBEC+5BC04(matched stub!), 5CA78+5CAEC+5CB5C,
 624EC+62524, 66620+66650, 67FD8+68004, 453D8+45418, 57194+571E4,
 timproc_b5 88A0+8940(matched g3 stub). Note 5CAEC's six `beql`s all land on
 5CB5C+4 — a shared `return 0` block, same idiom, not a tail-share.
@@ -10504,6 +10505,70 @@ fourth case). Remaining hits at 2026-09-05 (all game_libs, all with stub episode
 if (a0[1]==a1[1]) return 1; return 0;` with unfilled bne/beq delays = check the -g flags of the run),
 `2E290+2E2F8` (`jr ra; li v0,0x10`), `4FB78+4FB9C` (`jr ra; nop`, matched stub in game_libs_post0b.c),
 `560E4+56150` (`jr ra; li v0,1`).
+
+**EIGHTH CASE (2026-09-05 agent-c): game_libs_func_0003AA5C + "3AC50" -- a 128-word
+no-frame FP leaf; the stub's "caller-set $t2 CAP" note was the mis-split, and the exact
+hinged on WHERE a two-word sign-extension comes from.** Scanner pair `3AA5C (125w) -> 3AC50
+(3w)`, `bc1fl` at 0x3AC40 -> 0x3AC54 = 3AC50+4, delay slot `sb t2,3(a0)` = 3AC50's first
+word. Both directions checked before touching anything: 3AA40 before it is a matched
+`jr ra` leaf (so 3AA5C is a real entry: reads only a0..a3), gl_func_0003AC5C after it has
+its own `addiu sp` prologue; no `jr tN` dispatcher, no loop. The stub was the function's own
+`o->sign = -1` else block. Merged 0x1F4+0xC = 0x200, exact on the first in-tree build:
+```c
+typedef struct { signed char b0, b1, axis, sign; short tag; float dot; } AxisInfo;
+#define FABS(x) (((x) < 0.0f) ? -(x) : (x))
+void game_libs_func_0003AA5C(AxisInfo *o, Vec3 *a, Vec3 *b, int tag) {
+    signed char axis;
+    o->dot = b->x * a->x + b->y * a->y + b->z * a->z;
+    o->tag = tag;
+    axis = o->axis = (FABS(b->x) > FABS(b->y)) ? 0 : 1;      /* chained: see below */
+    if (axis) { axis = (FABS(b->z) > FABS(b->y)) ? 2 : o->axis; o->axis = axis; }
+    else      { axis = (FABS(b->z) > FABS(b->x)) ? 2 : o->axis; o->axis = axis; }
+    axis = o->axis;
+    switch (axis) { case 0: o->b0 = 2; o->b1 = 1; break;
+                    case 1: o->b0 = 0; o->b1 = 2; break;
+                    case 2: o->b0 = 1; o->b1 = 0; break; }
+    if (((float *)b)[o->axis] > 0.0f) { o->sign = 1; } else { o->sign = -1; }
+}
+```
+Levers, each isolated by a standalone variant sweep against the merged word list
+(`cc -O2 -mips2 -32 ...` + a word-by-word compare; ~110 variants total):
+1. **`int tag`, `signed char` fields.** A `short` parameter in the definition homes+extends
+   (`sw a3; sll; sra`); IDO `char` is unsigned (`lbu`), the target uses `lb`.
+2. **Comparison direction = operand evaluation order.** `c.lt.s $f12,$f2` with the FIRST
+   fabs landing in `$f2` means the source is `FABS(b->x) > FABS(b->y)` (left operand first,
+   `>` swapped into `c.lt.s`); `FABS(b->y) < FABS(b->x)` evaluates the other one first.
+3. **Vec3 fields for the dot product.** `b[0]*a[0] + b[1]*a[1] + b[2]*a[2]` (float[] args)
+   emits the last add as `add.s f8,f16,f4` (p2 + sum); `b->x*a->x + ...` emits the target's
+   `add.s f8,f4,f16`. Same loads, same muls; only the final add's operand order moves.
+4. **Chained `axis = o->axis = cond ? 0 : 1`.** Target: `li v0,1` (hoisted) ... `or v0,zero,zero`
+   ... `sll t6,v0,24; sra t7,t6,24; beqz t7,...; sb v0,2(a0)`. A `signed char` local assigned
+   0/1 then tested (`if (axis)`, `switch (axis)`, `if ((signed char)axis)`, `if ((int)axis)`)
+   never gets extended -- uopt knows the phi of constants fits. Storing first and testing the
+   field (`o->axis = ...; if (o->axis)`) reloads with `lb`. The extension is the VALUE OF THE
+   ASSIGNMENT EXPRESSION being converted to the field type: `if (o->axis = ...)`,
+   `if ((o->axis = ...) != 0)`, `switch (o->axis = ...)` and the chained `axis = o->axis = ...`
+   all produce it (0 diffs each); the store still uses the un-extended `v0`. Those two words
+   also consume `t6/t7`, which is why every later temp in the target sits two registers
+   later than a plain-local build (`t8/t9` for the case-body 2s, `t2` for the hoisted -1,
+   `t0/t1` for the index) -- a whole-tail register-ring shift that looks like an allocator
+   cap but is two missing instructions upstream.
+5. **`axis = cond ? 2 : o->axis; o->axis = axis;` in each arm.** Gives the target's value
+   select (`bc1fl +4; lb v0` / `b; li v0,2` / dead `lb v0` / `sb v0`) with one store per arm.
+   A direct `o->axis = cond ? 2 : o->axis;` is split into two `sb`s with the 2 hoisted into
+   `a1` across both arms; the store-back of the reloaded value is NOT deleted as a no-op.
+6. **`axis = o->axis; switch (axis)`** for the second `lb; sll; sra` (a direct
+   `switch (o->axis)` tests `lb` bare); the raw `lb` register is then reused for the
+   `sll t0,v1,2` index in the default path (no intervening stores), reloaded in the cases.
+7. Sign test written `if (b[axis] > 0.0f) { sign = 1; } else { sign = -1; }` -- the taken
+   arm first, so the -1 block (the ex-"3AC50" bytes) trails after the first `jr ra`.
+Baseline refreshed via the single-unit strip + `EXPECTED_BASELINE=1` route (post0b is a
+pinned-symbol unit): `.text` byte-identical, symtab 3AA5C 500->512, 3AC50 removed. The stale
+`game_libs_func_0003AC50 = 0x3AC50;` absolute in `undefined_syms_auto.txt` is unreferenced and
+was left alone (merge churn). Remaining queue after this: 5BBEC+5BC04 (matched stub!),
+5CAEC+5CB5C (six beqls to one `return 0` block), 624EC+62524, 66620+66650, 6F1D8+6F1FC,
+timproc_b5 88A0+8940 (matched g3 stub); 67FD8+68004, 453D8+45418, 57194+571E4 no longer
+show in the scanner output (already merged or renamed -- re-run `--all` before assuming).
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 
