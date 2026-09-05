@@ -4273,6 +4273,26 @@ The recipes above are all -O2. The -O0 USO files (e.g. bootup_uso `o0_*` splits)
 
 **Residual cap:** even with all five levers, -O0 emits one EXTRA dead `b .+1; nop` BB-marker at the function tail (the statement-list-end marker) that the target lacks — the same un-removable -O0 marker documented for `arcproc_uso_func_000000B4` (8 source variants tried there; INSN_PATCH is banned). So a -O0 alloc-cascade lands ~96% NM (body exact, +2-3 insn tail), not 100%. Apply the recipe for the body-correctness/struct-field-typing win and the migration-ready body; do NOT expect a clean match. (Also: these `o0_*` functions only build at -O0 after the per-file split migration — bare INCLUDE_ASM in the -O2 tail file can't host a -O0 body.)
 
+**2026-09-05 regression tell (agent-c, FC28/FD4C re-verified in-tree):** a later
+rewrite of both bodies replaced lever #2 with nested
+`if (x == 0) { x = alloc(N); } if (x != 0) { arm }` and reported "byte-exact
+except the double-b". objdiff of the NM object says otherwise: the nested form
+re-tests `x` on the NO-alloc path too, so every cascade `bnez x` lands on the
+`lw t; beqz t` re-test (`bnez t6,.+0x30`) instead of skipping past it to the
+arm (`bnez t6,.+0x3c` in the target) — 3 wrong branch targets per function that
+fuzzy-% barely registers (97.05 -> 97.26). Recognition: in a -O0 alloc cascade,
+if the target's `bnez x` skips a `lw tN,home; beqz tN` pair that your build's
+`bnez x` lands ON, you have nested-ifs where the target had `||`. The
+short-circuit `if (x != 0 || (x = alloc(N)) != 0) { arm }` puts the null-test
+on the alloc path only (`bnez x,.arm; alloc; beqz x,.skip`). Restoring it took
+FC28 to 73/75 and FD4C to 85/87 insns byte-exact, leaving ONLY the
+`#feedback-ido-o0-return-value-dead-double-b` pair. Also re-probed the dead-b
+tail on FC28 with `switch(0){default:return}`, `if(1) return`, `for(;;){return}`,
+`goto end; end: return`, `return a0; }` same-line, and `return a0?a0:a0` —
+none flips it (switch/goto/for add a branch; ternary grows the frame).
+Lesson: never trust a wrap comment's "byte-exact except X" — diff the
+`build/non_matching` object against `expected/` yourself before grinding.
+
 ---
 
 ---
