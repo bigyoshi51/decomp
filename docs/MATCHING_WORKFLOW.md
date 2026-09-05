@@ -166,6 +166,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [FIFTH CASE: game_libs 29CCC+29D08+29FDC+29FFC -- the scanner's "A" (181w case bodies) was the body of a `jr t6` JUMPTABLE dispatcher 15 words earlier; the whole 207-word switch went EXACT via a REPLACE_FUNC_BODY donor (jumptable .rodata rename+pin) plus the Duff's-device `case N:`-inside-the-loop layout that suppresses uopt code motion (2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Walk back past any `jr tN` dispatcher: its case bodies are the "A". Jumptable + in-unit compile = donor splice (6DD14 recipe). A jumptable-entered loop the target never hoisted out of = put the `case` label INSIDE the loop body (see docs/IDO_CODEGEN.md#duff-case-label-inside-loop-suppresses-licm)._
 - [FIFTH CASE, -O0 VARIANT: mgrproc 140+15C+168 and 170+188+194 — plain `bne` into the next symbol + a 2-word "empty stub" after it inside an -O0 run = one frameless -O0 predicate + ugen's dead fall-off pair; merge, compile at -O0 file-terminal with TRUNCATE_TEXT (our -O0 emits 2 dead pairs, ROM has 1), delete the stub episodes (agent-g 2026-09-05)](#o0-predicate-misplit-merge-recipe) — _Read the opt level of the RUN before believing an "-O2 collapses to 9 insns" cap sweep; the founding case of the branch-into-adjacent-return-leaf cap was -O0._
 - [SIXTH CASE, -O2 plain-`bne` VARIANT: timproc_uso_b5 1CF0+1D14 -- `bne` past the symbol end with the preset-default `move v0,zero` IN the bne delay slot and a filled `jr ra` slot, next symbol = 2-word `jr ra; nop` "empty fn" = the fn's own return-0 exit block; merge alone + non-null arm FIRST is byte-exact at plain -O2, no carve (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Filled delay slots = -O2, so NO file-terminal/TRUNCATE_TEXT machinery; `if (==2) return load; return 0;` puts return-0 as the bne target, the inverted `if (!=2) return 0;` flips to beq + return-0 fallthrough (same 11 words, 42%). The old "leaf-branch-past-end = cross-fn epilogue" verdict was this._
+- [SEVENTH CASE + GENERAL SCANNER: game_libs 986C+9920+993C -- the scanner's `A` (9920, reads caller-set t4/v0/v1/a3) was itself the return-block tail of the 44-word checksum VERIFIER 986C (sibling of the exact writer 97B4); its `beq` lands ON 9920 and 9920's `beq` (preset `li v0,1` in the delay) lands ON the `jr ra; nop` "empty fn" 993C = the return-1 exit; merged 54w EXACT; `scripts/find-stub-misplits.py` generalises the scan to ANY branch onto an adjacent 1-3 word `jr ra` stub incl. already-"matched" C stubs (agent-g 2026-09-05)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) -- _Walk BACK from the scanner's A until the head has no caller-set reads; a plain `beq` landing ON B+0 with the preset return value in ITS delay slot is the -O2 exit-block flavour. Last-word lever: `var + load` emits the inline load as addu rs in BOTH source orders -- pin the var first via `load + (t = var)` (integer assignment-expr lever). Remaining hits: 9944+9970, 2E290+2E2F8, 4FB78+4FB9C, 560E4+56150._
 - [SECOND CASE + SCANNER: game_libs 9A50 was a FIVE-deep beql dup-first-insn chain ending in a "matched empty fn" (9AD0 = its `return 1` block) — `scripts/find-beql-dup-misplits.py` lists the remaining 12 pairs; expected/ refresh in a pinned-symbol unit must be the PURE-INCLUDE_ASM build, not `cp build/…` (EBC8 sentinel 100→91.7)](#feedback-beql-next-symbol-plus-4-is-mis-split-branch-likely-block) — _Merge the whole chain; delete the merged-away stub episode; single-unit baseline recipe via strip_decomp_in_file + EXPECTED_BASELINE=1._
 - [Merging two functions into one C body does NOT reproduce a target's beql-into-sibling cross-function tail-share](#feedback-merge-doesnt-reproduce-cross-function-beql-tail-share) — When the target asm has function A's `beql v, zero, +N` landing inside sibling function B's body (cross-function tail-share), the C-merge fix is also dead — IDO at -O2 emits a 12-insn `bnel`-fall-through with TWO…
 - [merge-fragments skill is unsafe when parent+fragments span multiple .c files (different .o, different opt-level)](#feedback-merge-fragments-blocked-across-o-files) — _When a splat-split function's parent INCLUDE_ASM is in one .c file and its fragment INCLUDE_ASMs are in another (e.g., parent in kernel_017.c at -O1, fragments in kernel_018.c at -O2 because they're across an opt-level…
@@ -10461,6 +10462,48 @@ empty next function" and the next symbol is exactly `jr ra; nop` -- decode the b
 `move v0,zero` there means the fn's own preset-default return. Retracts the 1CF0
 "leaf-branch-past-end CAP per feedback_leaf_branch_past_end_is_cross_fn_epilogue" verdict; gate the
 merge with the single-unit baseline refresh (recipe below) since the merged symbol's size changes.
+
+**SEVENTH CASE (2026-09-05 agent-g): game_libs_func_0000986C + "9920" + "993C" -- the scanner's A was
+itself a tail; general stub scanner.** `game_libs_func_00009920` (7w) reads `t4`, `v0`, `v1`, `a3`
+without setting them: it is the second-check block of the 44-word `game_libs_func_0000986C`, the
+checksum-pair VERIFIER sibling of the exact writer 97B4 (byte-identical auto-unrolled x4 sum loop; the
+only loop diff is the blez delay slot `lw t2,0(sp)` = reload of the homed `out` where the writer has
+its `lui`). 986C ends `beq t3,at,+3; lw t4,0(sp); jr ra; move v0,zero` -- the beq lands ON 9920
+(`lw t5,4(t4); subu v0,v1,v0; addu t6,v0,t5; beq a3,t6,+3; li v0,1; jr ra; move v0,zero`) and THAT
+beq, with the preset `li v0,1` in its delay slot, lands ON 993C = `jr ra; nop`, the return-1 exit block
+that had been "matched" as `void game_libs_func_0000993C(void) {}` with an episode (deleted). Merged
+[0x986C,0x9944) = 0xD8, 54/54 words exact, standalone and in-tree:
+```c
+    chk = out[0];
+    if (sum + chk != 0xF251F205) return 0;
+    sum = chk - sum;
+    if (key != out[1] + (chk = sum)) return 0;
+    return 1;
+```
+Three levers on top of the merge: (1) INVERTED guards (`!= -> return 0`) give the target's
+beq-forward-to-later-block + inline `jr ra; move v0,zero` layout (the positive `if (==) {...}` form
+emits `bnel`); (2) named `chk = out[0]` + destructive `sum = chk - sum` reuse v1/v0 exactly as 97B4
+(the inline `out[1] + (chk - sum)` form is REASSOCIATED by uopt to `(out[1] + chk) - sum`); (3) the last
+`addu t6,v0,t5` wants `sum` as rs, but `var + inline-load` emits the LOAD as rs in BOTH source orders
+(`sum + out[1]` and `out[1] + sum` both give `addu t6,t5,v0`), while a named local for out[1] gets
+COLOURED (a0/v1) instead of the target's temp t5 -- the assignment-expr pin `out[1] + (chk = sum)` (or
+`(0, sum)`, or a fresh dead local) is the only form that keeps the load a temp AND puts the var first.
+Type changes (u32 sum/out/key), decl order and `register` do nothing.
+
+**General scanner (supersedes the beql-only one for this vein):** `scripts/find-stub-misplits.py`
+(project `scripts/`, committed with 986C) enumerates every 1-3 word symbol B ending `jr ra` (nop /
+`move v0,zero` / `li v0,N` delays) that is address-adjacent to A and that A branches ONTO (B+0 or B+4,
+ANY branch opcode incl. regimm), rejecting B with branch-ins from other functions, visible `jal`
+targets, or extra src references; B may be an INCLUDE_ASM `.s` OR an already-"matched" C stub
+(`void f(void){}` / `{ return 0; }`) whose `.s` is gone (address derived from the name). Labels
+`MATCHED-C-STUB` when a C def exists. `--exclude a,b,c` skips a parallel agent's queue,
+`[segment]` filters. Walk BACK from each reported A: if A reads caller-set registers it is itself a
+tail, and the true head is the previous symbol whose last branch lands on A (as here, and as in the
+fourth case). Remaining hits at 2026-09-05 (all game_libs, all with stub episodes to delete):
+`9944+9970` (`jr ra; nop`, matched stub -- 9944 looks self-contained: `if (a0[0]!=a1[0]) return 0;
+if (a0[1]==a1[1]) return 1; return 0;` with unfilled bne/beq delays = check the -g flags of the run),
+`2E290+2E2F8` (`jr ra; li v0,0x10`), `4FB78+4FB9C` (`jr ra; nop`, matched stub in game_libs_post0b.c),
+`560E4+56150` (`jr ra; li v0,1`).
 
 ## 6A144 = fsin/__sinf: six adjacent "tiny cap" fragments were ONE libultra gu function -- probe the merged stream as a library shape before grinding (agent-g 2026-09-05) <a name="sinf-six-fragment-identity-2026-09-05"></a>
 
