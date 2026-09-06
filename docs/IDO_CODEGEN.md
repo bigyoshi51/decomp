@@ -106,6 +106,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Stack-homed linked-list walk: volatile 2-field iterator struct pins cur/next to adjacent sp slots + exact load/store order; plain struct gets scalarized to s-regs by uopt (6337C 65.67→87.45, 2026-07-18 agent-h)](#volatile-iterator-struct-stack-homed-walk-6337C) — _Tell: adjacent-slot sw/lw walk + per-iteration `obj = cur[0]` reload + loop flag in v0. Residual: val s1-vs-v0 coloring cascade._
 - [Dispatch-temp/pointer ONE-LOCAL v1 unification (reused `tmp` = switch temp + call-result ptr -> both $v1, top home) + twin-indexed ARRAY-extern = paired lui/addiu base (inverse of split-NAME kill); phantom li aN,K before jal = one-arg-too-many tell (h2hproc A88 89.1->97.1, 2026-07-30)](#one-local-v1-unification-a88) — _if-chain degrades 3-arm dispatch; shared named const local homes+remats (cross-BB const PRE cap); min-web $a2 arg-discount tie residual. C54 addendum (titproc 89.6->94.0): param-reuse = dead-arm $a0; dead-s-reg reuse = vtable $s0; arg-embedded reload = lw-before-move as1 order. BOUNDARY (2026-07-30): E35C/F6D4 pure-copy dup web + 6CF0 split-point + 21D4 dead-4th-arg $a3 all NEGATIVE — one-local carrier folds like every spelling, late-self inert, K&R homes unpassed params (+3 insns)._
 - [NAMED-LOCAL WEB CROSSING A JAL CAN NEVER COLOR $v0 (call-return def conflict) — v0/v1 swap on a spilled-across-call temp is a cap when the spill slot is a decl-first named home; tmp-first decl + volatile pad ARRAY rebuilds a high temp-spill frame exactly (37AF0 98.97->99.13, 2026-07-15)](#named-web-jal-v0-conflict-37af0) — _uoptlist: a named local live across a jal conflicts with the call's v0 def -> forced v1; original's unnamed split-range temp took v0 both sides of its spill/reload. Frame recipe: declare the temp FIRST (highest home, jal-delay-slot spill to it) then `volatile int pad[4]` phantoms lift later locals; single-int-struct copy goes through &home (+2 insns), s1/p2 reuse and if(1) inert on the color._
+- [`(unsigned)p == 0` on an extern-address pointer keeps the null-test + alloc arm that -O2 otherwise folds away (`&sym != 0` is constant-folded, deleting the whole `jal alloc` arm); goto-skip shape puts the copy in the beqz delay (gl_func_0005165C head 11/11, 2026-09-05)](#unsigned-cast-defeats-addr-nonnull-fold-5165c) — _Plain `int *p = D_arr; if (p == 0) p = alloc(4); if (p) *p = 0;` at 7.1/5.3 -O2 emits NO jal at all (26.5% wrap). Cast the FIRST test only. Tail of the same fn re-confirms #shared-at-absolute-store-cap-66a50 for word stores (20+ shapes incl. chained/comma/u8/64-bit; the osLeoDiskInit byte-field retraction does not carry to `sw`)._
 - [SHARED-$AT ABSOLUTE-STORE PAIR IS A CAP: one `lui at` + two `sw ..,%lo/%lo+4(at)` is unreachable from -O2 C — every shape gives base-CSE (4 insns) or per-store lui (4 insns) (66A50/66B64, 2026-07-15)](#shared-at-absolute-store-cap-66a50) — _Probed 8 shapes: extern struct pair / int[2] / (&sym+1) => uopt materializes ONE base reg (lui+addiu+2sw); two scalar externs => two direct sw macros but two unmergeable %hi relocs; `*(int*)0xADDR` literal => uopt lowers per-store lui t8/t9 with NO %hi CSE (volatile same); if(1)/same-line inert. The 3-insn form needs same-symbol HI16 merging with unequal addends, which neither uopt nor as1 does on reloc operands. Target shape = pre-linked-library bake. Sibling fact: `*(int*)LITERAL = k` at -O2 emits lui tN,%hi;sw %lo(tN) DIRECT (correct sw shape, wrong base reg class).\_
 - [if(1) BB-break kills store-to-load forwarding (local-CSE, per-BB) + zero-jal library-call gotcha + swap/RMW ring-temp spellings (62F8C 98.08->100, 2026-07-15)](#if1-bb-break-store-forwarding-62f8c) — _Wrap the re-read in `if(1){...}` (zero code, fresh BB) when the build truncs the pre-store copy instead of the reload; de-name a swap temp via two stores on one line (ring t4 + delay-slot store order); RMW spelling `F=F+1; n=F;` keeps the load ring-t9-split; one function-scope ptr for repeated derefs = cross-site color bias; game_libs calls must link jal 0x0 via zero-alias, .o word-diff alone lies._
 - [32C8 follow-ups: chained-assign emits stores REVERSED from source order (flip chain, don't split); aggregate nm=uK copy forces homed-stash+reload; 12-byte-struct pad-ladder base = next-12 not next-4; fn-scope shared c = shared home, hoisted per-block ptr decls = unique homes (timproc_b5 32C8 48.8->93.1, 2026-07-18)](#struct-carrier-32c8-chain-direction-pads)
@@ -24830,3 +24831,31 @@ symbol `game_libs_func_00062F08` (NM offset 0x2d554, expected size 0x50) past
 `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN := 0x2d584` -> sentinel read 60.0. Clip =
 tail offset + full expected size (0x2d5a4); `rm` the NM `.o` before re-gating
 (docs/HANDOFF_NEW_MACHINE.md section 5).
+
+## `(unsigned)p == 0` defeats IDO's address-non-null fold (keeps the alloc arm); goto-skip lands `beqz v0; move v1,v0` (gl_func_0005165C, 2026-09-05) <a name="unsigned-cast-defeats-addr-nonnull-fold-5165c"></a>
+
+Target (alloc-or-passthrough zeroing setter, 16 words):
+```
+lui v0,%hi(D); addiu v1,v0,%lo(D)      <- hoisted first statement (orphan "51654")
+addiu sp,-0x18; bnez v1,STORE; sw ra,0x14(sp)
+jal alloc; li a0,4
+beqz v0,SKIP; move v1,v0
+STORE: sw zero,0(v1)
+SKIP: lw ra; lui at; sw zero,4(at); sw zero,0(at); jr ra; addiu sp,0x18
+```
+- `int *p = D_arr; if (p == 0) p = alloc(4); if (p != 0) *p = 0;` -- IDO 7.1 AND 5.3
+  -O2 constant-fold `&D_arr == 0` to false and DELETE the alloc arm: 8-10 words, no
+  jal. (-O1 keeps it but spills p to the frame: 0x20 frame, 24 words.)
+- `if ((unsigned)p == 0)` on the FIRST test keeps the compare live at -O2 (the cast
+  blocks the address-non-null fold) with the -O2 frame/scheduling intact. Cast only
+  the first test: casting the second too, or `if (p != 0) *p = 0;` after the
+  alloc, emits `move v1,v0; beqz v1` (+1 word); the goto form
+  `if ((unsigned)p == 0) { p = alloc(4); if (p == 0) goto skip; } *p = 0; skip: ...`
+  reads $v0 directly and drops the copy into the beqz delay -- 11/11 head words.
+- Tail re-confirms `#shared-at-absolute-store-cap-66a50` for WORD stores: extern
+  struct / int[2] / ((int*)&D)[i] / (char*)&D+4 / struct{int a[2]} / `a = b = 0` /
+  comma / long long / unsigned long long / double / 8-byte struct copy / u8 pair /
+  register-valued stores, at 7.1+5.3, -O1/-O2/-O3, -g/-g2/-g3, -mips1/3: always a
+  held base (`lui v0; addiu; sw 4(v0); sw 0(v0)`) or two per-symbol luis. The
+  osLeoDiskInit retraction (byte fields, 5.3 -O1) does NOT extend to `sw`. Closest
+  form = two distinct externs (13/16 words, objdiff 93.75).

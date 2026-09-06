@@ -69,6 +69,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [A {leaf-branch-past-end cap} immediately followed by a {caller-set-$vN cap} is OFTEN a single mis-split function — RECHECK such adjacent cap pairs](#feedback-adjacent-branchpastend-callerset-cap-pair-is-misplit) — _Splat's jr-ra heuristic over-splits a function at an EARLY-RETURN `jr ra` (mid-body `if(x)return 0;`) when a `bnel`/`beq` branches OVER that early return into the rest of the body. The two halves then look like two unrelated caps in isolation: the predecessor is a "leaf-branch-past-end" (its branch targets past its truncated end) and the successor is a "caller-set $vN cap" (it reads $vN uninitialized — but $vN was set in the predecessor, e.g. `lw v1,0(a0)`). Neither is a real cap. RECHECK heuristic: any NM-wrap/comment labeled caller-set-$v0/$v1/$tN whose IMMEDIATE PREDECESSOR is labeled leaf-branch-past-end (or vice-versa) — check if the predecessor's branch lands inside the successor and sets that very register; if so, merge (per [[feedback-branch-past-end-unshared-epilogue-merge]] mechanics) and decompile as ONE function. Verified 2026-05-28 byte-exact: game_libs_func_0002A8C4 (+0002A8D8, dlist node-detach, 16/16) — both were documented caps. Tail subtlety: the detach decremented `a0->count` but returned `v1->count` (different objects) — the cross-object access is what forces IDO's trailing store-then-reload (no volatile needed; same-object would CSE)._
 - [A "caller-set `$t6`" cap preceded by a tiny NO-`jr ra` orphan .s is a HOISTED PROLOGUE mis-split — check for a libultra identity before accepting the cap](#feedback-callerset-t6-orphan-head-is-hoisted-prologue) — _gl_func_0006C2AC sat 5 rounds as a documented "caller-set $t6 == 0xA6000000 gate cap"; the 0x8 orphan game_libs_func_0006C2A4 right before it (`lui t6; lw t6,0xC(t6)`, no jr ra) was the function's own gate load, hoisted above `addiu sp` by IDO 5.3 -O1's scheduler. Merged = libultra osDriveRomInit verbatim (0xA6000000 = PHYS_TO_K1(PI_DOM1_ADDR1)), 54/54 via the 6F088 osLeoDiskInit donor recipe. 2026-07-17. UPDATE 2026-07-23: head-store reporter family (1FF28/1FFAC/20030/200F4) 4-for-4 to fuzzy-100 by merge + `*(D+X+4)=*(D+X)` stash re-decode, no donor — see SWEEP block at section end for recipe + remaining orphan queue. Wave 2: the orphan generalizes to range-check/loop-bound loads (23F98 sltiu-gate 70.5→74.4, 1FBCC blez-bound 53.2→fuzzy-100); orphan addressing form = spelling oracle (lui+addiu → array-extern held base, lui-only folded → scalar &D+off)._
 - [Hoisted-prologue mis-split also occurs in REVERSE: the orphan word sits at the PARENT's tail (inside its .s), belonging to the NEXT function — move the boundary; label shift is reloc-safe iff nothing references the successor](#hoisted-prologue-reverse-tail-orphan-65494) — _13th instance (65494/659D0, 2026-07-30, agent-h): last `.word` of gl_func_00065494.s (`lw t6,924(a0)`) fed the successor's `sw t6,100(sp)` — 659D0's first insn hoisted above its `addiu sp`, splat attached it to the parent's range. Fix: move the word into the successor's .s head, adjust both `nonmatching` sizes (0x53C→0x538 / 0x170→0x174); the successor's glabel shifts -4 — safe ONLY after grepping all src + `objdump -r` on every expected/.o for references. ROM bytes unchanged (raw-word concat identical); force-touch the .c (make does NOT track .s deps of INCLUDE_ASM) then refresh expected/.o. Same tick's reconstruction levers (see full section): reverse-decl-order local layout with dead-local pads; outparam-block-as-one-struct (callee-write invisibility); `char *it[2]` vs scalarized struct; `char * volatile` for a loop-invariant arg slot. 42.3→79.5; residual = uniform +72 sp-offset shift (unexplained ~76B reservation below locals) + s8-vs-slot coloring._
+- [USO orphan "alias entry" oracle: the module's Sym EXPORT table (offsets = splat offset - 4) says which word is the real entry; arcproc F48 exported / F50 not => hoisted head; baseline gotcha: `make EXPECTED_BASELINE=1` still runs REPLACE_FUNC_BODY -- pass `REPLACE_FUNC_BODY=`](#uso-sym-export-oracle-orphan-sweep-arcproc-f48) — _2026-09-05 agent-g orphan sweep: all 7 "alias/alt entry" 2-word lui heads (arcproc 0F48, gl 1818/6BA74/51654/4E57C/3FB64/20A20) have ZERO jal/reloc/undefined_syms references -- none is an entry. arcproc F48 landed BYTE-EXACT as `gl_func_00000000(a0, *(int*)((char*)&D_00000000+0x170) + 0x26000F)` (import-base field load hoisted above addiu sp at 7.1 -O2); its "F50" body retired. Per-candidate ledger + the Kyoto-USO header parse recipe inside._
 - [Hoisted-head orphan whose "alias entry" is the WORD BEFORE every caller's jal target: the orphan is the function's own `n` copy, the callers' address is a mid-function alt-entry — merge, pin the caller address in undefined_syms_auto.txt, retire the post-hoist unit](#hoisted-head-orphan-callers-jal-post-hoist-word-66ec) — _kernel func_800066EC (1 word, `or a3,a2,zero`) sat since 2026-05 as a "1-insn alias entry, not reproducible from C"; kernel_048.c reproduced only func_800066F0 (the post-hoist 12 words) via a fake 4th arg `ctr` + `char pad[4]`. Merged 0x34 = `while (n--) *dst++ = *src++;` at -O1, 13/13 in BOTH IDO 7.1 and 5.3 (so the hoist is not 5.3-only). Tell: zero `jal` to the orphan symbol, every caller jal's the word after it. 2026-09-05, agent-g._
 - [split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`](#feedback-split-fragments-clobbers-prior-merge) — _When the bundle you split has a successor that was previously merged via `merge-fragments` (e.g. `game_libs_func_0003AA5C` had absorbed `0003AC50` via fca252b8, growing size 0x1F4 → 0x200), recursive split-fragments can re-split it back, leaving size 0x1F4 + a separate 0xC stub for AC50. Combined with TRUNCATE_TEXT this breaks objdiff with "Symbol data out of bounds: 0xN..0xM". Diagnostic: `objdiff-cli report generate` fails immediately after a split commit. Fix: revert the split commit, run `make expected` to refresh expected/.o. Before recursing split-fragments, run `git log -3 -- <successor>.s` for each newly-split-off — if a `Merge fragment` commit appears, stop._
 - [split-fragments.py over-splits a single function that has an internal early-return `jr ra` — re-split ONCE, don't recurse blindly](#feedback-split-fragments-over-splits-on-internal-early-return) — _split-fragments.py boundaries on every `jr ra` (03E00008). A function with an early-return (e.g. `bnel`/`beq` to a shared epilogue with a mid-body `jr ra`) has 2+ `jr ra` and gets wrongly cut. Diagnostic: after a recursive split, disassemble the split-off piece — if a branch in the PREDECESSOR (`bnel`/`bne`/`beq`) targets an address INSIDE the split-off piece, or both share a trailing `jr ra` epilogue, they are ONE function. Fix: `git checkout -- <bundle>.s src/.../*.c`, `rm` the wrongly-split `.s` files, then run split-fragments.py ONCE per real boundary (don't recurse past a piece whose predecessor branches into it). Verified 2026-05-17: titproc_uso_func_000015F4 bundle — naive recurse made 15F4/16B8/16E8 (jr=3), but 16B8's `bnel 0x16BC→0x16EC` jumps into "16E8" → correct is 15F4(0xC4)+16B8(0x60, jr=2 internal early-return)._
@@ -11258,3 +11259,58 @@ really do jal 66F0. Record it and move on.
 **Generalisation for the orphan queue:** when a tiny no-`jr ra` orphan is
 documented as an "alias/alt entry", grep for jal's TO THE ORPHAN. Zero hits = hoisted
 head; merge it. Hits = a real alt-entry; keep the `alabel` convention.
+
+## USO orphan "alias entry" oracle = the module Sym export table; arcproc F48 hoisted head (BYTE-EXACT); `EXPECTED_BASELINE=1` still splices donors (2026-09-05, agent-g) <a name="uso-sym-export-oracle-orphan-sweep-arcproc-f48"></a>
+
+**Sweep rule (from `#hoisted-head-orphan-callers-jal-post-hoist-word-66ec`):** a tiny
+no-`jr ra` orphan documented as an "alias / alternate entry" is an entry only if
+something reaches it. Grep `jal <orphan>` in asm/, the orphan's name in src/,
+`undefined_syms_auto.txt`, and (for raw-`.word` USOs) the encoded `0C00xxxx` word.
+Zero hits = hoisted head of the NEXT symbol.
+
+**For a USO the module's own tables are the oracle.** Kyoto USO header (magic
+0x12345678; for arcproc the FILE wrapper at ROM 0x5A5BE0 names `arcproc.uso`, the
+module header is 0x28 later at 0x5A5C08): dir at +0xC, 12-byte section headers
+`[flag, type, size]`, types 1=Sym 2=TextReloc 3=DataReloc 4=RoDataReloc 5=Text
+6=Data 7=RoData 9=EntrySym. **All Sym values and reloc offsets are splat offset
+MINUS 4** (verified: 48/50 arcproc export values +4 == a splat .s name; 0/50 exact).
+Sym entry = 12 bytes `[hash0, hash1|section-tag, value]`; value 0 = import,
+nonzero = export (tag word 0x52xxxx = text). TextReloc entry `[1, (symIdx<<4)|kind,
+off]`, kind 1=R_MIPS_26 2=LO16 3=HI16.
+- arcproc: exports at splat 0xF40, **0xF48**, 0xF78, 0xFA8 -- 0xF50 is NOT exported,
+  has no R_MIPS_26 and no Data/RoData fn-pointer reloc. So 0xF48 is the function.
+  Its `lui a1; lw a1,0x170(a1)` is HI16/LO16 against Sym idx 10 = the D_00000000
+  import base (same base as o0_240.c's `.f44/.f48` stores) -> the load is
+  `*(int*)((char*)&D_00000000 + 0x170)`, the first statement, scheduled above
+  `addiu sp` by 7.1 -O2. Merged 0x30 = 12/12 on the first compile:
+  `void arcproc_uso_func_00000F48(int a0) { gl_func_00000000(a0, *(int*)((char*)&D_00000000 + 0x170) + 0x26000F); }`
+  (24-bit constant -> lui+ori+addu, addu in the jal delay). arcproc is NOT Yay0
+  (Makefile note) so `cmp tenshoe.z64` is a live gate for it.
+
+**Expected/ refresh gotcha for pinned raw-word units with donor splices.** The
+documented route (single-unit strip via `refresh-expected-baseline.py`'s
+`strip_decomp_in_file` + `make EXPECTED_BASELINE=1 <unit>.o`) produced a `.text`
+that differed from the tracked baseline in 4 words (0x58/0x7c/0xa0/0x1cc of
+tail1 = import-reloc words inside the -O0 donor bodies) and 25 relocs vs 9: the
+`ifndef EXPECTED_BASELINE` guards around `REPLACE_FUNC_BODY` are EMPTY now, so
+the baseline build still splices the donors. Pass `REPLACE_FUNC_BODY=` on the
+command line (overrides the target-specific assignment) -> `.text` byte-identical
+to the tracked expected, symbol table differs only by the merge. ALWAYS diff
+old/new expected `.text` (objcopy -O binary --only-section=.text) before
+installing a refreshed baseline.
+
+**Orphan-sweep ledger (all seven candidates jal/reloc-clean; none is an entry):**
+| orphan | head | successor | verdict / state |
+|---|---|---|---|
+| arcproc_uso_func_00000F48 | `lui a1; lw a1,0x170` | "F50" wrapper 0x28 | hoisted head; **merged, BYTE-EXACT, F50 retired** |
+| game_libs_func_00001818 | `lui at,0x3F80; mtc1 at,f0` (f0 = 1.0f) | gl_func_00001820, 0x434 bare INCLUDE_ASM, stores f0 to sp+0x80..0x8C x4 | hoisted local `float v[4] = {1,1,1,1}` init; 269-insn FP fn -- multi-run target, untouched |
+| game_libs_func_0006BA74 | `lui t6,0xA460; lw a2,0x10(t6)` (PI_STATUS) | gl_func_0006BA7C = osPiRawReadIo | ALREADY EXACT under the successor's name (5.3 -O1 donor unit game_libs_ido53_6BA7C.c, symbol 0x54 starts at 0x6BA74); orphan is a zero-size dead emit at game_libs.c's 0x8944 clip. Nothing to do. |
+| game_libs_func_00051654 | `lui v0; addiu v1,v0,%lo` | gl_func_0005165C 0x40 (head words already in its .s) | head cracked, tail = 66A50 shared-$at cap; NM 26.5 -> 93.75 |
+| game_libs_func_0004E57C | `lui a1; addiu a1,a1,%lo` | gl_func_0004E584 0x84 (head in .s), NM 66.5% | same head family (a1 = array base, `move v1,a1; bnez a1`); open |
+| game_libs_func_0003FB64 | `andi t7,a1,0xFF; multu t7,a3` | gl_func_0003FB6C 0x9c (head in .s), NM 79.9% | hoisted `(u8)a1 * a3` first statement; open |
+| game_libs_func_00020A20 | `lui at; lwc1 f0,0xE78(at)` | gl_func_00020A28 0x3CC, NM 7.6% | hoisted FP-literal load; large FP fn; open |
+The four game_libs.c orphan INCLUDE_ASMs (BA74/51654/4E57C/3FB64, lines ~4876-4883)
+emit zero-size symbols at the unit clip -- the ROM bytes come from the successor
+`.s` files, which already carry the head words (relayout ledger convention, same as
+70A0C -> 70A14). Removing them would need a game_libs.c expected refresh; left in
+place, documented here so nobody re-checks the alias theory.
