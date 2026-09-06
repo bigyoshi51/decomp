@@ -14140,6 +14140,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [RETRACTION: the "branch-into-adjacent-return-0-leaf CAP" (mgrproc 140/170) was an -O0 frameless predicate mis-split at every `jr ra` — the "return-0 leaf" is the fn's own else arm, the 2-word "empty stub" is ugen's dead fall-off return; `if(c){return 1;} return 0;` at -O0 is byte-exact (both 0->100, 2026-09-05 agent-g)](#o0-two-block-predicate-not-adjacent-leaf-cap) — _At -O0 uopt never runs, so no preset-default `move v0,zero` hoist: the two return arms stay separate `X; jr ra; nop` blocks and the guard branches +4 onto the else arm. Tell: guard fn ends `li v0,1; jr ra; nop`, next symbol `move v0,zero; jr ra; nop`, next-next `jr ra; nop`, all inside an -O0 run. Our 7.1/5.3 -O0 emits TWO dead trailing pairs (fall-off `j $31` + `$exit: j $31`), the shipped build has ONE -> fn must be file-terminal + TRUNCATE_TEXT (o0_11D78 precedent). `a0[2]==a0[1]` (RIGHT operand first at -O0) gives `lw t6,4; lw t7,8`._
 - [Per-site `&D` alias budget = one alias per CALL-FREE same-symbol pair: IDO holds a `lui v0; addiu v0` base only for two accesses to the same symbol with no call between them; accesses on opposite sides of a call re-`lui` by themselves, `volatile` does not split a pair (game_libs 349E0 29/29 + 33444 27/27 EXACT, 2026-09-05 agent-g)](#alias-budget-call-free-same-symbol-pair-349e0) -- _Target with every access folded under its own lui: `flag |= 4` off one symbol = held base (13 diffs); `D_a = D | 4; ... D = D_a & ~4;` + ONE alias shared by three call-site args = exact. Don't alias per access, alias per call-free pair._
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
+- [EMPTY-CONDITIONAL keep-alives (`if (x) {}`) pin evaluation order but FLIP the whole function's held-base colour a2 -> v1 (and neighbouring candidates); `if (0) {...}` does not. o32 `mtc1 aN,$f12/$f14` above `addiu sp` = int-reg -> FP move of float PARAMS, not an ABI cap (game_libs 2D374 NM 96.69 / 5C808 EXACT, 2026-09-06 agent-c)](#empty-conditional-keepalive-flips-base-colour-2d374) -- _Tell: with the hacks the FP block's schedule matches but every `lui a2; addiu a2` base reads v1 and c/half swap; without them the int colouring is exact but a single-use `fr = (f32)raw` is forward-substituted and its cvt+bgez fixup sinks to the store. Stores to distinct symbols stay in SOURCE order (no LIFO across symbols). `d = A; d -= B;` gives load-into-dest `sub.s $f0,$f0,$f16`._
 - [Absolute-constant address casts (`*(int*)0x3B8FC`) CSE into one `lui;ori` register; the target's per-access `lui at,%hi; sb %lo(at)` chain means a SYMBOL (base-0 USO data + offset) -- per-site aliases may carry a NONZERO absolute (`gl_ref_0003B8F4 = 0x0003B8F4`); store + address-value on one symbol does NOT CSE, two stores on one symbol DO (held base + LIFO store order) (gl_func_00034A78 63->91%, 2026-09-05 agent-g)](#constant-address-cast-vs-symbol-form-per-access-lui-at-34a78) -- _Tell: build 3 words SHORT with `lui 3; ori 0xb8fc` reused vs target `lui at,4` before every store. Fix = extern per address. Open residual: target puts an adjacent same-hi byte pair `li 13; li 2; sb F7(at); sb F6(at)` under ONE `lui at`; every same-symbol C form (array/struct/volatile/TU-defined/static/short-cast) gives the LIFO pair but materializes `lui v0; addiu v0`; IDO never splits an even-offset short (pack(1) even = `sh`, odd = `sb;srl;sb`)._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -25106,3 +25107,39 @@ jal 0x34F80, reloc against sym 3 = an import with value 0) and is spelled as the
 target reads the uninitialised `base` from sp+0x18 (`lw a1,0x18(sp)`), the wrap from 0x1C. Homes map by decl
 position (#scalar-homes-are-the-holes-3cbb4): `int i; char *base; char *v1; Gl20914Tbl *t;` puts it at 0x18;
 `base` first (or last with `t` first) gives 0x1C or grows the frame to 0x28.
+
+
+## Empty-conditional keep-alives flip the held-base colour; the o32 `mtc1 aN,$f12` arg-move head (game_libs 2D374 NM 96.69, 5C808 EXACT, 2026-09-06 agent-c) <a name="empty-conditional-keepalive-flips-base-colour-2d374"></a>
+
+**5C808 (EXACT, no C change).** `gl_func_0005C810(int obj, float a, float b, float c, float d, float e, float f)`
+carried a documented "o32 int-a0 + float-$f12 arg-passing cap: +2 insns `mtc1 a1,$f12; mtc1 a2,$f14`".
+Those two words are the 2-word orphan `game_libs_func_0005C808`, the exported entry (bootup.uso Sym
+0x70E74). IDO 7.1 -O2 moves int-register float params into $f12/$f14 with `mtc1` and schedules the
+pair ABOVE `addiu sp`; splat cut them off as an "alias entry". Merge the head, keep the prototype,
+49/49 words. Same shape was already the (retracted) story of gl_func_0002DF68 (2026-07-11). Rule: a
+leading `mtc1 aN,$fM` orphan in front of a function whose o32 prototype has float params in the
+integer arg slots is the function's own head -- never an ABI cap.
+
+**2D374 (NM 95.12 -> 96.69).** Countdown-timer tick with a 256-step block:
+```
+z = 0.0f; fr = (f32)raw; half = (int)raw >> 1;           /* target: mtc1 zero,$f0 first, then raw->$f16,
+if (z) {} if (fr) {} if (half) {}                          sra a0; mtc1 a0,$f4; bgez; cvt $f2 (fr) ... */
+D_360 = (f32)half * (1.0f/256.0f); D_35C = z; D_358 = fr;
+```
+- With the three empty-conditional keep-alives the block's SCHEDULE matches the target exactly (z
+  materialised first, the unsigned cvt + bgez fixup before the 360 product, stores 360/35C/358), but
+  EVERY `if (x) {}` -- even a single one -- flips the function-wide held base `lui a2; addiu a2`
+  to v1, swaps c/half (v1/a0 -> a0/v1), and colours z/fr $f12/$f0 instead of $f0/$f2. 40+ diff
+  lines from one deleted conditional. `if (0) { f(&i); }` (folded at parse) does NOT do this.
+- Without them the int colouring is exact, but IDO forward-substitutes the single-use `fr` and
+  sinks its whole cvt+bgez fixup to the 358 store, and hoists the 1/256 constant to the block top
+  (objdiff 87.8 -- worse than the mis-coloured 96.69).
+- Stores to DISTINCT symbols are emitted in SOURCE order (probed 358/35C/360 and 35C/358/360);
+  the "LIFO store order" rule applies only to a same-symbol held-base pair.
+- `register` on the locals: no effect. Explicit `fr = (f32)(int)raw; if ((int)raw < 0) fr += 4294967296.0f;`
+  places the fixup right but creates a `mov.s $f0,$f2` phi and flips the base again.
+- Lever that DID land: `d = D_35C; d -= D_360;` (in-place) -> `lwc1 $f0; sub.s $f0,$f0,$f16;
+  trunc.w.s $f18,$f0; swc1 $f0; mfc1 a1,$f18` (the `a - b` form loads both into temps and writes $f0).
+- Open: a construct that keeps `fr` / `z` as colouring candidates (live across the bgez block
+  boundary) WITHOUT adding a basic block. Candidates to try next: the u16 read as a `volatile`
+  or pointer deref so the conversion can't be substituted; making `fr` two-use via the 360 term.
