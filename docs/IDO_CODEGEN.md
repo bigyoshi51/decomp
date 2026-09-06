@@ -182,6 +182,9 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Recurrence-table pack: the x4-unrolled 16-trip pack loop SPENDS the per-function unroll budget, which is what keeps the 6-trip recurrence loop rolled; hoisted import-base float load = the "CALLER-SET $f0 cap"; spell it with the inline addend or the land script byte_verify fails (20A20, 0 -> 100 EXACT, 245w, agent-g 2026-09-05)](#recurrence-pack-unroll-budget-20A20)
 - [Loop bound reloaded each iteration through a SECOND pointer ($a0 copy of base) while the pre-test reads it through the original: spell the pre-test `*(int *)base != 0` and the do-while bound through a distinct struct-typed copy `t->count` -- uopt then leaves the in-loop load (for-loop / same-pointer forms hoist it); plus blank-vs-prebaked in-module jal and uninit-home decl order (game_libs 20914 67/67 EXACT, 2026-09-06 agent-g)](#distinct-pointer-copy-keeps-loop-bound-reload-20914) — _Tell: `lw t0,0(a1)` before the loop, `or a0,a1,zero`, then `lw t2,0(a0); sltu at,v0,t2; bnezl` at the loop tail. A self-recursive `return f(...)` tail is turned into a loop by f_tail_recursion -- check the TextReloc symval before assuming recursion; a `0C000000` ROM word = blank load-time reloc = call the `gl_func_00000000` placeholder even when the callee is an in-module export (pre-baked `0C00xxxx` words are the other case)._
 - [Shift-merged PHANTOM temp: an 8-short record copy whose 21 words match but every temp sits one register LOW ($t6.. vs $t7..) -- spell the record address `(short *)&D + (a1 << 3)` (uopt merges the shift into one `sll a1,4` but the pre-merge temp still burns $t6), hand-walk the 4-per-iteration do/while with `i` declared first, and put the three inits + `do {` on ONE line (game_libs 20E24 21/21 + 20E78 22/22 EXACT, 2026-09-06 agent-g)](#shift-merged-phantom-temp-record-copy-20e24) — _Tell: build == target shape, temps all -1 (`lh t8` where target `lh t9`), and a `* 16` / `[i]` spelling. A `* 16` address has no phantom; every cfe-/uopt-folded mul/xor/div spelling either keeps $t6 or flips the loop to `addu v1,v0,a2` index form. Decl order = colour order (i -> $v0, p -> $v1, s -> $a2); inits on separate lines swap `or v1,a0` above `addiu t8` and put `li a0,8` after `or v0,zero,zero`. A `- 8` (shorts) offset stays a separate `addiu t8,t7,-16` before the base add (20E78)._
+- [NEGATIVE + landing route: gl_func_000240A0 (164w class dispatcher, 97.8%) -- 7-word case-0/3 copy colouring (target tests+returns the RAW call temp in $v0 and copies into a per-case register a1/v1 only for the deferred `sp44` home store; build colours the h web $v1 and returns via `or v0,v1`) survives ~25 spellings; the other 7 words are reloc (3 baked jals -> gl_ref_ externs, jtbl `lw t9,0xEB4(at)` -> 2E290 donor-splice `_rodata = 0xEB4`) (2026-09-06 agent-g)](#negative-240a0-per-case-copy-colour-deferred-home-store) -- _Tell: an early `return h` that jumps PAST the epilogue's `lw ra` (`lw ra` in its delay) = copy-free return of the call temp; the copy reg differing per switch arm (a1 vs v1) = a per-web colour, not the variable's. `register`/`char *`/`unsigned` on h drop its dead home (target has one -> h is a plain int)._
+- [ONE-BIT BITFIELD test = dead `srl 31` PHANTOM: a `sll tN,x,6; bgez tN` sign test whose every later temp is one register LOW is `if (p->bit25 == 0)` on a bitfield struct (cfe extracts `sll 6; srl 31`, uopt folds the `srl == 0` into `bgez` and the srl's temp number stays burned); `(x << 6) >= 0` / `!(x & 0x2000000)` have no phantom, `((unsigned)(x << 6) >> 31) == 0` and `((x << 5) << 1) >= 0` do (game_libs 25BFC 22/22 EXACT, 2026-09-06 agent-g)](#one-bit-bitfield-test-dead-srl-phantom-25bfc) -- _Tell: a packed header word tested as `& 0xFFFFFF`, then `sll 6; bgez`, then `sll 4; srl 30` (2-bit field) = a bitfield struct `{u type:4; u kind:2; u bit25:1; u bit24:1; u size:24;}`; the multi-bit fields' `sll;srl` pairs emit as-is, only the 1-bit test folds and leaves the gap. Same "count the skipped $tN" family as #shift-merged-phantom-temp-record-copy-20e24._
+- [Loop-invariant STORE hoisted by uopt + RMW double store + store-then-test: a ring dequeue whose 96.9% wrap had every temp promoted to a candidate ($v1/$a1 for the entry value and rd+1) is a plain `while (r->wr != r->rd) { r->f4c = 0; r->out = r->buf[r->rd]; r->rd++; r->rd &= 0xF; if (r->out) {...} }` -- the invariant store is hoisted ABOVE the loop by uopt, the inverted loop's pre-test load is the shared $v0 web, `r->rd++` keeps BOTH stores (a local `r->rd = rd + 1` is DSE'd), and the two forwarded reloads are the $t1/$t3 phantoms (game_libs 3183C 23/23 EXACT, 2026-09-06 agent-g)](#while-hoisted-invariant-store-rmw-double-store-3183c) -- _Tell: a `sw zero,X(a0)` between the entry `beq` and the loop head with NO source-level statement there ("cleared before the loop"), temps promoted to $v1/$a1 in every local-variable spelling, and skipped temp numbers around a double `sw` to the same field. `if (1) {}` / `volatile` DSE-defeats promote the value; the RMW form does not. `r->wr != r->rd` operand order gives `beq v0,t6` / `bnel v0,t5`._
 - [HOISTED shift-merge phantom = IN-PLACE `or a2,a3,zero; sll a2,a2,4` + K&R param HOMING flip: an invariant record index spelled INSIDE the loop as `((short *)&D)[y * 8 + j]` (no pa/pb locals, no `p = d`) makes uopt hoist y*8 as its own candidate, keeps y unmodified (web copied to $a3) and leaves d homed with its reload in the branch delay slot; any pa/pb-local form gives `sll a2,a3,4` with the `lw v0` sunk, any `y <<= 4` form keeps y in $a2 and moves d to $a3 (game_libs 20ED0 82.6 -> 75/75 EXACT, 2026-09-06 agent-g)](#hoisted-shift-merge-inplace-sll-param-homing-20ed0) — _Tell: loop body already exact, preheader shows `or aN,aM,zero; sll aN,aN,4` (a VARIABLE register shifted in place, not a $tN temp) and a param reloaded from its home into the loop pointer in a delay slot. Twin base tables that are reloc-blind zeros need DISTINCT base-0 aliases in undefined_syms_auto.txt or &D CSE merges the lui/addiu pairs. A 0C000000 jal whose oracle symval is an in-module export stays a `gl_func_00000000` placeholder call; a call that passes fewer args than the callee takes leaves the extra arg register untouched (here `$a1 = x`)._
 
 ## Quick reference by sub-topic
@@ -253,6 +256,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Last equality test before an unconditional `b end` folds into `bnel`; split it into inverted-skip + `goto` to force the plain `beq` + `b end`](#feedback-ido-split-last-eq-test-to-suppress-bnel) — _In a goto-chain of equality tests (`if (v==2) goto A; if (v==1) goto B; if (v==3) goto B; return;`), IDO folds the FINAL `if (v==3) goto B; return;` into a branch-likely: `bnel v0,at,end; lw ra (delay); b B` instead of the target's plain `beq v0,at,B; nop; b end; lw ra (delay)`. **Lever: write the last test as an explicit inverted skip-branch plus an unconditional goto** — `if (v != 3) goto end; goto B; end: return;` — splitting the equality+fallthrough so the optimizer can't fold the epilogue `lw ra` into a likely. Cracked mgrproc_uso_func_000014F4 2026-06-20 (40/40, prior "as1-scheduler branch-likely cap" where goto-chain/switch/if-else-if all reproduced the bnel). Do-while-break and `v==1||v==3` short-circuit forms drop a word (worse); the inverted-skip+goto is the one that lands._
 - [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
 - [Dead `sw a0,home` + IN-PLACE `andi a0,a0,0xFF` before a call: `&param` lever, NOT an `unsigned char` param (game_libs_func_0002DDEC 14/14, 2026-09-06 agent-c)](#dead-home-plus-inplace-andi-param-lever-vs-uchar-2ddec) — _Both spellings produce the dead home, but `unsigned char a0` extends EAGERLY into a fresh arg reg (`andi a2,a0,0xff` + `or a0,a2,zero`, +1 insn) while `int a0; int *p = &a0; f(a0 & 0xFF, 0); (void)p;` masks in place (`andi a0,a0,0xff`) and keeps the 1.0f-store `lui at` between the home and the andi. Diagnostic: the andi writes the SAME register it reads. The old "dual-entry / caller pre-sets $f4, do NOT merge" verdict on 2DDF4 was this one missing word._
+- [FP candidate colouring is per BASIC BLOCK: a dead candidate's register is never reused inside the same block -- reproduce the target's f0/f2/f12/f14 reuse with `do { } while (0)` boundaries; plain `float k = 200.0f` (not `register`) keeps a shared $f18 constant; homed scalars are laid out BELOW the arrays (game_libs_func_00035E64 NM 80.6 -> 99.4, strict word diff 75/90, 2026-09-06 agent-c)](#fp-colouring-per-block-dowhile0-boundary-35e64) — _Micro-test: `w` in f0 then `c = q[4]` gets f2 (t2) but f0 again once a `do{}while(0)` sits between them (t3). A candidate spanning two blocks (lerp) is coloured after the block-local ones (ox/oy/oz f0/f2/f12, lerp f14). `register float k` is constant-propagated (two `lui/mtc1`), a plain local is kept as the last-coloured candidate $f18 for both `c.lt.s` and `sub.s`. Frame: arrays top-down in declaration order; multi-def/const-def scalars get homes BELOW the arrays just above struct-copy temporaries (an unused `float pad[2]` keeps its 8 bytes). Two direct reads of a global (`if (G == 0) return; f(G, ...)`) = one CSE temp homed in the lowest slot (`sw t6,0x20(sp)` in the beqz delay) -- a named local colours v0 instead._
 - [Wrap the final RMW in `do {…} while(0)` to keep the reloaded pointer in `$v0` and defer the `return CONST` into the jr-ra delay slot](#feedback-ido-dowhile-rmw-tail-v0-delay-return) — _Tail `*a0 |= 1; return 1;` where `a0` is reloaded from its home: plain C reloads into `$v1`, precomputes `li v0,1` early (constant is cheap), leaving the delay slot a nop. Target reloads into `$v0`, does the RMW, then `li v0,1` in the jr-ra delay slot. Wrapping JUST the RMW statement in a trivial `do { *a0 |= 1; } while(0);` (or `if(1){…}`) BB-lever forces IDO to keep the pointer live in `$v0` through the block and emit the return constant last → delay-slot fill + v0/v1 swap, both fixed. Cracked gl_func_0003EDBC 2026-06-20 (the "13-insn INSN_PATCH for delay-fill + v0/v1 + slot-offset" cap; frame half was a `volatile int pad[3]` below the flag local + buf 168→156)._
 - [Circular-list do-while walk emits BOTH branch-likelies naturally (conditional-skip `bnel` + loop-back `bnezl`) — don't fear bnel here, write the obvious do-while](#feedback-ido-circular-list-do-while-natural-bnel) — _A circular-list iteration `node=head; if(node){ do { if(key==node->K) call(self,node); node=node->NEXT; if(node==head) node=0; } while(node!=0); }` compiles BYTE-EXACT including the two target branch-likelies: the `if(key==node->K) call(...)` skip becomes `bnel key,t,skip` (the `node=node->NEXT` advance fills the annulled delay), and the `while(node!=0)` loop becomes `bnezl node,loop` (the next iter's first load fills the delay). No coaxing — the obvious do-while IS the match. Loop state (self/key/node) lands in s0-s2 across the call. Verified 2026-05-24 gl_func_00060ED0 (29/29 first try) and gl_func_0005B568 (sibling, single bnel-free variant). Counter to the usual "bnel is hard" instinct._
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
@@ -25300,3 +25304,164 @@ home comes from `&param`; if the andi writes a different register with a later `
 genuine `unsigned char` parameter. Merged with the head in-tree: ROM cmp byte-identical on the first
 compile; the jal is a text-base (sym3) R_MIPS_26 with the callee offset baked in the word, so the
 callee is spelled `gl_ref_00042490` (MATCHING_WORKFLOW#feedback-nonzero-baked-jal-gl-ref-callside).
+
+
+## Loop-invariant store HOISTED by uopt + `r->f++; r->f &= M` RMW double store + store-then-test temps -- game_libs_func_0003183C 96.9 -> 23/23 EXACT (2026-09-06, agent-g) <a name="while-hoisted-invariant-store-rmw-double-store-3183c"></a>
+
+**Symptom.** 16-entry ring dequeue: `lw v0,0x44(a0); lw t6,0x40(a0); li t4,1; beq v0,t6,END; nop; sw zero,0x4C(a0);`
+then the loop `L: sll t7,v0,2; addu t8,a0,t7; lw t9,0(t8); addiu t0,v0,1; sw t0,0x44; andi t2,t0,0xF; sw t2,0x44;
+beqz t9,NEXT; sw t9,0x50; jr ra; sw t4,0x48; NEXT: lw v0,0x44; lw t5,0x40; bnel v0,t5,L; sll t7,v0,2; END: jr ra; nop`.
+The 96.9% wrap (`rd = r->rd; if (rd != r->wr) { r->f4c = 0; do { v = r->buf[rd]; if (1) { r->rd = rd + 1; }
+r->rd = (rd + 1) & 0xF; r->out = v; if (v) {...} rd = r->rd; } while (...) }`) was 23/23 size-exact with 11 register
+diffs: `v` coloured `$v1`, `rd + 1` coloured `$a1`, and the later temps all shifted (`li 1` in `$t0`, reload `$t1`).
+It had been filed as a "DSE-defeat / candidate-promotion coupling cap" -- every DSE defeat (`if (1)`, `volatile`)
+made the two values live across a block boundary and uopt promoted them to candidates.
+
+**What the target actually is (three tells, all readable from the bytes).**
+1. `sw zero,0x4C(a0)` sits between the pre-test `beq` and the loop head with no other statement -- that is uopt
+   HOISTING a loop-invariant store (`r->f4c = 0` written INSIDE the loop body). uopt does hoist invariant stores
+   out of a `while` whose body always executes them; the pre-test copy of an inverted `while` is what makes the
+   entry `lw v0,0x44` the same web as the loop's index (`sll t7,v0,2` / `addiu t0,v0,1`) and the tail reload.
+   Any `if (r->rd != r->wr) { r->f4c = 0; do {...} while (...) }` spelling puts the store before the loop in the
+   source and then the loop head re-loads `r->rd` (24 words) or, with a local `rd`, keeps TWO candidates
+   (`lw v1,0x44` at the head + `or v0,v1,zero` at the tail, 25 words).
+2. `sw t0,0x44; andi t2,t0,0xF; sw t2,0x44` with `$t1` skipped = `r->rd++; r->rd &= 0xF;` -- the RMW form keeps
+   both stores and its forwarded reload burns `$t1`. `r->rd = rd + 1; r->rd &= 0xF;` (local operand) is DSE'd to
+   one store with no phantom; `if (1) {}` / `volatile` keep the store but promote `rd + 1` to `$a1`.
+3. `lw t9` first, `sw t9,0x50` sunk into the `beqz t9` delay slot, `$t3` skipped before `li t4,1` =
+   `r->out = r->buf[r->rd];` as the FIRST statement and `if (r->out != 0)` as the test: the entry value stays a
+   scheduler temp and the forwarded `r->out` reload is the `$t3` phantom. A local `v` used by `r->out = v; if (v)`
+   is a candidate (`$v1`).
+
+**Exact source.**
+```c
+typedef struct { int buf[16]; int wr; int rd; int flag; int f4c; int out; } Ring3183C;
+void game_libs_func_0003183C(Ring3183C *r) {
+    while (r->wr != r->rd) {          /* wr first -> beq v0,t6 / bnel v0,t5 (rd != wr flips both) */
+        r->f4c = 0;                   /* hoisted above the loop by uopt */
+        r->out = r->buf[r->rd];       /* index form -> addu t8,a0,t7 (char-ptr arithmetic -> addu t8,t7,a0) */
+        r->rd++;
+        r->rd &= 0xF;
+        if (r->out != 0) { r->flag = 1; return; }
+    }
+}
+```
+
+**Recipe when you see it.** A store between the entry branch and the loop label that the wrap spells "before the
+loop", plus values that are temps in the target but candidates in every local-variable spelling: rewrite as the
+plain `while` with the store inside, drop the locals (use the struct field for both the value and the index), and
+use RMW (`++`, `&=`) for a same-field double store. Count skipped `$tN`s -- each is a forwarded reload.
+
+
+## ONE-BIT bitfield test folds `srl 31` into `bgez` and leaves a dead-temp PHANTOM -- game_libs_func_00025BFC 96.4 -> 22/22 EXACT (2026-09-06, agent-g) <a name="one-bit-bitfield-test-dead-srl-phantom-25bfc"></a>
+
+**Symptom.** Flag-guarded queue append: `lw v0,0(a0); lui at,0xFF; ori at,0xFFFF; lw v1,0(v0); and t6,v1,at; beqz t6;
+sll t8,v1,6; bgez t8; sll t9,v1,4; srl t0,t9,30; beqz t0; lui v1; addiu v1; lw t1,0x1030(v1); sll t2,t1,2; addu t3,v1,t2;
+sw v0,0x430(t3); lw t4,0x1030(v1); addiu t5,t4,1; sw t5,0x1030(v1); jr; nop`. Note `sll t8` right after `and t6` --
+`$t7` is never written. The 96.4% wrap (`(x & 0xFFFFFF) == 0`, `(x << 6) >= 0`, `((unsigned)(x << 4) >> 30) == 0`)
+was 22/22 words with every temp from the second test on one register low (12 diffs), filed as an "allocno cap".
+
+**Cause.** The word is a packed descriptor and the ROM tests it through a BITFIELD struct. A 1-bit unsigned field
+test is emitted by cfe as `sll 6; srl 31` and compared to 0; uopt rewrites `(srl 31) == 0` into `bgez` on the
+shifted value, deleting the srl -- but the srl's temp number (`$t7`) has already been consumed, so the rest of the
+ring starts at `$t8`. The 2-bit field (`sll 4; srl 30`) and the 24-bit field (`and 0xFFFFFF`) emit their full
+extraction and have no phantom.
+
+```c
+typedef struct { unsigned type:4; unsigned kind:2; unsigned queued:1; unsigned bit24:1; unsigned size:24; } Desc25BFC;
+void game_libs_func_00025BFC(Desc25BFC **a0) {
+    Desc25BFC *p = a0[0];
+    if (p->size == 0) return;
+    if (p->queued == 0) return;
+    if (p->kind == 0) return;
+    *(int *)((char *)&D_00000000 + *(int *)((char *)&D_00000000 + 0x1030) * 4 + 0x430) = (int)p;
+    *(int *)((char *)&D_00000000 + 0x1030) += 1;
+}
+```
+Byte-identical alternatives on a plain `int x`: `((unsigned)(x << 6) >> 31) == 0` (the explicit extraction) and
+`((x << 5) << 1) >= 0` (a shift-merge phantom per #shift-merged-phantom-temp-record-copy-20e24). `(x << 6) >= 0`
+and `!(x & 0x2000000)` are the no-phantom spellings (all temps -1). A `BF v = *p` local copy adds a frame + home.
+
+**Recipe.** A `sll K; bgez` sign test with the following temps shifted by one = 1-bit bitfield. Prefer the bitfield
+struct when the neighbouring tests are also `sll;srl` field extractions of the same word -- it is the ROM's type.
+
+
+## FP candidate colouring is per basic block; `do { } while (0)` boundaries reproduce register reuse; plain `float k = K` keeps a shared constant; homed scalars sit below the arrays (game_libs_func_00035E64, 2026-09-06 agent-c) <a name="fp-colouring-per-block-dowhile0-boundary-35e64"></a>
+
+Target (90 words, hoisted `lui t6; lw t6` head merged): a projection callback, `if (w < 200.0f)`, three
+products stored to a Vec3, two lw/sw struct copies, `point += tmp`, then `o->3x = ox + (px - ox) * lerp`.
+Register picture: w f0, sx/sy/sz f2/f12/f14, then lerp f14, ox/oy/oz f0/f2/f12 -- every register REUSED.
+
+**1. Reuse only happens across basic blocks.** Micro-test `-O2 -mips2 -32`:
+```
+w = p[3]; if (w < k) { w -= k; w = -w; a = p[0]*w; b = p[1]*w; q[0]=a; q[1]=b;
+    c = q[4]; d = q[5]; q[4] = c + (p[0]-c)*2.0f; q[5] = d + (p[1]-d)*2.0f; }
+```
+gives w f0, a f18, c f2, d f12 (f0 dead but not reused). Wrap the c/d half in `do { ... } while (0);`
+and c gets f0, d f2. uopt's interference for FP candidates is block-granular: everything defined or
+used in one block interferes. Applied to 35E64: `do { lerp = D[0x19E0]; tmp2 = tmp1; tmp3 = tmp2; }
+while (0); do { sums; ox = ..; oy = ..; oz = ..; lerps } while (0);` -- 46 -> 75 of 90 words. A
+candidate spanning two blocks (lerp) is coloured AFTER the block-local ones (ox/oy/oz take f0/f2/f12,
+lerp gets f14). One boundary right after the product stores is not enough (lerp colours f0 first).
+
+**2. Shared FP constant across the branch.** `lwc1 $f0; lui at,0x4348; mtc1 at,$f18; c.lt.s $f0,$f18;
+bc1fl; lw ra (delay); sub.s $f0,$f0,$f18`: a plain local `float f200; f200 = 200.0f; if (w < f200)
+{ w -= f200; w = -w; ... }` keeps the constant as the last-coloured candidate ($f18) shared by the
+compare and the subtraction, with `w` in place in f0. `register float f200` (and the literal written
+twice) is constant-propagated and rematerialized per use (`mtc1 at,$f10` + `mtc1 at,$f4`, +1 word).
+The constant def is always hoisted to the block start, so the target's `lwc1 $f0,0x80(sp)` in the
+beqz delay slot means `w = result[3]` sits BEFORE the ok-test in the source; doing that here splits w
+into an f16 load temp + f0 (3 words) once the products are named -- open.
+
+**3. Hoisted global read = uopt CSE temp with a stack home.** `if (G == 0) return; cb(G, ...)` with two
+direct reads of the zero extern gives `lui t6; lw t6,0(t6)` above the prologue, `sw t6,0x20(sp)` in
+the beqz delay (the temp's home, lowest slot) and `move a0,t6` -- a named `char *ctx = G` colours v0,
+a 1-element array or 1-field struct is scalarised the same way; a 2+-field struct forwards through
+t6 but takes its own frame bytes.
+
+**4. Frame layout.** Arrays/aggregates go top-down in declaration order; scalars that get homes
+(multi-def `w`, const-def `f200`, a reused `d`) go BELOW the arrays just above the struct-copy
+temporaries (each `*(IVec3 *)dst = *(IVec3 *)src` copy leaves a 12-byte temporary even though the
+copy is emitted directly lw/sw). An unused non-volatile `float pad[2]` keeps its 8 bytes (frame
+0xB0 -> 0xB8). `(unsigned char)`-style tricks are not involved. Open residual on 35E64: the target
+has NO homed scalar at the bottom (tmp1 at sp+0x3C right after the 24 temp bytes) plus 12 unused
+bytes above `point` and 8 between `result` and tmp3; every spelling that keeps the shared $f18
+constant also homes it at 0x3C (+4 on the tmp bases, 9 words).
+
+**5. Add operand order.** `o->30 = ox + (px - ox) * lerp` and `(px - ox) * lerp + ox` both emit
+`add.s $f10,$f8(prod),ox`; the target's `add.s $f10,ox,$f8` comes out of a named temp
+`d = (px - ox) * lerp; o->30 = ox + d;` (3 words) -- but `d` is then a homed scalar (see 4).
+
+
+## NEGATIVE + landing route: gl_func_000240A0 case-0/3 copy colouring for a deferred home store (97.8%, 2026-09-06 agent-g) <a name="negative-240a0-per-case-copy-colour-deferred-home-store"></a>
+
+**Shape.** 5-arm `switch (typ)` (jr table) where arms 0 and 3 are `h = f(...); if (h == 0) return h; [sp34 = 5;]
+sp44 = h;` and arms 1/2 are `sp44 = f(...); if (sp44 == 0) return sp44;` (store in the bnez delay -- these match).
+Target arms 0/3: `jal; bnez v0,STORE; or a1,v0,zero (arm 3: or v1,v0,zero); beqz zero,EPI+4; lw ra,0x2C(sp);
+STORE: ... sw a1,0x44(sp)` -- the test and the early return read the raw call temp `$v0` (the return jumps past the
+epilogue's `lw ra`, doing it in the delay), and the copy feeds only the deferred `sp44` home store. Build: the h web
+is coloured `$v1` in both arms (`uoptlist` candidates 52/74 "assigned (constrained) 2"), the store is `sw v1`, and
+the return path needs `beqz zero,EPI; or v0,v1,zero`. 7 words + a 3-word arg-load order before the following call
+(target hoists `lw a1,0x44(sp)` above `sw t1,0x18; lw a0,0x38` -- reads like a reload of an a1-coloured `sp44` web
+at the merge rather than a plain arg load).
+
+**Tried (standalone harness reproducing the in-tree bytes; all = same 10 words or worse):** sp44 assigned directly
+in arms 1/2 (no h there); `if ((h = f()) == 0) return h;`; distinct locals per arm (h0/h3) and block-scoped `int r`;
+`!h`; if/else inversion with `break` (+1 word) or else-return (161 diffs); `return 0` (shrinks); `register int sp44`
+(sp44 moves to 0x34); `register`/`char *`/`unsigned` h (all drop h's dead 0x48 home, which the target HAS -> h is a
+plain `int`); `if (1) { sp44 = h; }` (frame breaks); `goto` to a shared `return h;`; `default:` instead of
+`case 4:`; `sp34 = 5` before the test; h declared after c/e (frame moves). The per-arm colour difference (a1 in
+arm 0, v1 in arm 3) means the copy register is chosen per web from what is free at that point -- so the copy is
+most likely `sp44`'s OWN register (a homed candidate: def = copy, then `sw` to home), while the wrap's `h` is a
+second variable that steals the colour. Next probes: a form where the tested value is never a named variable
+(only sp44 is) yet the store stays deferred -- e.g. assign sp44 from h AFTER the test through a different
+statement kind, or give arm 0 a live `$v1`/`$a0` interferer so its copy lands in `$a1`.
+
+**Landing route for the other 7 words (do after the colouring):** the three baked jals `0C00E06C/E081/E567`
+(0x381B0 / 0x38204 / 0x3959C) are the gl_ref_ extern class
+(docs/MATCHING_WORKFLOW.md#feedback-nonzero-baked-jal-gl-ref-callside-2026-06-22; `gl_ref_00038204` and
+`gl_ref_0003959C` are already pinned, `gl_ref_000381B0 = 0x000381B0` is new), and the jumptable word
+`lw t9,0xEB4(at)` needs the table pinned at the USO's +0xEB4 via the 2E290/343F4 donor-splice recipe (own -O2 donor
+TU, `REPLACE_FUNC_BODY`, `gl_func_000240A0_rodata = 0x00000EB4`). The `expected/` object carries NO .text relocs, so
+only the splice makes those words raw-byte-equal; `gl_ref_` calls from the host TU alone are objdiff-100 but
+byte-different (the landed gl_func_0000408C / 00021E58 precedent).
