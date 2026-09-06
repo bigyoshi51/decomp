@@ -255,6 +255,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [The IDO unsigned-cast macro's internal `lui at,0x4f00` (2^31 bias) AS1-SCHEDULER placement is NOT source-reorderable — a per-`(unsigned)(float)` cast scheduling cap](#feedback-ido-unsigned-cast-4f00-scheduler-cap) — _`(int)(unsigned)(f * 255.0f)` expands to the IDO unsigned-float-to-int dance (`cfc1/ctc1/cvt.w.s/.../lui at,0x4f00;mtc1;sub.s` overflow-bias path). The `lui at,0x4f00` and the surrounding `mul.s`/`sll` get scheduled by as1 in an order the source can't influence (they're emitted INSIDE the cast macro, not as C statements) — a function with 3+ such casts back-to-back diverges on `lui 0x4f00`/`mul.s`/`sll` ordering even when the mnemonic multiset is exact. permuter-factory plateaus fast (gui_uso_func_00001EF4: score 2085, 85→92% then flat over 15min, never 0). Combined with the per-cast register coloring cascade this is the documented as1-scheduler-tie + ugen-coloring core; keep INCLUDE_ASM. Diagnostic: mnemonic-multiset matches target (modulo address-recompute lui) but raw word positions all shift by the scheduler — objdiff fuzzy UNDERSTATES how close the structure is._
 - [Last equality test before an unconditional `b end` folds into `bnel`; split it into inverted-skip + `goto` to force the plain `beq` + `b end`](#feedback-ido-split-last-eq-test-to-suppress-bnel) — _In a goto-chain of equality tests (`if (v==2) goto A; if (v==1) goto B; if (v==3) goto B; return;`), IDO folds the FINAL `if (v==3) goto B; return;` into a branch-likely: `bnel v0,at,end; lw ra (delay); b B` instead of the target's plain `beq v0,at,B; nop; b end; lw ra (delay)`. **Lever: write the last test as an explicit inverted skip-branch plus an unconditional goto** — `if (v != 3) goto end; goto B; end: return;` — splitting the equality+fallthrough so the optimizer can't fold the epilogue `lw ra` into a likely. Cracked mgrproc_uso_func_000014F4 2026-06-20 (40/40, prior "as1-scheduler branch-likely cap" where goto-chain/switch/if-else-if all reproduced the bnel). Do-while-break and `v==1||v==3` short-circuit forms drop a word (worse); the inverted-skip+goto is the one that lands._
 - [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
+- [Param-direct `idx = call(0, idx)` colours the web into s0 (frame +8) -- inflate its Chow span with a few `do { } while (0)` blocks around later statements and it drops to a caller-saved reg (a3) with the call-crossing spill to the param's own home (`sw v0,0x18(sp)`, frame 0x18); also inlined temps stay scratch (t8/t2) where named locals take arg regs, and `(T (*)[N])base + i` gives `addu src,base,i<<k` base-first (game_libs_func_00024E28 head/prologue/tail exact, 2026-09-06 agent-c)](#chow-span-dowhile0-param-spill-to-home-24e28) — _`if (0) { int *p = &idx; }` / `&idx` make the param MEMORY-resident instead (entry `sw a0,home` + arg reloads) -- that is a different shape. Open: the then-arm store of an `if (ctl == 3) rec->w14 = 0` always folds to `sw zero,0x1590(block)` (bnel + tail-dup) instead of the target's in-place `addiu v1,v1,0x157C` before the branch._
+- [`volatile float *tbl = (volatile float *)((char *)&D + 0x1C1D8)` pins `&D+K` as a HELD BASE with the addend baked in the `addiu` (`lui v0,2; addiu v0,-0x3E28; lwc1 0/4/8/C(v0)`); a plain pointer folds each read to its own `lui at; lwc1 %lo(D+K+4i)(at)`, per-use `&D+K+4i` picks base `D+(K&~0x7FFF)`, and a named nonzero extern gives the right words with BLANK HI16/LO16 fields (game_libs_func_0002DC74 52.2 -> 33/33 EXACT, 2026-09-06 agent-c)](#volatile-pointee-held-base-inline-addend-2dc74) — _Reloc-blind byte_verify needs the addend in the word; uopt only materialises the exact `sym+K` VALUE when the accesses cannot be folded (volatile pointee, call arg, struct-by-value source). Same function: `mfc1 a1,$f0` = float arg after an int to an `(int, float)`-prototyped blank callee; `if (a < -16) f = tbl[3]` last = `beqzl` with the mfc1 in its delay._
 - [Dead `sw a0,home` + IN-PLACE `andi a0,a0,0xFF` before a call: `&param` lever, NOT an `unsigned char` param (game_libs_func_0002DDEC 14/14, 2026-09-06 agent-c)](#dead-home-plus-inplace-andi-param-lever-vs-uchar-2ddec) — _Both spellings produce the dead home, but `unsigned char a0` extends EAGERLY into a fresh arg reg (`andi a2,a0,0xff` + `or a0,a2,zero`, +1 insn) while `int a0; int *p = &a0; f(a0 & 0xFF, 0); (void)p;` masks in place (`andi a0,a0,0xff`) and keeps the 1.0f-store `lui at` between the home and the andi. Diagnostic: the andi writes the SAME register it reads. The old "dual-entry / caller pre-sets $f4, do NOT merge" verdict on 2DDF4 was this one missing word._
 - [FP candidate colouring is per BASIC BLOCK: a dead candidate's register is never reused inside the same block -- reproduce the target's f0/f2/f12/f14 reuse with `do { } while (0)` boundaries; plain `float k = 200.0f` (not `register`) keeps a shared $f18 constant; homed scalars are laid out BELOW the arrays (game_libs_func_00035E64 NM 80.6 -> 99.4, strict word diff 75/90, 2026-09-06 agent-c)](#fp-colouring-per-block-dowhile0-boundary-35e64) — _Micro-test: `w` in f0 then `c = q[4]` gets f2 (t2) but f0 again once a `do{}while(0)` sits between them (t3). A candidate spanning two blocks (lerp) is coloured after the block-local ones (ox/oy/oz f0/f2/f12, lerp f14). `register float k` is constant-propagated (two `lui/mtc1`), a plain local is kept as the last-coloured candidate $f18 for both `c.lt.s` and `sub.s`. Frame: arrays top-down in declaration order; multi-def/const-def scalars get homes BELOW the arrays just above struct-copy temporaries (an unused `float pad[2]` keeps its 8 bytes). Two direct reads of a global (`if (G == 0) return; f(G, ...)`) = one CSE temp homed in the lowest slot (`sw t6,0x20(sp)` in the beqz delay) -- a named local colours v0 instead._
 - [Wrap the final RMW in `do {…} while(0)` to keep the reloaded pointer in `$v0` and defer the `return CONST` into the jr-ra delay slot](#feedback-ido-dowhile-rmw-tail-v0-delay-return) — _Tail `*a0 |= 1; return 1;` where `a0` is reloaded from its home: plain C reloads into `$v1`, precomputes `li v0,1` early (constant is cheap), leaving the delay slot a nop. Target reloads into `$v0`, does the RMW, then `li v0,1` in the jr-ra delay slot. Wrapping JUST the RMW statement in a trivial `do { *a0 |= 1; } while(0);` (or `if(1){…}`) BB-lever forces IDO to keep the pointer live in `$v0` through the block and emit the return constant last → delay-slot fill + v0/v1 swap, both fixed. Cracked gl_func_0003EDBC 2026-06-20 (the "13-insn INSN_PATCH for delay-fill + v0/v1 + slot-offset" cap; frame half was a `volatile int pad[3]` below the flag local + buf 168→156)._
@@ -25465,3 +25467,65 @@ statement kind, or give arm 0 a live `$v1`/`$a0` interferer so its copy lands in
 TU, `REPLACE_FUNC_BODY`, `gl_func_000240A0_rodata = 0x00000EB4`). The `expected/` object carries NO .text relocs, so
 only the splice makes those words raw-byte-equal; `gl_ref_` calls from the host TU alone are objdiff-100 but
 byte-different (the landed gl_func_0000408C / 00021E58 precedent).
+
+## `volatile` pointee pins `&D + K` as a held base with the addend baked in the `addiu` -- the reloc-blind-safe spelling of a named-array base (game_libs_func_0002DC74, 2026-09-06 agent-c) <a name="volatile-pointee-held-base-inline-addend-2dc74"></a>
+
+Target (33 words, hoisted `lui t6; lw t6,0(t6)` head merged): `if (mode == 15) { f = 1.0f; if (a0 >= 17) f = T[0];
+if (a1 >= 17) f = T[1]; if (a0 < -16) f = T[2]; if (a1 < -16) f = T[3]; cb(0x04030F00, f); }` where T is a 4-float
+table at bootup.uso Data+0x1C1D8 (ROM relocs: HI16/LO16 against the Data BASE sym2 with 0x1C1D8 in the words). The
+base picture is the named-array one: `lui v0,2; addiu v0,v0,-0x3E28` inside the first if-block, `lui v0` again after
+the join with `addiu v0` in the next branch's delay, then `lwc1 $f0,0/4/8/0xC(v0)`.
+
+Five spellings, `-O2 -mips2 -32`:
+
+| spelling | words | why |
+|---|---|---|
+| `extern float D_0001C1D8[]; f = D_0001C1D8[i]` (`D_0001C1D8 = 0x1C1D8` at link) | 33/33 by mnemonic, but the `.o` has `lui v0,0` / `addiu v0,0` + HI16/LO16 relocs | the linked ROM is byte-identical, objdiff scores it 100 (it resolves the symbol value), but the reloc-blind raw-`.text` compare of the land script / expected/ sees 4 blank fields |
+| `float *tbl = (float *)((char *)&D_00000000 + 0x1C1D8); tbl[i]` (also `Tbl *t`, `float (*)[4]`, `register`, `char *g = &D` + `*(float *)(g + 0x1C1D8)`) | 32, each read `lui at,2; lwc1 $f0,-0x3E28+4i(at)` | uopt folds every access to its own absolute address |
+| per-use `((float *)((char *)&D_00000000 + 0x1C1D8))[i]` macro, or `extern struct { char pad[0x1C1D8]; float tbl[4]; } S; S.tbl[i]` | 33 words but `addiu v0,v0,-0x8000` + `lwc1 0x41D8+4i(v0)` | uopt's shared base for `sym + big K` is `sym + (K & ~0x7FFF)`, never `sym + K` itself |
+| struct-by-value `T t = *(T *)((char *)&D + 0x1C1D8)` | 42, block copy up front | the value IS materialised exactly (the D7F4 addiu lesson) but the reads come from the copy |
+| **`volatile float *tbl = (volatile float *)((char *)&D_00000000 + 0x1C1D8); tbl[i]`** | **33/33, `addiu v0,v0,-0x3E28` with 0x1C1D8 baked, `lwc1 0/4/8/0xC(v0)`, HI16/LO16 relocs against `D_00000000` riding on top** | volatile accesses cannot be folded into `sym+const` operands, so uopt materialises the pointer VALUE once (the exact `sym+K` split) and addresses through it -- the same PRE shape as a named symbol (recompute after the conditional first use) |
+
+Rule: when the target holds `sym + K` (K >= 0x8000, or any K the reloc-blind compare must see in the word) as a base
+register with small displacements, read through a `volatile`-pointee pointer built from the base placeholder plus the
+C-level addend. It costs nothing: the loads are already one per site in the target. (The zero-addend head `lui t6;
+lw t6,0(t6)` is a plain zero extern `D_00000000_1c0ac`; the callee is the `(int, float)`-prototyped blank
+`gl_func_00000000_f`, which is what puts the float in a1 by `mfc1 a1,$f0` under o32 -- the old "mfc1-from-C cap"
+on this function was the K&R callee.)
+
+## Chow-span inflation with `do { } while (0)` flips a param-direct web from s0 to a caller-saved reg + spill-to-home; inlined temps stay scratch; array-cast index gives base-first `addu` (game_libs_func_00024E28, 2026-09-06 agent-c) <a name="chow-span-dowhile0-param-spill-to-home-24e28"></a>
+
+Target prologue: `addiu sp,-0x18; sw ra,0x14; slt at,a0,t6; sw a1,0x1C; sw a2,0x20; bnez; or a3,a0,zero; ...
+jal poll; or a1,a3,zero; ...; jal base; sw v0,0x18(sp); ...; lw a3,0x18(sp)`. The index param is copied to a3,
+the first call's result goes back into the SAME web (spilled to a0's incoming home 0x18 across the second call,
+reloaded into a3), a1/a2 are homed. Frame 0x18, no s-regs.
+
+| spelling (`-O2 -mips2 -32`) | prologue |
+|---|---|
+| separate `j = poll(0, idx)` | `sw v0,0x18(sp)` but in a FRAME slot: frame 0x30, a1/a2 homes at 0x34/0x38 |
+| param-direct `idx = poll(0, idx)` (the [param-direct lever](#param-direct-beats-separate-local-spill-the-parameter-to-its-own-incoming-arg-home-kills-the-frame-8-bloat-cap-gl_func_0005fcc4-2026-06-19)) | web coloured into **s0**: `sw s0,0x18; or s0,a0,zero`, frame 0x20 |
+| `register int idx`, K&R def, `if (1) { idx = ... }`, `unsigned idx` | still s0 |
+| `int *p = &idx;` or `if (0) { int *p = &idx; }` | MEMORY-resident: entry `sw a0,0x18(sp)`, call arg reloaded `lw a1,0x18(sp)` -- not the target |
+| **param-direct + four `do { *(int *)(rec + K) = v; } while (0);` around later record stores** | **exact**: `or a3,a0,zero` in the bnez delay, `sw v0,0x18(sp)` in the second jal's delay, `lw a3,0x18(sp)`, frame 0x18 |
+
+Why: uopt's Chow priority is (uses) / (span); each `do { } while (0)` adds two basic blocks to the span of every
+web live across it (the [macro-BB entry](#dowhile0-macro-bb-bloat-span-demotion-46050) saw the same in a loop). One to three
+blocks were not enough here; four flipped the web from s0 to a3 + spill-around-the-call. The blocks emit nothing.
+
+**objdiff cost of the lever (measure before shipping a wrap):** on the merged 66-word symbol the OLD 24E34 body
+(separate `j`, named `g`/`block`/`rec`, no do-while) scores **78.68**; the same body + param-direct + four do-while
+blocks 67.21; the prologue-exact body 72.82; the prologue-exact body minus its do-while blocks 77.20. objdiff's
+sequence alignment charges the `bnel` tail-dup / block reshuffle more than it credits the exact prologue, so the
+prologue-exact variant ships only as an `#if 0` alternate inside the wrap until the ctl-store residual is cracked.
+
+Companions from the same function:
+- named `n` / `ctl` locals colour into arg regs (`lw a1,0x1578(t0)`, `lw a2,0x1590(v1)`); inlining them
+  (`rec = *(int *)(G + 0x1578) * 0x64 + G;` / `if (*(int *)(rec + 0x1590) == 3)`) keeps them scratch t8 / t2 as in
+  the target (the whole `sll/subu/sll/addu/sll` x100 chain then matches register-for-register).
+- `src = base + idx * 0x10` and `idx * 0x10 + base` BOTH emit `addu src,idx<<4,base`; `(char *)((int (*)[4])base + idx)`
+  emits the target's `addu src,base,idx<<4`.
+- OPEN: `if (ctl == 3) *(int *)(rec + 0x14) = 0;` with rec = block + 0x157C: the then-arm store is always folded to
+  `sw zero,0x1590(block)` (CSE with the ctl load address) and rec's `addiu` is tail-duplicated into a `bnel` delay
+  (or made a second register `addiu a0,v1,0x157C` with an `if (rec) {}` keep-alive), while the target computes rec
+  IN PLACE before the branch, materialises `li a2,1` there, and fills a plain `bne` with `sll t4,a3,4`. rec-first,
+  `rec += 0x157C` in place, volatile store, if/else, `int *q = rec + 0x14` were all tried.
