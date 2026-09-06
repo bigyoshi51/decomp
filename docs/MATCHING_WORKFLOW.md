@@ -11334,8 +11334,8 @@ installing a refreshed baseline.
 | game_libs_func_00001818 | `lui at,0x3F80; mtc1 at,f0` (f0 = 1.0f) | gl_func_00001820, 0x434 bare INCLUDE_ASM, stores f0 to sp+0x80..0x8C x4 | hoisted local `float v[4] = {1,1,1,1}` init; 269-insn FP fn -- multi-run target, untouched |
 | game_libs_func_0006BA74 | `lui t6,0xA460; lw a2,0x10(t6)` (PI_STATUS) | gl_func_0006BA7C = osPiRawReadIo | ALREADY EXACT under the successor's name (5.3 -O1 donor unit game_libs_ido53_6BA7C.c, symbol 0x54 starts at 0x6BA74); orphan is a zero-size dead emit at game_libs.c's 0x8944 clip. Nothing to do. |
 | game_libs_func_00051654 | `lui v0; addiu v1,v0,%lo` | gl_func_0005165C 0x40 (head words already in its .s) | head cracked, tail = 66A50 shared-$at cap; NM 26.5 -> 93.75 |
-| game_libs_func_0004E57C | `lui a1; addiu a1,a1,%lo` | gl_func_0004E584 0x84 (head in .s), NM 66.5% | same head family (a1 = array base, `move v1,a1; bnez a1`); open |
-| game_libs_func_0003FB64 | `andi t7,a1,0xFF; multu t7,a3` | gl_func_0003FB6C 0x9c (head in .s), NM 79.9% | hoisted `(u8)a1 * a3` first statement; open |
+| game_libs_func_0004E57C | `lui a1; addiu a1,a1,%lo` | gl_func_0004E584 0x84 (head in .s) | head + all 3 stages cracked, NM 66.5 -> 87.9 (31/33 words): `base = D_arr` assigned TWICE keeps a1 live for the `li at,-0x28; bne a1,at` = `(base+10)==0` compare; residual is the `{`-line prologue tie-break (`sw ra` vs `move v1,a1` for the first delay slot; `#line 1` reaches 33/33 = not a natural layout) -- docs/IDO_CODEGEN.md #prologue-sw-ra-carries-brace-line-4e584 |
+| game_libs_func_0003FB64 | `andi t7,a1,0xFF; multu t7,a3` | gl_func_0003FB6C 0x9c (head in .s) | hoisted `(a1 & 0xFF) * a3` first product; **EXACT 2026-09-05** (39/39) once the 0xA0 stack record at sp+0x20 (tag 0x25, +8 a3, +0xC a4, +0x10 a1, +0x14 size) was typed; store order a1-field before a3-field |
 | game_libs_func_00020A20 | `lui at; lwc1 f0,0xE78(at)` | gl_func_00020A28 0x3CC, NM 7.6% | hoisted FP-literal load; large FP fn; open |
 The four game_libs.c orphan INCLUDE_ASMs (BA74/51654/4E57C/3FB64, lines ~4876-4883)
 emit zero-size symbols at the unit clip -- the ROM bytes come from the successor
