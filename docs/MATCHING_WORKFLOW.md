@@ -71,6 +71,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Hoisted-prologue mis-split also occurs in REVERSE: the orphan word sits at the PARENT's tail (inside its .s), belonging to the NEXT function — move the boundary; label shift is reloc-safe iff nothing references the successor](#hoisted-prologue-reverse-tail-orphan-65494) — _13th instance (65494/659D0, 2026-07-30, agent-h): last `.word` of gl_func_00065494.s (`lw t6,924(a0)`) fed the successor's `sw t6,100(sp)` — 659D0's first insn hoisted above its `addiu sp`, splat attached it to the parent's range. Fix: move the word into the successor's .s head, adjust both `nonmatching` sizes (0x53C→0x538 / 0x170→0x174); the successor's glabel shifts -4 — safe ONLY after grepping all src + `objdump -r` on every expected/.o for references. ROM bytes unchanged (raw-word concat identical); force-touch the .c (make does NOT track .s deps of INCLUDE_ASM) then refresh expected/.o. Same tick's reconstruction levers (see full section): reverse-decl-order local layout with dead-local pads; outparam-block-as-one-struct (callee-write invisibility); `char *it[2]` vs scalarized struct; `char * volatile` for a loop-invariant arg slot. 42.3→79.5; residual = uniform +72 sp-offset shift (unexplained ~76B reservation below locals) + s8-vs-slot coloring._
 - [TWENTY-FOURTH mis-split case: an 8-byte "alternate entry" orphan that CALLERS jal (mgrproc 119C) + a successor nobody jal's (11A4) is a hoisted head; the successor's 2-insn `lui at`/`addiu a1` "scheduler-tie cap" was the boundary (119C+11A4 96.97 -> 100 EXACT, 2026-09-05 agent-c)](#hoisted-head-119c-11a4-mgrproc) — _Tell: `objdump -r expected.o | grep A\|B` -- the only R_MIPS_26 targets the orphan. Replace the successor's arg-register parameter with the orphan's global read; the load-delay dependency re-orders the tie for free._
 - [USO orphan "alias entry" oracle: the module's Sym EXPORT table (offsets = splat offset - 4) says which word is the real entry; arcproc F48 exported / F50 not => hoisted head; baseline gotcha: `make EXPECTED_BASELINE=1` still runs REPLACE_FUNC_BODY -- pass `REPLACE_FUNC_BODY=`](#uso-sym-export-oracle-orphan-sweep-arcproc-f48) — _2026-09-05 agent-g orphan sweep: all 7 "alias/alt entry" 2-word lui heads (arcproc 0F48, gl 1818/6BA74/51654/4E57C/3FB64/20A20) have ZERO jal/reloc/undefined_syms references -- none is an entry. arcproc F48 landed BYTE-EXACT as `gl_func_00000000(a0, *(int*)((char*)&D_00000000+0x170) + 0x26000F)` (import-base field load hoisted above addiu sp at 7.1 -O2); its "F50" body retired. Per-candidate ledger + the Kyoto-USO header parse recipe inside._
+- [game_libs "fake-param exact" sweep (agent-c 2026-09-05): 41 no-`jr ra` orphans oracled at once -- 38 are exported heads (only 1D4B0/23494/307A8 have no export), NO successor is exported; 67AC4 (0.0f head) and 2DEF4 (a0*8+a1+0x1A head) landed BYTE-EXACT with the fake-param 67AC8 / 2DF00 stubs retired; 31D70->31D78 and 5FDC0->5FDCC are the remaining fake-param exacts; oracle takes SECTION offsets (ROM - 0xDD0A6C) for game_libs; game_libs_post baseline = strip + EXPECTED_BASELINE=1 with the 29CCC donor ACTIVE](#game-libs-fake-param-exact-sweep-agent-c) -- _Full 41-row oracle table inside; every "alias/alt-entry/caller-set" head in game_libs is the successor's hoisted first statement._
 - [Orphan "alt-entry" sweep, wave 2 (agent-c 2026-09-05): 6/6 candidates were hoisted heads; TWENTY-FIFTH mis-split case = h2hproc 049C (EXACT) + timproc 10D4 / trkproc 1088 (EXACT), 11D0 / 1920 (1.0f-head NM merges), game_libs 67AC4 exported; Kyoto USO section walker corrected ([type,size,flag], Yay0 flag 0x1001, Sym=[tag,value,hash]); an uninitialized `register float` faking a hoisted constant is a fake cap; timproc tracked baselines need the metadata-only symtab merge](#orphan-sweep-agent-c-25th-h2hproc-timproc) -- _Tools now in the 1080 repo: `scripts/uso-sym-oracle.py <rom> <inner_hdr> <off>...` and `scripts/elf-symtab-merge-orphan.py`. The "timproc" ROM range is TWO modules (timproc.uso @0x5AF114 = b1, trkproc.uso @0x5B3DE2 = b3); game_libs is bootup.uso's Text section (inner header 0xD9FE28, data 0xDD0A6C)._
 - [Hoisted-head orphan whose "alias entry" is the WORD BEFORE every caller's jal target: the orphan is the function's own `n` copy, the callers' address is a mid-function alt-entry — merge, pin the caller address in undefined_syms_auto.txt, retire the post-hoist unit](#hoisted-head-orphan-callers-jal-post-hoist-word-66ec) — _kernel func_800066EC (1 word, `or a3,a2,zero`) sat since 2026-05 as a "1-insn alias entry, not reproducible from C"; kernel_048.c reproduced only func_800066F0 (the post-hoist 12 words) via a fake 4th arg `ctr` + `char pad[4]`. Merged 0x34 = `while (n--) *dst++ = *src++;` at -O1, 13/13 in BOTH IDO 7.1 and 5.3 (so the hoist is not 5.3-only). Tell: zero `jal` to the orphan symbol, every caller jal's the word after it. 2026-09-05, agent-g._
 - [split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`](#feedback-split-fragments-clobbers-prior-merge) — _When the bundle you split has a successor that was previously merged via `merge-fragments` (e.g. `game_libs_func_0003AA5C` had absorbed `0003AC50` via fca252b8, growing size 0x1F4 → 0x200), recursive split-fragments can re-split it back, leaving size 0x1F4 + a separate 0xC stub for AC50. Combined with TRUNCATE_TEXT this breaks objdiff with "Symbol data out of bounds: 0xN..0xM". Diagnostic: `objdiff-cli report generate` fails immediately after a split commit. Fix: revert the split commit, run `make expected` to refresh expected/.o. Before recursing split-fragments, run `git log -3 -- <successor>.s` for each newly-split-off — if a `Merge fragment` commit appears, stop._
@@ -11343,6 +11344,65 @@ emit zero-size symbols at the unit clip -- the ROM bytes come from the successor
 `.s` files, which already carry the head words (relayout ledger convention, same as
 70A0C -> 70A14). Removing them would need a game_libs.c expected refresh; left in
 place, documented here so nobody re-checks the alias theory.
+
+## game_libs "fake-param exact" sweep: 41 orphans oracled, 2 landed, 2 left (2026-09-05, agent-c) <a name="game-libs-fake-param-exact-sweep-agent-c"></a>
+
+**Oracle usage for game_libs.** `scripts/uso-sym-oracle.py baserom.z64 0xD9FE28 <off>` matches
+`<off>` against bootup.uso's Sym export values, which are Text SECTION offsets. game_libs is
+bootup.uso's Text section with data @0xDD0A6C, so pass `ROM - 0xDD0A6C` (the ROM column of the
+`.s` comment minus 0xDD0A6C), NOT the splat offset -- splat offsets return `export sym idx []` for
+every word and look like "nothing exported". Example: splat 0x67AC4 = ROM 0xE4CB9C -> section
+0x7C130, which IS in the export list; 0x7C128/0x7C12C/0x7C134 are not.
+
+**Sweep.** Every game_libs `.s` of <= 4 words without `03E00008`, excluding all-zero pads and
+agent-g's ledger, then the oracle on each word and on the successor. Result: **38 of 41 orphans
+have their first non-pad word exported; NOT ONE successor is exported.** The "alias entry / alt
+entry / caller-set / second entry" theory is dead for the whole unit. Two were landed here:
+
+| orphan (head) | successor before | result |
+|---|---|---|
+| game_libs_func_00067AC4 `mtc1 zero,$f12` (after a 2-word zero pad in 67ABC.s, which stays as the pad) | gl_func_00067AC8 `inner(a, a)` "exact" via a fake float param | **BYTE-EXACT 9/9**: `void f(void) { inner(0.0f, 0.0f); }` with `extern int inner(float, float)`; mtc1 above `addiu sp`, `mov.s $f14,$f12` in the jal delay. 67AC8 stub + episode retired; post1b baseline = `cp build/...c.o` (.text identical, only merged symbols + renamed inner reloc differ) |
+| game_libs_func_0002DEF4 `sll t6,a0,3; addu a0,t6,a1; addiu a0,a0,0x1A` | gl_func_0002DF00 `(int a0)` "exact" | **BYTE-EXACT 15/15**: `void f(int a0, int a1) { gl_func_00000000(0x82020000 \| (((a0 * 8 + a1 + 0x1A) & 0xFF) << 8), 0); }`. 2DF00 stub + episode retired |
+
+**Remaining fake-param EXACTS (successor at fuzzy-100 with an arg the ROM never passes) -- take
+these next, same recipe:**
+- `game_libs_func_00031D70` `lui at; sw a0,0(at)` (section 0x463DC exported) -> `gl_func_00031D78(int a0, int a1, int a2)` 100.0 (0x2C, game_libs_post, comment says "alias"). Head = `D_00000000 = a0;` as the first statement.
+- `game_libs_func_0005FDC0` = 1 zero pad word + `lui a2; lw a2,0(a2)` (section 0x74430 exported, the pad word 0x7442C is not) -> `gl_func_0005FDCC(int a0, int a1, int a2)` 100.0 (0x48, game_libs_post0b). a2 is fake: it is `*(int *)&D_00000000` loaded above the prologue. Split the pad word off like 67ABC.
+
+**Oracle table for the rest (all NM wraps; `*` = exported).** Successor fuzzy % from report.json;
+none of the successors is exported, so each orphan is the successor's hoisted first statement and
+the merged function must own the head:
+| orphan | head words | exported | successor (%) |
+|---|---|---|---|
+| 0000CD74 | `lui at; mtc1 zero,$f0; lwc1 $f4,0(at)` | 0x213E0* | gl_func_0000CD80 59.8 (float a0, float a1) |
+| 0001D4B0 | `li t0,0x158; multu a1,t0; lui v0; addiu v0` | none of the 4 words | gl_func_0001D4C0 10.5 -- the only orphan with NO export at all: its head is 4 words in, check whether the real entry is earlier (1D4A0?) |
+| 00023494 | `lui t6; lh t6,0x23FA(t6)` | 0x37B00 NOT exported | gl_func_0002349C 70.8 "caller-set" -- not exported either; jal-grep before merging |
+| 00024E28 | `lui t0; addiu t0; lhu t6,0x202C(t0)` | 0x39494* | gl_func_00024E34 76.2 |
+| 000258C0 | `lui a3; addiu a3; lw t6,0x1034(a3)` | 0x39F2C* | gl_func_000258CC 77.6 |
+| 0002CF60 | `lui v1; addiu v1; lh t6,0x2040(v1); lw t9,0x2070(v1)` | 0x415CC* | gl_func_0002CF70 60.3 |
+| 0002D36C | 2 pad + `lui t6; lw t6,0(t6)` | 0x419E0* (3rd word) | gl_func_0002D37C 95.1 "alias" |
+| 0002DC74 | `lui t6; lw t6,0(t6)` | 0x422E0* | gl_func_0002DC7C 52.2 |
+| 0002DDEC | `lui at,0x3F80; mtc1 at,$f4` (1.0f) | 0x42458* | gl_func_0002DDF4 65.0 (int a0, int fval_bits) |
+| 000307A8 | `lui t6; lw t6,0(t6)` | 0x44E14 NOT exported | gl_func_000307B0 83.3 -- jal-grep before merging |
+| 000309AC | `lui t6; lw t6,0x10(t6)` | 0x45018* | gl_func_000309B4 73.7 |
+| 00035E5C | 2 pad + `lui t6; lw t6,0(t6)` | 0x4A4D0* (3rd word) | gl_func_00035E6C 80.6 |
+| 0003F9BC | `lui t6; lw t6,0(t6)` | 0x54028* | gl_func_0003F9C4 60.4 |
+| 0004247C | `lui v1; lw v1,0x240(v1)` | 0x56AE8* | gl_func_00042484 65.0 |
+| 0004B2F4 | `lui t6; lw t6,0x1C4(t6)` | 0x5F960* | gl_func_0004B2FC 11.9 |
+| 0004CDB0 / 0004CEFC | `lui t6; lw t6,0x204(t6)` | 0x6141C* / 0x61568* | gl_func_0004CDB8 65.8 / gl_func_0004CF04 65.1 |
+| 0005A2C4 | `lui v0; lw v0,0(v0)` | 0x6E930* | gl_func_0005A2CC 84.7 "caller-set" (1796 B) |
+| 0005BCCC | `lui at; lwc1 $f4,0x2030(at)` | 0x70338* | gl_func_0005BCD4 90.2 (fake `caller_f12_angle`, `caller_f4_div` params) |
+| 0005C808 | `mtc1 a1,$f12; mtc1 a2,$f14` | 0x70E74* | gl_func_0005C810 95.7 "alias entry" (int obj, float a..f) -- the head converts int-passed a1/a2 to FP args |
+| 0005D304 | `lui at; lwc1 $f0,0x2044(at)` | 0x71970* | gl_func_0005D30C NM (float *out, ax, ay, az) "caller-set" |
+| 00061728 | `lui a1; addiu a1; lw v1,0(a1)` | 0x75D94* | gl_func_00061734 48.4 |
+| INCLUDE_ASM successors (both exported at the orphan): 0000A1B0, 0000B628, 0000CBF0, 00041820, 000430D8, 00044B78, 0005D754, 00060BD4, 0006179C, 0006FC70 | | | fresh decodes must start at the orphan address |
+
+**Baseline route for game_libs_post (REPLACE_FUNC_BODY unit, no pinned sizes).** The tracked
+`expected/src/game_libs/game_libs_post.c.o` was built with the 29CCC donor spliced: the strip +
+`make EXPECTED_BASELINE=1 REPLACE_FUNC_BODY=` route (the arcproc recipe) differs from it in 8
+`.text` bytes (the donor's 4 HI16/LO16 pairs) and drops 4 relocs. Plain `EXPECTED_BASELINE=1`
+(donor active) reproduces `.text` + `objdump -r` byte-for-byte. Rule: try both, install whichever
+is `.text`-identical to the tracked file; never install a baseline whose `.text` moved.
 
 ## Orphan "alt-entry" sweep wave 2: six hoisted heads, the corrected Kyoto USO walker, and the fake-constant cap (2026-09-05, agent-c) <a name="orphan-sweep-agent-c-25th-h2hproc-timproc"></a>
 
