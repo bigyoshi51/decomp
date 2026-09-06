@@ -178,6 +178,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Memory-serialized FP sampler kit: volatile state-ptr loads + VOLATILE Vec3 locals + interleaved-scalar frame gaps + multu-by-u32-var (54264 49.2->85.1, 2026-08-22 agent-g)](#volatile-vec3-serialized-sampler-54264) — _volatile deref macro for per-vertex base reloads; volatile struct locals serialize cvt/store blocks + slot-resident row operands; frame gaps = reserved homes of register scalars by decl order (spilled var FIRST -> top slot); u32 var for multu; product-first vs base-first fetch spelling flips addu operand order per site._
 
 - [Device-tick coloring kit (game_libs_func_00034180 78->EXACT, 2026-09-05 agent-g): inline fn-ptr call -> `jalr t9`; named `vt` + inline device temp fixes v0/v1; `&D` passed as a CALL ARG makes IDO HOLD the base pre-call (`lui a1; addiu a1; lw v1,K(a1)`) where a lone use folds; compound `x = (g ^= 1)` colors temps t8/t0/t2 (named flag -> a0); `if (1) {}` before an empty i++ delay loop flips counter/bound v1/v0 -> v0/v1](#device-tick-coloring-kit-34180) — _33 -> 0 diffs in six standalone variants; the whole-function v0/v1 swap was NOT a first-temp cascade cap._
+- [Gauge-tick FP kit (game_libs_func_00001818 0->97.0, 2026-09-05 agent-g): float temps x/y/z = f16/f18 webs + z-home round-trip + per-use 1.0/2.0 remat; `(hi-lo)*(r+1)/2 + lo` (IDO flips the add operands); `t = a+b; field = t; F(t)` = add.s-f12/jal/swc1-in-delay; TYPED float extern puts the 255.0f constant LEFT of the mul (cast `*(float*)&D` always emits D first); `int m[1]` = memory var vs scalar m rematerialised from a homed n; frame holes = unused scalar homes in decl order, frame rounds to 8](#gauge-tick-fp-kit-1818) -- _Open: field store before a memory-var store kills store-to-load forwarding (array store = alias barrier); the lh pointer/value pair colours v0/v1 named vs v1/v0 target._
 
 ## Quick reference by sub-topic
 
@@ -24950,3 +24951,71 @@ a leaf (impossible with three `jal`s in the body).
 **Recognition:** -O0 USO fn, `lw tN,HOME(sp)` straight into a `li at,K; beq tN,at` chain, tN in the
 plain t6..t9,t0.. rotation, and calls anywhere in the function. Wrap it honestly; the s-reg
 promotion shifts every later t number, so count the whole cascade as ONE residual.
+
+
+## Gauge-tick FP kit: float temps, flipped add operands, typed-extern constant-left mul, `int m[1]` memory var, decl-order frame holes (game_libs_func_00001818 0->97.0, 2026-09-05 agent-g) <a name="gauge-tick-fp-kit-1818"></a>
+
+Hoisted-head orphan merge (`docs/MATCHING_WORKFLOW.md#uso-sym-export-oracle-orphan-sweep-arcproc-f48`):
+`lui at,0x3F80; mtc1 at,f0` above `addiu sp` was the local `float v[4]` init
+(`v[0] = 1.0f; ...` as four scalar stores -- an initializer list `= {1,1,1,1}`
+emits a rodata struct copy instead). 271-word -O2 FP function, 1.8% -> 97.0% in
+17 standalone variants; the levers, in the order they moved the needle:
+
+1. **Source-level float temps give the f16/f18 webs, the z home round-trip AND
+   per-use constant rematerialisation.** Target computes three lerps into
+   `f16`, `f18` and a home slot (`swc1 f4,0x44; lwc1 f8,0x44; swc1 f8,w.z`),
+   and materialises `1.0f`/`2.0f` (`lui at; mtc1`) at EVERY use. Direct
+   `w.x = ...` stores CSE the constants into f16/f18 and store each result
+   immediately (29%). `float x, y, z; x = ...; y = ...; z = ...; w.x = x;
+   w.y = y; w.z = z; w.w = 1.0f;` reproduces all three shapes.
+2. **IDO flips a commutative add whose left operand is a plain load:**
+   `lo + (hi - lo) * k` emits `add.s f16,f6,f2` (product first); the target's
+   `add.s f16,f2,f6` (lo first) comes from `(hi - lo) * k + lo`. Same for the
+   phase step: `phase + step` loads step first; `step + phase` loads phase
+   first. Int pairs behave the same way (`o->x74 + o->x44` loads x44 first,
+   cf. 9B4). With a TYPED struct (`o->lo.x`) the natural order matches instead
+   -- the flip is a cast-form property, so keep operand order and access form
+   consistent within one function.
+3. **`t = a + b; field = t; F(t)`** (a float local) gives `add.s f12; jal;
+   swc1 f12,field` (store in the jal delay, sum passed in f12). Both
+   `F(field += step)` and `field += step; F(field)` reload the field for the
+   arg. The float-arg callee must be a prototyped unique extern
+   (`extern float gl_ffunc_00001818(float)`, K&R would double-promote).
+4. **Constant-LEFT `mul.s` needs a typed float extern.** Target `lui
+   at,0x437F; mtc1 at,f4; lui at,%hi(D); lwc1 f8,%lo(D)(at); mul.s f6,f4,f8`
+   (255 first). Every cast form -- `255.0f * *(float*)&D`, `D * 255.0f`,
+   `(float)255`, `(float)0xFF`, `255` int literal, a `k = 255.0f` local
+   (const-propagated), parenthesised -- emits the D load first. `extern float
+   D_f; 255.0f * D_f` is the only spelling that puts the constant left
+   (+16 words at 5 sites). `D_f * (float)o->x` and `*(float*)&D * (float)o->x`
+   both give cvt-first (9B4 form) -- only the literal-times-global case cares.
+5. **`int m[1]` = memory variable; every scalar spelling of `m = n*4+2` is
+   rematerialised.** Target computes `sll t9,v0,2; addiu t0,t9,2` once, homes
+   it (`sw t0,0x7C`) and `lw`s it at four call sites. Plain `int m`, two-def
+   `m = n*4; m += 2`, `struct { int m; }` member, `(void)&m`, `register n`,
+   `volatile int m`, reuse of `n` as m, m computed from `o->seg` (forwarded):
+   ALL keep n in a home and recompute `n*4-2` / `n*4+1` at each use (uopt
+   forward-substitutes a single-def scalar into its uses and spills the
+   operand instead). A 1-element array is the only spelling that stores once
+   and loads per use with the same 4-byte home. Open half: the array store is
+   an alias barrier -- placed after `o->seg = n` it kills the forwarded
+   `slti at,v0,12` (reload); placed before it the two `sw`s keep source order
+   (target has the field store first, m store in the bnez delay). 2-word
+   residual.
+6. **Frame holes are unused scalar homes in declaration order; frame rounds
+   to 8.** Confirmed the `#scalar-homes-are-the-holes-3cbb4` rule for a
+   0xA0 frame with 0x40 bytes of holes: `Vec4f w; float v[4]; int m[1]; int
+   n, rem, tot, cur; float a; float t; float b; float c, x, y, f1, f2, f3;
+   float z; float g1; char *p, *q; short h;` puts w 0x90, v 0x80, m 0x7C, a
+   0x68, b 0x60, z 0x44, p 0x30, q 0x2C, h 0x28 exactly. Watch the rounding:
+   3 pads after z gave frame 0xA8 with p at 0x30, 2 pads gave 0xA0 with p at
+   0x2C -- one pad + the two trailing named locals was the only combination
+   with both right. Dead scalars survive -O2 as homes only.
+7. **-O1 is NOT the answer to "many stack homes":** the same source at -O1
+   homes every local and parameter (0.7%); the target's p/m/a/b homes are
+   -O2 spilled candidates.
+
+Residual (8/271): the m-store order above, and the `lw v1,0x148(s0); lh
+v0,0x20(v1)` chain -- named `q`/`h` locals colour v0/v1 (swapped), inline
+gives t4/v0; the swap renumbers the surrounding t4/t5/t6 ring. Frame and
+every other word exact; objdiff 99.77.
