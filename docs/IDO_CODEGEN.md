@@ -180,6 +180,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Device-tick coloring kit (game_libs_func_00034180 78->EXACT, 2026-09-05 agent-g): inline fn-ptr call -> `jalr t9`; named `vt` + inline device temp fixes v0/v1; `&D` passed as a CALL ARG makes IDO HOLD the base pre-call (`lui a1; addiu a1; lw v1,K(a1)`) where a lone use folds; compound `x = (g ^= 1)` colors temps t8/t0/t2 (named flag -> a0); `if (1) {}` before an empty i++ delay loop flips counter/bound v1/v0 -> v0/v1](#device-tick-coloring-kit-34180) — _33 -> 0 diffs in six standalone variants; the whole-function v0/v1 swap was NOT a first-temp cascade cap._
 - [Gauge-tick FP kit (game_libs_func_00001818 0->97.0, 2026-09-05 agent-g): float temps x/y/z = f16/f18 webs + z-home round-trip + per-use 1.0/2.0 remat; `(hi-lo)*(r+1)/2 + lo` (IDO flips the add operands); `t = a+b; field = t; F(t)` = add.s-f12/jal/swc1-in-delay; TYPED float extern puts the 255.0f constant LEFT of the mul (cast `*(float*)&D` always emits D first); `int m[1]` = memory var vs scalar m rematerialised from a homed n; frame holes = unused scalar homes in decl order, frame rounds to 8](#gauge-tick-fp-kit-1818) -- _Open: field store before a memory-var store kills store-to-load forwarding (array store = alias barrier); the lh pointer/value pair colours v0/v1 named vs v1/v0 target._
 - [Recurrence-table pack: the x4-unrolled 16-trip pack loop SPENDS the per-function unroll budget, which is what keeps the 6-trip recurrence loop rolled; hoisted import-base float load = the "CALLER-SET $f0 cap"; spell it with the inline addend or the land script byte_verify fails (20A20, 0 -> 100 EXACT, 245w, agent-g 2026-09-05)](#recurrence-pack-unroll-budget-20A20)
+- [Loop bound reloaded each iteration through a SECOND pointer ($a0 copy of base) while the pre-test reads it through the original: spell the pre-test `*(int *)base != 0` and the do-while bound through a distinct struct-typed copy `t->count` -- uopt then leaves the in-loop load (for-loop / same-pointer forms hoist it); plus blank-vs-prebaked in-module jal and uninit-home decl order (game_libs 20914 67/67 EXACT, 2026-09-06 agent-g)](#distinct-pointer-copy-keeps-loop-bound-reload-20914) — _Tell: `lw t0,0(a1)` before the loop, `or a0,a1,zero`, then `lw t2,0(a0); sltu at,v0,t2; bnezl` at the loop tail. A self-recursive `return f(...)` tail is turned into a loop by f_tail_recursion -- check the TextReloc symval before assuming recursion; a `0C000000` ROM word = blank load-time reloc = call the `gl_func_00000000` placeholder even when the callee is an in-module export (pre-baked `0C00xxxx` words are the other case)._
 
 ## Quick reference by sub-topic
 
@@ -25056,3 +25057,52 @@ compare of `build/.o` vs `expected/.o` and FAILS (`C4200000` vs `C4200E78`).
 Use the inline-addend form (arcproc F48 style). Landed as 1080-decomp
 cbcd8635b (agent-g, 2026-09-05).
 
+## Loop bound reloaded per iteration through a SECOND pointer = distinct struct-typed copy for the bound, original pointer for the pre-test; blank vs pre-baked in-module jal; uninit home by decl order -- gl_func_00020914 67/67 EXACT (2026-09-06, agent-g) <a name="distinct-pointer-copy-keeps-loop-bound-reload-20914"></a>
+
+**Symptom.** A record scan `for (i = 0; i < count; i++) { if (key == rec->key) return rec->val; rec += 12; }`
+whose target shows the count loaded ONCE before the loop through the table pointer (`lw t0,0(a1); ... beqz t0`)
+and then RELOADED at the loop tail through a copy of that pointer (`or a0,a1,zero` ... `lw t2,0(a0); addiu v0,v0,1;
+addiu v1,v1,12; sltu at,v0,t2; bnezl at,LOOP; lh t1,0x1E(v1)`). The natural `for`, a do-while whose bound reads
+`*(unsigned *)base`, and `volatile` all get the count HOISTED into `$a0` (`lw a0,0(a1); ... sltu at,v0,a0`), 62 words
+vs 67, with `mode` never copied to `$a3`.
+
+**Lever (67/67 on the first compile).** Give the bound a different variable from the pre-test:
+```c
+typedef struct { int count; } Gl20914Tbl;
+    t = (Gl20914Tbl *)base;
+    i = 0;
+    if (*(int *)base != 0) {          /* pre-test through the ORIGINAL pointer */
+        v1 = base;
+        do {
+            if (key == *(short *)(v1 + 0x1E)) return *(int *)(v1 + 0x14);
+            i++; v1 += 12;
+        } while ((unsigned)i < (unsigned)t->count);   /* bound through the COPY */
+    }
+```
+uopt keeps `t` as its own candidate (`or a0,a1,zero`), the in-loop `t->count` is not redundant with the
+`*(int *)base` pre-test load, and it stays in the loop (it is below the conditional `return`, so it is not
+anticipated at the header and LICM leaves it). Same-pointer spellings make the in-loop load fully redundant with
+the pre-test load and PRE keeps the value in a register. A `for (...; i < t->count; ...)` with `t` for BOTH reads
+also hoists (`t3` reads the flag home early, 67 words but shuffled).
+
+**Companion 1 -- the tail `jal` was NOT self-recursion.** The wrap had `gl_func_00020914(mode, 0, key); return 0;`
+(and the natural fix `return gl_func_00020914(...)`) -- IDO's `f_tail_recursion` rewrites an int self tail call
+into a loop, restructuring the whole body (60 words, everything renumbered). The USO TextReloc at section
+0x3506C (ROM - 0xDD0A6C) names symval 0x34F28 = splat 0x208BC = `gl_func_000208BC`, whose return value is
+returned (`jal; ...; b EPI+4; lw ra` -- the `or v0,zero,zero` in the `bne t3,at` delay is the `return 0` arm).
+Oracle: `scripts/uso-sym-oracle.py baserom.z64 0xD9FE28 <section-off>` (1080 repo, needs the build venv for
+crunch64).
+
+**Companion 2 -- blank vs pre-baked in-module jals.** The ROM word at that site is `0C000000` (blank load-time
+reloc, sym 1291 = an in-module EXPORT), so the C call must go through the `gl_func_00000000` placeholder
+(`return gl_func_00000000(mode, 0, key);` + a comment naming 208BC), exactly like 31D70's exported-text callee --
+calling `gl_func_000208BC` directly links the real address and `cmp tenshoe.z64` fails on that one word. The
+OTHER case exists in the same neighbourhood: 208BC's own call at 0x208FC is `0C00D3E0` in the ROM (pre-baked
+jal 0x34F80, reloc against sym 3 = an import with value 0) and is spelled as the named extern pinned in
+`undefined_syms_auto.txt` (`gl_func_00034F80 = 0x00034F80`). Rule: read the ROM word first; blank -> placeholder,
+`0C00xxxx` -> named extern = the encoded target.
+
+**Companion 3 -- the missing `default:` arm reads `base`'s frame home.** Frame 0x20 has two local slots; the
+target reads the uninitialised `base` from sp+0x18 (`lw a1,0x18(sp)`), the wrap from 0x1C. Homes map by decl
+position (#scalar-homes-are-the-holes-3cbb4): `int i; char *base; char *v1; Gl20914Tbl *t;` puts it at 0x18;
+`base` first (or last with `t` first) gives 0x1C or grows the frame to 0x28.
