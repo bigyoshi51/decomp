@@ -11338,7 +11338,7 @@ installing a refreshed baseline.
 | game_libs_func_00051654 | `lui v0; addiu v1,v0,%lo` | gl_func_0005165C 0x40 (head words already in its .s) | head cracked, tail = 66A50 shared-$at cap; NM 26.5 -> 93.75 |
 | game_libs_func_0004E57C | `lui a1; addiu a1,a1,%lo` | gl_func_0004E584 0x84 (head in .s) | head + all 3 stages cracked, NM 66.5 -> 87.9 (31/33 words): `base = D_arr` assigned TWICE keeps a1 live for the `li at,-0x28; bne a1,at` = `(base+10)==0` compare; residual is the `{`-line prologue tie-break (`sw ra` vs `move v1,a1` for the first delay slot; `#line 1` reaches 33/33 = not a natural layout) -- docs/IDO_CODEGEN.md #prologue-sw-ra-carries-brace-line-4e584 |
 | game_libs_func_0003FB64 | `andi t7,a1,0xFF; multu t7,a3` | gl_func_0003FB6C 0x9c (head in .s) | hoisted `(a1 & 0xFF) * a3` first product; **EXACT 2026-09-05** (39/39) once the 0xA0 stack record at sp+0x20 (tag 0x25, +8 a3, +0xC a4, +0x10 a1, +0x14 size) was typed; store order a1-field before a3-field |
-| game_libs_func_00020A20 | `lui at; lwc1 f0,0xE78(at)` | gl_func_00020A28 0x3CC, NM 7.6% | hoisted FP-literal load; large FP fn; open |
+| game_libs_func_00020A20 | `lui at; lwc1 f0,0xE78(at)` | gl_func_00020A28 0x3CC, NM 7.6% | hoisted FP-literal load; large FP fn; **BYTE-EXACT 2026-09-05 (agent-g), 20A28 retired — see IDO_CODEGEN #recurrence-pack-unroll-budget-20A20** |
 The four game_libs.c orphan INCLUDE_ASMs (BA74/51654/4E57C/3FB64, lines ~4876-4883)
 emit zero-size symbols at the unit clip -- the ROM bytes come from the successor
 `.s` files, which already carry the head words (relayout ledger convention, same as

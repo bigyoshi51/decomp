@@ -179,6 +179,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 - [Device-tick coloring kit (game_libs_func_00034180 78->EXACT, 2026-09-05 agent-g): inline fn-ptr call -> `jalr t9`; named `vt` + inline device temp fixes v0/v1; `&D` passed as a CALL ARG makes IDO HOLD the base pre-call (`lui a1; addiu a1; lw v1,K(a1)`) where a lone use folds; compound `x = (g ^= 1)` colors temps t8/t0/t2 (named flag -> a0); `if (1) {}` before an empty i++ delay loop flips counter/bound v1/v0 -> v0/v1](#device-tick-coloring-kit-34180) — _33 -> 0 diffs in six standalone variants; the whole-function v0/v1 swap was NOT a first-temp cascade cap._
 - [Gauge-tick FP kit (game_libs_func_00001818 0->97.0, 2026-09-05 agent-g): float temps x/y/z = f16/f18 webs + z-home round-trip + per-use 1.0/2.0 remat; `(hi-lo)*(r+1)/2 + lo` (IDO flips the add operands); `t = a+b; field = t; F(t)` = add.s-f12/jal/swc1-in-delay; TYPED float extern puts the 255.0f constant LEFT of the mul (cast `*(float*)&D` always emits D first); `int m[1]` = memory var vs scalar m rematerialised from a homed n; frame holes = unused scalar homes in decl order, frame rounds to 8](#gauge-tick-fp-kit-1818) -- _Open: field store before a memory-var store kills store-to-load forwarding (array store = alias barrier); the lh pointer/value pair colours v0/v1 named vs v1/v0 target._
+- [Recurrence-table pack: the x4-unrolled 16-trip pack loop SPENDS the per-function unroll budget, which is what keeps the 6-trip recurrence loop rolled; hoisted import-base float load = the "CALLER-SET $f0 cap"; spell it with the inline addend or the land script byte_verify fails (20A20, 0 -> 100 EXACT, 245w, agent-g 2026-09-05)](#recurrence-pack-unroll-budget-20A20)
 
 ## Quick reference by sub-topic
 
@@ -25019,3 +25020,39 @@ Residual (8/271): the m-store order above, and the `lw v1,0x148(s0); lh
 v0,0x20(v1)` chain -- named `q`/`h` locals colour v0/v1 (swapped), inline
 gives t4/v0; the swap renumbers the surrounding t4/t5/t6 ring. Frame and
 every other word exact; objdiff 99.77.
+
+
+<a id="recurrence-pack-unroll-budget-20A20"></a>
+## Recurrence-table pack (20A20): unroll budget coupling, hoisted import-base float load, reloc-blind byte_verify gotcha (2026-09-05)
+
+`game_libs_func_00020A20` (0x3D4, 245 words; was a 7.64% "CALLER-SET $f0
+permanent cap" NM wrap under the name `gl_func_00020A28`) builds a 2x8 float
+linear-recurrence table and packs it to `u16`. Three levers:
+
+1. **Sym-export oracle for the hoisted head.** bootup.uso's Sym table exports
+   0x3508C (= 20A20) and not 20A28; 20A28 has zero jal/reloc/undefined_syms
+   references. The 8-byte `lui at; lwc1 f0,0xE78(at)` orphan is the function's
+   own first statement — an import-base float load
+   `k = *(float *)((char *)&D_00000000 + 0xE78)` that 7.1 -O2 schedules above
+   `addiu sp`. The "caller-set $f0" verdict was this hoisted load.
+2. **Unroll-budget coupling.** Both loops must be INDEX form. The 16-trip pack
+   loop (`out[i] = (u32)v[i]`) is unrolled x4 by IDO (the `bne` / `addiu v0,sp,76`
+   tail) and that spends the per-function unroll budget, which is what keeps the
+   6-trip recurrence loop rolled. Write the pack loop as a pointer loop and IDO
+   unrolls the recurrence fully (637 words).
+3. **Reproduce the shipped bug and the operand order.** The recurrence loop
+   stores its terms to `out[i]` / `out[i+8]`, not `v[]` (so the pack loop reads
+   `v[2..7]` / `v[10..15]` uninitialised — reproduced as written), and
+   `y * v[i-2] + v[i-1] * x` gives the target mul/add order (loads-first
+   canonicalisation flips a leading inline-load operand; `k` is a hoisted leaf).
+   Frame 0x50 = `k` home 0x4C, `v` at 0x0C, `i` home + unroll slot; any extra
+   named local costs a home.
+
+**Landing gotcha (reloc-blind byte_verify).** Spelling the head load as
+`extern float D_00000E78` + a `D_00000E78 = 0xE78` alias leaves the `lwc1`
+`%lo` addend 0 in the `.o` (only the link bakes 0xE78): objdiff reads 100.0 and
+the ROM is byte-identical, but the land script's `byte_verify` is a raw `.text`
+compare of `build/.o` vs `expected/.o` and FAILS (`C4200000` vs `C4200E78`).
+Use the inline-addend form (arcproc F48 style). Landed as 1080-decomp
+cbcd8635b (agent-g, 2026-09-05).
+
