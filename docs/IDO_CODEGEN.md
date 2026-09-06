@@ -181,6 +181,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Gauge-tick FP kit (game_libs_func_00001818 0->97.0, 2026-09-05 agent-g): float temps x/y/z = f16/f18 webs + z-home round-trip + per-use 1.0/2.0 remat; `(hi-lo)*(r+1)/2 + lo` (IDO flips the add operands); `t = a+b; field = t; F(t)` = add.s-f12/jal/swc1-in-delay; TYPED float extern puts the 255.0f constant LEFT of the mul (cast `*(float*)&D` always emits D first); `int m[1]` = memory var vs scalar m rematerialised from a homed n; frame holes = unused scalar homes in decl order, frame rounds to 8](#gauge-tick-fp-kit-1818) -- _Open: field store before a memory-var store kills store-to-load forwarding (array store = alias barrier); the lh pointer/value pair colours v0/v1 named vs v1/v0 target._
 - [Recurrence-table pack: the x4-unrolled 16-trip pack loop SPENDS the per-function unroll budget, which is what keeps the 6-trip recurrence loop rolled; hoisted import-base float load = the "CALLER-SET $f0 cap"; spell it with the inline addend or the land script byte_verify fails (20A20, 0 -> 100 EXACT, 245w, agent-g 2026-09-05)](#recurrence-pack-unroll-budget-20A20)
 - [Loop bound reloaded each iteration through a SECOND pointer ($a0 copy of base) while the pre-test reads it through the original: spell the pre-test `*(int *)base != 0` and the do-while bound through a distinct struct-typed copy `t->count` -- uopt then leaves the in-loop load (for-loop / same-pointer forms hoist it); plus blank-vs-prebaked in-module jal and uninit-home decl order (game_libs 20914 67/67 EXACT, 2026-09-06 agent-g)](#distinct-pointer-copy-keeps-loop-bound-reload-20914) — _Tell: `lw t0,0(a1)` before the loop, `or a0,a1,zero`, then `lw t2,0(a0); sltu at,v0,t2; bnezl` at the loop tail. A self-recursive `return f(...)` tail is turned into a loop by f_tail_recursion -- check the TextReloc symval before assuming recursion; a `0C000000` ROM word = blank load-time reloc = call the `gl_func_00000000` placeholder even when the callee is an in-module export (pre-baked `0C00xxxx` words are the other case)._
+- [Shift-merged PHANTOM temp: an 8-short record copy whose 21 words match but every temp sits one register LOW ($t6.. vs $t7..) -- spell the record address `(short *)&D + (a1 << 3)` (uopt merges the shift into one `sll a1,4` but the pre-merge temp still burns $t6), hand-walk the 4-per-iteration do/while with `i` declared first, and put the three inits + `do {` on ONE line (game_libs 20E24 21/21 + 20E78 22/22 EXACT, 2026-09-06 agent-g)](#shift-merged-phantom-temp-record-copy-20e24) — _Tell: build == target shape, temps all -1 (`lh t8` where target `lh t9`), and a `* 16` / `[i]` spelling. A `* 16` address has no phantom; every cfe-/uopt-folded mul/xor/div spelling either keeps $t6 or flips the loop to `addu v1,v0,a2` index form. Decl order = colour order (i -> $v0, p -> $v1, s -> $a2); inits on separate lines swap `or v1,a0` above `addiu t8` and put `li a0,8` after `or v0,zero,zero`. A `- 8` (shorts) offset stays a separate `addiu t8,t7,-16` before the base add (20E78)._
+- [HOISTED shift-merge phantom = IN-PLACE `or a2,a3,zero; sll a2,a2,4` + K&R param HOMING flip: an invariant record index spelled INSIDE the loop as `((short *)&D)[y * 8 + j]` (no pa/pb locals, no `p = d`) makes uopt hoist y*8 as its own candidate, keeps y unmodified (web copied to $a3) and leaves d homed with its reload in the branch delay slot; any pa/pb-local form gives `sll a2,a3,4` with the `lw v0` sunk, any `y <<= 4` form keeps y in $a2 and moves d to $a3 (game_libs 20ED0 82.6 -> 75/75 EXACT, 2026-09-06 agent-g)](#hoisted-shift-merge-inplace-sll-param-homing-20ed0) — _Tell: loop body already exact, preheader shows `or aN,aM,zero; sll aN,aN,4` (a VARIABLE register shifted in place, not a $tN temp) and a param reloaded from its home into the loop pointer in a delay slot. Twin base tables that are reloc-blind zeros need DISTINCT base-0 aliases in undefined_syms_auto.txt or &D CSE merges the lui/addiu pairs. A 0C000000 jal whose oracle symval is an in-module export stays a `gl_func_00000000` placeholder call; a call that passes fewer args than the callee takes leaves the extra arg register untouched (here `$a1 = x`)._
 
 ## Quick reference by sub-topic
 
@@ -250,6 +252,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [The IDO unsigned-cast macro's internal `lui at,0x4f00` (2^31 bias) AS1-SCHEDULER placement is NOT source-reorderable — a per-`(unsigned)(float)` cast scheduling cap](#feedback-ido-unsigned-cast-4f00-scheduler-cap) — _`(int)(unsigned)(f * 255.0f)` expands to the IDO unsigned-float-to-int dance (`cfc1/ctc1/cvt.w.s/.../lui at,0x4f00;mtc1;sub.s` overflow-bias path). The `lui at,0x4f00` and the surrounding `mul.s`/`sll` get scheduled by as1 in an order the source can't influence (they're emitted INSIDE the cast macro, not as C statements) — a function with 3+ such casts back-to-back diverges on `lui 0x4f00`/`mul.s`/`sll` ordering even when the mnemonic multiset is exact. permuter-factory plateaus fast (gui_uso_func_00001EF4: score 2085, 85→92% then flat over 15min, never 0). Combined with the per-cast register coloring cascade this is the documented as1-scheduler-tie + ugen-coloring core; keep INCLUDE_ASM. Diagnostic: mnemonic-multiset matches target (modulo address-recompute lui) but raw word positions all shift by the scheduler — objdiff fuzzy UNDERSTATES how close the structure is._
 - [Last equality test before an unconditional `b end` folds into `bnel`; split it into inverted-skip + `goto` to force the plain `beq` + `b end`](#feedback-ido-split-last-eq-test-to-suppress-bnel) — _In a goto-chain of equality tests (`if (v==2) goto A; if (v==1) goto B; if (v==3) goto B; return;`), IDO folds the FINAL `if (v==3) goto B; return;` into a branch-likely: `bnel v0,at,end; lw ra (delay); b B` instead of the target's plain `beq v0,at,B; nop; b end; lw ra (delay)`. **Lever: write the last test as an explicit inverted skip-branch plus an unconditional goto** — `if (v != 3) goto end; goto B; end: return;` — splitting the equality+fallthrough so the optimizer can't fold the epilogue `lw ra` into a likely. Cracked mgrproc_uso_func_000014F4 2026-06-20 (40/40, prior "as1-scheduler branch-likely cap" where goto-chain/switch/if-else-if all reproduced the bnel). Do-while-break and `v==1||v==3` short-circuit forms drop a word (worse); the inverted-skip+goto is the one that lands._
 - [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
+- [Dead `sw a0,home` + IN-PLACE `andi a0,a0,0xFF` before a call: `&param` lever, NOT an `unsigned char` param (game_libs_func_0002DDEC 14/14, 2026-09-06 agent-c)](#dead-home-plus-inplace-andi-param-lever-vs-uchar-2ddec) — _Both spellings produce the dead home, but `unsigned char a0` extends EAGERLY into a fresh arg reg (`andi a2,a0,0xff` + `or a0,a2,zero`, +1 insn) while `int a0; int *p = &a0; f(a0 & 0xFF, 0); (void)p;` masks in place (`andi a0,a0,0xff`) and keeps the 1.0f-store `lui at` between the home and the andi. Diagnostic: the andi writes the SAME register it reads. The old "dual-entry / caller pre-sets $f4, do NOT merge" verdict on 2DDF4 was this one missing word._
 - [Wrap the final RMW in `do {…} while(0)` to keep the reloaded pointer in `$v0` and defer the `return CONST` into the jr-ra delay slot](#feedback-ido-dowhile-rmw-tail-v0-delay-return) — _Tail `*a0 |= 1; return 1;` where `a0` is reloaded from its home: plain C reloads into `$v1`, precomputes `li v0,1` early (constant is cheap), leaving the delay slot a nop. Target reloads into `$v0`, does the RMW, then `li v0,1` in the jr-ra delay slot. Wrapping JUST the RMW statement in a trivial `do { *a0 |= 1; } while(0);` (or `if(1){…}`) BB-lever forces IDO to keep the pointer live in `$v0` through the block and emit the return constant last → delay-slot fill + v0/v1 swap, both fixed. Cracked gl_func_0003EDBC 2026-06-20 (the "13-insn INSN_PATCH for delay-fill + v0/v1 + slot-offset" cap; frame half was a `volatile int pad[3]` below the flag local + buf 168→156)._
 - [Circular-list do-while walk emits BOTH branch-likelies naturally (conditional-skip `bnel` + loop-back `bnezl`) — don't fear bnel here, write the obvious do-while](#feedback-ido-circular-list-do-while-natural-bnel) — _A circular-list iteration `node=head; if(node){ do { if(key==node->K) call(self,node); node=node->NEXT; if(node==head) node=0; } while(node!=0); }` compiles BYTE-EXACT including the two target branch-likelies: the `if(key==node->K) call(...)` skip becomes `bnel key,t,skip` (the `node=node->NEXT` advance fills the annulled delay), and the `while(node!=0)` loop becomes `bnezl node,loop` (the next iter's first load fills the delay). No coaxing — the obvious do-while IS the match. Loop state (self/key/node) lands in s0-s2 across the call. Verified 2026-05-24 gl_func_00060ED0 (29/29 first try) and gl_func_0005B568 (sibling, single bnel-free variant). Counter to the usual "bnel is hard" instinct._
 - [IDO -O2 emits branch-likely for empty-body do-while loops; move call into the body to get plain branch + nop delay](#feedback-ido-empty-body-do-while-emits-branch-likely) — _`do { } while (func() & MASK)` (empty body, call in condition) compiles to beqzl/bnezl (branch-likely) with the call's lui hoisted into the annulled delay slot.
@@ -25123,6 +25126,118 @@ position (#scalar-homes-are-the-holes-3cbb4): `int i; char *base; char *v1; Gl20
 `base` first (or last with `t` first) gives 0x1C or grows the frame to 0x28.
 
 
+## Shift-merged PHANTOM temp: record-copy loop matches shape but every temp one register LOW -- `(a1 << 3)` short-index address + hand-walked do/while + one-line inits -- game_libs_func_00020E24 21/21 + 00020E78 22/22 EXACT (2026-09-06, agent-g) <a name="shift-merged-phantom-temp-record-copy-20e24"></a>
+
+**Symptom.** An 8-short (16-byte) table-record copy `a0[0..7] = ((short *)&D)[a1*8 .. +7]` whose 96.7% wrap
+already had the exact 21-word shape (lui/addiu base, `or v1,a0`, `sll`, `addu`, `li 8`, `or v0,zero`, a 2x4
+rotated copy loop, `jr`) but EVERY temp register one lower than the target (`lh t8,0(a2)` where the target
+has `lh t9,0(a2)`; loop temps t8..t2 where the target uses t9..t2 with t8 for the base `addiu`). Target:
+```
+lui t8,%hi(D); addiu t8,t8,%lo(D); or v1,a0,zero; sll t7,a1,4; addu a2,t7,t8; li a0,8; or v0,zero,zero
+L: lh t9,0(a2); addiu v0,v0,4; addiu v1,v1,8; sh t9,-8(v1); lh t0,2(a2); addiu a2,a2,8; sh t0,-6(v1)
+   lh t1,-4(a2); sh t1,-4(v1); lh t2,-2(a2); bne v0,a0,L; sh t2,-2(v1); jr ra; nop
+```
+Note `sll t7,a1,4` -- $t6 is never written. The build's `sll t6,a1,4` is the same value one register earlier.
+
+**Lever 1 -- the phantom temp.** Spell the record address as a SHORT-index shift, not a byte multiply:
+```c
+short *s = (short *)&D_00000000 + (a1 << 3);      /* NOT (short *)((char *)&D + a1 * 16) */
+```
+cfe emits `(a1 << 3)` then the pointer scale `<< 1`; uopt merges them into one `sll a1,4`, but the pre-merge
+temp has already consumed $t6 in the temp-number sequence, so the surviving temps start at $t7. A `* 16`
+(or `* 8` short-index) spelling folds in cfe and has no phantom. Every other folded spelling tried
+(`a1 * 8` shorts, `(a1 * 16)` chars, xor/div tricks, `[a1 * 8]` subscripts) either keeps $t6 or flips the
+loop into an `addu v1,v0,a2` INDEX form. Same family as #distinct-pointer-copy-keeps-loop-bound-reload-20914's
+"the register number is the residual, not the logic": count the temps the target SKIPS.
+
+**Lever 2 -- hand-walked pointer loop, decl order = colour order.** The natural
+`for (i = 0; i < 8; i++) a0[i] = s[i];` on the shift address emits the index form. The target's pointer
+form with i -> $v0, p -> $v1, s -> $a2 needs the explicit 4-per-iteration do/while with `i` DECLARED FIRST:
+```c
+void game_libs_func_00020E24(short *a0, int a1) {
+    int i = 0; short *p = a0; short *s = (short *)&D_00000000 + (a1 << 3); do {
+        i += 4;
+        p[0] = s[0]; p[1] = s[1]; p[2] = s[2]; p[3] = s[3];
+        p += 4;
+        s += 4;
+    } while (i != 8);
+}
+```
+Declaring `s` first swaps $v0/$a2. The pre-store `i += 4; ... p += 4` walk is what puts `addiu v0,4; addiu v1,8`
+above the first `sh` (IDO hoists the increments and rewrites the stores to `-8(v1)`.. offsets).
+
+**Lever 3 -- one-line inits (source-line tie-break, see #same-line-brace-return-sinks-arg-home-c3e8).** The
+three inits and the `do {` must share ONE source line: the hoisted `li a0,8` belongs to the loop-header line
+and must schedule BEFORE `or v0,zero,zero` (the `i = 0` init). With the inits on separate lines IDO keeps
+line order: `or v0,zero,zero` first, and it also hoists `or v1,a0,zero` above `addiu t8`.
+
+**Sibling 20E78 (22/22).** Same table shape, record `a1 - 1` from a second table: spell it
+`(short *)&D_00000000 + (a1 << 3) - 8` -- the `- 8` shorts stays a separate `addiu t8,t7,-16` between the
+`sll t7,a1,4` and the base `addu`, everything else identical. Both are the blank-jal callees of
+gl_func_00020ED0 (TextReloc sym1295/1296); their D base is the reloc-blind `&D_00000000` with addend 0.
+
+**Recipe when you see it.** Build/target same word count, same shape, every temp `-1`, and a `* 16`-style
+address: (1) shift-spell the record address, (2) hand-walk the do/while with `i` first, (3) collapse the
+inits + `do {` onto one line. Verify against `expected/<unit>.o` at `st_value`, never the build.
+
+**Corollary -- FLOAT table, same phantom (game_libs_func_000298D8 98.48 -> 23/23 EXACT, 2026-09-06 agent-g).**
+`*(float *)((char *)&D + 0x200 + v * 4)` emits `sll t8,v0,2`; the target has `sll t9`. Spell the index as
+a SHORT-index shift, `*(float *)((short *)&D_00000000 + 0x100 + (v << 1))` -- uopt merges the `<< 1` with
+the halfword scale into the single `sll v0,2` and the pre-merge temp burns `$t8`. The other 4 words of that
+residual were cfe operand rank on the float mul: `(tbl - 1.0f) * *(float *)(a0 + 8)` evaluates the
+register-rooted cast-deref FIRST (`lwc1 f4,8(a0)` before the table load, `mul.s f10,f4,f8`); writing it
+textually first, `*(float *)(a0 + 8) * (tbl - 1.0f) + 1.0f`, restores tbl -> `$f4`, sub -> `$f6`,
+a0+8 -> `$f8`, `mul.s f10,f6,f8`. One- and two-level typed member chains for that operand are byte-identical
+alternatives here (unlike the int case in #cfe-rank, a single typed deref DOES flip for this shape).
+
+
+## HOISTED shift-merge phantom = in-place `or a2,a3,zero; sll a2,a2,4`, and the K&R param-homing flip -- gl_func_00020ED0 82.6 -> 75/75 EXACT (2026-09-06, agent-g) <a name="hoisted-shift-merge-inplace-sll-param-homing-20ed0"></a>
+
+**Symptom.** `void f(d, x, y) short *d; int x, y;` -- three early-return arms calling blank in-module jals,
+then an 8-short signed average `d[j] = (A[y][j] + B[y][j]) / 2` that IDO x4-unrolls itself. The 82.6% wrap
+(`pa = (short *)((char *)&A + y * 16); pb = ...; for (j = 0; j != 8; j++) d[j] = (pa[j] + pb[j]) / 2;`) had
+the WHOLE loop body byte-exact; the objdump word diff vs `expected/` was only the mix-path preheader:
+```
+target:  bnez a1,ARM3 / lw v0,0x18(sp)  (homed d reloaded, delay slot)   ... or a2,a3,zero; sll a2,a2,4; lui t6; lui t7; addiu; addiu; addu v1; addu a0; li a2,8; or a1,zero
+wrap:    bnez a1,ARM3 / sll a2,a3,4                                        ... lui t6; lui t7; addiu; addiu; addu v1; addu a0; li a2,8; or a1,zero; lw v0,0x18(sp)
+```
+i.e. `y*16` in the target is a VARIABLE register copied from y and shifted IN PLACE (not a `$tN` temp), and
+the loop pointer's `d` reload is the first statement of the block (hoisted into the branch delay).
+
+**Lever (75/75 on the first in-tree compile).** No `pa`/`pb` locals, no `p = d` copy -- index both tables
+INSIDE the loop with the record index as a short-index multiply:
+```c
+    for (j = 0; j != 8; j++) {
+        d[j] = (((short *)&D_20ED0_a)[y * 8 + j] + ((short *)&D_20ED0_b)[y * 8 + j]) / 2;
+    }
+```
+uopt hoists the invariant `y * 8` as its own candidate (coloured `$a2`) and merges the halfword scale into
+it -- the hoisted form of the 20E24 shift-merge phantom
+(#shift-merged-phantom-temp-record-copy-20e24): the pre-merge copy survives as `or a2,a3,zero` and the
+merged shift lands on the same register, `sll a2,a2,4`. Because y is never modified, its web is the plain
+entry copy `or a3,a2,zero` and `d` keeps its HOME (`sw a0,0x18(sp)`, reloaded per arm and as `lw v0` for
+the loop, which the scheduler lifts into the `bnez a1` delay).
+
+**Negative results (standalone harness whose control reproduced the in-tree bytes word-for-word; ~30
+spellings).** Any spelling with pa/pb locals -- `y * 16`, `y << 4`, `(short *)&D + (y << 3)`,
+`((short (*)[8])&D)[y]`, with or without `p = d`, with `k = y * 16` / `k = y << 4` -- emits `sll a2,a3,4`
+or `sll v0,a2,4` and sinks the `lw v0` under the base adds (some re-colour pa/pb to `$a3/$t0`). Any spelling
+that MODIFIES y (`y <<= 4`, `y *= 16`, `y = y * 16`, `y <<= 3`) gets the in-place `sll a2,a2,4` but flips
+the param allocation: y stays in `$a2` (no entry copy) and **d moves into `$a3` instead of its home**
+(21-word residual, 74 words). `k = y; k <<= 4;` is copy-propagated into `sll v0,a2,4`. So the target's
+"y copied to $a3 + d homed + in-place shift" triple is reachable ONLY through the hoisted in-loop form.
+Rule of thumb: a param that the target keeps HOMED while a sibling param is copied to a fresh `$aN` at entry
+is a tell that no parameter is assigned in the source -- move the arithmetic into the loop.
+
+**Companions.** (1) Two lui/addiu pairs against reloc-blind zero words need TWO distinct base-0 aliases in
+`undefined_syms_auto.txt` (`D_20ED0_a = 0; D_20ED0_b = 0;`) -- a shared `&D_00000000` is CSE'd into one
+pair. (2) All three jals are `0C000000` with oracle symvals that are in-module exports (sym1295 = 20E24,
+sym1296 = 20E78): placeholder `gl_func_00000000(...)` calls, per
+#distinct-pointer-copy-keeps-loop-bound-reload-20914 companion 2. (3) The second arm calls the 2-arg callee
+with ONE argument -- the target leaves `$a1 = x` untouched; spelling `f(d, x)` would be byte-identical
+here (x is already in `$a1`) but `f(d)` documents what the ROM actually does.
+
+
 ## Empty-conditional keep-alives flip the held-base colour; the o32 `mtc1 aN,$f12` arg-move head (game_libs 2D374 NM 96.69, 5C808 EXACT, 2026-09-06 agent-c) <a name="empty-conditional-keepalive-flips-base-colour-2d374"></a>
 
 **5C808 (EXACT, no C change).** `gl_func_0005C810(int obj, float a, float b, float c, float d, float e, float f)`
@@ -25157,3 +25272,31 @@ D_360 = (f32)half * (1.0f/256.0f); D_35C = z; D_358 = fr;
 - Open: a construct that keeps `fr` / `z` as colouring candidates (live across the bgez block
   boundary) WITHOUT adding a basic block. Candidates to try next: the u16 read as a `volatile`
   or pointer deref so the conversion can't be substituted; making `fr` two-use via the 360 term.
+
+
+## Dead `sw a0,home` + in-place `andi a0,a0,0xFF` before a call: `&param` lever, not an `unsigned char` param (game_libs_func_0002DDEC, 2026-09-06 agent-c) <a name="dead-home-plus-inplace-andi-param-lever-vs-uchar-2ddec"></a>
+
+Target (14 words, hoisted head merged):
+```
+lui at,0x3F80; mtc1 at,$f4          ; 1.0f, scheduled above the prologue
+addiu sp,-0x18; sw ra,0x14(sp)
+sw a0,0x18(sp)                      ; dead home of the used arg
+lui at,0 (HI16 D+0x324)
+andi a0,a0,0xFF                     ; IN PLACE
+or a1,zero,zero
+jal gl_ref_00042490 ; swc1 $f4,0(at) (LO16)
+```
+Three spellings, standalone `-O2 -mips2 -32`:
+- `void f(int a0) { D = 1.0f; call(a0 & 0xFF, 0); }` -> 13 words, no home (the 2026-05-30 "dual entry" verdict).
+- `void f(unsigned char a0) { D = 1.0f; call(a0, 0); }` -> 15 words: home present, but the eager
+  promotion writes a NEW register (`andi a2,a0,0xff`) and copies back (`or a0,a2,zero`) — the
+  [unsigned-char-param entry](#feedback-ido-unsigned-char-param-homes-and-extends) shape.
+- `void f(int a0) { int *p = &a0; D = 1.0f; call(a0 & 0xFF, 0); (void)p; }` -> **14/14**: the
+  address-taken param is homed (the [used-arg-dead-home](#feedback-ido-used-arg-dead-home) lever) and
+  the mask stays an in-place `andi a0,a0` on the arg web. Same lever as game_libs_func_0002DDBC.
+
+Rule of thumb: if the target's `andi` DEST == its SOURCE arg register, the C arg is `int` and the
+home comes from `&param`; if the andi writes a different register with a later `or aN,rX`, it is a
+genuine `unsigned char` parameter. Merged with the head in-tree: ROM cmp byte-identical on the first
+compile; the jal is a text-base (sym3) R_MIPS_26 with the callee offset baked in the word, so the
+callee is spelled `gl_ref_00042490` (MATCHING_WORKFLOW#feedback-nonzero-baked-jal-gl-ref-callside).
