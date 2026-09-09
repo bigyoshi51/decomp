@@ -14171,6 +14171,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Integer `mult` takes the RIGHT source operand in rs and allocates the right operand's temps FIRST: `(h - a0 - 1) * w` = `lw t6,w; lh t7,h; subu t8; addiu t9; mult t6,t9`, `w * (h - a0 - 1)` = `lh t6,h; subu t7; addiu t8; lw t9,w; mult t8,t9` (game_libs_func_0002CF60 EXACT 45/45, 2026-09-09 agent-c)](#mult-operand-order-head-temp-ring-2cf60) -- _A head/prologue product whose only residual is the t6..t9 numbering + `mult rs,rt` swap: swap the C operands, no local needed (a named `k = ...` local renumbers the whole ring and homes k). Complements the deeper-tree rs note under the FIFO temp-queue entry: the rs pick is source-RIGHT, not tree depth, when neither operand is a plain register._
 - [Stack-arg (5th) load register t1 = uopt candidate colour with t0 occupied; de-named = ugen ring t7, named = colour t0; ~60 spellings inert (game_libs_func_0004247C NM 22/23, 2026-09-09 agent-c)](#stack-arg-candidate-t0-vs-t1-4247c) -- _Negative result + what it rules out: prototype/varargs, dead-if keep-alives, decl/assign order, folded casts / masks on the lh operand, uchar/ushort callee returns, struct-typed globals, K&R fnptr, extra dead args. The ring is t6,t7,t8,(t9 skipped after a jalr),t0,t1,... and a subsumed mask on an lhu DOES shift the post-call pop by one (lh has no identity mask). Open: what zero-emission LR holds t0 in the target._
 - [DL-packet append macro: FUNCTION-scope g/i/p colour ONE way for every packet in a BB (v1/a1/a2); BLOCK-scope temps with `i` loaded BEFORE `g` recolour a later packet (v0/v1/a0 exact for the if-arm packet); do{}while(0) around packets regresses (game_libs_func_0004CDB0 NM 78/83, 2026-09-09 agent-c)](#packet-macro-scope-colouring-4cdb0) -- _Per-packet colours in one straight-line BB mean distinct variables per packet, not one macro var set; the CSE'd `obj->0xC` temp is coloured before a fresh `i` in the same block whatever the statement order (packet 3 residual)._
+- [gbi `_SHIFTL` constants are NOT reassociated around the shifted term: `0x01000000 | (x << 16) | 0x40` emits `or t8,t7,at; ori t9,t8,0x40`, the folded `0x01000040 | (x << 16)` emits one `lui/ori at` (game_libs_func_0004B2F4 NM 90.36, 2026-09-09 agent-c)](#gbi-shiftl-constants-not-reassociated-4b2f4) -- _Spell G_MTX/G_TEXRECT-style command words in the gbi macro order (cmd<<24 | param<<16 | size) and let IDO evaluate left to right; a pre-folded constant changes the temp ring. Companion residual: a single-use global read held across one call is memory-homed at definition here where the target colours it a2 + jal-delay spill._
 - [IDO -O3 turns an INITIALISED `static float` local (`static float dtor = 3.1415926 / 180.0`) into a .bss object plus an entry-time WRITE-BACK of the rodata literal (`lwc1 f0,%lo(lit)` ... `swc1 f0,%lo(dtor)`); -O2 keeps it as initialised data with no store (guPositionF 6F684 EXACT, 2026-09-09 agent-g)](#o3-static-local-float-initialiser-bss-writeback) -- _A "store of a constant to an anonymous global" in a float-math leaf that otherwise never writes globals = this. The reloc is against the donor's local `.bss` section symbol -> `<func>_bss` rename + pin (same as `<func>_rodata`). Both 7.1 and 5.3 -O3 do it._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -25801,3 +25802,20 @@ v1/a1/a2, packet 3 = a0/v1/a1 (i before g), if-arm packet = v1/v0/a0 (i before g
   the jal delay); inline it is a ring temp (t8). Table base + index read off the same `&D` symbol in
   one call-free stretch -> per-site alias extern (349E0 rule) or they CSE into one `lui/addiu v0` base.
 
+
+## gbi `_SHIFTL` constants are not reassociated around the shifted term (game_libs_func_0004B2F4 NM 90.36, 2026-09-09 agent-c) <a name="gbi-shiftl-constants-not-reassociated-4b2f4"></a>
+
+Target G_MTX word: `ori t5,a2,2; andi t6,t5,0xff; sll t7,t6,0x10; lui at,0x100; or t8,t7,at; ori t9,t8,0x40;
+sw t9,0(a3)` = `gSPMatrix`'s `_SHIFTL(G_MTX,24,8) | _SHIFTL(p,16,8) | _SHIFTL(sizeof(Mtx),0,16)` evaluated
+LEFT TO RIGHT: `(0x01000000 | ((p & 0xFF) << 16)) | 0x40`. IDO folds the two constants only if they are
+adjacent in the tree -- `0x01000040 | (x << 16)` (or any spelling that puts both constants on one side)
+emits `lui at,0x100; ori at,at,0x40; or t4,t9,at` instead (one word shorter, different temp ring downstream).
+Rule: spell DL command words in the gbi macro order `cmd<<24 | param<<16 | size` and let the compiler keep
+the two `or`s. Fully-constant words (`0xFA000100`, `0x06000000`) fold either way.
+
+Companion residual on the same function (open): the single-use render-flags read `fl = D[0x1F4]` that lives
+across ONE call is a candidate in the target (`lw a2,0x1F4(t3)` straight into a2, spilled `sw a2,0x64(sp)` in
+the jal delay, reloaded `lw a2` and used as `ori t5,a2,2`), but IDO here homes it at definition (`lw t9; sw
+t9,0x70(sp)`, reloaded into a t-temp) in function-scope, block-scope-around-the-call and inline spellings; the
+packet/alloc temps colour g-before-i in every spelling (the [4CDB0 class](#packet-macro-scope-colouring-4cdb0),
+block-scope i-first does not flip it here). Frame 0xD0 vs 0xC0 follows from those spill homes.
