@@ -14169,6 +14169,9 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Absolute-constant address casts (`*(int*)0x3B8FC`) CSE into one `lui;ori` register; the target's per-access `lui at,%hi; sb %lo(at)` chain means a SYMBOL (base-0 USO data + offset) -- per-site aliases may carry a NONZERO absolute (`gl_ref_0003B8F4 = 0x0003B8F4`); store + address-value on one symbol does NOT CSE, two stores on one symbol DO (held base + LIFO store order) (gl_func_00034A78 63->91%, 2026-09-05 agent-g)](#constant-address-cast-vs-symbol-form-per-access-lui-at-34a78) -- _Tell: build 3 words SHORT with `lui 3; ori 0xb8fc` reused vs target `lui at,4` before every store. Fix = extern per address. Open residual: target puts an adjacent same-hi byte pair `li 13; li 2; sb F7(at); sb F6(at)` under ONE `lui at`; every same-symbol C form (array/struct/volatile/TU-defined/static/short-cast) gives the LIFO pair but materializes `lui v0; addiu v0`; IDO never splits an even-offset short (pack(1) even = `sh`, odd = `sb;srl;sb`)._
 - [A dense 0/1/2 `switch` lowers to a compare chain in CASE-LABEL order (0 first) but lays the ARMS out in SOURCE order; an if/else chain re-tests on the copied param and lays arms out in test order (game_libs_func_000309AC EXACT 29/29, 2026-09-09 agent-c)](#switch-arm-order-is-test-chain-and-layout-309ac) -- _Target `beqz a0 -> LAST arm; li at,1; beq a0,at; li at,2; bnel a0,at,CALL` with `a1 = 0` in the likely delay and arms laid out 70/30/0 = `switch (sel) { case 2: p = 70; case 1: p = 30; case 0: default: p = 0; }`. Source-order cases (0,1,2) give three plain `beq` + three `b`, +1 word; `p = 0; switch` with two cases gives `beql`; an if/else chain gives `bnez`/`bnel a3,at` on the a3 copy. The `or a3,a0` copy + jal-delay spill to the a0 home needs no do-while lever at this size._
 - [Integer `mult` takes the RIGHT source operand in rs and allocates the right operand's temps FIRST: `(h - a0 - 1) * w` = `lw t6,w; lh t7,h; subu t8; addiu t9; mult t6,t9`, `w * (h - a0 - 1)` = `lh t6,h; subu t7; addiu t8; lw t9,w; mult t8,t9` (game_libs_func_0002CF60 EXACT 45/45, 2026-09-09 agent-c)](#mult-operand-order-head-temp-ring-2cf60) -- _A head/prologue product whose only residual is the t6..t9 numbering + `mult rs,rt` swap: swap the C operands, no local needed (a named `k = ...` local renumbers the whole ring and homes k). Complements the deeper-tree rs note under the FIFO temp-queue entry: the rs pick is source-RIGHT, not tree depth, when neither operand is a plain register._
+- [Stack-arg (5th) load register t1 = uopt candidate colour with t0 occupied; de-named = ugen ring t7, named = colour t0; ~60 spellings inert (game_libs_func_0004247C NM 22/23, 2026-09-09 agent-c)](#stack-arg-candidate-t0-vs-t1-4247c) -- _Negative result + what it rules out: prototype/varargs, dead-if keep-alives, decl/assign order, folded casts / masks on the lh operand, uchar/ushort callee returns, struct-typed globals, K&R fnptr, extra dead args. The ring is t6,t7,t8,(t9 skipped after a jalr),t0,t1,... and a subsumed mask on an lhu DOES shift the post-call pop by one (lh has no identity mask). Open: what zero-emission LR holds t0 in the target._
+- [DL-packet append macro: FUNCTION-scope g/i/p colour ONE way for every packet in a BB (v1/a1/a2); BLOCK-scope temps with `i` loaded BEFORE `g` recolour a later packet (v0/v1/a0 exact for the if-arm packet); do{}while(0) around packets regresses (game_libs_func_0004CDB0 NM 78/83, 2026-09-09 agent-c)](#packet-macro-scope-colouring-4cdb0) -- _Per-packet colours in one straight-line BB mean distinct variables per packet, not one macro var set; the CSE'd `obj->0xC` temp is coloured before a fresh `i` in the same block whatever the statement order (packet 3 residual)._
+- [IDO -O3 turns an INITIALISED `static float` local (`static float dtor = 3.1415926 / 180.0`) into a .bss object plus an entry-time WRITE-BACK of the rodata literal (`lwc1 f0,%lo(lit)` ... `swc1 f0,%lo(dtor)`); -O2 keeps it as initialised data with no store (guPositionF 6F684 EXACT, 2026-09-09 agent-g)](#o3-static-local-float-initialiser-bss-writeback) -- _A "store of a constant to an anonymous global" in a float-math leaf that otherwise never writes globals = this. The reloc is against the donor's local `.bss` section symbol -> `<func>_bss` rename + pin (same as `<func>_rodata`). Both 7.1 and 5.3 -O3 do it._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -25723,3 +25726,78 @@ it. Everything else was exact on the first compile: `for (unsigned i = 0; i < h2
 compared by `bnel s3,t2` with the `addiu s2,s2,1` tail-dup in its delay, the sign-extended
 `lh` reload CSE'd on the no-call path, and a blank `gl_func_00000000()` after the loop.
 Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c.
+
+## IDO -O3 turns an initialised `static float` local into .bss + an entry-time write-back of the literal (guPositionF `dtor`, game_libs_func_0006F684 EXACT 108/108, 2026-09-09 agent-g) <a name="o3-static-local-float-initialiser-bss-writeback"></a>
+
+**Symptom.** A float-math leaf (guPositionF: three `mtc1 a1-a3` args scaled by one rodata float,
+six sinf/cosf jals, a 3x3 of products) contains ONE store to an anonymous global in its head:
+`lui at,%hi(D+0x44030)` ... `swc1 f0,%lo(0x4030)(at)`, where f0 is the rodata literal just loaded
+(`lwc1 f0,%lo(0x24D0)(at)` = 0x3C8EFA35 = pi/180). The old NM wrap decoded it honestly as
+`*(f32*)((char*)&D_00000000 + 0x44030) = temp_f0;` and treated it as game-specific state.
+
+**Cause.** libreultra's `guPositionF` has `static float dtor = 3.1415926 / 180.0;`. At -O2 IDO
+emits that as an initialised `.data`/`.sdata` object and only READS it. At **-O3** (both 7.1 and
+5.3) the static is placed in **`.bss`** (16 bytes, uninitialised) and the function **writes the
+literal into it on every entry** before the three `r/p/h *= dtor` multiplies -- the initialiser is
+materialised as a rodata literal + store. The store lands after the arg spills
+(`swc1 f14,0x50(sp); swc1 f12,0x4C(sp); swc1 f0,dtor; jal sinf; swc1 f16,0x54(sp)`), i.e. it is
+scheduled like any other global store, not hoisted into a one-time guard.
+
+**Consequences for matching.**
+- The verbatim source is the match; do NOT rewrite the static as an explicit global store
+  (`float d = LIT; ...; G = d;`): that costs the static's stack slot and shifts every spill/home
+  slot by 4 (12 mismatches at -O3, tried 3 spellings).
+- The two relocs are against the donor's LOCAL section symbols (`.rodata` for the literal, `.bss`
+  for the static). `scripts/replace-function-body.py` renames them to `<func>_rodata` /
+  `<func>_bss` when splicing; pin both in `undefined_syms_auto.txt` to the USO's baked addends
+  (here `game_libs_func_0006F684_rodata = 0x000024D0`, `_bss = 0x00044030`; the RoData section of
+  bootup.uso is 0x25A0 and Data 0x2E670, so 0x44030 is the module's bss image). Standalone the
+  donor is 105/108 (three addend words), linked 108/108, objdiff 100.0; the `.o` slice vs
+  expected/ differs only at the three reloc-field words (accepted reloc-blind class).
+- Tell to recognise the class in other gu/ or game leaves: a `lwc1 f0,lit` immediately followed
+  (after the arg mtc1s) by a `swc1 f0,GLOBAL` of the SAME register, in a function that writes no
+  other globals, in an -O3-class TU (guFrustum/guOrtho/guPosition wrappers are all -O3).
+- -O2 with the verbatim static is 96 words off (different frame/spill layout, no write-back), so
+  the store is also an **-O3 tell** on its own.
+
+## Stack-arg candidate t0 vs t1 after a jalr: negative sweep (game_libs_func_0004247C NM 22/23, 2026-09-09 agent-c) <a name="stack-arg-candidate-t0-vs-t1-4247c"></a>
+
+Target (23 words): `lui v1; lw v1,0x240(v1)` head; `lw v0,0x28(v1); lw t9,0x64(v0); lh t6,0x60(v0);
+jalr t9; addu a0,t6,v1`; reload g into v1; `lui a0; addiu a0` (string); **`lw t1,0xBC(v1)`**; `lw
+a3,0xB8(v1); li a1,0x110; or a2,v0,zero; jal; sw t1,0x10(sp)`. Source `rv = p->fn((int)g + p->off);
+g = CUR; f(&str, 0x110, rv, g->b8, g->bc)` reproduces every word except the stack-arg register:
+- de-named 5th arg -> `t7` = the first post-call **ugen ring pop** (ring = FIFO t6,t7,t8,t9,t0,t1,t2..;
+  after a `jalr t9` the t9 slot is skipped: a 7-arg probe popped t7,t8,t0,t1,t2 for args 5..7);
+- named `c = g->bc` -> `t0` = uopt candidate, lowest free caller-saved after v0 (rv), v1 (g), a0-a3;
+- `t1` therefore = a candidate with **t0 already taken by a zero-emission LR**, or 4 phantom pops.
+Inert (all keep t7 / t0, same 22/23): b+c named in both decl and assign orders, `register c`, c declared
+first, `int **nv` held address for the reload (breaks the g web: reload lands in t7), struct-typed
+global `D_s.cur` / typed `Obj *` (same bytes as the cast form -- the `(int)g + off` operand order must
+stay g-second for `addu a0,t6,v1`), extern array base, prototyped callee (fixed 5-arg, varargs after
+1/2/3 args), void vs int return / `return f(..)`, `if(x){}` keep-alives on rv/c/b/g/s (extending
+across the jal spills, +8 frame), folded `<<0`/`*1`/`+0`/`&~0`/`(int)(short)(int)` on the lh operand,
+`(short)` re-cast, `& 0xFFFF` on the lh (emits andi -- signed range has no identity mask; on an `lhu`
+the mask folds AND shifts the post-call pop t7->t8, confirming the ring model), `unsigned char`/
+`short`/`unsigned short` callee return with and without subsumed masks (andi emitted: call results have
+no range), K&R `int (*)()` fnptr, `*(int (**)(int))` deref, `(char *)g + off` pointer form, named cb /
+named off (colour a1/a2 -> jalr a1), 6th/7th dead args, do{}while(0), comma-arg, block-scoped copy of
+rv, `rv = 0` / `c = 0` / `g = 0` trailing kills. The zdbug:6 trace needs the ecvt patch (not applied
+on this machine); next probe = get the coloring trace and read which LR takes t0.
+
+## DL-packet append macro: function-scope vs block-scope temps decide per-packet colours (game_libs_func_0004CDB0 NM 78/83, 2026-09-09 agent-c) <a name="packet-macro-scope-colouring-4cdb0"></a>
+
+Four `g = obj->0xC; i = g->4; g->4 = i+1; p = (obj->0xC)->0 + i*8; p[0] = w0; p[1] = w1` packets, three
+in one straight-line BB between calls and one inside `if (flag)`. Target colours: packets 1-2 g/i/p =
+v1/a1/a2, packet 3 = a0/v1/a1 (i before g), if-arm packet = v1/v0/a0 (i before g).
+- One FUNCTION-scope `g/i/p` set = one LR each for the whole BB = one colour for packets 1-3
+  (v1/a1/a2): exact for 1-2, wrong for 3. So the target's packet 3 uses DIFFERENT variables.
+- BLOCK-scope `{ int i = *(int *)(GFX(obj) + 4); char *g = GFX(obj); unsigned *p; ... }` for the if-arm
+  packet = v0/v1/a0 exact: with `i` textually first the fresh `i` is coloured before the CSE'd
+  pointer temp there. The same block spelling for packet 3 still gives g=v1/i=a0 (pointer temp first);
+  `g`-first block scope, unnamed g, post-increment `(*(int *)(g + 4))++`, shared `i2/g2/p2` with the
+  if-arm packet, function-scope i + block g/p and vice versa are all the same 5-word residual.
+- `do { ... } while (0)` around any/all packets REGRESSES (45-72/83) -- not the BB-boundary lever here.
+- The f6 argument pointer `self->0x1C0` must be a NAMED local (`q`, colours a3, `lw a0,0x60(a3)` in
+  the jal delay); inline it is a ring temp (t8). Table base + index read off the same `&D` symbol in
+  one call-free stretch -> per-site alias extern (349E0 rule) or they CSE into one `lui/addiu v0` base.
+
