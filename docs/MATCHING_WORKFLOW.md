@@ -11868,3 +11868,36 @@ two mis-split heads in the game-side units landed BYTE-EXACT with zero register 
   big ones. The near-100 post1b/tail wraps (65060 99.9, 683D4 99.7, E5D0 98.7, 67C1C 99.0,
   C28C 99.8) all carry probed regalloc caps -- not lever-class residuals.
 
+**2026-09-09 seventh sweep (agent-g, fifth run): the three game-side INCLUDE_ASM
+successors "exported at the orphan" in game_libs_tail -- two BYTE-EXACT, one merged NM.**
+- ~~A1B0 -> A1C0~~ **LANDED as game_libs_func_0000A1B0, EXACT 66/66** (sym 1066, one
+  R_MIPS_26 ref; the 4-word head `ori a3,0xEA60; div a1,a3; mflo v0; li t0,1000` is the
+  hoisted `ms / 60000`): ms -> {min, sec, hundredths} `unsigned char buf[4]` + the A4D0
+  find-first-match loop over three stride-8 entries (blank jal to sym1044 = text 0x9A50).
+  Keys: remainders spelled `x - q * d` (mflo/multu/subu; `%` gives `mfhi`); `int i`
+  declared BEFORE `buf`; only three named scalars (a fourth home = frame 0x50 not 0x48);
+  i/entry initialised in the for-header (at-declaration inits schedule the `or s0/s1`
+  above the first div check). Baseline tail strip + EXPECTED_BASELINE=1, clip 0x5550.
+- ~~B628 -> B638~~ **LANDED as game_libs_func_0000B628, EXACT 33/33** (sym 1104): the
+  head's `div v0,at` has NO mflo -- v0 stays `n = a1*3` (`n % 8` = andi/bgez/addiu -8,
+  `sll 2` = int-table index), `mfhi a1` = `n % 5` (single-use constant divisor = assembler
+  div macro, no zero checks); `a1 * 48` is a separate stride-48 index. The 3-month
+  "inherits $hi and $v0 from B5AC's tail" cap on B5AC/B638 is retracted for B638 (B5AC
+  is the same class: its "tail-SUFFIX div" is its own hoisted head -- next run). The
+  table base `(char *)&D_00000000 + 0xD388` must be assigned inside `do { } while (0)`
+  or uopt reassociates `(D+K) + n*4` into `D + (K + n*4)` -- see
+  `docs/IDO_CODEGEN.md#bb-boundary-blocks-sym-addend-reassociation-b628`.
+- **CBF0 -> CBFC merged as game_libs_func_0000CBF0, NM 97.78 (97/97 structure, 35
+  colouring words)** (sym 1127, DataReloc fn-table entry; head = held `&D+0x134` chain
+  base in a3): record-percentage scaler (`pct = x < lo ? 0 : hi < x ? 100 : (x-lo)/range
+  *100`, `pct == 100.0f` bumps rec->0x34 -- read the bc1fl slot: nullified on the equal
+  path, so `lw t2,52(v1)` is the RECORD) + four `if (h) f(h, *p)` dispatches. Load-bearing:
+  `if (self->active) { ... } else { continue; }` -- the explicit else-continue is what
+  makes uopt keep the loop bound in a register across the inactive path (plain `if {}`
+  reloads it in the beqzl slot). Residual = v0/v1 (G vs n/rec), a3/t0 (base vs 96) and
+  the FP ring (lo=f12, 100=f14, 0=f18 in the target); every documented ordering lever is
+  inert -- a uoptlist-dump job once the ecvt patch is on the machine.
+- Next in these units: B5AC (same class as B638: 0x8 head + body, check the oracle at
+  0xB5AC's section offset), then the big ones 65B40 -> 65B5C (sym 2411) / 65EE4 -> 65F08
+  (sym 2416, 548 B).
+
