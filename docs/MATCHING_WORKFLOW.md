@@ -11902,3 +11902,34 @@ successors "exported at the orphan" in game_libs_tail -- two BYTE-EXACT, one mer
   0xB5AC's section offset), then the big ones 65B40 -> 65B5C (sym 2411) / 65EE4 -> 65F08
   (sym 2416, 548 B).
 
+**2026-09-09 eighth sweep (agent-g, sixth run): B5AC + both big ones oracled; two BYTE-EXACT,
+one merged NM with the residual pinned to one word class.**
+- ~~B5AC~~ **LANDED as gl_func_0000B5AC, EXACT 35/35** (sym 1103 at 0xB59C = section 0x1FC08;
+  0xB5AC not exported; the .s already spanned [0xB59C,0xB628)): B628's twin with table
+  `D + 0xD268` (`lui 1` = sign carry) and an `a1 * 9` int index that MUST be a named local
+  (`int k = a1 * 9;` keeps the t0/t1/t2 triple; inline forms renumber it, 8 diff words).
+  No expected/ refresh (symtab unchanged); tail clip re-probed EBC8 0x5520 + 0x30 = 0x5550.
+- ~~65B40 -> 65B5C~~ **LANDED as game_libs_func_00065B40, EXACT 69/69** (sym 2411, two jal
+  refs; 0x65B5C not exported): quaternion (self+0xF4) -> 3x3 matrix (self+0x3B0). The
+  "caller-set $f0..$f16" cap was the head's hoisted loads + 2.0 + x*y. Four knobs, all in
+  `docs/IDO_CODEGEN.md#int-2-multiplier-keeps-mul-s-two-pointer-locals-65b40`: int `* 2`
+  (not `2.0f`), products unnamed (CSE temps), inputs through a folded pointer local (flips
+  the FP colouring), a second folded pointer local for the matrix (frame pad). Baseline =
+  `cp build/...post1b.c.o expected/` (.text identical before the cp).
+- **65EE4 -> 65F08 merged as game_libs_func_00065EE4, NM 35.5 at -O2** (sym 2416; 0x65F08
+  not exported; 146 words): three unrolled backup-region inits over the sym1520 BSS struct
+  (0x3F030), callees 662E8 / 66210 / 6612C all in-TU (blank imports). The target is the
+  -O1 shape (no `lui 0xb1ff` CSE, `lui at` stores, `lui/addiu a0` per &G, rolling t6..t4);
+  -O2 holds &G in s0 whatever the spelling (volatile, typed param, 15 per-call aliases).
+  Standalone -O1 = 146/146 words, 59-66 differing, ONE class: each block's G.data constant
+  is born in $a2 (`lui a2; ori a2,a2,0x10; sw a2,0x24(at)`) -- ugen only forwards a
+  just-stored constant (`addu a2,t7,zero`); 3-arg first call (G.data / literal /
+  assignment-as-arg), `register` local (-> s0) and a third parameter (-> stack-homed) all
+  miss. Lands via an -O1 donor (GAMELIBS_65EE4_DONOR + REPLACE_FUNC_BODY, like 6A304) once
+  the a2 birth is found. `D_65EE4_g = 0` alias added to undefined_syms_auto.txt.
+- Next in these units: the a2-birth probe for 65EE4 (try `-O1` with the constant spelled as
+  a `char *` pointer field and with `-Xcpluscomm` off, and the three blocks as a `for` over
+  a `static const` table -- the rolling temps say straight-line, but a table would make the
+  a2 a loaded value); then the remaining INCLUDE_ASM successors in post1b
+  (`grep -n INCLUDE_ASM src/game_libs/game_libs_post1b.c`, oracle each head).
+
