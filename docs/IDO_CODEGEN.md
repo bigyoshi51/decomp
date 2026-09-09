@@ -14,6 +14,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 
 ### large-body matching
+- [Two-arm `{cur,next}` list walker: entry result as a TEMP copied into the body var + if/else step macro into a second var gives the target's `or a1,a0` / hoisted `or a2,zero` / `b .+8` shape and the slot(a0) < obj(a1) < node(a2) colouring; `slot = base; slot += idx * 16` = base-first addu; residual = ugen t-ring only (game_libs_func_000430D8 NM 97.66, 107/107 mnemonics, 2026-09-09 agent-c)](#two-arm-list-walker-temp-copy-colouring-order-430d8) -- _First-occurrence colouring: the loop var whose zero default sits in the step's else (hoisted by uopt) is coloured after the body's slot temp; a named `nx` colours into a-regs, the `p->cur = p->next` re-read keeps it in t-regs. Ring probes (decl order, head/CSE/int-cast/volatile/index spellings, narrow flag, ternary/statement forms, per-arm head store) all inert._
+- [9-case USO jumptable switch in post0b via the 29CCC donor splice; `switch ((unsigned char)x)` = the folded cast burns ONE ugen ring slot (selector t7 -> t8, every later temp +1); arms laid out in source order 1,3,5,8,2,0,default (game_libs_func_00044B78 73/73 EXACT, 2026-09-09 agent-c)](#uchar-switch-selector-ring-burn-jumptable-donor-44b78) -- _`x & 0xFF`, `(unsigned short)(x & 0xFF)`, `& 0xFFFF`, a `u8` local and an unsigned param all give t7; only the direct `(unsigned char)` cast of the param burns the slot. Mode-table arms as `(char *)&D_zero_alias + K` call args bake the addends; the jumptable `%lo` is the one reloc-blind word (pinned `<fn>_rodata = 0x1B3C`)._
 - [Pointer-form memory-homed list iterator `{cur,next}` = sp-slot cursor with hoisted per-branch loads and reload-after-cur-store (3DF5C 53->83, 3DB3C 73->83, 38598 73->76, 2026-09-04 agent-g)](#pointer-form-list-iterator-3df5c) — _`Iter it; Iter *p = &it;` with ALL accesses through `p` (never `it.`): stores kept (no DSE), `p->next` loads hoisted above an if/else fork as two separate lw of the same slot, and a second textual `p->next` read after the `p->cur = nx` store emits the target's in-loop reload (plain struct promotes members to regs; if(0)-escaped struct / char*[2] array / volatile / char-cast forms all forward instead). Residual class: loop-var copy `or v0,a0` (node phi in a0, body copy in v0, plain beq/bne) — every copy/for/while((n=node))/comma-ternary NEXT form coalesces into beql/bnel; and an UNDEFINED-register seed store (`sw t6,8(sp)` with t6 never defined) — every C uninitialized read (scalar, register, dead-if def, promoted struct member, struct copy) gets a memory home instead._
 - [Pointer-form Vec3 macros (`pd->x = rx_` through `Vec3 *pc=&C` aliases + fn-scope shared x/y/z float temps) keep field-wise locals memory vars AND stop uopt folding the temps (all 3 ops held, then stored); tmp for `tmp=A; B=tmp;` must be a SEPARATE fn-scope local (as a frame-struct member the ladder reloads all 3); unnamed-load pointer var = addiu base fold after first access; int `/ 2` keeps div.s (2.0f -> *0.5, `* 2.0f` -> x+x); nested-!= pair ladder (bootup 4948 14.8->94.1, 2026-09-04 agent-f)](#pointer-form-vec3-macros-4948)
 - [Escaping frame STRUCT keeps dead-field math alive + makes every field a memory var (bootup 63B4 23.4->76.0): plain Vec3 locals DCE the unused x/y of an in-place M*v; Vec3-temp+struct-copy result = memcpy form; MIN/MAX ternary into a FLOAT temp then cast (cast-on-ternary duplicates trunc per arm); float locals cost 8B homes (2026-09-04 agent-f)](#escaping-frame-struct-63b4)
@@ -14181,7 +14183,10 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [IDO -O3 turns an INITIALISED `static float` local (`static float dtor = 3.1415926 / 180.0`) into a .bss object plus an entry-time WRITE-BACK of the rodata literal (`lwc1 f0,%lo(lit)` ... `swc1 f0,%lo(dtor)`); -O2 keeps it as initialised data with no store (guPositionF 6F684 EXACT, 2026-09-09 agent-g)](#o3-static-local-float-initialiser-bss-writeback) -- _A "store of a constant to an anonymous global" in a float-math leaf that otherwise never writes globals = this. The reloc is against the donor's local `.bss` section symbol -> `<func>_bss` rename + pin (same as `<func>_rodata`). Both 7.1 and 5.3 -O3 do it._
 - [`(char *)&D + K` (K > 0x7FFF) plus a scaled index in ONE basic block is reassociated into `D + (K + i*4)` (`lui/addiu D; ori at,K; addu; addu`); a `do { } while (0)` (or a `(int)` cast) around the base assignment keeps `D+K` as one held value with the addend baked in the hi/lo pair (`lui t1,1; addiu t1,-0x2C78; sll t0,v0,2; addu a3,t0,t1`) (game_libs_func_0000B628 36 -> 33/33 EXACT, 2026-09-09 agent-g)](#bb-boundary-blocks-sym-addend-reassociation-b628) -- _The reloc-blind byte gate needs the addend IN the words; a named extern pinned to K gives blank hi/lo fields. Same family as the volatile-pointee held base (2DC74) and the A670 cursor init: uopt only folds `sym+K` with a variable index when both sit in the same BB. Also here: a single-use constant divisor emits the assembler `li at,c; div` macro with NO zero/overflow checks (a twice-used one is CSE'd into a t-reg and gets the checks), and a `%` whose quotient is never read has no `mflo` -- the "inherited $hi/$v0" verdict was that._
 - [An int `2` multiplier (`x * y * 2`, or `(float)2`) keeps `lui at,0x4000; mtc1 $f0` + `mul.s` by the held constant; a float literal `2.0f` is strength-reduced to `add.s f,f,f`. Repeated float products must stay UNNAMED (uopt CSE temps: one takes a register, the rest are spilled) and the struct reads go through a folded POINTER LOCAL -- the pointer candidate flips the FP colouring so the constant gets $f0 first; a second folded pointer local (matrix side) adds 8 dead bytes at the frame top and moves the temp block to sp+0x00 (game_libs_func_00065B40 quaternion->matrix, 69/69 EXACT, 2026-09-09 agent-g)](#int-2-multiplier-keeps-mul-s-two-pointer-locals-65b40) -- _Named products = 9 memory-homed candidates (77 words, `w` spilled); raw `(float *)(s + K)` reads = x in $f0 / 2.0 in $f14 (68 words); one pointer local = right colouring but every temp slot +4. Corollary (gl_func_0000B5AC 35/35): an index expression that must keep its own t-reg triple (`sll 3; addu; sll 2` in t0 -> t1, hi/lo pair in t2) is a NAMED int local; inline `tbl + a1*9` reuses t0 for the sll and puts the pair in t1._
+- [`if (*p++)` tested byte = cfe temp candidate (lbu v0); `if (*p) { p++; }` keeps the t-ring load and hoists the increment; 67BDC loop order (67C1C 29/29 EXACT)](#post-increment-test-temp-is-a-candidate-67c1c) -- _25-cell matrix; `c = *qs` before `src++` folds the cursor copy (28 w); if(1) barrier inert here._
 - [`*p++` old-value cursor at -O2: `q = p; p++; if (1) { *q = c; }` keeps `or v1,v0` + `sb 0(v1)` + `addiu v0,1` WITHOUT evicting the a1 param (game_libs_func_00067D50 memset 10/12, 2026-09-09 agent-g)](#post-increment-old-value-if1-barrier-67d50) -- _Plain `*p++`, `*p = c; p++`, `q = p++`, int-typed p all fold to `sb 0(v0)`; `q = p; p++; *q = c` without the barrier colours q into a1 and moves c to a3 (+1 word). 7.1 -O2 == 5.3 -O2 here; -O1 homes p (frame 8). Residual = the loop-bottom `n--` old-value copy's colour (target a3 before the sb, ours v1 after it) -- 40 spellings inert. Retracts the "IDO -O2 unrolls by 4 / needs a lower-opt split" note on that function._
+- [Named-scalar homes interleave with aggregates top-down in declaration order (65060 EXACT 58/58, 68990 5-scalar map)](#named-scalar-homes-interleave-declaration-order-65060) -- _a named pointer declared FIRST homes at the frame TOP; "scalar homes always bottom" retracted; count scalars above/below the aggregate._
+- [for(;;)+if(done)break vs do-while reorders the s-reg candidates (68990 EXACT 93/93)](#for-break-vs-do-while-s-reg-candidate-order-68990) -- _do-while / while colour &a s3, done s4; the for-break form gives done s3 / &a s4 / &b s5 with the same beqz back edge; switch labels -1..4 + case 0/3 on default = addiu+1 / sltiu 6._
 - [-O2 frame bottom = dead homes for named scalars: with <= 3 named scalars the leaf frame bottom is 12 bytes, every further named scalar (int, float, pointer, constant-valued or `register` alike) adds a 4-byte home rounded to 8 -- so a target with a 12-byte bottom names at most three (gl_func_000659D0 measurements, 2026-09-09 agent-g)](#named-scalar-dead-homes-frame-bottom-659cc) -- _Loop-carried `pos = node + K` bases and named float temps therefore cost frame even when register-only; the same function shows uopt folding every unnamed `node + K` into `disp(v1)` (plain/int/V3f/volatile-pointee/cast chains), holding it only through if(1)/do-while(0)/phi forms (each +1 home), and NOT scalarizing V3f struct temps (+11 words)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 
@@ -26147,6 +26152,27 @@ a separate `sym+0x100` invariant (baked addend, no shared base register); a poin
 makes the base the candidate and derives the end from it per iteration. `short i` widens the loop (27 diffs).
 Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (6179C row).
 
+## `if (*p++)` makes the tested byte a cfe temp = register CANDIDATE (`lbu v0`); `if (*p) { p++; }` keeps it in the temp ring and uopt hoists the increment above the branch; the 67BDC loop order fixes the increment pair (game_libs_func_00067C1C strcat-tail, 29/29 EXACT, 2026-09-09 agent-g) <a name="post-increment-test-temp-is-a-candidate-67c1c"></a>
+
+Target: `lbu t8,0(a1); addiu a1,a1,1; beqz t8,END; nop` (first appended byte test) and a copy loop
+`or v1,a1; lbu a2,0(v1); or v0,a0; addiu a0,a0,1; addiu a1,a1,1; bnez a2,LOOP; sb a2,0(v0)`.
+25-cell matrix (5 test spellings x 5 loop orders, 7.1 -O2):
+
+| first-char test | loop order | words / diffs |
+|---|---|---|
+| `if (*src++)` | `qs = src; src++; c = *qs; qd = dst; dst++; *qd = c;` (increment between copy and load) | 29 / 4: `lbu v0` + `beqz v0`, and `addiu a1` above `addiu a0` |
+| `if (*src++)` | 67BDC order `qs = src; qd = dst; dst++; src++; c = *qs; *qd = c;` | 29 / 2 (only the v0 pair) |
+| **`if (*src) { src++;`** / `src++; if (*(src - 1))` / `src += 1; if (src[-1])` / `if (*src != 0) { src++;` | **67BDC order** | **29 / 0** |
+| any | `c = *qs` BEFORE `src++` | 28: the `or v1,a1` cursor copy folds into `lbu a2,0(a1)` |
+| any | `if (1) { *qd = c; }` barrier | same as without (the 67D50 lever is not needed here) |
+
+Mechanism: cfe lowers `*p++` in a condition to `t = *p; p = p + 1; if (t)` with `t` a real temp local, so uopt treats
+it as a register candidate and colours it v0; `if (*p)` leaves the load an expression temp (t-ring). The then-block's
+`p++` is hoisted above the `beqz` (`addiu a1,a1,1` in the same slot as the target) because `p` is dead on the exit
+path -- a partially-dead increment is free to float up. Companion to the 67D50 old-value rule below: the house
+67xxx string idiom is "copy the cursor, increment, load through the copy" with BOTH cursors copied before BOTH
+increments.
+
 ## `*p++` old-value cursor at -O2: named cursor + `if (1)` barrier around the store keeps `or v1,v0` / `sb 0(v1)` without evicting the a1 param (game_libs_func_00067D50 memset, 10/12, 2026-09-09 agent-g) <a name="post-increment-old-value-if1-barrier-67d50"></a>
 
 Target (12 words, no frame): `or v1,a2,zero; or v0,a0,zero; beqz a2,END; addiu a2,-1; LOOP: or v1,v0,zero; or a3,a2,zero;
@@ -26167,6 +26193,39 @@ Everything that tried to keep q live across the test or to emit the test temp be
 `t = n` before the store, `volatile` pads, `else { n = 0; }`, `for (;;) { q = p; if (n-- == 0) break; ... }`) either
 CSEs the copy back after the store or changes the loop shape. Not a lower-opt-file case: the old NM note claiming
 "-O2 unrolls by 4, -O1 adds a prologue" was measured against the `do { } while (--n)` decode, not this one.
+
+## Named-scalar homes interleave with aggregates TOP-DOWN in declaration order -- a named pointer declared FIRST sits at the frame top, not the bottom (gl_func_00065060 EXACT 58/58; gl_func_00068990 5-scalar map, 2026-09-09 agent-g) <a name="named-scalar-homes-interleave-declaration-order-65060"></a>
+
+Two measurements that refine the entry below and retract the 65060 "named cross-BB pointer home = 8B at frame
+bottom, unavoidable" cap note:
+
+- **gl_func_00068990** (frame 0x50, s0-s6 + ra at 0x18..0x37, two address-taken `int` reader slots a/b): the
+  five named scalars `done, b, a, saved, v` are laid out top-down in DECLARATION order, 4 bytes each, dead homes
+  included -- `done` 0x4C, `b` 0x48, `a` 0x44, `saved` 0x40, `v` 0x3C. Re-declaring `saved, v` first moved `a` to
+  0x3C; declaring `done` last moved `a` to 0x48 (`b` 0x44). The target's `&a = sp+0x44`, `&b = sp+0x48` therefore
+  pins ONE named scalar above `b` and two below `a` (or fewer with unused slots at the bottom).
+- **gl_func_00065060** (frame 0x38, `ra` at 0x14, a `Tri3i tmp` copy and a `goto mid;`-carried `int *flags`
+  candidate): the target has `tmp` at sp+0x1C with 16 bytes above it. `int pad_a[2]; Tri3i tmp; int *flags`
+  gives pad 0x30, tmp 0x24, flags home 0x1C (the 4-word residual that stood since 2026-07); **`int *flags;
+  int pad_a[3]; Tri3i tmp;`** gives flags 0x34, pad 0x28, tmp 0x1C = 58/58. `int pad_a[3]; int *flags; Tri3i
+  tmp;` and the assign-after-declare spelling are the same 58/58 -- only "pointer above tmp, 12 bytes of pad"
+  matters.
+
+Rule: when a target slot is N bytes higher/lower than yours, count the named scalars declared ABOVE and BELOW
+the aggregate rather than assuming a bottom floor; a named pointer's home is 4 bytes and moves with its
+declaration. The 12-byte-floor observation below (659CC) is the special case where every scalar is declared
+after the aggregates.
+
+## `for (;;) { ... if (done != 0) break; }` vs `do { } while (done == 0)`: the loop spelling reorders the s-register candidates (gl_func_00068990 EXACT 93/93, 2026-09-09 agent-g) <a name="for-break-vs-do-while-s-reg-candidate-order-68990"></a>
+
+Same body (record-stream reader: a 6-arm `switch` inside a loop, a `done` flag set in one arm and tested at the
+bottom, two address-taken reader slots hoisted to `&a`/`&b` s-registers, a held `&G` and a held `D + 0x2B430`).
+`do { ... } while (done == 0);` and `while (done == 0) { }` colour `&a` s3 / `done` s4; `for (done = 0; done == 0;)`
+also swaps the `lui s2` / `addiu s4` prologue order; **`for (;;) { ...; if (done != 0) break; }`** colours the
+target's `done` s3 / `&a` s4 / `&b` s5 with an identical `beqz s3,TOP` back edge. `char` / `unsigned` `done`,
+an initialiser, `continue` in the arm and declaration order do not move it. Companion: `switch (tag)` with labels
+-1..4 and `case 0: case 3: default:` = `addiu t7,t6,1; sltiu at,t7,6` dense table, arms in source order
+(#sparse-case-switch 2E290 rule).
 
 ## -O2 frame bottom = dead homes for named scalars; the 12-byte floor covers three (gl_func_000659D0 / 0x659CC list integrator, NM 88.29, 2026-09-09 agent-g) <a name="named-scalar-dead-homes-frame-bottom-659cc"></a>
 
@@ -26205,3 +26264,89 @@ forms additionally CSE `&G` into a temp (`lui/addiu tN` + `sw 0x28(tN)`, 168-170
 globals. Side observation on -O1 argument order: `G.base + 4` (binary op) is evaluated before `&G`; a plain `G.base`
 load after it (`lui a0; lui a1; lw a1; jal; addiu a0`), whereas the target evaluates the plain load first
 (`lui a1; lui a0; addiu a0; jal; lw a1`); `volatile` G gives the target's call-2 order but adds a `lw a2` in call 1.
+
+## Two-arm `{cur,next}` list walker: temp-copy entry + if/else step into a second var = the target's copy / hoisted-zero / `b .+8` shape and the a0/a1/a2 colouring order; residual = ugen t-ring only (game_libs_func_000430D8, 2026-09-09 agent-c) <a name="two-arm-list-walker-temp-copy-colouring-order-430d8"></a>
+
+Target (0x1AC, 107 words, leaf, frame 0x10): hoisted head `lw t6,0x2C(a0); lui t7; lw t7,0x18C(t7)`
+(table base `**(self+0x2C)` -> v0, list head D+0x18C), `sw t7,4(sp)` (it.next = head) in the
+`beqz a1` delay, then two near-identical loops (flag != 0 reads the node Vec3 at +0xF0, else at
++0xE4) that quantise `trunc(v * 120.0f)` into bytes 0x10..0x12 of a 16-byte-stride record. The
+iterator is the memory-homed `{cur,next}` of [3DF5C](#pointer-form-list-iterator-3df5c) but the
+two arms are NOT emitted alike:
+
+```
+arm 1 (flag != 0)                              arm 2 (flag == 0)
+sw t7,0(sp); lw t9,4(t7); sw t9,4(sp)          lw t3,4(sp); or a2,zero,zero; ...; sw t3,0(sp)
+b; lw a0,0(t7) / or a0,zero,zero               lw a2,0(t3)
+beqz a0,END; or a1,a0,zero    <- entry COPY    beqz a2,END
+LOOP: lw t1,0xC4(a1); or a2,zero,zero <- zero  LOOP: lw t6,0xC4(a2); andi; bnezl ..; lw t5,4(sp)
+      hoisted to the loop top                        (body on a2, slot a0)
+      body on a1, slot = addu a0,v0,t3
+      lw t0,4(sp); beqz t0; sw t0,0(sp)              lw t5,4(sp); or a2,zero,zero; beqz t5; ...
+      lw t1,4(t0); sw t1,4(sp)
+      b .+8; lw a2,0(t0)        <- emptied else       b .+8; lw a2,0(t5)
+      bnez a2,LOOP; or a1,a2,zero <- bottom COPY      bnezl a2,LOOP+4; lw t6,0xC4(a2)
+```
+
+| spelling (`-O2 -mips2 -32`, standalone) | result |
+|---|---|
+| doc STEP macro (named `nx`) in both arms, `while (node)` | structure right, arm 1 coalesced (bnezl rotation, no copies), `nx` coloured a0/a1 (an a-reg candidate), frame 8 |
+| 4-word `Iter {cur, next, e1, e2}` | frame 0x10 (a 3-word Iter puts the pair at 4/8) |
+| `slot = base + idx * 16`, `idx * 16 + base`, `&base[idx * 16]`, `(int)base + ...`, `base + (idx << 4)` | `addu a0,tN,v0` (index first) |
+| **`slot = base; slot += idx * 16;`** | **`addu a0,v0,tN`** |
+| `p->cur = p->next; if (p->cur) { p->next = p->cur->next; node = p->cur->data; } else node = 0;` (no named nx) | cursor loads stay in t-regs (t7/t0/t3/t5 like the target); forwarding from the just-stored head still happens in arm 1 (`sw t7,0(sp); lw t9,4(t7)`), arm 2 reloads `lw 4(sp)` |
+| arm 1 entry `obj = (p->cur = p->next, p->cur ? (p->next = p->cur->next, p->cur->data) : 0)`, loop `while (obj) { body(obj); STEP(node); obj = node; }` with the if/else STEP | entry temp a0 + `or a1,a0` copy, `node = 0` hoisted from the else to the loop top, the `b .+8` past the emptied else, bottom `or a1,a2`; colouring slot=a0, obj=a1, node=a2 (both arms) |
+| same but `node = TERNARY; obj = node;` at the entry (node's first occurrence at the entry) | node colours a0 (first occurrence before slot), slot a2 |
+| entry as a statement if/else into obj, or `(p->cur = p->next) != 0 ? ..` without the comma | entry coalesces into obj (no `or a1,a0`) |
+| arm 2 with the same two-var form | worse (the target's arm 2 is the plain single-var rotated loop) |
+
+Rules read off the table: (1) uopt colours unconstrained candidates in FIRST-OCCURRENCE order
+(the [regalloc rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules)), so a
+loop variable whose only early def is the step's `else node = 0` (textually AFTER the body's
+`slot`) colours after `slot`; putting `node = 0` before the body, or defining `node` at the entry,
+moves it ahead. (2) The comma-ternary entry assigned to a DIFFERENT variable than the loop-step
+result keeps the two copies (`or a1,a0` / `or a1,a2`); every single-variable or statement-form
+spelling coalesces into the bnezl rotation. (3) uopt hoists the else-arm constant to the loop top
+only when it does not interfere with the body var -- with one variable it lands just above the
+bottom `beqz` instead.
+
+Residual (banked, 97.66 / 45 words differ by t-register only): the target's ring runs
+t6,t7,[t8],t9,[t0],t1,t2,t3,[t4],t5,[t6],t7,[t8],t9 then t0/t1 for the bottom step -- two ring
+slots burnt before the first body temp that the build never burns (build: t6,t7,t8,t9,t0,t1,..).
+Inert on the ring: declaration order (all 120 permutations), head through a named local (colours
+a2 and burns t7), a CSE'd double read of the global (same), `(int)`-cast / `(char *)g + K` /
+volatile-pointee / `[0x63]` / `Link **hp` head spellings, `short`/`char`/`unsigned` flag types,
+ternary-vs-statement forms in either arm, the head store inside each arm (uopt does NOT hoist it),
+a 2-word Iter + `int pad[2]`, an extra `p->cur = 0` / `p->e1 = 0` store (adds a word).
+
+## 9-case jumptable `switch` in post0b via the 29CCC donor splice; `switch ((unsigned char)x)` burns ONE ugen ring slot; arms in source order (game_libs_func_00044B78 73/73 EXACT, 2026-09-09 agent-c) <a name="uchar-switch-selector-ring-burn-jumptable-donor-44b78"></a>
+
+Target: `lui at; sw a0,0(at); andi t8,a0,0xff` (hoisted head = the flags-word store + selector)
+then `addiu sp,-0x18; sltiu at,t8,9; sw ra; beqz at,DEFAULT; sw a0,0x18(sp); sll t8,2; lui at;
+addu at,t8; lw t8,0x1B3C(at); jr t8`, seven `lui a0; jal; addiu a0,K` arms each followed by
+`b TAIL; lw t0,0x18(sp)`, and a tail `lw t2,0x18(sp); li a0,2; andi t1,t0,0x200; beqz; andi
+t3,t2,0x400; li a0,0x42; beqz t3; li at,-3; and a0,a0,at; jal`.
+
+- **Donor route (post0b's first):** the switch's jumptable goes to the donor's local `.rodata`;
+  `REPLACE_FUNC_BODY := ... game_libs_func_00044B78=$(GAMELIBS_44B78_DONOR)` on the post0b objects
+  renames the reloc to `game_libs_func_00044B78_rodata`, pinned in undefined_syms_auto to the USO
+  RoData table (+0x1B3C; entries from `scripts/extract-uso-jumptable.py --module 0xD9FE28 --shim
+  0x1466C`, whose targets come out +8 from the arm starts with that shim -- read the RoData words
+  directly: they are Text SECTION offsets, `- 0x1466C` = splat). The post0b.c definition is a
+  3-line stub whose bytes never reach the ROM; the donor .c is added to the Makefile `C_FILES`
+  filter-out list so it is not linked. ROM byte-identical; the raw `.text` slice differs from
+  expected/ in exactly the jumptable LO16 word (0 + reloc vs 0x1B3C) -- the reloc-blind exception
+  class; objdiff scores 100.
+- **Selector spelling = ring offset.** `switch (mode & 0xFF)` gives `andi t7` and every later temp
+  one register low; `switch ((unsigned char)mode)` gives the target `andi t8` -- the folded
+  narrowing cast burns exactly one ugen ring slot (the
+  [2A4D0](#folded-ushort-cast-ring-slot-2a4d0) / [2A55C](#subsumed-mask-single-ring-slot-burn-2a55c-2a740-cracked-2026-07-03)
+  class). `(unsigned short)(mode & 0xFF)`, `(mode & 0xFF) & 0xFFFF`, `& 0xFFu`, `unsigned char sel =
+  mode; switch (sel)`, an `unsigned mode` param and `(unsigned char)(mode & 0xFF)` all stay at t7.
+- **Arm layout = case order in the source** (the [309AC](#switch-arm-order-is-test-chain-and-layout-309ac)
+  rule at jumptable size): cases written 1, 3, 5, 8, 2 (with its `if (osTvType == 1)` -- the
+  else arm's `lui a0` is hoisted above the `bne`), 0, default reproduce the target's arm order;
+  the three default-mapped labels (4, 6, 7) need no `case` lines.
+- Call args `(char *)&D_44B78_modes + K` (zero alias of the Data table symbol) bake K into the
+  `addiu a0,a0,K`; the tail is literally `f = 2; if (mode & 0x200) f = 0x42; if (mode & 0x400)
+  f &= ~2;` (the param reloads from its 0x18(sp) home per use, no local copy needed).
