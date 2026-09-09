@@ -52,6 +52,8 @@ def resolve_syms(ours,theirs):
         seen.add(n); res.append(l)
     return res
 for path in sys.argv[1:]:
+    if path.endswith('.o'):
+        print('skip binary (regenerate via the unit route):', path); continue
     lines=open(path).read().splitlines(keepends=True)
     out=[]
     for h in hunks(lines):
