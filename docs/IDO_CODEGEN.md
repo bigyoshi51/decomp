@@ -14181,6 +14181,9 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [IDO -O3 turns an INITIALISED `static float` local (`static float dtor = 3.1415926 / 180.0`) into a .bss object plus an entry-time WRITE-BACK of the rodata literal (`lwc1 f0,%lo(lit)` ... `swc1 f0,%lo(dtor)`); -O2 keeps it as initialised data with no store (guPositionF 6F684 EXACT, 2026-09-09 agent-g)](#o3-static-local-float-initialiser-bss-writeback) -- _A "store of a constant to an anonymous global" in a float-math leaf that otherwise never writes globals = this. The reloc is against the donor's local `.bss` section symbol -> `<func>_bss` rename + pin (same as `<func>_rodata`). Both 7.1 and 5.3 -O3 do it._
 - [`(char *)&D + K` (K > 0x7FFF) plus a scaled index in ONE basic block is reassociated into `D + (K + i*4)` (`lui/addiu D; ori at,K; addu; addu`); a `do { } while (0)` (or a `(int)` cast) around the base assignment keeps `D+K` as one held value with the addend baked in the hi/lo pair (`lui t1,1; addiu t1,-0x2C78; sll t0,v0,2; addu a3,t0,t1`) (game_libs_func_0000B628 36 -> 33/33 EXACT, 2026-09-09 agent-g)](#bb-boundary-blocks-sym-addend-reassociation-b628) -- _The reloc-blind byte gate needs the addend IN the words; a named extern pinned to K gives blank hi/lo fields. Same family as the volatile-pointee held base (2DC74) and the A670 cursor init: uopt only folds `sym+K` with a variable index when both sit in the same BB. Also here: a single-use constant divisor emits the assembler `li at,c; div` macro with NO zero/overflow checks (a twice-used one is CSE'd into a t-reg and gets the checks), and a `%` whose quotient is never read has no `mflo` -- the "inherited $hi/$v0" verdict was that._
 - [An int `2` multiplier (`x * y * 2`, or `(float)2`) keeps `lui at,0x4000; mtc1 $f0` + `mul.s` by the held constant; a float literal `2.0f` is strength-reduced to `add.s f,f,f`. Repeated float products must stay UNNAMED (uopt CSE temps: one takes a register, the rest are spilled) and the struct reads go through a folded POINTER LOCAL -- the pointer candidate flips the FP colouring so the constant gets $f0 first; a second folded pointer local (matrix side) adds 8 dead bytes at the frame top and moves the temp block to sp+0x00 (game_libs_func_00065B40 quaternion->matrix, 69/69 EXACT, 2026-09-09 agent-g)](#int-2-multiplier-keeps-mul-s-two-pointer-locals-65b40) -- _Named products = 9 memory-homed candidates (77 words, `w` spilled); raw `(float *)(s + K)` reads = x in $f0 / 2.0 in $f14 (68 words); one pointer local = right colouring but every temp slot +4. Corollary (gl_func_0000B5AC 35/35): an index expression that must keep its own t-reg triple (`sll 3; addu; sll 2` in t0 -> t1, hi/lo pair in t2) is a NAMED int local; inline `tbl + a1*9` reuses t0 for the sll and puts the pair in t1._
+- [`*p++` old-value cursor at -O2: `q = p; p++; if (1) { *q = c; }` keeps `or v1,v0` + `sb 0(v1)` + `addiu v0,1` WITHOUT evicting the a1 param (game_libs_func_00067D50 memset 10/12, 2026-09-09 agent-g)](#post-increment-old-value-if1-barrier-67d50) -- _Plain `*p++`, `*p = c; p++`, `q = p++`, int-typed p all fold to `sb 0(v0)`; `q = p; p++; *q = c` without the barrier colours q into a1 and moves c to a3 (+1 word). 7.1 -O2 == 5.3 -O2 here; -O1 homes p (frame 8). Residual = the loop-bottom `n--` old-value copy's colour (target a3 before the sb, ours v1 after it) -- 40 spellings inert. Retracts the "IDO -O2 unrolls by 4 / needs a lower-opt split" note on that function._
+- [-O2 frame bottom = dead homes for named scalars: with <= 3 named scalars the leaf frame bottom is 12 bytes, every further named scalar (int, float, pointer, constant-valued or `register` alike) adds a 4-byte home rounded to 8 -- so a target with a 12-byte bottom names at most three (gl_func_000659D0 measurements, 2026-09-09 agent-g)](#named-scalar-dead-homes-frame-bottom-659cc) -- _Loop-carried `pos = node + K` bases and named float temps therefore cost frame even when register-only; the same function shows uopt folding every unnamed `node + K` into `disp(v1)` (plain/int/V3f/volatile-pointee/cast chains), holding it only through if(1)/do-while(0)/phi forms (each +1 home), and NOT scalarizing V3f struct temps (+11 words)._
+- [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -26143,3 +26146,62 @@ offsets before writing the guard. The indexed loop lets uopt build the pointer I
 a separate `sym+0x100` invariant (baked addend, no shared base register); a pointer cursor on the same symbol
 makes the base the candidate and derives the end from it per iteration. `short i` widens the loop (27 diffs).
 Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (6179C row).
+
+## `*p++` old-value cursor at -O2: named cursor + `if (1)` barrier around the store keeps `or v1,v0` / `sb 0(v1)` without evicting the a1 param (game_libs_func_00067D50 memset, 10/12, 2026-09-09 agent-g) <a name="post-increment-old-value-if1-barrier-67d50"></a>
+
+Target (12 words, no frame): `or v1,a2,zero; or v0,a0,zero; beqz a2,END; addiu a2,-1; LOOP: or v1,v0,zero; or a3,a2,zero;
+sb a1,0(v1); addiu v0,v0,1; bnez a2,LOOP; addiu a2,-1; END: jr ra; or v0,a0,zero` = `while (n--) *p++ = c; return s;`
+with BOTH post-op old values kept as dead copies (the `n--` one pre-loop in v1 and in-loop in a3, the `p++` one in v1).
+
+| spelling, IDO 7.1 -O2 (5.3 -O2 identical) | words | shape |
+|---|---|---|
+| `while (n--) *p++ = c;`, `*p = c; p++`, `q = p++; *q = c`, `int p` + cast | 11 (+pad) | old-p folded: `sb a1,0(v0); addiu v0,1`; only the `n--` copy survives |
+| `q = p; p++; *q = c;` (also `register`, K&R, `for(q=p;n--;q=p)`, do-while + pre-test) | 13 | old-p kept but q colours a1: `or a3,a1` evicts c at entry, `sb a3,0(a1)` |
+| **`q = p; p++; if (1) { *q = c; }`** (also `if (0) { q = 0; }` after the store) | **12, 10 exact** | `or v1,v0; sb a1,0(v1); or v1,a2; addiu v0,1` |
+| `i = n` named counters, `while (n) { n--; ... }`, `for (i = n; i != 0; i--)` | 10-30 | no dead copies / unrolled / extra webs |
+| 7.1 or 5.3 -O1, -O1 -g, -O1 -g3, -O0 | 13-20 | p homed (`addiu sp,-8`, lw/sw per use) or unfilled slots |
+
+Residual (2 words): the loop-bottom `n--` old-value copy. In the target it is `or a3,a2,zero` scheduled ABOVE the `sb`
+(q still live in v1, so the temp takes a3 and floats up); ours is `or v1,a2,zero` BELOW the `sb` (q dead, v1 reused).
+Everything that tried to keep q live across the test or to emit the test temp before the store (`if (0) { n = (int)q; }`,
+`t = n` before the store, `volatile` pads, `else { n = 0; }`, `for (;;) { q = p; if (n-- == 0) break; ... }`) either
+CSEs the copy back after the store or changes the loop shape. Not a lower-opt-file case: the old NM note claiming
+"-O2 unrolls by 4, -O1 adds a prologue" was measured against the `do { } while (--n)` decode, not this one.
+
+## -O2 frame bottom = dead homes for named scalars; the 12-byte floor covers three (gl_func_000659D0 / 0x659CC list integrator, NM 88.29, 2026-09-09 agent-g) <a name="named-scalar-dead-homes-frame-bottom-659cc"></a>
+
+Leaf, no calls, 92 bytes of aggregates (it[2] + three 12-byte Vec3 temps + 40 bytes of dead pads), target frame 0x68
+with the lowest aggregate at sp+0xC. Standalone 7.1 -O2 measurements on the same body, only the scalar declarations
+varied (all of them register-allocated, none spilled):
+
+| named scalars | frame bottom below the lowest aggregate |
+|---|---|
+| 1, 2 or 3 (`node` / `+ data` / `+ head`, all load-derived) | 12 bytes (= target) |
+| 4 (`+ char *q = node + K` used once, or `+ int k = 5`, or `+ f32 fa = load`) | 20 |
+| 5 (`+ pos, prev` = node + K) | 20 |
+| 6 (`+ temp_t9` loaded pointer) | 28 |
+| 3 ints + 3 named floats (`dx, dy, dz` = sub results) | 36 |
+
+`register` does not remove the home; the kind of value (load, add, constant, float) does not matter. Consequence for
+the decode: a target whose frame bottom is 12 bytes names at most three scalars, so the held `v0 = node + 0x120` /
+`a1 = node + 0x108` bases and the three FP sub results in that function are UNNAMED there. The same probe set shows
+uopt folding every unnamed `node + K` into `disp(v1)` (plain, int-typed, `V3f *`-typed, volatile-pointee, cast-deref
+chains) and holding it only through an `if (1)` / `do { } while (0)` barrier or a loop-carried phi (`pos = v0 + K`
+before the loop and at its bottom) -- each of which is a named scalar (+ home) and the phi form also emits an
+`or v0,a1,zero`. `V3f p = *pos; V3f q = *prev; d = p - q` is NOT scalarized (memory copies, +11 words). The FP temp
+map itself is right with named `dx, dy, dz` in x,y,z source order (px/qx f4/f6 -> f0, py/qy f8/f10 -> f2, pz/qz
+f16/f18 -> f12: the first-written result takes f0); the target only differs in issuing all six loads first and
+emitting z,y,x. Open: what keeps `node + K` unfolded without a named local (uoptlist dump once ecvt is patched).
+
+## -O1 (ugen) a2-born constant negative: `G.data = C; f(&G, C2, C)` always forwards the stored temp (game_libs_func_00065EE4, 2026-09-09 agent-g) <a name="o1-a2-born-constant-negative-65ee4"></a>
+
+Target block: `lui t6,0xB1FF; lui at; sw t6,0x28(at); lui a2,0xB1FF; ori a2,a2,0x10; lui at; sw a2,0x24(at); ...
+jal f; sw t8,0x2C(at)` -- the G.data constant is born in `$a2` (outside the rolling t6/t7/t8 temp ring) and the store
+uses it. IDO 7.1 -O1 and 5.3 -O1 from every spelling tried (literal third arg, `G.data = C` as the argument, plain
+`int d` / `register int d` / `u32` local, `char *` pointer fields, `register int p2` third parameter, `volatile` G,
+`&((Hdr *)B)->data` address-of-member constants, `*(int *)((char *)&G + K)` chains, `extern char G[]` arrays) emit
+`lui tN; ori tN,0x10; sw tN,0x24(at)` and `addu a2,tN,zero` in the jal slot (149 words vs 146). The array and chain
+forms additionally CSE `&G` into a temp (`lui/addiu tN` + `sw 0x28(tN)`, 168-170 words) -- keep struct-member
+globals. Side observation on -O1 argument order: `G.base + 4` (binary op) is evaluated before `&G`; a plain `G.base`
+load after it (`lui a0; lui a1; lw a1; jal; addiu a0`), whereas the target evaluates the plain load first
+(`lui a1; lui a0; addiu a0; jal; lw a1`); `volatile` G gives the target's call-2 order but adds a `lw a2` in call 1.
