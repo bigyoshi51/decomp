@@ -11520,12 +11520,73 @@ next symbol. Tell: the symbol's own words start at +4, the `.s` size is 0x10 for
    `nm` differs only by the two renames, reloc count unchanged (2). Install, rebuild.
 
 **Same class, not yet landed (all "leading-nop cap" notes in the tree):**
-- game_libs_func_00069F50 = 1 zero word + VI_CURRENT_REG reader at 0x69F54
-  (post1b, mid-file, note says "blocked on unit relayout"): suffix the predecessor.
-- 6D94C (`nop; nop; mfc0 v0,$9` osGetCount) / 6E20C (`nop; nop; jr ra; sqrt.s`) /
-  6C9D4 / 74860: the heads are pads; the bodies are handwritten libultra `.s`
-  (CP0 / sqrtf / cache ops) so they stay INCLUDE_ASM, but the boundary is still wrong
-  and any C neighbour that lands before them needs the suffix, not a sidecar.
+- ~~game_libs_func_00069F50~~ **LANDED 2026-09-09 (agent-g) as game_libs_func_00069F54
+  = osViGetCurrentLine (io/vigetline.c), EXACT 3/3.** Oracle: section 0x7E5C0
+  (= 0x69F54) exported sym 1548, two R_MIPS_26; 0x7E5BC / 0x7E5CC (the leading AND
+  trailing zero words of the old 0x14 `.s`) not exported. Both pads went on as
+  `SUFFIX_BYTES_FORCE` -- `gl_func_00069E04=0x00000000` (osSendMesg, 0x14C,
+  donor-spliced: fine) and `game_libs_func_00069F54=0x00000000` -- appended to the
+  existing post1b line (`gl_func_00067370=...`). Baseline route for post1b is the
+  C-build `cp` (unit `.text` byte-identical to the tracked expected, `nm` differs only
+  by the rename, 462 relocs unchanged). The "blocked on unit relayout / mid-file
+  C-for-INCLUDE never reproduces the block layout" note was wrong for this shape:
+  a C body whose size equals the `.s` minus the pads, plus the pads as suffixes,
+  is layout-neutral.
+- 6D94C (`nop; nop; mfc0 v0,$9` osGetCount, entry 0x6D954 = section 0x81FC0) /
+  6E20C (`nop; nop; jr ra; sqrt.s f0,f12` = libreultra gu/sqrtf.s, entry 0x6E214 =
+  section 0x82880) / 74860 (osWritebackDCacheAll cache loop, entry 0x74864): the
+  heads are pads; the bodies are handwritten libultra `.s` (CP0 / sqrtf / cache ops)
+  so they stay INCLUDE_ASM, but the boundary is still wrong and any C neighbour that
+  lands before them needs the suffix, not a sidecar. **Probed 2026-09-09 (agent-g):
+  IDO 7.1 -O2 has NO sqrt intrinsic** -- `sqrtf(x)`, `(float)sqrt(x)` and
+  `__builtin_sqrtf(x)` all emit a frame + `jal` (the `jr ra; sqrt.s` shape is the
+  assembler's reorder fill of the handwritten LEAF), so 6E214 is not C-landable.
+  6C9D4 (`mtc0 a0,$12; nop; jr ra; nop` = __osSetSR) was mis-filed here: its
+  section offset 0x81040 is 16-aligned and it has NO leading pad -- nothing to fix.
+  Their current predecessors (6D894 INCLUDE_ASM, 6E1A4 donor-spliced + its own
+  `_pad.s`, 74854 suffix) already leave the layout right; revisit only when a C
+  neighbour lands directly before one of them.
+- ~~game_libs_func_00070850~~ **LANDED 2026-09-09 (agent-g) as game_libs_func_00070854
+  = guMtxF2L (gu/mtxutil.c verbatim), EXACT 64/64, IDO 5.3 -O2 carve-out donor
+  `game_libs_ido53_70854.c` + `SUFFIX_BYTES_FORCE gl_func_000707E8=0x00000000`
+  (guOrtho's pad).** Oracle: 0x84EC0 (= 0x70854) sym 1998; 0x84EBC not exported. The
+  2026-08-22 "64/64-word divergent from libreultra guMtxF2L at every opt level --
+  stays NM" note (in the 70954 donor header) was an off-by-one comparison against
+  the padded `.s`: **when a leading-zero `.s` is compared to a library candidate,
+  align the candidate to the FIRST NON-ZERO word, not to the symbol.** Gotcha: a
+  `GAMELIBS_*_DONOR :=` variable must be defined ABOVE the unit's `REPLACE_FUNC_BODY
+  :=` line (immediate expansion; an empty donor dies with "replace-function-body.py:
+  the following arguments are required: donor"). Baseline for post1c = strip +
+  `EXPECTED_BASELINE=1 REPLACE_FUNC_BODY=` (tracked expected has 0 relocs).
+- **2026-09-09 full sweep of every game_libs `.s` that starts with a zero word (33
+  files), oracle on the first non-zero word** (`scripts/uso-sym-oracle.py`, section
+  = splat + 0x1466C): 29 have the first non-zero word 16-aligned and NOT the zero =
+  inter-object pads (the whole class). Verdicts beyond the two landed above:
+  handwritten bodies that stay INCLUDE_ASM -- 6A0A4 (`mfc0 t4,$12`, 0xA4),
+  6A5F4 (`lui k0` exception vector, 0x774), 6B054 / 6F2D4 (bcopy twins), 6C404 /
+  6F254 (bzero twins), 6D954 (osGetCount), 6E214 (sqrtf), 70AC4 (`mfc0 t0,$12`),
+  71374 (`cfc1 v0,$31`), 73264 (`mfc0 t0,$10` TLB), 74864 (cache loop); **6C714 = `__ull_rshift`
+  LANDED 2026-09-09 (agent-g), EXACT 11/11** (`sw a0..a3; ld t7/t6; dsrlv;
+  dsll32/dsra32; jr; dsra32`, sym 2590): `unsigned long long f(u64 a, u64 b) { return
+  a >> b; }` in the -O2 -mips3 donor `game_libs_mips3_6C740.c`, spliced over a
+  placeholder in post1b2c, `SUFFIX_BYTES_FORCE gl_func_0006C484=0x00000000`. This was
+  the 6C710 "mod8=4 sidecar failure" case of `#feedback-leading-nop-symbol-misplaced-on-pad`:
+  with NO sidecar the placeholder sits at 0x6C710 (right after the GLOBAL_ASM block)
+  and the pad injection shifts it to 0x6C714. **Baseline route for post1b2c = strip +
+  `EXPECTED_BASELINE=1` with donors ACTIVE** (reloc-blind identical to the tracked
+  expected: 19 words, all at `objdump -r` offsets; defined symbols differ only by the
+  rename). `REPLACE_FUNC_BODY=` blanked is WRONG here -- it drops gl_func_0006F3E4's
+  donor and shortens the unit by 0x13C (F3E4 "lost"). Which route a unit needs is
+  whatever reproduces the tracked expected's `.text` reloc-blind; check both.
+  C-landable with the suffix shape but not yet done -- **69CC4** (sym 345, 2 refs: `lui at; sdc1 f4,%lo(D+0x2268)(at); cvt.d.s f0,f12`
+  then the "gl_func_00069CD0" `addiu sp,-0x18` -- a hoisted-head-above-prologue
+  double-FP function whose 3 pad words 69CB8..69CC0 close gl_func_00069C94), 6FBE4
+  (sym 2637, the 18%-NM global-init body; pads 6FBD8..6FBE0), 70324 (memmove, 0x304,
+  syms 2378/2642), 67FE4 (FP compare leaf, NOT exported -> local; pads 67FD8..67FE0).
+  Agent-c's units (post/post0b/game_libs.c) hold 2D374, 35E64, 4DD14, 5FDC4 (landed
+  there), 61044, 226E0, 295C4, 5AFB4, 1F6B4. Four `gl_func_*` `.s` (4D0B4, 55B44,
+  60584, 68C14) have the ZERO word itself exported and the `addiu sp` at +4 -- a
+  different phenomenon (a real leading nop at the entry), not this class.
 - Rule of thumb for the libultra tail [0x71864..0x75288]: symbol start with
   `(ROM - 0xDD0A6C) & 0xF == 4` and a leading zero word = mis-split pad. Check the
   oracle before writing "hazard idiom".
