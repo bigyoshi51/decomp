@@ -14167,6 +14167,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
 - [EMPTY-CONDITIONAL keep-alives (`if (x) {}`) pin evaluation order but FLIP the whole function's held-base colour a2 -> v1 (and neighbouring candidates); `if (0) {...}` does not. o32 `mtc1 aN,$f12/$f14` above `addiu sp` = int-reg -> FP move of float PARAMS, not an ABI cap (game_libs 2D374 NM 96.69 / 5C808 EXACT, 2026-09-06 agent-c)](#empty-conditional-keepalive-flips-base-colour-2d374) -- _Tell: with the hacks the FP block's schedule matches but every `lui a2; addiu a2` base reads v1 and c/half swap; without them the int colouring is exact but a single-use `fr = (f32)raw` is forward-substituted and its cvt+bgez fixup sinks to the store. Stores to distinct symbols stay in SOURCE order (no LIFO across symbols). `d = A; d -= B;` gives load-into-dest `sub.s $f0,$f0,$f16`._
 - [Absolute-constant address casts (`*(int*)0x3B8FC`) CSE into one `lui;ori` register; the target's per-access `lui at,%hi; sb %lo(at)` chain means a SYMBOL (base-0 USO data + offset) -- per-site aliases may carry a NONZERO absolute (`gl_ref_0003B8F4 = 0x0003B8F4`); store + address-value on one symbol does NOT CSE, two stores on one symbol DO (held base + LIFO store order) (gl_func_00034A78 63->91%, 2026-09-05 agent-g)](#constant-address-cast-vs-symbol-form-per-access-lui-at-34a78) -- _Tell: build 3 words SHORT with `lui 3; ori 0xb8fc` reused vs target `lui at,4` before every store. Fix = extern per address. Open residual: target puts an adjacent same-hi byte pair `li 13; li 2; sb F7(at); sb F6(at)` under ONE `lui at`; every same-symbol C form (array/struct/volatile/TU-defined/static/short-cast) gives the LIFO pair but materializes `lui v0; addiu v0`; IDO never splits an even-offset short (pack(1) even = `sh`, odd = `sb;srl;sb`)._
+- [A dense 0/1/2 `switch` lowers to a compare chain in CASE-LABEL order (0 first) but lays the ARMS out in SOURCE order; an if/else chain re-tests on the copied param and lays arms out in test order (game_libs_func_000309AC EXACT 29/29, 2026-09-09 agent-c)](#switch-arm-order-is-test-chain-and-layout-309ac) -- _Target `beqz a0 -> LAST arm; li at,1; beq a0,at; li at,2; bnel a0,at,CALL` with `a1 = 0` in the likely delay and arms laid out 70/30/0 = `switch (sel) { case 2: p = 70; case 1: p = 30; case 0: default: p = 0; }`. Source-order cases (0,1,2) give three plain `beq` + three `b`, +1 word; `p = 0; switch` with two cases gives `beql`; an if/else chain gives `bnez`/`bnel a3,at` on the a3 copy. The `or a3,a0` copy + jal-delay spill to the a0 home needs no do-while lever at this size._
 - [Integer `mult` takes the RIGHT source operand in rs and allocates the right operand's temps FIRST: `(h - a0 - 1) * w` = `lw t6,w; lh t7,h; subu t8; addiu t9; mult t6,t9`, `w * (h - a0 - 1)` = `lh t6,h; subu t7; addiu t8; lw t9,w; mult t8,t9` (game_libs_func_0002CF60 EXACT 45/45, 2026-09-09 agent-c)](#mult-operand-order-head-temp-ring-2cf60) -- _A head/prologue product whose only residual is the t6..t9 numbering + `mult rs,rt` swap: swap the C operands, no local needed (a named `k = ...` local renumbers the whole ring and homes k). Complements the deeper-tree rs note under the FIFO temp-queue entry: the rs pick is source-RIGHT, not tree depth, when neither operand is a plain register._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -25650,6 +25651,45 @@ the coalescing in place; an extra emitted base ref (a second recompute of `REG +
 the if-arm) DID flip the base to a3 but then sh took s1 -- the base/sh priorities are within one
 ref of each other.
 
+
+## Dense 0/1/2 `switch`: compare chain in case-label order, arms in source order; the `bnel` default arm and the `beqz`-to-last-arm both come from the arm order, not from if/else (game_libs_func_000309AC EXACT 29/29, 2026-09-09 agent-c) <a name="switch-arm-order-is-test-chain-and-layout-309ac"></a>
+
+Target (hoisted head merged, 29 words, frame 0x18, only `ra` saved):
+```
+lui t6; lw t6,0x10(t6)              cur (hoisted above addiu sp)
+addiu sp,-0x18; sw ra,0x14
+beq a0,t6,END; or a3,a0,zero        sel == cur -> return; a3 = copy of sel for the post-call store
+beqz a0,L0;    li a2,30             third call arg hoisted into the delay
+li at,1; beq a0,at,L1
+li at,2; bnel a0,at,CALL; or a1,zero,zero     default (likely delay = the default arm)
+b CALL; li a1,70                    case 2
+L1: b CALL; li a1,30                case 1
+L0: or a1,zero,zero                 case 0 (falls into CALL)
+CALL: lui a0; addiu a0; jal; sw a3,0x18(sp)   spill the copy to the a0 home in the jal delay
+lw a3,0x18(sp); lui at; sw a3,0x10(at)
+```
+
+| spelling (`-O2 -mips2 -32`) | chain | words |
+|---|---|---|
+| `if (sel == 0) p = 0; else if (sel == 1) p = 30; else if (sel == 2) p = 70; else p = 0;` | `bnez a0` first, then `bnel a3,at` / `bne a3,at` on the COPY, arms in source order 0/30/70 | 31 |
+| `switch` cases in source order 0,1,2,default | `beqz a0; beq; beq`, three plain `b`, arms laid out 70/0/0/30 (2, default, 0, 1) | 30 |
+| `switch` cases 1,2 then 0/default | `beqz` to the last arm but a `nop`-filled `beq` | 31 |
+| `default` first, then 1, 2 | no `beqz` at all (`beq a0,at` 1 / 2, default falls through) | 27 (-2) |
+| `p = 0; switch (sel) { case 1: case 2: }` | `beql a0,at` with `li a1,70` in the likely delay | 29, 14 diffs |
+| **`switch (sel) { case 2: p = 70; break; case 1: p = 30; break; case 0: default: p = 0; break; }`** | **exact** | **29** |
+
+Rules read off the table: (1) uopt tests dense integer cases in ascending LABEL order (0, 1, 2) whatever the
+source order, using the ORIGINAL param register for every compare (the `or a3,a0` copy is the post-call web,
+never the compare operand); (2) the arm layout DOES depend on the source order, but not as a plain copy of it
+(ascending 0/1/2 came out 2, default, 0, 1) -- when the target lays the arms out descending (70, 30, 0) spell the
+cases descending, and merge `case 0:` into `default:` when the target has ONE zero arm; (3) the arm that shares a
+label with `default` becomes the fall-through block at the end, and the last compare in the chain turns into
+`bnel` with that arm's store in the likely delay. A separate `case 0:` arm next to `default` duplicates the zero
+arm (+1 word). An if/else chain cannot reproduce (1): after the first test IDO re-tests
+on the copy. The copy + spill-to-home shape (`or a3,a0` in the first branch delay, `sw a3,0x18(sp)` in the
+jal delay, `lw a3` reload) is what the plain source gives at this size; the four-`do { } while (0)`
+Chow-span lever of [24E28](#chow-span-dowhile0-param-spill-to-home-24e28) is only needed when a longer
+body promotes the web to s0.
 
 ## Integer `mult` operand order = source RIGHT operand in rs, right operand's temps allocated first (game_libs_func_0002CF60 EXACT, 2026-09-09) <a name="mult-operand-order-head-temp-ring-2cf60"></a>
 
