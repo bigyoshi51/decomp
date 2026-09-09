@@ -257,6 +257,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Last equality test before an unconditional `b end` folds into `bnel`; split it into inverted-skip + `goto` to force the plain `beq` + `b end`](#feedback-ido-split-last-eq-test-to-suppress-bnel) — _In a goto-chain of equality tests (`if (v==2) goto A; if (v==1) goto B; if (v==3) goto B; return;`), IDO folds the FINAL `if (v==3) goto B; return;` into a branch-likely: `bnel v0,at,end; lw ra (delay); b B` instead of the target's plain `beq v0,at,B; nop; b end; lw ra (delay)`. **Lever: write the last test as an explicit inverted skip-branch plus an unconditional goto** — `if (v != 3) goto end; goto B; end: return;` — splitting the equality+fallthrough so the optimizer can't fold the epilogue `lw ra` into a likely. Cracked mgrproc_uso_func_000014F4 2026-06-20 (40/40, prior "as1-scheduler branch-likely cap" where goto-chain/switch/if-else-if all reproduced the bnel). Do-while-break and `v==1||v==3` short-circuit forms drop a word (worse); the inverted-skip+goto is the one that lands._
 - [Used incoming arg ALSO dead-spilled to its outgoing-shadow (`sw aN,off(sp)` in the jal delay) — CRACK with `int *p = &aN; ...(*p)`](#feedback-ido-used-arg-dead-home) — _A function that passes param `aN` to its first call can have a dead `sw aN,off(sp)` (to aN's shadow slot) in that jal's delay slot; plain -O2 C puts a `nop` → 1 insn short (~94-96%). **CRACK: take the parameter's address** — `int *p = &aN; ... use *p` forces the home. (permuter-found 2026-05-24, gl_func_0006A5B0 96→100.) `(void)aN;` is DCE'd when aN is used (unused-args only); `-g` adds a frame. Use do-while (not while) for if+spin-loops. RE-GRIND any single-`sw aN`-residual NM-wrap with `&param` (incl. the prologue-less variant game_libs_func_0002BA08)._
 - [Param-direct `idx = call(0, idx)` colours the web into s0 (frame +8) -- inflate its Chow span with a few `do { } while (0)` blocks around later statements and it drops to a caller-saved reg (a3) with the call-crossing spill to the param's own home (`sw v0,0x18(sp)`, frame 0x18); also inlined temps stay scratch (t8/t2) where named locals take arg regs, and `(T (*)[N])base + i` gives `addu src,base,i<<k` base-first (game_libs_func_00024E28 head/prologue/tail exact, 2026-09-06 agent-c)](#chow-span-dowhile0-param-spill-to-home-24e28) — _`if (0) { int *p = &idx; }` / `&idx` make the param MEMORY-resident instead (entry `sw a0,home` + arg reloads) -- that is a different shape. Open: the then-arm store of an `if (ctl == 3) rec->w14 = 0` always folds to `sw zero,0x1590(block)` (bnel + tail-dup) instead of the target's in-place `addiu v1,v1,0x157C` before the branch._
+- [A loop's PROMOTED constant web (`li t3,20` at the loop's dominator) ABSORBS every same-constant multiply in the function -- an outside-the-loop `x * 20` then emits `multu x,t3` instead of IDO's in-place `sll t7,x,2; addu t7,t7,x; sll t7,t7,2` expansion; every spelling that folds to 20 shares (casts, (x*5)*4, 20*x, int[][5] / Row* IXA, a pointer local), `(x*5)<<2` / `&D[x*5]` give the in-place *5 but a FRESH sll for the *4; a DIFFERENT loop constant (24) restores the chain. Also: IDO homes EVERY declared local one frame word top-down in declaration order (spv's slot = its declaration rank; six locals = frame 0x58), and `while (1) { if (n <= 0) break; ... continue; }` is the top-tested plain-`b` loop where `while ((n = load) > 0)` rotates (game_libs_func_000258C0 77.6 -> 95.69 NM, 2026-09-09 agent-c)](#loop-promoted-constant-web-absorbs-outside-mul-258c0) -- _Tell: target has `li tN,K` above a shift-chain multiply by the same K and a `multu` in the loop below. Open: which source shape keeps the two K's apart (the target does it); and the held-base colour t0 vs a3 when a call-arg web (sh) can coalesce into a3 first._
 - [`volatile float *tbl = (volatile float *)((char *)&D + 0x1C1D8)` pins `&D+K` as a HELD BASE with the addend baked in the `addiu` (`lui v0,2; addiu v0,-0x3E28; lwc1 0/4/8/C(v0)`); a plain pointer folds each read to its own `lui at; lwc1 %lo(D+K+4i)(at)`, per-use `&D+K+4i` picks base `D+(K&~0x7FFF)`, and a named nonzero extern gives the right words with BLANK HI16/LO16 fields (game_libs_func_0002DC74 52.2 -> 33/33 EXACT, 2026-09-06 agent-c)](#volatile-pointee-held-base-inline-addend-2dc74) — _Reloc-blind byte_verify needs the addend in the word; uopt only materialises the exact `sym+K` VALUE when the accesses cannot be folded (volatile pointee, call arg, struct-by-value source). Same function: `mfc1 a1,$f0` = float arg after an int to an `(int, float)`-prototyped blank callee; `if (a < -16) f = tbl[3]` last = `beqzl` with the mfc1 in its delay._
 - [Dead `sw a0,home` + IN-PLACE `andi a0,a0,0xFF` before a call: `&param` lever, NOT an `unsigned char` param (game_libs_func_0002DDEC 14/14, 2026-09-06 agent-c)](#dead-home-plus-inplace-andi-param-lever-vs-uchar-2ddec) — _Both spellings produce the dead home, but `unsigned char a0` extends EAGERLY into a fresh arg reg (`andi a2,a0,0xff` + `or a0,a2,zero`, +1 insn) while `int a0; int *p = &a0; f(a0 & 0xFF, 0); (void)p;` masks in place (`andi a0,a0,0xff`) and keeps the 1.0f-store `lui at` between the home and the andi. Diagnostic: the andi writes the SAME register it reads. The old "dual-entry / caller pre-sets $f4, do NOT merge" verdict on 2DDF4 was this one missing word._
 - [FP candidate colouring is per BASIC BLOCK: a dead candidate's register is never reused inside the same block -- reproduce the target's f0/f2/f12/f14 reuse with `do { } while (0)` boundaries; plain `float k = 200.0f` (not `register`) keeps a shared $f18 constant; homed scalars are laid out BELOW the arrays (game_libs_func_00035E64 NM 80.6 -> 99.4, strict word diff 75/90, 2026-09-06 agent-c)](#fp-colouring-per-block-dowhile0-boundary-35e64) — _Micro-test: `w` in f0 then `c = q[4]` gets f2 (t2) but f0 again once a `do{}while(0)` sits between them (t3). A candidate spanning two blocks (lerp) is coloured after the block-local ones (ox/oy/oz f0/f2/f12, lerp f14). `register float k` is constant-propagated (two `lui/mtc1`), a plain local is kept as the last-coloured candidate $f18 for both `c.lt.s` and `sub.s`. Frame: arrays top-down in declaration order; multi-def/const-def scalars get homes BELOW the arrays just above struct-copy temporaries (an unused `float pad[2]` keeps its 8 bytes). Two direct reads of a global (`if (G == 0) return; f(G, ...)`) = one CSE temp homed in the lowest slot (`sw t6,0x20(sp)` in the beqz delay) -- a named local colours v0 instead._
@@ -25594,3 +25595,48 @@ the store. Everything else is temp renumbering downstream (the target also skips
 t7/t9 in the prologue). The switch jumptable `lw t2,0xF50(at)` %lo is the USO rodata
 offset: in-unit compiles cannot bake it -- once the .text is word-exact, wire the
 2E290/6DD14 REPLACE_FUNC_BODY donor with `gl_func_00026D64_rodata = 0x00000F50`.
+
+## A loop's promoted constant web absorbs every same-constant multiply in the function (multu instead of the in-place shift chain); locals are homed top-down in declaration order; `while (1) { if (n <= 0) break; }` = top-tested plain-b loop (game_libs_func_000258C0, 2026-09-09 agent-c) <a name="loop-promoted-constant-web-absorbs-outside-mul-258c0"></a>
+
+Context: merging the 3-word head game_libs_func_000258C0 under gl_func_000258CC (77.6 -> 95.69
+NM, 4cf38d81d on agent-c). Target shape: first section `lw v1,80(sp); srl v1,v1,0x18; sll
+t7,v1,2; addu t7,t7,v1; sll t7,t7,2; addu v0,a3,t7` (IDO's in-place expansion of `x * 20`),
+and further down a drain loop with `addiu t3,zero,20` promoted to the loop's dominator block
+(top of the same first-section block!) and `multu v1,t3; mflo` inside the loop.
+
+**Finding 1 -- constant-web absorption.** Once uopt promotes the loop's constant 20 into a
+register web, EVERY multiply-by-20 the web's blocks reach is rewritten to use the register,
+including the first-section `spv * 20` that sits above the `li` in the same block -- the build
+emits `multu v1,t3` there instead of the shift chain. Spellings tried for the first-section
+multiply that ALL fold to the shared constant: `x*20`, `20*x`, `(unsigned)x*20`, `x*20u`,
+`(char)/(short)/(unsigned char) x * 20`, `(x*5)*4`, `x*4*5`, `(x*10)*2`, `&((int*)D)[x*5]`,
+`((int(*)[5])D)[x]`, `extern int D[][5]; D[x]`, a `Row5 *g = (Row5 *)&D` local, and the same
+set on the LOOP side (`v1 * (unsigned char)20` etc.). Spellings that break the fold give the
+in-place `*5` (`sll t7,x,2; addu t7,t7,x`) but a FRESH temp for the `*4`: `(x*5)<<2`,
+`&D_arr[x*5]` (int-array IXA), `((x<<2)+x)*4`. A different loop constant (24, test only) restores
+the exact first-section chain -- so the target's source keeps the two 20s apart by a mechanism
+not yet found (different u-code constant identity; NOT type casts, NOT IXA-vs-MUL). The shipped
+NM body spells the loop multiply `(v1 * 5) << 2` (li t3,5 + one extra sll in the loop) because
+that scores better than the shared-constant form.
+
+**Finding 2 -- frame homing order.** At -O2 IDO reserves ONE frame word per declared scalar
+local, allocated top-down in declaration order above the saved regs (here 0x40..0x57 for six
+locals, frame 0x58; seven locals -> 0x60). An address-taken local's slot therefore equals its
+declaration rank: `int spv;` first -> 0x54, `int v1; int spv;` -> 0x50 (the target). Dropping a
+local (inlining `cnt2`) shrank the frame but moved the `srl/addiu` out of the beq delay, so the
+lever is ORDER, not count.
+
+**Finding 3 -- loop shape.** `while ((v1 = *(REG+0x1034)) > 0) { ... continue; }` rotates
+into a bottom `bgtz` with an entry `blezl`; `while (1) { v1 = load; if (v1 <= 0) break; ...
+continue; }` keeps the target's top test (`lw v1; blez v1,exit`) with plain `b` back-edges from
+each `continue`. The bnezl from the config block jumps straight to the loop header with the
+preheader's single `li t1,1` duplicated into its delay slot (as1), so the loop has two entry
+edges and the constant webs materialise at the dominator block, not a preheader.
+
+**Open (the 95.69 residual):** the held base colours t0 because the call-arg web `sh` (`sll
+t0,a0,4; srl t0,t0,0x1e` in the target) coalesces straight into a3; the target colours the
+base a3 FIRST and copies `or a3,t0,zero` before the jal. do-while(0) spans around key/cnt2/
+call/d, if-arm swap, `unsigned key`, `key += sh` split, and the IXA spellings above all leave
+the coalescing in place; an extra emitted base ref (a second recompute of `REG + spv*20` in
+the if-arm) DID flip the base to a3 but then sh took s1 -- the base/sh priorities are within one
+ref of each other.
