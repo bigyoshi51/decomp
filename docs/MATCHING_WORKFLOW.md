@@ -73,6 +73,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [USO orphan "alias entry" oracle: the module's Sym EXPORT table (offsets = splat offset - 4) says which word is the real entry; arcproc F48 exported / F50 not => hoisted head; baseline gotcha: `make EXPECTED_BASELINE=1` still runs REPLACE_FUNC_BODY -- pass `REPLACE_FUNC_BODY=`](#uso-sym-export-oracle-orphan-sweep-arcproc-f48) — _2026-09-05 agent-g orphan sweep: all 7 "alias/alt entry" 2-word lui heads (arcproc 0F48, gl 1818/6BA74/51654/4E57C/3FB64/20A20) have ZERO jal/reloc/undefined_syms references -- none is an entry. arcproc F48 landed BYTE-EXACT as `gl_func_00000000(a0, *(int*)((char*)&D_00000000+0x170) + 0x26000F)` (import-base field load hoisted above addiu sp at 7.1 -O2); its "F50" body retired. Per-candidate ledger + the Kyoto-USO header parse recipe inside._
 - [game_libs "fake-param exact" sweep (agent-c 2026-09-05): 41 no-`jr ra` orphans oracled at once -- 38 are exported heads (only 1D4B0/23494/307A8 have no export), NO successor is exported; 67AC4 (0.0f head) and 2DEF4 (a0*8+a1+0x1A head) landed BYTE-EXACT with the fake-param 67AC8 / 2DF00 stubs retired; 31D70->31D78 and 5FDC0->5FDCC landed BYTE-EXACT the same day (all 4 fake-param exacts retired); 2026-09-06: 5C808->5C810 BYTE-EXACT on the first compile (the "o32 int-a0 + float-$f12 cap" was the mtc1 arg-move head), 5BCCC->5BCD4 BYTE-EXACT, 2DDEC->2DDF4 BYTE-EXACT (the "dual-entry, dead a0 home" verdict was the &param lever), 35E5C->35E6C merged as 35E64 (FP colouring is per basic block: do-while(0) boundaries) and 2D36C->2D37C merged as 2D374 NM 96.69 (26 NM-wrap successors remain the vein); a 1-word pad before a merged head goes on the matched predecessor as all-zero SUFFIX_BYTES_FORCE + NM-clip re-probe; oracle takes SECTION offsets (ROM - 0xDD0A6C) for game_libs; game_libs_post baseline = strip + EXPECTED_BASELINE=1 with the 29CCC donor ACTIVE](#game-libs-fake-param-exact-sweep-agent-c) -- _Full 41-row oracle table inside; every "alias/alt-entry/caller-set" head in game_libs is the successor's hoisted first statement._
 - [Orphan "alt-entry" sweep, wave 2 (agent-c 2026-09-05): 6/6 candidates were hoisted heads; TWENTY-FIFTH mis-split case = h2hproc 049C (EXACT) + timproc 10D4 / trkproc 1088 (EXACT), 11D0 / 1920 (1.0f-head NM merges), game_libs 67AC4 exported; Kyoto USO section walker corrected ([type,size,flag], Yay0 flag 0x1001, Sym=[tag,value,hash]); an uninitialized `register float` faking a hoisted constant is a fake cap; timproc tracked baselines need the metadata-only symtab merge](#orphan-sweep-agent-c-25th-h2hproc-timproc) -- _Tools now in the 1080 repo: `scripts/uso-sym-oracle.py <rom> <inner_hdr> <off>...` and `scripts/elf-symtab-merge-orphan.py`. The "timproc" ROM range is TWO modules (timproc.uso @0x5AF114 = b1, trkproc.uso @0x5B3DE2 = b3); game_libs is bootup.uso's Text section (inner header 0xD9FE28, data 0xDD0A6C)._
+- [TWENTY-SIXTH mis-split case: a "LEADING-nop hardware-hazard idiom" CAP on a libultra leaf is the 16-byte INTER-OBJECT PAD of the previous .o -- the module Sym export table puts the entry at +4; land as C + all-zero `SUFFIX_BYTES_FORCE` on the PREDECESSOR (game_libs 74840/74850 -> 74844 `__osSpSetStatus` + 74854 `__osSpGetStatus` EXACT, agent-g 2026-09-09)](#leading-nop-cap-is-inter-object-pad-sym-oracle-74844) -- _`nop; lui t6,0xA404; jr ra; sw a0,0x10(t6)` sat 3 months as "IDO can't emit a bare nop". Section offset of the `lui` (0x88EB0) is 16-aligned AND exported (3 jal refs); the nop word is not. Every separately-compiled libultra .o in the game_libs tail is 16-aligned, so a lone zero word before a leaf = the previous object's pad. Do NOT add a 1-word `_pad_pre` GLOBAL_ASM sidecar (emits 8 bytes, shifts the unit +4): attach it as `SUFFIX_BYTES_FORCE := <pred>=0x00000000` (+ the `NON_MATCHING_` mirror). Same class: 69F50 (VI_CURRENT reader), 6D94C/6E20C/74860 heads. Ledger + refresh recipe inside._
 - [Hoisted-head orphan whose "alias entry" is the WORD BEFORE every caller's jal target: the orphan is the function's own `n` copy, the callers' address is a mid-function alt-entry — merge, pin the caller address in undefined_syms_auto.txt, retire the post-hoist unit](#hoisted-head-orphan-callers-jal-post-hoist-word-66ec) — _kernel func_800066EC (1 word, `or a3,a2,zero`) sat since 2026-05 as a "1-insn alias entry, not reproducible from C"; kernel_048.c reproduced only func_800066F0 (the post-hoist 12 words) via a fake 4th arg `ctr` + `char pad[4]`. Merged 0x34 = `while (n--) *dst++ = *src++;` at -O1, 13/13 in BOTH IDO 7.1 and 5.3 (so the hoist is not 5.3-only). Tell: zero `jal` to the orphan symbol, every caller jal's the word after it. 2026-09-05, agent-g._
 - [split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`](#feedback-split-fragments-clobbers-prior-merge) — _When the bundle you split has a successor that was previously merged via `merge-fragments` (e.g. `game_libs_func_0003AA5C` had absorbed `0003AC50` via fca252b8, growing size 0x1F4 → 0x200), recursive split-fragments can re-split it back, leaving size 0x1F4 + a separate 0xC stub for AC50. Combined with TRUNCATE_TEXT this breaks objdiff with "Symbol data out of bounds: 0xN..0xM". Diagnostic: `objdiff-cli report generate` fails immediately after a split commit. Fix: revert the split commit, run `make expected` to refresh expected/.o. Before recursing split-fragments, run `git log -3 -- <successor>.s` for each newly-split-off — if a `Merge fragment` commit appears, stop._
 - [split-fragments.py over-splits a single function that has an internal early-return `jr ra` — re-split ONCE, don't recurse blindly](#feedback-split-fragments-over-splits-on-internal-early-return) — _split-fragments.py boundaries on every `jr ra` (03E00008). A function with an early-return (e.g. `bnel`/`beq` to a shared epilogue with a mid-body `jr ra`) has 2+ `jr ra` and gets wrongly cut. Diagnostic: after a recursive split, disassemble the split-off piece — if a branch in the PREDECESSOR (`bnel`/`bne`/`beq`) targets an address INSIDE the split-off piece, or both share a trailing `jr ra` epilogue, they are ONE function. Fix: `git checkout -- <bundle>.s src/.../*.c`, `rm` the wrongly-split `.s` files, then run split-fragments.py ONCE per real boundary (don't recurse past a piece whose predecessor branches into it). Verified 2026-05-17: titproc_uso_func_000015F4 bundle — naive recurse made 15F4/16B8/16E8 (jr=3), but 16B8's `bnel 0x16BC→0x16EC` jumps into "16E8" → correct is 15F4(0xC4)+16B8(0x60, jr=2 internal early-return)._
@@ -11458,3 +11459,73 @@ a0/s0 split by itself (clamp on a0, rest on s0, identical words) -- drop the loc
   (`scripts/elf-symtab-merge-orphan.py <in.o> <out.o> <dead,dead.NON_MATCHING> <head=size>`)
   and verify `.text` + `objdump -r` identical before installing. objdiff then scores the
   merged symbol at its new size (10D4/1088 -> 100.0).
+
+## TWENTY-SIXTH mis-split case: the "leading-nop hardware-hazard idiom" cap is the previous libultra .o's 16-byte inter-object pad; Sym export oracle + all-zero `SUFFIX_BYTES_FORCE` on the predecessor (game_libs 74844/74854 EXACT, agent-g 2026-09-09) <a name="leading-nop-cap-is-inter-object-pad-sym-oracle-74844"></a>
+
+**Symptom.** A 4-word libultra accessor whose `.s` reads `nop; lui t6,0xA404; jr ra;
+sw a0,0x10(t6)` (game_libs_func_00074840) / `nop; lui; jr ra; lw v0,0x10` (74850),
+wrapped since 2026-06 as a permanent CAP: "the LEADING NOP is a hardware-access hazard
+idiom; IDO has no inline asm to inject a bare nop". Plain C emits the 3 real words
+exactly -- the cap was entirely about the extra leading word.
+
+**Oracle.** `scripts/uso-sym-oracle.py baserom.z64 0xD9FE28 <sec>` with
+`sec = ROM - 0xDD0A6C` (game_libs = bootup.uso Text):
+
+| splat | section | export? | refs |
+|---|---|---|---|
+| 0x74840 (nop) | 0x88EAC | no | -- |
+| **0x74844 (`lui`)** | **0x88EB0** | **sym 2521** | 3 x R_MIPS_26 |
+| 0x74850 (nop) | 0x88EBC | no | -- |
+| **0x74854 (`lui`)** | **0x88EC0** | **sym 2630** | 1 x R_MIPS_26 |
+| 0x74860 (nop) | 0x88ECC | no | -- |
+| 0x74864 (`lui t0,0x8000` cache loop) | 0x88ED0 | sym 1311 | 2 x R_MIPS_26 |
+
+Every real entry sits on a 16-byte SECTION boundary: the libultra tail of game_libs is a
+run of separately compiled one-function `.o`s (spsetstat.c, spgetstat.c, ...) and the
+USO linker aligned each object's `.text` to 16. The "leading nop" is the tail pad of the
+PREVIOUS object (`__osPiRawWriteIo` 747F4 is 0x4C long -> section 0x88EAC, padded to
+0x88EB0). generate-uso-asm cut at the previous `jr ra`+delay and glued the pad onto the
+next symbol. Tell: the symbol's own words start at +4, the `.s` size is 0x10 for a
+3-insn body, and `(ROM - 0xDD0A6C) & 0xF == 4` for the symbol start.
+
+**Landing shape (this unit is an asm-processor INCLUDE_ASM/C mix, mid-file).**
+1. New `.s` for the true entry (`game_libs_func_00074844.s`, 0xC, the 3 words) as
+   episode provenance; `git rm` the old 0x10 `.s`.
+2. C at the true entry name:
+   `void game_libs_func_00074844(unsigned int data) { *(volatile unsigned int *)0xA4040010 = data; }`
+   `unsigned int game_libs_func_00074854(void) { return *(volatile unsigned int *)0xA4040010; }`
+   (libreultra spsetstat.c / spgetstat.c verbatim; 7.1 -O2 fills the jr delay: 3/3.)
+3. The pad word: **NOT** a `_pad_pre_74844.s` GLOBAL_ASM sidecar. I tried it first --
+   asm-processor's dummy for a 1-word `.text` block is 8 bytes, so both symbols landed
+   +4 (0x11B4/0x11C8 instead of 0x11B0/0x11C0) with the unit still TRUNCATE-clipped at
+   0x1210 (`#one-word-pad-legal-shapes`). The legal shape is the all-zero suffix on the
+   PREDECESSOR symbol (policy: all-zero padding SUFFIX is a genuine alignment mechanism):
+   ```
+   build/src/game_libs/game_libs_post2b_d.c.o: SUFFIX_BYTES_FORCE := gl_func_000747F4=0x00000000 game_libs_func_00074844=0x00000000
+   build/non_matching/src/game_libs/game_libs_post2b_d.c.o: NON_MATCHING_SUFFIX_BYTES_FORCE := gl_func_000747F4=0x00000000 game_libs_func_00074844=0x00000000
+   ```
+   The recipe runs REPLACE_FUNC_BODY before SUFFIX_BYTES_FORCE, so a suffix on a
+   donor-spliced predecessor (747F4) is fine. The 74860 block keeps its own leading nop
+   (it is 74854's pad, and 74864 is handwritten osWritebackDCacheAll -- INCLUDE_ASM).
+   `rm` both objects before gating (Makefile-only change does not dirty them).
+4. `.text` of the rebuilt unit vs tracked `expected/`: identical except 11 words, all
+   at `objdump -r` offsets (reloc-blind identical). Symbols 0x11B0/0x11C0/0x11CC as
+   in expected.
+5. **Baseline refresh** (needed: the tracked expected still names 74840/74850, so
+   report.json shows the new symbols as absent and 747F4 drops to 94.7 until the
+   expected also carries the suffix): `strip_decomp_in_file` on the one unit, then
+   `make RUN_CC_CHECK=0 EXPECTED_BASELINE=1 REPLACE_FUNC_BODY= build/src/game_libs/game_libs_post2b_d.c.o`
+   (`REPLACE_FUNC_BODY=` is mandatory, see `#uso-sym-export-oracle-orphan-sweep-arcproc-f48`),
+   restore the source, `objcopy --only-section=.text` old vs new = **byte-identical**,
+   `nm` differs only by the two renames, reloc count unchanged (2). Install, rebuild.
+
+**Same class, not yet landed (all "leading-nop cap" notes in the tree):**
+- game_libs_func_00069F50 = 1 zero word + VI_CURRENT_REG reader at 0x69F54
+  (post1b, mid-file, note says "blocked on unit relayout"): suffix the predecessor.
+- 6D94C (`nop; nop; mfc0 v0,$9` osGetCount) / 6E20C (`nop; nop; jr ra; sqrt.s`) /
+  6C9D4 / 74860: the heads are pads; the bodies are handwritten libultra `.s`
+  (CP0 / sqrtf / cache ops) so they stay INCLUDE_ASM, but the boundary is still wrong
+  and any C neighbour that lands before them needs the suffix, not a sidecar.
+- Rule of thumb for the libultra tail [0x71864..0x75288]: symbol start with
+  `(ROM - 0xDD0A6C) & 0xF == 4` and a leading zero word = mis-split pad. Check the
+  oracle before writing "hazard idiom".
