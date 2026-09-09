@@ -2,8 +2,9 @@
 # §2 gate (docs/HANDOFF_NEW_MACHINE.md §2) on the landing worktree. Env: LAND_WT (default projects/1080-agent-d), LAND_SCRATCH (log dir).
 #: make + cmp, non_matching_objects, refresh-report, exact-set diff vs origin/main, sentinels. Never pushes.
 set -uo pipefail
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="/home/danjs/code/decomp/tools/build-venv/bin:$PATH"
-WT="${LAND_WT:-$(git rev-parse --show-toplevel)/projects/1080-agent-d}"
+WT="${LAND_WT:-$SELF_DIR/../projects/1080-agent-d}"
 LOG="${LAND_SCRATCH:-${TMPDIR:-/tmp}}/gate-landing"
 cd "$WT" || exit 1
 echo "== HEAD: $(git log --oneline -1)"

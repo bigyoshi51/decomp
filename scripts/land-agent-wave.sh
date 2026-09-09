@@ -8,7 +8,7 @@
 set -uo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="/home/danjs/code/decomp/tools/build-venv/bin:$PATH"
-WT="${LAND_WT:-$(git rev-parse --show-toplevel)/projects/1080-agent-d}"
+WT="${LAND_WT:-$SELF_DIR/../projects/1080-agent-d}"
 S="${LAND_SCRATCH:-${TMPDIR:-/tmp}}"
 cd "$WT" || exit 1
 if [ "${NO_RESET:-0}" != 1 ]; then
