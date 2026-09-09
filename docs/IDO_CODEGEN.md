@@ -14172,11 +14172,14 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Stack-arg (5th) load register t1 = uopt candidate colour with t0 occupied; de-named = ugen ring t7, named = colour t0; ~60 spellings inert (game_libs_func_0004247C NM 22/23, 2026-09-09 agent-c)](#stack-arg-candidate-t0-vs-t1-4247c) -- _Negative result + what it rules out: prototype/varargs, dead-if keep-alives, decl/assign order, folded casts / masks on the lh operand, uchar/ushort callee returns, struct-typed globals, K&R fnptr, extra dead args. The ring is t6,t7,t8,(t9 skipped after a jalr),t0,t1,... and a subsumed mask on an lhu DOES shift the post-call pop by one (lh has no identity mask). Open: what zero-emission LR holds t0 in the target._
 - [DL-packet append macro: FUNCTION-scope g/i/p colour ONE way for every packet in a BB (v1/a1/a2); BLOCK-scope temps with `i` loaded BEFORE `g` recolour a later packet (v0/v1/a0 exact for the if-arm packet); do{}while(0) around packets regresses (game_libs_func_0004CDB0 NM 78/83, 2026-09-09 agent-c)](#packet-macro-scope-colouring-4cdb0) -- _Per-packet colours in one straight-line BB mean distinct variables per packet, not one macro var set; the CSE'd `obj->0xC` temp is coloured before a fresh `i` in the same block whatever the statement order (packet 3 residual)._
 - [Held-base scalar global (`lui a1; addiu a1,0; lw v1,0(a1)` hoisted head, `sw t6,0(a1)` tail): compare the global INLINE in the head and read the named local ONCE after the if (uopt PRE reloads on the call path only; a named `n` with two defs colours n=v0/&count=v1), and store `count = n + 1` BEFORE the table stores with the second index re-reading the global (`table[n + 1]` folds to `4(base)` and drops the held base) (game_libs_func_00061728 EXACT 29/29, 2026-09-09 agent-c)](#held-base-scalar-inline-head-compare-61728) -- _Tell: `addiu t6,v1,1` is the FIRST ring temp and the count store is the last `sw` off the same base register the head loaded through. `extern int`, `int[1]`, struct member and static-def spellings all give the held base once the structure is right; the callee of the guard is a blank import (a baked in-TU jal breaks the 0C000000 word)._
+- [Hoisted record-index head (`li t0,K; multu a1,t0; lui v0; addiu v0`): an `int` param narrowed with `(short)` at BOTH call sites is the homed-int-param `sw/lh` narrowing PLUS a temp spilled across the first call (`sw a2,0x18` in the jal delay); `(u16field & 0xFFFF)` re-phases the post-call ugen ring; `Rec *e` named at function scope + `int k` named INSIDE the if-block colours base=v0/e=v1/k=a3 with the sll/sra (game_libs_func_0001D4B0 NM 99.90, 41/41 body words, frame 0x30 vs 0x28, 2026-09-09 agent-c)](#hoisted-record-index-head-int-param-short-cast-spill-1d4b0) -- _A `short` param re-narrows from its home (`lh a2,0x32(sp)`) and never spills; any int-typed spelling of `k` (`int k` at top, `(short)(x+0)`, `(int)`, `|0`) colours k=v0 FIRST -- only the block-scoped name after `e` puts it after base/e. Residual = ONE extra named-local home (target: one home + a phantom temploc); 1-/2-name spellings all spawn phantom templocs or flip k._
+- [Break-on-first-zero table walk = plain `beqz`+nop onto the post-loop block (an `if` guard gives `beqzl` + the dup'd increment); INDEXED `for (i = 0; i < 64; i++)` keeps `&tbl[64]` as its own held s-reg with the +0x100 addend BAKED (pointer cursor on the same symbol = per-iteration `addiu t9,base,256`; a distinct end alias splits the addend or grows an entry guard) (game_libs_func_0006179C EXACT 34/34, 2026-09-09 agent-c)](#break-on-zero-indexed-walk-baked-end-pointer-6179c) -- _Decode gotcha: recount the `beqz` target -- landing PAST the loop's bottom `bnel` means `break`, not "skip the call". The hoisted `lui v0; addiu v0; lw t6,0(v0)` orphan is a `--global < 0` countdown whose load+store fuse into the held v0._
 - [An UNREFERENCED `float scratch[16]` local is KEPT by IDO 7.1 -O2 (64-byte frame gap, no emission) -- the frame-0x90-vs-0x50 residual of a call-heavy FP leaf; and a sin/cos pair whose sin result survives the cos call in $f22 needs BOTH results NAMED and the consumer stores written AFTER the second call (game_libs_func_0005D304 EXACT 68/68, 2026-09-09 agent-c)](#unreferenced-float-array-frame-filler-f22-trig-pair-5d304) -- _Tell: every sp offset short by the same constant with the body otherwise exact = a dead local the original kept (plain, `volatile`, or 16 dead named floats all fit); `q[0] = s` BEFORE the cos call forwards $f0 into the store and drops the $f22 save. Same-base zero stores follow source order; divides before the out init put the divisor load in the hoisted head._
 - [Splitting a loop's promoted constant web from same-value constants outside the loop: carry the loop value in an `unsigned neg = 0xFFFFFFFF` local declared at the top (a DIFFERENT u-code constant; inline 0xFFFFFFFF/~0u/-1LL/(short) casts are cfe-folded to the same short -1, `(char)-1` is 0xFF); indexed `base + i*K + off` with NO cursor local makes uopt build the IV itself (`or v0,t0`) and keep `base` (a0) for the in-loop count reload; a plain `for` is rotated with the guard load folded to the absolute address (game_libs_func_00023494 EXACT 42/42, 2026-09-09 agent-c)](#loop-constant-web-split-unsigned-carrier-indexed-iv-23494) -- _Answers the 258C0 "which source shape keeps the two K's apart" question for the constant-store case: the identity survives only through a local of a wider/unsigned type. Also: a load AND a store on one `&D` symbol fuse into a held base -- per-site aliases for stores too._
 - [gbi `_SHIFTL` constants are NOT reassociated around the shifted term: `0x01000000 | (x << 16) | 0x40` emits `or t8,t7,at; ori t9,t8,0x40`, the folded `0x01000040 | (x << 16)` emits one `lui/ori at` (game_libs_func_0004B2F4 NM 90.36, 2026-09-09 agent-c)](#gbi-shiftl-constants-not-reassociated-4b2f4) -- _Spell G_MTX/G_TEXRECT-style command words in the gbi macro order (cmd<<24 | param<<16 | size) and let IDO evaluate left to right; a pre-folded constant changes the temp ring. Companion residual: a single-use global read held across one call is memory-homed at definition here where the target colours it a2 + jal-delay spill._
 - [IDO -O3 turns an INITIALISED `static float` local (`static float dtor = 3.1415926 / 180.0`) into a .bss object plus an entry-time WRITE-BACK of the rodata literal (`lwc1 f0,%lo(lit)` ... `swc1 f0,%lo(dtor)`); -O2 keeps it as initialised data with no store (guPositionF 6F684 EXACT, 2026-09-09 agent-g)](#o3-static-local-float-initialiser-bss-writeback) -- _A "store of a constant to an anonymous global" in a float-math leaf that otherwise never writes globals = this. The reloc is against the donor's local `.bss` section symbol -> `<func>_bss` rename + pin (same as `<func>_rodata`). Both 7.1 and 5.3 -O3 do it._
 - [`(char *)&D + K` (K > 0x7FFF) plus a scaled index in ONE basic block is reassociated into `D + (K + i*4)` (`lui/addiu D; ori at,K; addu; addu`); a `do { } while (0)` (or a `(int)` cast) around the base assignment keeps `D+K` as one held value with the addend baked in the hi/lo pair (`lui t1,1; addiu t1,-0x2C78; sll t0,v0,2; addu a3,t0,t1`) (game_libs_func_0000B628 36 -> 33/33 EXACT, 2026-09-09 agent-g)](#bb-boundary-blocks-sym-addend-reassociation-b628) -- _The reloc-blind byte gate needs the addend IN the words; a named extern pinned to K gives blank hi/lo fields. Same family as the volatile-pointee held base (2DC74) and the A670 cursor init: uopt only folds `sym+K` with a variable index when both sit in the same BB. Also here: a single-use constant divisor emits the assembler `li at,c; div` macro with NO zero/overflow checks (a twice-used one is CSE'd into a t-reg and gets the checks), and a `%` whose quotient is never read has no `mflo` -- the "inherited $hi/$v0" verdict was that._
+- [An int `2` multiplier (`x * y * 2`, or `(float)2`) keeps `lui at,0x4000; mtc1 $f0` + `mul.s` by the held constant; a float literal `2.0f` is strength-reduced to `add.s f,f,f`. Repeated float products must stay UNNAMED (uopt CSE temps: one takes a register, the rest are spilled) and the struct reads go through a folded POINTER LOCAL -- the pointer candidate flips the FP colouring so the constant gets $f0 first; a second folded pointer local (matrix side) adds 8 dead bytes at the frame top and moves the temp block to sp+0x00 (game_libs_func_00065B40 quaternion->matrix, 69/69 EXACT, 2026-09-09 agent-g)](#int-2-multiplier-keeps-mul-s-two-pointer-locals-65b40) -- _Named products = 9 memory-homed candidates (77 words, `w` spilled); raw `(float *)(s + K)` reads = x in $f0 / 2.0 in $f14 (68 words); one pointer local = right colouring but every temp slot +4. Corollary (gl_func_0000B5AC 35/35): an index expression that must keep its own t-reg triple (`sll 3; addu; sll 2` in t0 -> t1, hi/lo pair in t2) is a NAMED int local; inline `tbl + a1*9` reuses t0 for the sll and puts the pair in t1._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -25963,3 +25966,148 @@ $v0 from the previous function's tail" caps (gl_func_0000B5AC / B638):**
   though `a1 * 3` is already in v0: multiplies by constants are expanded in the code generator
   after CSE, so `n * 16` (uses v0, `sll 4` only) and `a1 * 48` are different source; the
   target's re-expansion means the source indexed a stride-48 record array by `a1`, not `n`.
+
+## An int `2` multiplier keeps `mul.s` by a held 2.0; unnamed products are CSE temps; a folded pointer local flips the FP colouring, a second one pads the frame (game_libs_func_00065B40 quaternion -> matrix, 69/69 EXACT, 2026-09-09 agent-g) <a name="int-2-multiplier-keeps-mul-s-two-pointer-locals-65b40"></a>
+
+**Target shape.** `lwc1 x,y; lui at,0x4000; mtc1 $f0; mul.s x*y; lwc1 w,z` (the 7-word exported
+"head", sym 2411, two jal refs) then 62 words of `mul.s a,b; mul.s t,a,$f0; swc1 t,N(sp)` / `sub.s`
+/ `add.s` / `swc1 N(a0)` with x/y/z/w held in $f2/$f12/$f14/$f16, the constant 2.0 in $f0, one
+product (2xy) in $f18 and eight products spilled to sp+0x00..0x24 (frame 0x30). Splat had cut it
+after the head and the body sat 3 months as a "caller-set $f0..$f16 convention" cap. The Sym
+oracle settles that class in one call: the head offset is exported, the body offset is not.
+
+**Four independent knobs, each observed in isolation (standalone `cc -O2` probes):**
+
+1. **`* 2` vs `* 2.0f`.** `p[1]*p[2]*2.0f` (and `2.0f*a*b`, `a*(b*2.0f)`, a `float two = 2.0f`
+   local, a `/ 0.5f`) all become `mul.s; add.s f,f,f` -- uopt strength-reduces a float-literal
+   multiply by 2. `p[1]*p[2]*2` (int constant, implicit conversion) and `(p[1]*p[2])*(float)2`
+   keep `lui at,0x4000; mtc1 $f10; mul.s; mul.s` -- the converted constant is a plain operand.
+   A global `float two` reads through `lui/lwc1` (wrong: the target materialises the immediate).
+   `2.0` (double) inserts `cvt.d.s/add.d/cvt.s.d`.
+2. **Products unnamed.** Nine `float xy = x*y*2;`-style locals = nine register candidates with
+   equal weight: uopt colours six of them and memory-homes the rest INCLUDING one input (`w`
+   store+reload at the top, frame 0x58, 72-77 words). Writing the products inline in every
+   formula (`m[0] = x*y*2 - w*z*2; ... m[4] = x*y*2 + w*z*2;`) makes them uopt CSE temps: the
+   first (2xy) gets $f18, the other eight are spilled around their two uses, and `1.0f - x*x*2`
+   is itself a CSE temp (spilled at sp+0xC, reused for row 2). 10 slots, frame 0x30.
+3. **Inputs through a folded pointer local.** `float x = F(0xF4)` locals, raw `*(float *)(s +
+   0xF4)` reads, a typed parameter `s->x`, `register` locals and `struct { ... } *q` declared
+   then assigned all give the same 68-word body with x in $f0 and 2.0 in $f14. Only a pointer
+   local `Quat *q = (Quat *)(s + 0xF4);` (folded away -- the loads are still `244(a0)`) gives
+   the target order 2.0=$f0, x=$f2, y=$f12, z=$f14, w=$f16 and the head's load order x, y,
+   2.0, w, z. The pointer candidate is in the colouring set even though it is folded; it
+   shifts the priority ranking so the 9-use constant is coloured first.
+4. **Frame padding from a second folded pointer local.** With `q` alone the temps sit at
+   sp+0x04..0x28 (16 diff words: every slot +4). Adding `float *m = (float *)(s + 0x3B0);` for
+   the stores (also folded -- stores stay `944(a0)`) puts the two dead 4-byte homes at the
+   frame top and the temp block at sp+0x00..0x24. Frame 0x30 either way; the difference is
+   only where the dead homes land. (`m` alone, without `q`, materialises `addiu v0,a0,944`
+   and reloads the inputs: 90 words.)
+
+```c
+typedef struct { float x, y, z, w; } Quat65B40;
+void game_libs_func_00065B40(char *s) {
+    Quat65B40 *q = (Quat65B40 *)(s + 0xF4);
+    float *m = (float *)(s + 0x3B0);
+    m[0] = q->x * q->y * 2 - q->w * q->z * 2;
+    m[1] = 1.0f - q->x * q->x * 2 - q->z * q->z * 2;
+    m[2] = q->y * q->z * 2 + q->w * q->x * 2;
+    m[6] = q->x * q->z * 2 + q->w * q->y * 2;   /* row 2 before row 1: target store order */
+    m[7] = q->y * q->z * 2 - q->w * q->x * 2;
+    m[8] = 1.0f - q->x * q->x * 2 - q->y * q->y * 2;
+    m[3] = 1.0f - q->y * q->y * 2 - q->z * q->z * 2;
+    m[4] = q->x * q->y * 2 + q->w * q->z * 2;
+    m[5] = q->x * q->z * 2 - q->w * q->y * 2;
+}
+```
+
+Store order follows the source (rows 0, 2, 1 in the target); natural row order costs 16 words.
+Baseline for post1b = `cp build/src/game_libs/game_libs_post1b.c.o expected/...` after the
+byte-identical gate (the `.text` was already identical; only the merged symbol changed).
+
+**Corollary, integer side (gl_func_0000B5AC 35/35, same day).** The twin of B628 (see the
+entry above): same body, table `D + 0xD268` (`lui 1; addiu 0xD268` is the sign carry, NOT
+0x1D268) and an `a1 * 9` int index. Inline `tbl + a1 * 9`, `(char *)tbl + a1 * 36` and
+`row[a1]` on a stride-36 struct all emit `sll t0,t8,3; addu t0,t0,t8; sll t0,t0,2; lui t1;
+addiu t1; addu a3,t0,t1` (8 diff words); a NAMED `int k = a1 * 9;` keeps t0 alive across the
+`sll`, which then takes t1 and pushes the hi/lo pair to t2 -- the target's triple. Same rule
+as the float case read backwards: name the value whose register must survive, leave unnamed
+the ones that must be recomputed or spilled.
+
+
+## Hoisted record-index head: int param + `(short)` cast at both call sites = homed narrowing AND a spilled temp; u16 `& 0xFFFF` phantom re-phases the ring; block-scoped `int k` after a named `e` colours k=a3 (game_libs_func_0001D4B0 NM 99.90 / 41 body words, 2026-09-09 agent-c) <a name="hoisted-record-index-head-int-param-short-cast-spill-1d4b0"></a>
+
+Target (glyph DL emit, 41 words, frame 0x28, only `ra` saved; the 4-word orphan `addiu t0,zero,0x158;
+multu a1,t0; lui v0; addiu v0,v0,0` was the hoisted `&rec[a1]` head of the old gl_func_0001D4C0):
+```
+addiu sp,-0x28; sw a2,0x30(sp); li at,1; sw ra; lh a2,0x32(sp)        a2 narrowed via its home
+mflo t6; addu v1,v0,t6; lb a3,0x1D(v1); multu a3,t0                     e=v1, k=a3 (base v0)
+sll a1,a3,16; sra a1,a1,16; mflo t7; addu t8,v0,t7; lbu t9,0x1C(t8)     (short)k -> a1
+bnel t9,at,EXIT; lw ra                                                  flag == 1 gate
+sw v1,0x20(sp); jal reserve; sw a2,0x18(sp)                             e AND the a2 temp spilled
+lw v1,0x20; lw a2,0x18; lui at,0xC34; lhu t2,0x20(v1); lui t4,0xC80; ori t4,0x3E0
+or t3,t2,at; sw t3,0(v0); sw t4,4(v0); addiu a0,v0,8; jal submit; lb a1,0x1D(v1)
+or a0,v0,zero; EXIT: lw ra; addiu sp; or v0,a0,zero; jr ra; nop
+```
+Both jals are section-baked words (`0x0C00C592`/`0x0C00C5C6` = text 0x31648/0x31718 = the in-TU
+gl_func_0001CFDC/0001D0AC, TextReloc sym 3): spell them as the absolute `gl_ref_00031648` /
+`gl_ref_00031718` (undefined_syms_auto.txt, the 25C54 class), NOT the in-TU names.
+
+| spelling (`-O2 -mips2 -32`) | result |
+|---|---|
+| `short a2` param | `sw a2,home; lh a2,home+2` at entry BUT the post-call value re-narrows from the home (`lh a2,0x32(sp)`), never `sw a2,0x18` |
+| `int a2` + `(short)a2` at BOTH call sites | entry `sw/lh` identical AND the CSE'd conversion temp is spilled across the first call (`sw a2,0x18(sp)` in the jal delay, `lw` after) = target |
+| `int s = a2` / `short s = a2` / K&R / `register` / prototyped-short callees / `(int)a2` | all coalesce back to the home re-narrow |
+| `p[0] = e->w20 \| 0x0C340000` | post-call ring `lhu t1; or t2; lui/ori t3` and the const store scheduled first |
+| `p[0] = (e->w20 & 0xFFFF) \| 0x0C340000` | zero-emission phantom alloc: ring `lhu t2; or t3; lui/ori t4`, stores in source order = target |
+| `int k = TAB[a1].k` at top (any int-typed k: `(short)(x + 0)`, `(short)(int)x`, `x \| 0`, `register`) | k colours FIRST: k=v0, base=a3 (7 diff words) |
+| k as a CSE temp with the cast folded (`(short)TAB[a1].k`) | base=v0, k=a3 but `or a1,a3,zero` -- no sll/sra |
+| `Rec *e = &TAB[a1];` at function scope + `int *p; int k = e->k;` INSIDE the if | base=v0, e=v1, k=a3 with the sll/sra, spills a2 0x18 / e 0x20, ring exact: **body 41/41**, frame 0x30 |
+
+Why: (1) IDO narrows a homed `int` param to `short` THROUGH the home slot (`sw`+`lh`), and because the
+result is an expression temp (not the variable) it is spilled like any temp; a `short` param IS the
+variable and rematerialises from its home. (2) uopt colours constrained LRs by priority, then the rest in
+first-occurrence order (regalloc-algorithm entry); a `k` with an sll/sra use outranks the base and grabs v0
+unless its LR is created AFTER base and e -- a block-scoped named local inside the if does that, an
+int-typed temp does not. (3) `&tab[a1]` (address-of) emits the idx-first `addu`, `tab[k].flag` (deref)
+base-first: spell the head cursor as a struct-array index, not pointer arithmetic.
+
+Residual (NOT closed): the target frame is 0x28 = a2 temploc 0x18, phantom 0x1C, e 0x20, ONE named home
+0x24; this shape needs three names (e, p, k) = two extra homes (0x28/0x2C). Probed and rejected: k+p sharing
+one `int`, `a1 = e->k` param-web (head: e/base recoloured; body: second `lb`), a0 as the cursor, nested
+inner-scope overlay, `register` on any/all, `while(0)`/`if(0)` base boosts (a top-level while(0) turns the
+a2 narrowing into in-register sll/sra), decl-order permutations -- every 1-/2-name spelling either flips k
+to v0 or spawns phantom templocs (frame still 0x30, spills at 0x1C/0x24). Ledger:
+MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (1D4B0 row).
+
+
+## Break-on-first-zero table walk: `beqz`+nop, indexed `for` with the end pointer's addend baked (game_libs_func_0006179C EXACT 34/34, 2026-09-09 agent-c) <a name="break-on-zero-indexed-walk-baked-end-pointer-6179c"></a>
+
+Target (run-once teardown, 34 words, frame 0x28, s0-s2 + ra saved; the 3-word orphan `lui v0; addiu v0,0;
+lw t6,0(v0)` is the exported head sym119):
+```
+addiu t7,t6,-1; ...; bgez t7,EXIT; sw t7,0(v0)                 if (--count < 0)  (held v0 base)
+lui s0; lui s2; lui s1,2; addiu s1,0x1ED0; addiu s2,s2,0x100; addiu s0,s0,0
+LOOP: lw a1,0(s0); beqz a1,AFTER; nop; jal blank; or a0,s1,zero   zero entry -> AFTER (break)
+addiu s0,s0,4; bnel s0,s2,LOOP; lw a1,0(s0)
+AFTER: lui a0,2; jal blank; addiu a0,a0,0x1ED8; EXIT: restore; jr ra
+```
+`s2 = sym+0x100` is ONE hi/lo pair with the addend baked; the TextReloc has HI16/LO16 sym2344 at both
+`lui s0`/`addiu s0` and `lui s2`/`addiu s2` (same symbol, different addends).
+
+| spelling (`-O2 -mips2 -32`) | result |
+|---|---|
+| `for (p = tbl; p != &tbl[64]; p++) if (*p) f(arg, *p);` | 34 words but base held in s1, `or s0,s1,zero` cursor copy, end recomputed `addiu t9,s1,256` each iteration, `beqzl` + dup'd `addiu s0,s0,4` |
+| end as a DISTINCT alias symbol (`(int *)(D_c + 0x100)` or `&D_c.end` struct member), for/while/do | entry guard `beq t9,s2` (for/while) and/or `addiu t9,s2,256` per iteration -- uopt splits the addend off the alias too |
+| same symbol + named `int *end = &tbl[64];` | end held in an s-reg with the addend baked, but end colours s1 / arg s2 (first-occurrence) |
+| INDEXED `for (i = 0; i < 64; i++) if (tbl[i]) f(arg, tbl[i]);` (also do/while, while, unsigned i, `else {}`) | s0 cursor / s1 arg / s2 end all exact; only `beqzl a1` + dup'd increment vs the target's `beqz` + nop (2 words) |
+| **`for (i = 0; i < 64; i++) { if (tbl[i] == 0) break; f(arg, tbl[i]); }`** (or the do/while twin) | **34/34** |
+| `for (i = 0; i < 64 && tbl[i] != 0; i++)` | 42 words (the && test is duplicated into the guard) |
+
+Why: the target's `beqz` lands on `lui a0,2` = the block AFTER the bottom `bnel`, i.e. the loop exits on the
+first zero handle -- a `break`, not an if-guard around the call (whose skip block would be the increment, which
+IDO then dup's into a `beqzl` delay). The head decode had read the branch target off by one block; recount
+offsets before writing the guard. The indexed loop lets uopt build the pointer IV itself and keep `&tbl[64]` as
+a separate `sym+0x100` invariant (baked addend, no shared base register); a pointer cursor on the same symbol
+makes the base the candidate and derives the end from it per iteration. `short i` widens the loop (27 diffs).
+Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (6179C row).
