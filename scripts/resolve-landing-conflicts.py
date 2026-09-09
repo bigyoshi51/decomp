@@ -40,6 +40,18 @@ def resolve_makefile(ours,theirs):
         otoks=oh.split(); ttoks=th.split()
         add=[x for x in ttoks if x not in otoks]
         return [' '.join(otoks+add)+',$(shell'+osh]
+    # same target-specific variable line on both sides (REPLACE_FUNC_BODY, SUFFIX, clip...):
+    # merge tokens instead of stacking two assignments; clip lines take ours (re-probed later)
+    def key(l):
+        m=re.match(r'^(.*?:\s*[A-Z_]+\s*[:+]?=)', l)
+        return m.group(1) if m else None
+    if len(ours)==len(theirs) and ours and all(key(a) and key(a)==key(b) for a,b in zip(ours,theirs)):
+        res=[]
+        for a,b in zip(ours,theirs):
+            if 'CLIP_KEEP_ALIGN' in a: res.append(a); continue
+            k=key(a); at=a[len(k):].split(); bt=b[len(k):].split()
+            res.append(k+' '+' '.join(at+[t for t in bt if t not in at])+'\n')
+        return res
     return ours+theirs
 def resolve_syms(ours,theirs):
     seen=set(re.match(r'\s*(\S+)\s*=',l).group(1) for l in ours if '=' in l)
