@@ -73,7 +73,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [USO orphan "alias entry" oracle: the module's Sym EXPORT table (offsets = splat offset - 4) says which word is the real entry; arcproc F48 exported / F50 not => hoisted head; baseline gotcha: `make EXPECTED_BASELINE=1` still runs REPLACE_FUNC_BODY -- pass `REPLACE_FUNC_BODY=`](#uso-sym-export-oracle-orphan-sweep-arcproc-f48) — _2026-09-05 agent-g orphan sweep: all 7 "alias/alt entry" 2-word lui heads (arcproc 0F48, gl 1818/6BA74/51654/4E57C/3FB64/20A20) have ZERO jal/reloc/undefined_syms references -- none is an entry. arcproc F48 landed BYTE-EXACT as `gl_func_00000000(a0, *(int*)((char*)&D_00000000+0x170) + 0x26000F)` (import-base field load hoisted above addiu sp at 7.1 -O2); its "F50" body retired. Per-candidate ledger + the Kyoto-USO header parse recipe inside._
 - [game_libs "fake-param exact" sweep (agent-c 2026-09-05): 41 no-`jr ra` orphans oracled at once -- 38 are exported heads (only 1D4B0/23494/307A8 have no export), NO successor is exported; 67AC4 (0.0f head) and 2DEF4 (a0*8+a1+0x1A head) landed BYTE-EXACT with the fake-param 67AC8 / 2DF00 stubs retired; 31D70->31D78 and 5FDC0->5FDCC landed BYTE-EXACT the same day (all 4 fake-param exacts retired); 2026-09-06: 5C808->5C810 BYTE-EXACT on the first compile (the "o32 int-a0 + float-$f12 cap" was the mtc1 arg-move head), 5BCCC->5BCD4 BYTE-EXACT, 2DDEC->2DDF4 BYTE-EXACT (the "dual-entry, dead a0 home" verdict was the &param lever), 35E5C->35E6C merged as 35E64 (FP colouring is per basic block: do-while(0) boundaries) and 2D36C->2D37C merged as 2D374 NM 96.69 (26 NM-wrap successors remain the vein); a 1-word pad before a merged head goes on the matched predecessor as all-zero SUFFIX_BYTES_FORCE + NM-clip re-probe; oracle takes SECTION offsets (ROM - 0xDD0A6C) for game_libs; game_libs_post baseline = strip + EXPECTED_BASELINE=1 with the 29CCC donor ACTIVE](#game-libs-fake-param-exact-sweep-agent-c) -- _Full 41-row oracle table inside; every "alias/alt-entry/caller-set" head in game_libs is the successor's hoisted first statement._
 - [Orphan "alt-entry" sweep, wave 2 (agent-c 2026-09-05): 6/6 candidates were hoisted heads; TWENTY-FIFTH mis-split case = h2hproc 049C (EXACT) + timproc 10D4 / trkproc 1088 (EXACT), 11D0 / 1920 (1.0f-head NM merges), game_libs 67AC4 exported; Kyoto USO section walker corrected ([type,size,flag], Yay0 flag 0x1001, Sym=[tag,value,hash]); an uninitialized `register float` faking a hoisted constant is a fake cap; timproc tracked baselines need the metadata-only symtab merge](#orphan-sweep-agent-c-25th-h2hproc-timproc) -- _Tools now in the 1080 repo: `scripts/uso-sym-oracle.py <rom> <inner_hdr> <off>...` and `scripts/elf-symtab-merge-orphan.py`. The "timproc" ROM range is TWO modules (timproc.uso @0x5AF114 = b1, trkproc.uso @0x5B3DE2 = b3); game_libs is bootup.uso's Text section (inner header 0xD9FE28, data 0xDD0A6C)._
-- [TWENTY-SIXTH mis-split case: a "LEADING-nop hardware-hazard idiom" CAP on a libultra leaf is the 16-byte INTER-OBJECT PAD of the previous .o -- the module Sym export table puts the entry at +4; land as C + all-zero `SUFFIX_BYTES_FORCE` on the PREDECESSOR (game_libs 74840/74850 -> 74844 `__osSpSetStatus` + 74854 `__osSpGetStatus` EXACT, agent-g 2026-09-09)](#leading-nop-cap-is-inter-object-pad-sym-oracle-74844) -- _`nop; lui t6,0xA404; jr ra; sw a0,0x10(t6)` sat 3 months as "IDO can't emit a bare nop". Section offset of the `lui` (0x88EB0) is 16-aligned AND exported (3 jal refs); the nop word is not. Every separately-compiled libultra .o in the game_libs tail is 16-aligned, so a lone zero word before a leaf = the previous object's pad. Do NOT add a 1-word `_pad_pre` GLOBAL_ASM sidecar (emits 8 bytes, shifts the unit +4): attach it as `SUFFIX_BYTES_FORCE := <pred>=0x00000000` (+ the `NON_MATCHING_` mirror). Same class: 69F50 (VI_CURRENT reader), 6D94C/6E20C/74860 heads. Ledger + refresh recipe inside. 2026-09-09 second sweep: 69CC4 (hoisted-head acos table fn, 78/78), 6FBE4 (= __osTimerServicesInit, in-TU u64 def lever, 35/35), 70324 (bcopy boundary; two-export = .weakext tell) inside; refresh-expected-baseline.py has NO --help (it runs). Third sweep: 67FE4 (local atan-table fn, baked-jal scan finds LOCAL callers; the 68004 "tail" started with the bc1fl likely-fill debris), 6FC70 = __osTimerInterrupt + 6FDE8 = __osSetTimerIntr (one timerintr.c -O1 donor TU; a 2-word `.s` carrying a hi/lo reloc pair at an exported offset = the hoisted head of the real entry; in-unit callees must be blank imports)._
+- [TWENTY-SIXTH mis-split case: a "LEADING-nop hardware-hazard idiom" CAP on a libultra leaf is the 16-byte INTER-OBJECT PAD of the previous .o -- the module Sym export table puts the entry at +4; land as C + all-zero `SUFFIX_BYTES_FORCE` on the PREDECESSOR (game_libs 74840/74850 -> 74844 `__osSpSetStatus` + 74854 `__osSpGetStatus` EXACT, agent-g 2026-09-09)](#leading-nop-cap-is-inter-object-pad-sym-oracle-74844) -- _`nop; lui t6,0xA404; jr ra; sw a0,0x10(t6)` sat 3 months as "IDO can't emit a bare nop". Section offset of the `lui` (0x88EB0) is 16-aligned AND exported (3 jal refs); the nop word is not. Every separately-compiled libultra .o in the game_libs tail is 16-aligned, so a lone zero word before a leaf = the previous object's pad. Do NOT add a 1-word `_pad_pre` GLOBAL_ASM sidecar (emits 8 bytes, shifts the unit +4): attach it as `SUFFIX_BYTES_FORCE := <pred>=0x00000000` (+ the `NON_MATCHING_` mirror). Same class: 69F50 (VI_CURRENT reader), 6D94C/6E20C/74860 heads. Ledger + refresh recipe inside. 2026-09-09 second sweep: 69CC4 (hoisted-head acos table fn, 78/78), 6FBE4 (= __osTimerServicesInit, in-TU u64 def lever, 35/35), 70324 (bcopy boundary; two-export = .weakext tell) inside; refresh-expected-baseline.py has NO --help (it runs). Third sweep: 67FE4 (local atan-table fn, baked-jal scan finds LOCAL callers; the 68004 "tail" started with the bc1fl likely-fill debris), 6FC70 = __osTimerInterrupt + 6FDE8 = __osSetTimerIntr (one timerintr.c -O1 donor TU; a 2-word `.s` carrying a hi/lo reloc pair at an exported offset = the hoisted head of the real entry; in-unit callees must be blank imports). Fourth sweep: 6C484 = osInitialize (5.3 -O1, __ll_mul/__ull_div rename), 6CD44 = osViSetMode (-O1), 6F834 = guFrustum (-O3; asm-processor rejects -O3 -> direct-CC rule), 6F634 / 6CC14 verified -O1 exact but unlanded, 6D894 = __osProbeTLB handwritten._
 - [Hoisted-head orphan whose "alias entry" is the WORD BEFORE every caller's jal target: the orphan is the function's own `n` copy, the callers' address is a mid-function alt-entry — merge, pin the caller address in undefined_syms_auto.txt, retire the post-hoist unit](#hoisted-head-orphan-callers-jal-post-hoist-word-66ec) — _kernel func_800066EC (1 word, `or a3,a2,zero`) sat since 2026-05 as a "1-insn alias entry, not reproducible from C"; kernel_048.c reproduced only func_800066F0 (the post-hoist 12 words) via a fake 4th arg `ctr` + `char pad[4]`. Merged 0x34 = `while (n--) *dst++ = *src++;` at -O1, 13/13 in BOTH IDO 7.1 and 5.3 (so the hoist is not 5.3-only). Tell: zero `jal` to the orphan symbol, every caller jal's the word after it. 2026-09-05, agent-g._
 - [split-fragments.py recursion can clobber a prior manual merge and break `objdiff-cli report generate`](#feedback-split-fragments-clobbers-prior-merge) — _When the bundle you split has a successor that was previously merged via `merge-fragments` (e.g. `game_libs_func_0003AA5C` had absorbed `0003AC50` via fca252b8, growing size 0x1F4 → 0x200), recursive split-fragments can re-split it back, leaving size 0x1F4 + a separate 0xC stub for AC50. Combined with TRUNCATE_TEXT this breaks objdiff with "Symbol data out of bounds: 0xN..0xM". Diagnostic: `objdiff-cli report generate` fails immediately after a split commit. Fix: revert the split commit, run `make expected` to refresh expected/.o. Before recursing split-fragments, run `git log -3 -- <successor>.s` for each newly-split-off — if a `Merge fragment` commit appears, stop._
 - [split-fragments.py over-splits a single function that has an internal early-return `jr ra` — re-split ONCE, don't recurse blindly](#feedback-split-fragments-over-splits-on-internal-early-return) — _split-fragments.py boundaries on every `jr ra` (03E00008). A function with an early-return (e.g. `bnel`/`beq` to a shared epilogue with a mid-body `jr ra`) has 2+ `jr ra` and gets wrongly cut. Diagnostic: after a recursive split, disassemble the split-off piece — if a branch in the PREDECESSOR (`bnel`/`bne`/`beq`) targets an address INSIDE the split-off piece, or both share a trailing `jr ra` epilogue, they are ONE function. Fix: `git checkout -- <bundle>.s src/.../*.c`, `rm` the wrongly-split `.s` files, then run split-fragments.py ONCE per real boundary (don't recurse past a piece whose predecessor branches into it). Verified 2026-05-17: titproc_uso_func_000015F4 bundle — naive recurse made 15F4/16B8/16E8 (jr=3), but 16B8's `bnel 0x16BC→0x16EC` jumps into "16E8" → correct is 15F4(0xC4)+16B8(0x60, jr=2 internal early-return)._
@@ -11677,3 +11677,62 @@ next symbol. Tell: the symbol's own words start at +4, the `.s` size is 0x10 for
 - Rule of thumb for the libultra tail [0x71864..0x75288]: symbol start with
   `(ROM - 0xDD0A6C) & 0xF == 4` and a leading zero word = mis-split pad. Check the
   oracle before writing "hazard idiom".
+
+**2026-09-09 fourth sweep (agent-g): the oracle-first identity pass applied to the
+post1b2c NM wraps -- three more exacts, zero register grinding.** The tell that
+unlocked all three: an NM wrap whose comment names *several anonymous globals* or a
+"budget cap" is usually ONE libultra symbol at the wrong opt level. Check the
+identity and the opt level BEFORE any lever.
+- **6C484 = `osInitialize` (os/initialize.c verbatim), IDO 5.3 -O1, 163/163 first
+  compile** (sym 2445). The 62.9% wrap had "four vector-source symbols" (`gl_vec_src0..3`)
+  and a "64-bit stack-arg cascade": the four `lui/addiu` pairs are the -O1
+  per-statement re-materialisation of ONE symbol (`__osExceptionPreamble`), and the
+  `(hi,lo,0,3)` / `(hi,lo,0,4)` blank-jal pair is `osClockRate * 3 / 4` lowered to
+  `__ll_mul` / `__ull_div` under **-mips2** (the 1080 libultra was built -mips2, so u64
+  mul/div are helper calls into the in-unit 6C87C / 6C77C). Keys: `osClockRate` and
+  `osViClock` DEFINED in the donor TU (shared `lui at` on the two-word stores, the
+  vimgr/timerintr lever); 7.1 -O1 is 161 words (different delay-slot fill) so the donor
+  is a 5.3 object. **Gotcha: the compiler names `__ll_mul` / `__ull_div` itself and both
+  are kernel-pinned to REAL addresses (0x80002F78 / 0x80002E78) in undefined_syms_auto**
+  -- a jal to them bakes; rename post-compile with `scripts/rename-elf-symbol.py $@
+  __ll_mul=gl_func_00000000_llmul6c __ull_div=gl_func_00000000_ulldiv6c` (pins = 0), the
+  743C4 lldiv recipe. The alternative (explicit `gl_func_00000000_*(a, b)` calls in the C)
+  also gives 163/163 -- the arg marshalling of an explicit u64 call is identical to the
+  intrinsic's -- but verbatim + rename keeps the source honest.
+- **6CD44 = `osViSetMode` (io/visetmode.c verbatim), -O1, 26/26 at both 7.1 and 5.3**
+  (sym 1988). The 86% wrap had `D_A[2] = self; *D_B = 1; D_C[3] = ((int**)D_C)[2][1]`
+  -- D_A = D_B = D_C = `__osViNext` (modep @8, `state` u16 @0 = VI_STATE_MODE_UPDATED,
+  control @0xC = modep->comRegs.ctrl @4). `register u32 saveMask` is what colours the
+  `__osDisableInt` result into s0 (6F634 / 6CC14 have no `register` and spill v0 to
+  sp+0x1C instead -- that is the source's spelling, not an opt-level difference).
+- **6F834 = `guFrustum` (gu/frustum.c verbatim), IDO 5.3 -O3, 26/26** (sym 162). The
+  87.7% wrap's "2-FP-home budget cap: every probed mode homes only TWO float params in
+  f12/f14 and stack-homes the third" was **-O2 vs -O3**: at -O3 IDO homes l/r/b through
+  f12/f14/f16 (`mtc1 a1-a3` / `mfc1 a1-a3`), exactly the guOrtho 707E8 donor class.
+  When a gu/ wrapper's mtc1/mfc1 re-marshal count is off by one, try -O3 before
+  declaring a cap. **Build gotcha: asm-processor rejects -O3** ("one of -O0 -O1 -O2 -g
+  is required"); a -O3 donor needs the direct-CC rule pair (`$(CC) -c $(CFLAGS)
+  $(OPT_FLAGS) $(MIPSISET) $(CPPFLAGS) -o $@ $<` for build/ and build/non_matching/,
+  copy the xldtob/xprintf/frustum rules near the end of the Makefile) -- a plain
+  `OPT_FLAGS := -O3` line fails the make and leaves the unit's object built WITHOUT its
+  donors, so the post-failure `cmp` is against a stale ROM and report.json shows every
+  donor-spliced fn in the unit "lost". Read make's exit code before the cmp. guFrustumF
+  (6F684, 0x1B0) is NOT libreultra's guFrustumF (88 words vs the target's 108) -- only
+  guFrustum is spliced; guFrustumF is a blank import (`gl_func_00000000_frustumf`).
+- **Verified but NOT landed (three-function cap), both first-compile exact at -O1
+  (7.1 and 5.3 identical) with libreultra verbatim + existing pins:**
+  - `gl_func_0006F634` = `osViSwapBuffer` (io/viswapbuf.c: `framep @4 = arg; state |=
+    VI_STATE_BUFFER_UPDATED (0x10)`), 20/20, no pad (6F684 follows directly). Pins
+    `D_00000000_vinext`, `gl_func_00000000_disint` / `_resint` already exist. Donor
+    `game_libs_o1_6F634.c`, OPT_FLAGS := -O1, splice + filter-out, done.
+  - `gl_func_0006CC14` = `osEPiLinkHandle` (io/epilinkhandle.c: `handle->next =
+    __osPiTable; __osPiTable = handle; return 0`), 19/19 incl. the jr delay nop. The
+    tracked `.s` is 18 words (ends at `jr ra`) and `gl_func_0006CC14_pad.s` carries the
+    delay nop + the inter-object pad word, so the landing needs the C body (19 words)
+    + `git rm` of the pad.s pragma + `SUFFIX_BYTES_FORCE gl_func_0006CC14=0x00000000`
+    (+ the NON_MATCHING mirror) on post1b2c, then the post1b2c baseline refresh
+    (strip + EXPECTED_BASELINE=1 donors ACTIVE). Pin `D_00000000_pitable` exists.
+- **6D894 = `__osProbeTLB` (os/probetlb.s, HANDWRITTEN)** -- word-for-word the
+  libreultra LEAF (`mfc0 EntryHi; andi ASID; mtc0; tlbp; mfc0 Index; tlbr; PageMask /
+  EntryLo0|1` with the trapping `add v0,v0,t5` and unfilled hazard nops). Section 0x81F00
+  is 16-aligned, no pad; stays INCLUDE_ASM. Not a C candidate.
