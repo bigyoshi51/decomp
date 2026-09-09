@@ -14167,6 +14167,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [SAME-LINE `{ call(&SYM, a0); }` also flips the `sw ra` / `lui a0` PROLOGUE order in 1-call wrappers — the "unflippable tiny-wrapper cap" was the same source-line tie-break for the `(int a0)` members (gl_func_000333F4 / 0003341C / 0004D05C all 0->100 EXACT 2026-09-05 agent-g; the (int a0) queue is CLOSED)](#same-line-brace-call-wrapper-lui-a0-sw-ra) — _Target `addiu sp; or a1,a0; lui a0; sw ra; jal`: `sw ra,0x14(sp)` belongs to the entry line, `lui a0,%hi(SYM)` to the call line; on separate lines IDO keeps line order (sw ra first). Put the call on the `{` line and lui schedules first. Does NOT flip `void f(void) { g(&SYM); }` (bootup 6204 / E9FC) in any of 6 one-line spellings. Strict sweep of all NM objects for the C3E8 dead-arg-home swap found ZERO further candidates._
 - [EMPTY-CONDITIONAL keep-alives (`if (x) {}`) pin evaluation order but FLIP the whole function's held-base colour a2 -> v1 (and neighbouring candidates); `if (0) {...}` does not. o32 `mtc1 aN,$f12/$f14` above `addiu sp` = int-reg -> FP move of float PARAMS, not an ABI cap (game_libs 2D374 NM 96.69 / 5C808 EXACT, 2026-09-06 agent-c)](#empty-conditional-keepalive-flips-base-colour-2d374) -- _Tell: with the hacks the FP block's schedule matches but every `lui a2; addiu a2` base reads v1 and c/half swap; without them the int colouring is exact but a single-use `fr = (f32)raw` is forward-substituted and its cvt+bgez fixup sinks to the store. Stores to distinct symbols stay in SOURCE order (no LIFO across symbols). `d = A; d -= B;` gives load-into-dest `sub.s $f0,$f0,$f16`._
 - [Absolute-constant address casts (`*(int*)0x3B8FC`) CSE into one `lui;ori` register; the target's per-access `lui at,%hi; sb %lo(at)` chain means a SYMBOL (base-0 USO data + offset) -- per-site aliases may carry a NONZERO absolute (`gl_ref_0003B8F4 = 0x0003B8F4`); store + address-value on one symbol does NOT CSE, two stores on one symbol DO (held base + LIFO store order) (gl_func_00034A78 63->91%, 2026-09-05 agent-g)](#constant-address-cast-vs-symbol-form-per-access-lui-at-34a78) -- _Tell: build 3 words SHORT with `lui 3; ori 0xb8fc` reused vs target `lui at,4` before every store. Fix = extern per address. Open residual: target puts an adjacent same-hi byte pair `li 13; li 2; sb F7(at); sb F6(at)` under ONE `lui at`; every same-symbol C form (array/struct/volatile/TU-defined/static/short-cast) gives the LIFO pair but materializes `lui v0; addiu v0`; IDO never splits an even-offset short (pack(1) even = `sh`, odd = `sb;srl;sb`)._
+- [Integer `mult` takes the RIGHT source operand in rs and allocates the right operand's temps FIRST: `(h - a0 - 1) * w` = `lw t6,w; lh t7,h; subu t8; addiu t9; mult t6,t9`, `w * (h - a0 - 1)` = `lh t6,h; subu t7; addiu t8; lw t9,w; mult t8,t9` (game_libs_func_0002CF60 EXACT 45/45, 2026-09-09 agent-c)](#mult-operand-order-head-temp-ring-2cf60) -- _A head/prologue product whose only residual is the t6..t9 numbering + `mult rs,rt` swap: swap the C operands, no local needed (a named `k = ...` local renumbers the whole ring and homes k). Complements the deeper-tree rs note under the FIFO temp-queue entry: the rs pick is source-RIGHT, not tree depth, when neither operand is a plain register._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -23628,6 +23629,14 @@ Same-function coloring notes (95.4 final):
 The -O3 recipe's real lever is the WHOLE-TU compile, not -O3 itself. The 1080 game_libs VI-manager pair (gl_func_00074EFC = osCreateViManager 65.0%, gl_func_0007507C = viMgrMain 32.6%, libultra vimgr.c verbatim) is first-compile word-exact at IDO 5.3 **-O1** -mips2 as one TU (98/98 + 115/115), spliced with the identical pipeline (REPLACE_FUNC_BODY + add-elf-func-symbol.py POST_COMPILE + section-reloc pins). -O3/-O2 probes were WRONG here (filled jal delays, s-reg allocation — target is -O1-shaped). Three transferable findings:
 
 1. **In-TU definition vs extern declaration of a global changes codegen.** `OSDevMgr __osViDevMgr = {0}` DEFINED in the TU → IDO shares one `lui $at` across the whole field-store burst (`sw t2,0(at); sw t3,4(at); sw t4,8(at); sw t4,c(at)`), materializing the stored values FIRST. Declared `extern` → cc re-luis `$at` per store (+5 words). If a near-miss's residual is per-store `lui at` vs a shared-at burst on a symbol whose target reloc fields look blank, suspect the original TU DEFINED the symbol. (Corollary: in a 0-based USO data segment, "blank-looking" lui/lo 0 fields can be a REAL baked address 0 — game_libs .data starts at 0, .rodata 0x2540, .bss 0x44080; __osViDevMgr lives at data offset 0.)
+   **Second instance (6FBE4 = `__osTimerServicesInit`, agent-g 2026-09-09): the same lever governs a 64-bit
+   (u64/OSTime) ZERO store at -mips2.** `extern OSTime __osCurrentTime; __osCurrentTime = 0;` emits two
+   independent at-macro halves, hi first (`li t6,0; lui at; sw t6,%lo(sym)(at); lui at; li t7,0;
+   sw t7,%lo(sym+4)(at)`); with `OSTime __osCurrentTime;` DEFINED in the TU it is one store with a
+   shared `lui at` and the LOW word stored first (`lui at; li t6,0; li t7,0; sw t7,4(at); sw t6,0(at)`).
+   Identical at 5.3 -O1 and 7.1 -O1; no flag/type/volatile/0LL spelling reproduces it with an extern.
+   Tell: `lui at` FIRST, two `li`, then `sw ..,4(at); sw ..,0(at)`. The donor's .bss definition is
+   imported by the splice as an UND symbol (pin = 0), so defining it costs nothing downstream.
 2. **as1 32-byte-aligns an UNREACHABLE dead-epilogue block** (epilogue after `while(TRUE)`): a run of 0x00000000 words appears between the loop back-branch and the dead epilogue, sized by the epilogue's offset in the TU's .text — i.e. by the PRECEDING function's size. A mid-function zero-run in the target that no C shape seems to produce can be pure alignment that falls out for free once the earlier TU functions compile to their exact sizes. Don't burn probes on the gap itself; fix the neighbors.
 3. **Forward-declared statics resolve *UND* in the donor symtab even at -O1** (`static void viMgrMain(void*);` + later def → symbol *UND*, body only reachable via the .text section) — so the add-elf-func-symbol.py POST_COMPILE injection is needed for whole-TU donors at ANY opt level, not just -O3. The static's fn-ptr materialization relocates against `.text` with the fn's donor offset as addend: pin `<fn>_text = <baked addr> - <donor offset>` (74EFC: 0x896E8 - 0x188 = 0x89560).
 
@@ -25640,3 +25649,37 @@ call/d, if-arm swap, `unsigned key`, `key += sh` split, and the IXA spellings ab
 the coalescing in place; an extra emitted base ref (a second recompute of `REG + spv*20` in
 the if-arm) DID flip the base to a3 but then sh took s1 -- the base/sh priorities are within one
 ref of each other.
+
+
+## Integer `mult` operand order = source RIGHT operand in rs, right operand's temps allocated first (game_libs_func_0002CF60 EXACT, 2026-09-09) <a name="mult-operand-order-head-temp-ring-2cf60"></a>
+
+**Symptom.** A hoisted head statement `*(int *)(REG + 0x5364) = <product>` is exact except
+the scratch numbering of the product's temps and the `mult` operand order:
+
+| C | emitted |
+|---|---|
+| `(*(short *)(REG+0x2040) - a0 - 1) * *(int *)(REG+0x2070)` | `lh t7,0x2040; lw t6,0x2070; subu t8,t7,a0; addiu t9,t8,-1; mult t6,t9` |
+| `*(int *)(REG+0x2070) * (*(short *)(REG+0x2040) - a0 - 1)` (target) | `lh t6,0x2040; lw t9,0x2070; subu t7,t6,a0; addiu t8,t7,-1; mult t8,t9` |
+
+**Rule.** For a 32-bit `mult` IDO 7.1 -O2 (1) evaluates the RIGHT operand of `*` first --
+its temps pop the ugen free-queue (t6, t7, t8, ...) before the left operand's -- and (2) puts
+the right operand in `rs`. The scheduler may still hoist the left operand's `lh` above the
+right operand's `lw` (row 1: the `lh` is emitted first but got t7), so read the register
+NUMBERS, not the instruction order, to see which operand was evaluated first. So when the
+target's `mult rs,rt` has the deeper expression tree in rs and the plain load in rt, the load
+is the LEFT source operand.
+
+**Non-levers.** A named local `k = h - a0 - 1; store = k * w;` renumbers the ring (k colors a
+candidate, `subu a1`), and `k = h - a0; k = k - 1;` / `k -= a0; k--;` additionally flip the
+held base to a1 (12-14 diff words). `short` / `unsigned int` flavours of the 0x2070 load leave
+the row-1 shape unchanged. Only the operand swap moves the ring.
+
+**Context.** game_libs_func_0002CF60 (0xB4, 45 words): the 4-word orphan `lui v1; addiu v1;
+lh t6,0x2040(v1); lw t9,0x2070(v1)` was the hoisted head of this store (bootup.uso Sym exports
+0x415CC = 0x2CF60; 0x2CF70 is not exported), the old gl_func_0002CF70 wrap (60.3) merged under
+it. Everything else was exact on the first compile: `for (unsigned i = 0; i < h2048; i++)` with
+`rec = REG + 0x2D00 + i * 0x160` (s1 induction on REG, 0x2D00 folded into the `lw` and the
+`addiu s0,s1,0x2D00` arg), `if ((*(unsigned *)rec >> 31) == 1)` = the loop-promoted `li s3,1`
+compared by `bnel s3,t2` with the `addiu s2,s2,1` tail-dup in its delay, the sign-extended
+`lh` reload CSE'd on the no-call path, and a blank `gl_func_00000000()` after the loop.
+Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c.
