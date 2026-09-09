@@ -185,6 +185,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass â€
 - [NEGATIVE + landing route: gl_func_000240A0 (164w class dispatcher, 97.8%) -- 7-word case-0/3 copy colouring (target tests+returns the RAW call temp in $v0 and copies into a per-case register a1/v1 only for the deferred `sp44` home store; build colours the h web $v1 and returns via `or v0,v1`) survives ~25 spellings; the other 7 words are reloc (3 baked jals -> gl_ref_ externs, jtbl `lw t9,0xEB4(at)` -> 2E290 donor-splice `_rodata = 0xEB4`) (2026-09-06 agent-g)](#negative-240a0-per-case-copy-colour-deferred-home-store) -- _Tell: an early `return h` that jumps PAST the epilogue's `lw ra` (`lw ra` in its delay) = copy-free return of the call temp; the copy reg differing per switch arm (a1 vs v1) = a per-web colour, not the variable's. `register`/`char *`/`unsigned` on h drop its dead home (target has one -> h is a plain int)._
 - [ONE-BIT BITFIELD test = dead `srl 31` PHANTOM: a `sll tN,x,6; bgez tN` sign test whose every later temp is one register LOW is `if (p->bit25 == 0)` on a bitfield struct (cfe extracts `sll 6; srl 31`, uopt folds the `srl == 0` into `bgez` and the srl's temp number stays burned); `(x << 6) >= 0` / `!(x & 0x2000000)` have no phantom, `((unsigned)(x << 6) >> 31) == 0` and `((x << 5) << 1) >= 0` do (game_libs 25BFC 22/22 EXACT, 2026-09-06 agent-g)](#one-bit-bitfield-test-dead-srl-phantom-25bfc) -- _Tell: a packed header word tested as `& 0xFFFFFF`, then `sll 6; bgez`, then `sll 4; srl 30` (2-bit field) = a bitfield struct `{u type:4; u kind:2; u bit25:1; u bit24:1; u size:24;}`; the multi-bit fields' `sll;srl` pairs emit as-is, only the 1-bit test folds and leaves the gap. Same "count the skipped $tN" family as #shift-merged-phantom-temp-record-copy-20e24._
 - [Loop-invariant STORE hoisted by uopt + RMW double store + store-then-test: a ring dequeue whose 96.9% wrap had every temp promoted to a candidate ($v1/$a1 for the entry value and rd+1) is a plain `while (r->wr != r->rd) { r->f4c = 0; r->out = r->buf[r->rd]; r->rd++; r->rd &= 0xF; if (r->out) {...} }` -- the invariant store is hoisted ABOVE the loop by uopt, the inverted loop's pre-test load is the shared $v0 web, `r->rd++` keeps BOTH stores (a local `r->rd = rd + 1` is DSE'd), and the two forwarded reloads are the $t1/$t3 phantoms (game_libs 3183C 23/23 EXACT, 2026-09-06 agent-g)](#while-hoisted-invariant-store-rmw-double-store-3183c) -- _Tell: a `sw zero,X(a0)` between the entry `beq` and the loop head with NO source-level statement there ("cleared before the loop"), temps promoted to $v1/$a1 in every local-variable spelling, and skipped temp numbers around a double `sw` to the same field. `if (1) {}` / `volatile` DSE-defeats promote the value; the RMW form does not. `r->wr != r->rd` operand order gives `beq v0,t6` / `bnel v0,t5`._
+- [Base pointer held in ONE $s-reg for EVERY access (direct field stores/loads AND address arithmetic, base-first `addu s3,s5,t3`) = the base is an ARRAY-element address `extern St D_arr[]; g = &D_arr[0]` -- `(St*)&D_00000000` folds every direct access to `lui at,%hi(D); sb %lo(at)` and commutes the addu; per-ACCESS zero aliases with the inline addend for a far byte (+0x1B5DC) incl. the RMW load/store as two symbols; s-reg constants are emitted in the block that DEFINES the base; every declared local homes a frame word; `u8 sel` = the `or v1,v0` copy (gl_func_00026D64 88.1->97.1, 2026-09-06 agent-g)](#extern-struct-array-base-keeps-sreg-opaque-26d64) -- _Tell: build folds exit-path stores / an in-loop `lh` to `lui at` forms while the target uses the held $s5, and `addu vN,tI,s5` (index first) vs target `addu sN,s5,tI`. Function-typed symbol `(St*)proc` also keeps the base opaque but drags the loop-invariant `li s6/s7` into the entry block. Open: uopt sinks the `sll` of a pre-test index when the cursor RMW immediately follows the exit test (as1 then hoists the store's `lui at` into the head); RMW two statements later keeps the sll but moves the store._
 - [HOISTED shift-merge phantom = IN-PLACE `or a2,a3,zero; sll a2,a2,4` + K&R param HOMING flip: an invariant record index spelled INSIDE the loop as `((short *)&D)[y * 8 + j]` (no pa/pb locals, no `p = d`) makes uopt hoist y*8 as its own candidate, keeps y unmodified (web copied to $a3) and leaves d homed with its reload in the branch delay slot; any pa/pb-local form gives `sll a2,a3,4` with the `lw v0` sunk, any `y <<= 4` form keeps y in $a2 and moves d to $a3 (game_libs 20ED0 82.6 -> 75/75 EXACT, 2026-09-06 agent-g)](#hoisted-shift-merge-inplace-sll-param-homing-20ed0) â€” _Tell: loop body already exact, preheader shows `or aN,aM,zero; sll aN,aN,4` (a VARIABLE register shifted in place, not a $tN temp) and a param reloaded from its home into the loop pointer in a delay slot. Twin base tables that are reloc-blind zeros need DISTINCT base-0 aliases in undefined_syms_auto.txt or &D CSE merges the lui/addiu pairs. A 0C000000 jal whose oracle symval is an in-module export stays a `gl_func_00000000` placeholder call; a call that passes fewer args than the callee takes leaves the extra arg register untouched (here `$a1 = x`)._
 
 ## Quick reference by sub-topic
@@ -25529,3 +25530,67 @@ Companions from the same function:
   (or made a second register `addiu a0,v1,0x157C` with an `if (rec) {}` keep-alive), while the target computes rec
   IN PLACE before the branch, materialises `li a2,1` there, and fills a plain `bne` with `sll t4,a3,4`. rec-first,
   `rec += 0x157C` in place, volatile store, if/else, `int *q = rec + 0x14` were all tried.
+
+
+## Base pointer held in one $s-reg for every access = array-element address of an extern struct array; per-access cursor aliases; constants follow the base's def block; one frame word per local; `u8 sel` copy -- gl_func_00026D64 88.1 -> 97.1 (2026-09-06, agent-g) <a name="extern-struct-array-base-keeps-sreg-opaque-26d64"></a>
+
+Target (920 B command-queue drain, s5 = `lui s5,0; addiu s5,s5,0` = data base 0):
+`lbu t6,21434(s5)` at entry, `sb zero,21434(s5)` / `sb t6,21434(s5)` on BOTH loop-exit
+paths, `lh t8,8264(s5)` inside the loop, `addu s3,s5,t3` / `addu s2,s5,t9` /
+`addu t9,s5,t8` (base FIRST); the cursor byte at +0x1B5DC is reached by a fresh
+`lui at,0x2 ... -18980(at)` at every access (re-seed store, head load, RMW load
+`lui t4; lbu t4`, RMW store `lui at; sb t5`). Frame 0x68 with `lo` homed at 0x38.
+Standalone (`-O2 -mips2 -32 -G 0 -non_shared -Xcpluscomm -Wab,-r4300_mul`, IDO 7.1):
+
+1. **`(St *)&D_00000000` folds.** uopt constant-propagates `g = &D` and turns every
+   direct `g->f` into `LOD/STR D+off`; the codegen then uses the hoisted `&D` register
+   only in the block that materialised it (entry `lbu 21434(s5)`) and `lui at` macros
+   everywhere else, and every `g + idx` comes out `addu vN,tI,s5` (constant commuted
+   right). Double assignment, `register`, `volatile St *`, `(u32)` cast, typed struct,
+   static const pointer: all still fold. Two forms keep `g` a register variable used
+   at EVERY site with base-first addu: (a) a FUNCTION-typed symbol
+   `g = (St *)D_00000000` with `extern int D_00000000();` -- but that drags the
+   loop-invariant `li s6,2 / li s7,0x30` into the entry block next to g's def;
+   (b) **an extern ARRAY of the struct type, `extern St D_26D64_arr[]; g = &D_26D64_arr[0]`**
+   -- entry block identical to the target (`lui/addiu/lbu` first, `sw s0` in the
+   `bnez` delay, `li s7; li s6; li s4` in the join block). Pin the alias to 0 in
+   `undefined_syms_auto.txt` (`D_26D64_arr = 0x00000000;`, same family as the
+   `D_412E8_*` section aliases). In-unit the real `D_00000000` is `extern int`, so the
+   array needs its own alias name; a donor TU could declare `extern St D_00000000[]`.
+2. **s-reg constants are emitted in the block that defines the base.** With g defined
+   in the entry block (proc-symbol form) the `2`/`0x30` constants land in the entry;
+   defining g after the `if` puts them in the join block after `addiu s5` in the
+   target's order (s7, s6, s4). The array form gets the join placement with g defined
+   at the top -- the uopt hoisted `LDA arr` behaves like the plain `&D` case (entry)
+   while the accesses stay indirect.
+3. **Far byte (+0x1B5DC, outside the 16-bit fold range): one alias per ACCESS.** One
+   symbol for all four accesses, even `volatile`, is CSE'd into a held `lui s8,2;
+   addiu s8,-32768` (+s8 save, +8 frame); a load+store pair on one alias (`X = X + 1`)
+   still holds a base for the pair (#alias-budget-call-free-same-symbol-pair-349e0).
+   `CUR_D = CUR_C + 1` on two zero aliases with the inline addend gives the target's
+   reload + `lui t4 / lui at` pair, and the raw .o words carry `0x2 / -18980` inline
+   (reloc-blind byte_verify safe).
+4. **Frame = one word per declared local** (`s32` or `f32` alike, rounded to 8): the
+   target's 0x68 = 9 saved regs + 10 locals. `f0` (case-0x41 temp) and the `char *g`
+   local were not locals in the original; `lo` declared first homes at 0x38.
+5. **`u8 sel`** for the `sel < 0x10 / sel == 0xFF` selector emits the target's
+   `or v1,v0,zero` copy in the `beqz` delay (an `s32 sel` compares v0 directly; an
+   explicit `sel2 = sel` copy is coalesced away and costs a frame word).
+6. **Queue entry**: `idx = (cur & 0xFF) * 8; ent = (u8 *)g->queue + idx;` BEFORE the
+   exit test gives `andi t2` in the head and the in-place `addiu s3,s3,21552` (with
+   `ent` after the test uopt splits it into `addu v1` + `addiu s3,v1` and re-emits
+   the addiu in the jal arm). `s32 cur` + explicit mask: a `u8 cur` with `cur * 8`
+   emits NO andi (IDO does not re-zero-extend a u8 register var for a multiply).
+   The code load must come AFTER the cursor RMW store in source (u8* load vs global
+   byte store = alias dep keeps `lbu v0,21552(s3)` under the `sb`).
+
+**Open residual (the 97.1 floor, 142/230 words identical, mnemonic sequence differs
+in one swap).** The target has BOTH `andi t2` and `sll t3` in the loop head (sll in
+the `bne` delay) and the RMW store's `lui at` under the reload. When the RMW
+immediately follows the exit test uopt sinks the `sll` into the store block and as1
+fills the head's load stalls by hoisting that `lui at` across the branch; moving the
+RMW two statements later (after the `0xF8` test) keeps the sll in the head but moves
+the store. Everything else is temp renumbering downstream (the target also skips
+t7/t9 in the prologue). The switch jumptable `lw t2,0xF50(at)` %lo is the USO rodata
+offset: in-unit compiles cannot bake it -- once the .text is word-exact, wire the
+2E290/6DD14 REPLACE_FUNC_BODY donor with `gl_func_00026D64_rodata = 0x00000F50`.
