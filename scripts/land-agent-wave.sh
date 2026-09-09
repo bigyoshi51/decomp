@@ -29,7 +29,7 @@ regen_unit() {  # $1 = expected/src/<seg>/<unit>.c.o
     *game_libs_post1b.c)   # committed baseline = ROM-exact C-BUILD object (donor jal relocs)
       echo "   (post1b: C-build route)"; rm -f "$b"; make "$b" RUN_CC_CHECK=0 >"$S/regen-make.log" 2>&1 || { echo "   !! C-build failed"; tail -5 "$S/regen-make.log"; return 1; }
       cp "$b" "$o"; git add "$o" "$c"; return 0;;
-    *src/game_libs/game_libs.c)   # strip route with donor splicing BLANKED
+    *src/game_libs/game_libs.c|*src/game_libs/game_libs_post1c.c)   # strip route with donor splicing BLANKED (tracked baselines carry 0 relocs)
       echo "   (game_libs.c: strip + EXPECTED_BASELINE=1 REPLACE_FUNC_BODY= route)"; cp "$c" "$S/regen-keep.c"; strip_c "$c"
       rm -f "$b"; make "$b" RUN_CC_CHECK=0 EXPECTED_BASELINE=1 REPLACE_FUNC_BODY= >"$S/regen-make.log" 2>&1 || { echo "   !! baseline make failed"; tail -5 "$S/regen-make.log"; cp "$S/regen-keep.c" "$c"; return 1; }
       cp "$b" "$o"; cp "$S/regen-keep.c" "$c"; rm -f "$b"; git add "$o" "$c"; return 0;;
