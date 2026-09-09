@@ -11411,7 +11411,46 @@ the merged function must own the head:
 | INCLUDE_ASM successors (both exported at the orphan): 0000A1B0, 0000B628, 0000CBF0, 000430D8, 00044B78, 0006FC70 | | | fresh decodes must start at the orphan address; 6FC70 landed by the external session (__osTimerInterrupt); 60BD4 / 5D754 EXACT and 41820 NM landed 2026-09-09 (rows above) |
 | 000430D8 | `lw t6,0x2C(a0); lui t7; lw t7,0x18C(t7)` | 0x57744* (sym1951, jal'd from text 0x58004/0x58030) | **MERGED 2026-09-09 (agent-c)** as game_libs_func_000430D8 (0x1AC, 107 words, leaf, frame 0x10; 430E4 INCLUDE_ASM + structural note + .s retired) NM -> **97.66**: the head is the hoisted record-table base `**(self+0x2C)` + list head D+0x18C (sym154 + 0x18C, inline addend); body = Vec3 -> s8 quantiser over the {cur,next}-iterated list, `trunc(v * 120.0f)` at +0xF0 (flag) / +0xE4 into bytes 0x10..0x12 of a 16-byte-stride record. 107/107 by mnemonic with every a/v register and the schedule exact (IDO_CODEGEN#two-arm-list-walker-temp-copy-colouring-order-430d8); residual = ugen t-ring only (two burnt slots before the first loop the build never burns). post0b baseline: metadata-only symtab merge of the tracked .o (elf-symtab-merge-orphan.py, .text + relocs identical); NM clip 0x2d724 re-probed unchanged |
 | 00044B78 | `lui at; sw a0,0(at); andi t8,a0,0xff` | 0x591E4* (sym1553, jal'd from text 0x4896C/0x48A10/0x58F54) | **BYTE-EXACT 73/73 2026-09-09 (agent-c)** as `void game_libs_func_00044B78(int mode)` (0x124; 44B84 INCLUDE_ASM + structural note + .s retired): video-mode selector -- store to the D+0x3C8E0 flags word (existing D_00000000_3c8e0), `switch ((unsigned char)mode)` through the USO RoData jumptable at +0x1B3C, arms setmode(&D_44B78_modes + 0x280/0x320/0x3C0/0x50/(osTvType==1 ? 0xA0 : 0x960)/0x0), default = error print of the Data string +0x1FE78, tail special-features flags. WIRED as the post0b unit's first REPLACE_FUNC_BODY jumptable donor (src/game_libs/game_libs_o2_44B78.c, the 29CCC recipe: `game_libs_func_00044B78_rodata = 0x1B3C` + `D_44B78_modes = 0` in undefined_syms, donor in the Makefile C_FILES filter-out, stub definition in post0b.c). Raw .text slice = expected except the jumptable LO16 word (0 + reloc vs 0x1B3C); objdiff 100; post0b expected = symtab merge of the tracked .o; NM object -8 -> clip 0x2d724 -> **0x2d71c** (probe: 62F08 NM 0x2d6cc + 0x50) |
+| 00026CCC | `lui v1; addiu v1,0; lbu v0,0x53B8(v1); lbu a3,0x53B9(v1); lui t6,2; lw t6,-0x4A6C(t6); subu a0; addiu a0,256; andi 0xff` (9 words) | 0x3B338* (sym, text; 0x26CF0 nothing) | **BYTE-EXACT 32/32 2026-09-09 (agent-c)** as `void game_libs_func_00026CCC(void)` (0x80; gl_func_00026CF0 wrap 59.7 + .s retired, the 26C9C "9-insn alt-entry-prologue donation" note corrected): enqueue-commit helper -- `n = (cur - committed + 256) & 0xFF` off the held registry base (sym1255 = `D_00000000_345c0`), high-water `if (D+0x1B594 < n) D+0x1B594 = n` (sym2 Data base, addend baked, inline `(char *)&D_00000000 + 0x1B594`), `r = submit(*(void **)(REG + 0x53CC), committed << 8 \| cur, 0)`, `if (r != -1) REG[0x53B9] = REG[0x53B8]`; callee blank sym1333 (text 0x7E470 = gl_func_00069E04). Only lever = the base spelled INLINE by macro (IDO_CODEGEN#inline-address-constant-base-vs-named-pointer-local-26ccc). post baseline = metadata-only symtab merge of the tracked .o (elf-symtab-merge-orphan.py, .text + relocs identical); no clip in this unit; no new undefined_syms line |
+| 0005C948 | `lwc1 $f2,4(a0); lwc1 $f12,8(a1); lwc1 $f14,8(a0); lwc1 $f16,4(a1); mul.s $f4,$f2,$f12; lwc1 $f8,0(a1)` (6 words) | 0x70FB4* (sym; 0x5C960 nothing) | **BYTE-EXACT 29/29 2026-09-09 (agent-c)** as `void game_libs_func_0005C948(Vec3 *a, Vec3 *b, Vec3 *o)` (0x74; gl_func_0005C960 INCLUDE_ASM "CALLER-SET-FPU cap, 8 FPU inputs at entry" + .s retired): Vec3 cross product `o = a x b`, reloc-free leaf. Levers: `float z, y, x;` (z declared FIRST = homed at 0x24 for the jr-delay store) and the three result stores on ONE source line (IDO_CODEGEN#cross-product-decl-order-same-line-stores-5c948). post0b baseline = metadata-only symtab merge of the tracked .o (.text + relocs identical); NM clip re-probed 0x2d71c unchanged (62F08 NM 0x2d6cc + 0x50); no undefined_syms change |
 | 0006179C | `lui v0; addiu v0; lw t6,0(v0)` | 0x75E08* (sym119, jal'd from text 0x77CBC/0x7A3B4; 617A8 nothing) | **BYTE-EXACT 34/34 2026-09-09 (agent-c)** as `void game_libs_func_0006179C(void)` (0x88; 617A8 INCLUDE_ASM + .s retired): the head is the hoisted countdown load; `if (--D_6179C_a < 0) { for (i = 0; i < 64; i++) { if (D_6179C_b[i] == 0) break; blank(&D+0x21ED0, D_6179C_b[i]); } blank(&D+0x21ED8); }` -- the zero entry is a BREAK (plain beqz+nop past the loop), the indexed loop keeps `&tbl[64]` as a held s2 with the +0x100 addend baked; two zero aliases (sym2345 / sym2344) -- IDO_CODEGEN#break-on-zero-indexed-walk-baked-end-pointer-6179c. post0b baseline strip + EXPECTED_BASELINE=1, .text identical, NM clip re-probed = 0x2d724 (unchanged) |
+
+**2026-09-09 FULL oracle sweep of game_libs_post.c + game_libs_post0b.c (agent-c, every
+INCLUDE_ASM / NM symbol, 516 rows; `scripts/uso-sym-oracle.py` logic + a baked-jal scan of the
+whole Text section + text-base (sym3) R_MIPS_26 / word / HI-LO refs + a branch-into scan).**
+Counts: **(a) exported at its own address 391** (+3 referenced only through a Data fn-table /
+text-base reloc: 2E330 x26, 3190C, 346F0; + the zero-pad-prefixed heads 1F6A8 / 2266C / 295BC /
+4DD0C / 61040 (5 zero words: 1 align + one EMPTY 16-byte object) and the leading-nop 5AFB0, all
+exported at the first non-zero word), **(c) TU-local baked-jal callees 82** (the 1CC98..1F3C8
+/ 1D870..1F6A8 / 2A904..2C7A4 runs: whole -O2 TUs whose internal calls are baked; decode as
+`gl_ref_*` absolute callees), **(b) hoisted-head mis-splits NOT previously in any ledger 12**,
+**(d) unreferenced 13**. Objdump abbreviates zero-word runs as `...` -- count `.word` lines,
+not disassembly lines, or a pad-prefixed head looks like it "starts" at +8.
+
+New (b) rows (orphan = exported at its own address, successor NOT exported; every one is the
+successor's hoisted first statement) -- all still open on origin/main at sweep time:
+| orphan (words) | head | successor (%) | note |
+|---|---|---|---|
+| 26CCC (9) | `lui/addiu v1`=sym1255 base; `lbu v0,0x53B8; lbu a3,0x53B9; lui t6,2; lw t6,-0x4A6C(t6)` (sym2 Data base + 0x1B594); `a0 = (v0 - a3 + 256) & 0xFF` | gl_func_00026CF0 (59.7, 23w) | the "caller-set t6/v0/v1 cap" was the head; a0 is COMPUTED, not a param -- see the 26CCC row below |
+| 308AC (7) | `lui/addiu v0`=sym1448 (@0x338 fade record); `sw a0,0; sw zero,8; sw zero,0xC; lui at; lwc1 $f4,0x1868(at)` (sym1 RoData + 0x1868) | gl_func_000308C8 (82.0, 55w) | 3-arm switch on a0 + three blank jals (sym1374 text 0x3B290 = 26C24, sym1376 0x3B2D8) |
+| 36074 (5) | `mtc1 zero,$f0; lui/addiu v0; lui at,0x3F80; mtc1 at,$f4` (0.0f + 1.0f + record base) | gl_func_00036088 (23.2, 103w) | struct init, -0x88 frame |
+| 43468 (7) | `lui v1; lw v1,0(v1); lui/addiu t1; multu a1,v1; lw t8,0x204(t1); lw t7,0x240(t1)` | gl_func_00043484 (INCLUDE_ASM, 53w) | stride global * a1 + the D+0x204 index / D+0x240 current-object pair (4CDB0 kit) |
+| 470E4 / 47394 / 47B28 (6 each, identical) | `lui at,0x437F; mtc1 at,$f16; lwc1 $f0,0(a1); li t8,1; lw t6,0x254(a0); mul.s $f4,$f0,$f16` (255.0f) | gl_func_000470FC / 473AC / 47B40 (6.0, 166w each, twins) | three copies of one colour-pack fn; one C body should land all three |
+| 4F0C8 (6) | `lwc1 $f2,0(a1); lwc1 $f4,0x3C(a0); lwc1 $f12,4(a1); lwc1 $f8,0x4C(a0); mul.s; lwc1 $f14,8(a1)` | gl_func_0004F0E0 (19.7, 127w) | matrix * vec3 leaf, reloc-free head |
+| 4FD00 (6) | `lw t7,0x68(a0); sll v1,a1,3; li t1,6; addu t8,t7,v1; lhu t9,2(t8); lw t6,0x60(a0)` | gl_func_0004FD18 (43.0, 245w) | 8-byte record index |
+| 5C948 (6) | `lwc1 $f2,4(a0); lwc1 $f12,8(a1); lwc1 $f14,8(a0); lwc1 $f16,4(a1); mul.s $f4,$f2,$f12; lwc1 $f8,0(a1)` | gl_func_0005C960 (INCLUDE_ASM, 23w) | Vec3 cross product, NO relocs in 5C948..5C9BC (pure leaf, 29w) |
+| 5D1F0 (7) | `lui at,0x4000; mtc1 at,$f16; lwc1 $f0,4(a0); lwc1 $f18,0(a0); lwc1 $f2,8(a0); mul.s $f6,$f16,$f0; lwc1 $f4,0xC(a0)` | gl_func_0005D20C (10.8, 62w) | 5D754 family (2.0f quaternion product), leaf |
+| 2A014 LAST word (1) | `addiu t6,a2,-242` sits at 0x2A07C = a baked-jal target (x3); 2A014 is exported at its own start and its `jr ra; nop` ends at 0x2A078 | gl_func_0002A080 (92.0, 118w; 9 RoData jumptable refs) | 2A080 is `switch (a2 - 242)` over 14 cases: needs the post-unit jumptable donor (29CCC / 44B78 recipe); 2A014 (73.1) loses its last word |
+
+(d) rows: 3DB3C (44w, 83.2) is branched into from 3DA14 @0x3DB38 -> 0x3DB48 = the 3DA14 tail
+(merge); 45418 / 571E4 = branch-likely dup-first-insn tails of 453D8 / 57194; 4FB5C -> 4FB78 ->
+4FB9C and 53294 / 6110C = plain-branch tails of 4FB34 / 5323C / 610F4 (find-stub-misplits
+`--runs` + find-beql-dup-misplits `--all` both list them); 4230C = 10 zero words (data, no
+code); 1CA10 (162w), 3DF5C (89w), 3FB6C (37w), 4E584 (31w), 5165C (14w) have NO export, no
+baked jal, no reloc, no branch from any .s -- dead TU-local code (IDO keeps unreferenced
+statics) or reached only through a pointer my HI/LO pairing missed: do not spend a tick on
+them before an in-Data pointer scan. The dispatcher-stub runs 2E290 / 343F4 / 560E4 are
+unchanged from agent-g's ledger.
 
 **Baseline route for game_libs_post (REPLACE_FUNC_BODY unit, no pinned sizes).** The tracked
 `expected/src/game_libs/game_libs_post.c.o` was built with the 29CCC donor spliced: the strip +
@@ -11989,4 +12028,11 @@ BYTE-EXACT, two tightened NM wraps, the 65EE4 a2-birth probe closed negative.**
   the 98.97 wrap's "first-char test temp colours v0 where the target uses t8 + addiu order" residual was two
   spellings: `if (*src) { src++;` (no cfe post-increment temp) and the 67BDC loop order
   (docs/IDO_CODEGEN.md#post-increment-test-temp-is-a-candidate-67c1c). Expected post1b: C-build cp.
+- ~~683D4~~ **LANDED as gl_func_000683D4 (array allocator + per-element vtable ctor/finalize loop, 54/54 EXACT
+  in-unit)** -- the 99.44 wrap's "finalize vtable temp colours a1, target v0" residual was the int-returning hook
+  call's dead $v0 poisoning the BB; the fix is a BB boundary BETWEEN the `e = arr[i]` and `vt = e[7]` defs
+  (`do { vt = e[7]; } while (0);`), NOT un-poisoning the whole BB (which swaps e/vt to v0/v1)
+  (docs/IDO_CODEGEN.md#dead-v0-poison-is-per-bb-split-the-defs-683d4). `jal 0x7C860` = existing `func_7C860`
+  pin (68524 sibling), blank+reloc in the .o. Expected post1b: C-build cp. Next in post1b: 675A4 (98.89, 262 w),
+  66D54 (97.99, 102 w).
 

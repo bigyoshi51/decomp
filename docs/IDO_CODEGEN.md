@@ -14173,6 +14173,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Integer `mult` takes the RIGHT source operand in rs and allocates the right operand's temps FIRST: `(h - a0 - 1) * w` = `lw t6,w; lh t7,h; subu t8; addiu t9; mult t6,t9`, `w * (h - a0 - 1)` = `lh t6,h; subu t7; addiu t8; lw t9,w; mult t8,t9` (game_libs_func_0002CF60 EXACT 45/45, 2026-09-09 agent-c)](#mult-operand-order-head-temp-ring-2cf60) -- _A head/prologue product whose only residual is the t6..t9 numbering + `mult rs,rt` swap: swap the C operands, no local needed (a named `k = ...` local renumbers the whole ring and homes k). Complements the deeper-tree rs note under the FIFO temp-queue entry: the rs pick is source-RIGHT, not tree depth, when neither operand is a plain register._
 - [Stack-arg (5th) load register t1 = uopt candidate colour with t0 occupied; de-named = ugen ring t7, named = colour t0; ~60 spellings inert (game_libs_func_0004247C NM 22/23, 2026-09-09 agent-c)](#stack-arg-candidate-t0-vs-t1-4247c) -- _Negative result + what it rules out: prototype/varargs, dead-if keep-alives, decl/assign order, folded casts / masks on the lh operand, uchar/ushort callee returns, struct-typed globals, K&R fnptr, extra dead args. The ring is t6,t7,t8,(t9 skipped after a jalr),t0,t1,... and a subsumed mask on an lhu DOES shift the post-call pop by one (lh has no identity mask). Open: what zero-emission LR holds t0 in the target._
 - [DL-packet append macro: FUNCTION-scope g/i/p colour ONE way for every packet in a BB (v1/a1/a2); BLOCK-scope temps with `i` loaded BEFORE `g` recolour a later packet (v0/v1/a0 exact for the if-arm packet); do{}while(0) around packets regresses (game_libs_func_0004CDB0 NM 78/83, 2026-09-09 agent-c)](#packet-macro-scope-colouring-4cdb0) -- _Per-packet colours in one straight-line BB mean distinct variables per packet, not one macro var set; the CSE'd `obj->0xC` temp is coloured before a fresh `i` in the same block whatever the statement order (packet 3 residual)._
+- [Vec3 cross product leaf: three named float results with the LAST-stored one (`z`) declared FIRST (`float z, y, x;` -> z homed at the frame top 0x24 for the jr-delay `swc1 $f4,8(a2)`; `float x, y, z;` homes it at 0x1C) AND the three `o->x = x; o->y = y; o->z = z;` stores on ONE source line (separate lines emit x, y, z; one line = the target's y, x, z order) (game_libs_func_0005C948 EXACT 29/29, 2026-09-09 agent-c)](#cross-product-decl-order-same-line-stores-5c948) -- _The hoisted 6-word head (four component loads + first mul.s above `addiu sp`) was the "CALLER-SET-FPU, 8 FPU inputs at entry" cap on gl_func_0005C960. Direct `o->x = expr` stores, a local `V3 t; *o = t;` and `float t[3]` all reorder the loads and shrink the frame (27-29 diff). The same-line rule is a uopt statement-order effect, not a scheduler one: the standalone one-liner matched first and the in-tree three-liner did not._
+- [Inline address-constant base (macro `((unsigned char *)&SYM)[off]` at EVERY site) = uopt's rematerialised held base: ONE colour (v1) across an if-join for all pre-call reads, re-formed `lui/addiu` after the call for a load/store pair; a NAMED `unsigned char *reg = &SYM` local is its own candidate (a1, dropped at the join, per-site `lui at/t0` after the call) -- `volatile` pointee and a typed struct pointer keep the named shape (game_libs_func_00026CCC EXACT 32/32, 2026-09-09 agent-c)](#inline-address-constant-base-vs-named-pointer-local-26ccc) -- _Tell: the same base register before AND after a call with `addiu rX,rX,0` both times, plus a `lw a0,off(rX)` call arg after an if-join. Companion of #held-base-scalar-inline-head-compare-61728 (scalar) and #volatile-pointee-held-base-inline-addend-2dc74 (baked addend): addend 0 + multi-block = inline macro, never a local._
 - [Held-base scalar global (`lui a1; addiu a1,0; lw v1,0(a1)` hoisted head, `sw t6,0(a1)` tail): compare the global INLINE in the head and read the named local ONCE after the if (uopt PRE reloads on the call path only; a named `n` with two defs colours n=v0/&count=v1), and store `count = n + 1` BEFORE the table stores with the second index re-reading the global (`table[n + 1]` folds to `4(base)` and drops the held base) (game_libs_func_00061728 EXACT 29/29, 2026-09-09 agent-c)](#held-base-scalar-inline-head-compare-61728) -- _Tell: `addiu t6,v1,1` is the FIRST ring temp and the count store is the last `sw` off the same base register the head loaded through. `extern int`, `int[1]`, struct member and static-def spellings all give the held base once the structure is right; the callee of the guard is a blank import (a baked in-TU jal breaks the 0C000000 word)._
 - [Hoisted record-index head (`li t0,K; multu a1,t0; lui v0; addiu v0`): an `int` param narrowed with `(short)` at BOTH call sites is the homed-int-param `sw/lh` narrowing PLUS a temp spilled across the first call (`sw a2,0x18` in the jal delay); `(u16field & 0xFFFF)` re-phases the post-call ugen ring; `Rec *e` named at function scope + `int k` named INSIDE the if-block colours base=v0/e=v1/k=a3 with the sll/sra (game_libs_func_0001D4B0 NM 99.90, 41/41 body words, frame 0x30 vs 0x28, 2026-09-09 agent-c)](#hoisted-record-index-head-int-param-short-cast-spill-1d4b0) -- _A `short` param re-narrows from its home (`lh a2,0x32(sp)`) and never spills; any int-typed spelling of `k` (`int k` at top, `(short)(x+0)`, `(int)`, `|0`) colours k=v0 FIRST -- only the block-scoped name after `e` puts it after base/e. Residual = ONE extra named-local home (target: one home + a phantom temploc); 1-/2-name spellings all spawn phantom templocs or flip k._
 - [Comma-constant `(0, (float)2) * q`: cfe folds `2.0f * x` to `add.s x,x`, `(float)2` keeps the `mtc1 2.0; mul.s`, and the COMMA makes the constant an expression operand so uopt orders it FIRST vs an inline struct load (`mul.s $f18,$f4,$f2` = 2.0 * y); nine named products homed top-down in decl order, quaternion reads inline (game_libs_func_0005D754 EXACT 109/109, 2026-09-09 agent-c)](#comma-constant-const-first-mul-5d754) -- _Commutative FP operand rank vs a literal: inline `o->f` load = load-first (every constant value, every literal spelling); named local / `(t = K)` / `(0, K)` = const-first; `p[i]` / `*p` / cast-index = const-first BUT product-second. Regime A (in-place loads) is needed for the target schedule, so the comma or assignment-expression form is the only lever that keeps the loads unnamed._
@@ -14188,6 +14190,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Named-scalar homes interleave with aggregates top-down in declaration order (65060 EXACT 58/58, 68990 5-scalar map)](#named-scalar-homes-interleave-declaration-order-65060) -- _a named pointer declared FIRST homes at the frame TOP; "scalar homes always bottom" retracted; count scalars above/below the aggregate._
 - [for(;;)+if(done)break vs do-while reorders the s-reg candidates (68990 EXACT 93/93)](#for-break-vs-do-while-s-reg-candidate-order-68990) -- _do-while / while colour &a s3, done s4; the for-break form gives done s3 / &a s4 / &b s5 with the same beqz back edge; switch labels -1..4 + case 0/3 on default = addiu+1 / sltiu 6._
 - [-O2 frame bottom = dead homes for named scalars: with <= 3 named scalars the leaf frame bottom is 12 bytes, every further named scalar (int, float, pointer, constant-valued or `register` alike) adds a 4-byte home rounded to 8 -- so a target with a 12-byte bottom names at most three (gl_func_000659D0 measurements, 2026-09-09 agent-g)](#named-scalar-dead-homes-frame-bottom-659cc) -- _Loop-carried `pos = node + K` bases and named float temps therefore cost frame even when register-only; the same function shows uopt folding every unnamed `node + K` into `disp(v1)` (plain/int/V3f/volatile-pointee/cast chains), holding it only through if(1)/do-while(0)/phi forms (each +1 home), and NOT scalarizing V3f struct temps (+11 words)._
+- [Dead-$v0 poison of an int-returning call is PER BASIC BLOCK: two candidates born after the call in the same BB colour v1/a1; un-poisoning the whole BB (`if (1) {}` after the call / void callee) gives v0/v1 in def order; a target with the FIRST candidate v1 and the SECOND v0 needs a BB boundary BETWEEN the two defs -- `e = arr[i]; do { vt = e[7]; } while (0);` (gl_func_000683D4 vtable ctor/finalize loop, 54/54 EXACT, 2026-09-09 agent-g)](#dead-v0-poison-is-per-bb-split-the-defs-683d4) -- _The poisoned candidate keeps its v1 in the call BB while the clean one takes v0 in the next BB; if(1){} or do{}while(0) between the defs are equivalent. Reusing one pointer name across two call sites makes it a cross-BB web and flips the FIRST site (v0/v1 swap); the naming levers (named vt, decl order, de-named CSE `e`) are all inert against the poison. Same family as #feedback-ido-dispatcher-v0-eviction-else-tail / the 373 void-callee entry, which un-poison the whole BB._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -25819,6 +25822,85 @@ v1/a1/a2, packet 3 = a0/v1/a1 (i before g), if-arm packet = v1/v0/a0 (i before g
   one call-free stretch -> per-site alias extern (349E0 rule) or they CSE into one `lui/addiu v0` base.
 
 
+## Vec3 cross-product leaf: z-first declaration order + same-line result stores (game_libs_func_0005C948 EXACT 29/29, 2026-09-09 agent-c) <a name="cross-product-decl-order-same-line-stores-5c948"></a>
+
+**Target** (0x74; the first 6 words were the `game_libs_func_0005C948` orphan, exported at
+text 0x70FB4; `gl_func_0005C960` at +0x18 is not exported): `lwc1 f2,4(a0); lwc1 f12,8(a1);
+lwc1 f14,8(a0); lwc1 f16,4(a1); mul.s f4,f2,f12; lwc1 f8,0(a1); addiu sp,-40; mul.s f6,f14,f16;
+swc1 f8,8(sp); lwc1 f10,0(a0); swc1 f10,4(sp); lwc1 f8,4(sp); sub.s f0,f4,f6; lwc1 f4,8(sp);
+mul.s f6,f14,f4; nop; mul.s f10,f8,f12; sub.s f18,f6,f10; mul.s f6,f8,f16; nop; mul.s
+f10,f2,f4; sub.s f8,f6,f10; swc1 f8,0x24(sp); swc1 f18,4(a2); swc1 f0,0(a2); lwc1 f4,0x24(sp);
+addiu sp,40; jr ra; swc1 f4,8(a2)`. The a.x / b.x homes at sp+4 / sp+8 and the z home at
+sp+0x24 all fall out of plain -O2 once the shape is right.
+
+**Exact C:**
+```c
+typedef struct { float x, y, z; } Vec3_5C948;
+void game_libs_func_0005C948(Vec3_5C948 *a, Vec3_5C948 *b, Vec3_5C948 *o) {
+    float z, y, x;
+    x = a->y * b->z - a->z * b->y;
+    y = a->z * b->x - a->x * b->z;
+    z = a->x * b->y - a->y * b->x;
+    o->x = x; o->y = y; o->z = z;   /* ONE line */
+}
+```
+1. **Declaration order = home slot.** Named float locals are homed top-down in declaration
+   order (the 258C0 / 3F9BC rule). Only `z` is actually stored and reloaded (it feeds the
+   `jr ra` delay-slot store), and the target keeps it at the frame top 0x24: declare it
+   FIRST. `float x, y, z;` lands it at 0x1C = the only 2 diff words.
+2. **Same-line stores.** With the three result stores on separate lines uopt emits them x, y,
+   z; on ONE line it emits the target's y, x, z (the standalone one-liner matched before the
+   in-tree three-liner did). Textual line breaks are a real uopt input here.
+3. Wrong shapes: direct `o->x = expr` (no locals) drops the frame to 0x10 and reorders the
+   loads; `V3 t; ... *o = t;` and `float t[3]` copy through integer lw/sw (27-29 diff).
+
+## Inline address-constant base vs a named pointer local: the rematerialised held base across an if-join and a call (game_libs_func_00026CCC EXACT 32/32, 2026-09-09 agent-c) <a name="inline-address-constant-base-vs-named-pointer-local-26ccc"></a>
+
+**Target shape** (0x80, the hoisted 9-word head was the `game_libs_func_00026CCC` orphan, the
+body the old `gl_func_00026CF0` "caller-set t6/v0/v1 cap"):
+```
+lui v1,%hi(REG); addiu v1,v1,%lo(REG)       ; addend 0 -> D_00000000_345c0
+lbu v0,0x53B8(v1); lbu a3,0x53B9(v1)
+lui t6,%hi(D+0x1B594); lw t6,%lo(D+0x1B594)(t6)
+subu a0,v0,a3; addiu a0,a0,256; andi a0,a0,0xff
+addiu sp,sp,-24; slt at,t6,a0; beqz at,.J; sw ra
+lui at; sw a0,%lo(D+0x1B594)(at)
+.J: andi t7,a3,0xff; sll t8,t7,8; andi t9,v0,0xff; or a1,t8,t9
+lw a0,0x53CC(v1)                            ; SAME base register after the join
+jal submit; or a2,zero,zero
+lui v1,%hi(REG); li at,-1; beq v0,at,.E; addiu v1,v1,%lo(REG)   ; re-formed, same colour
+lbu t0,0x53B8(v1); sb t0,0x53B9(v1)
+```
+**Exact C:**
+```c
+#define REG_26CCC ((unsigned char *)&D_00000000_345c0)
+void game_libs_func_00026CCC(void) {
+    int cur, committed, n, r;
+    cur = REG_26CCC[0x53B8];
+    committed = REG_26CCC[0x53B9];
+    n = (cur - committed + 256) & 0xFF;
+    if (*(int *)((char *)&D_00000000 + 0x1B594) < n) {
+        *(int *)((char *)&D_00000000 + 0x1B594) = n;
+    }
+    r = gl_func_00000000(*(void **)(REG_26CCC + 0x53CC), ((committed & 0xFF) << 8) | (cur & 0xFF), 0);
+    if (r != -1) REG_26CCC[0x53B9] = REG_26CCC[0x53B8];
+}
+```
+**The one lever.** The base must be the address CONSTANT `&SYM` written inline at every site
+(macro). uopt then makes `&SYM` a rematerialisable candidate: one colour (v1) for the three
+pre-call uses -- including the `lw a0,0x53CC(v1)` call argument on the far side of the
+if-join -- and a fresh `lui/addiu` of the same colour after the call for the lbu/sb pair.
+Three spellings that keep a NAMED pointer all give 20-21 diff words: `unsigned char *reg =
+(unsigned char *)&SYM;` (candidate a1 for the two lbu only, dropped at the join; `lui a0` for
+the 0x53CC read; per-site `lui t0` / `lui at` after the call; committed slides a3 -> v1),
+`volatile unsigned char *reg` (a3 after the call, still per-site), and a typed `struct *q`
+(identical to the plain local). Everything else (int locals from the lbu loads, explicit
+`& 0xFF` on both pack operands = the two `andi`, `+ 256` then `& 0xFF`, the `< n` compare
+with the inline global, the `!= -1` guard) fell out of the first spelling. Companion rules:
+#held-base-scalar-inline-head-compare-61728 (scalar global held in a1) and
+#volatile-pointee-held-base-inline-addend-2dc74 (the `volatile` pointee is for a BAKED
+addend in the lui/addiu pair; with addend 0 it is the wrong tool).
+
 ## Held-base scalar global: inline head compare + single post-if read + increment-before-stores (game_libs_func_00061728 EXACT 29/29, 2026-09-09 agent-c) <a name="held-base-scalar-inline-head-compare-61728"></a>
 
 Target (push onto a 64-entry table; hoisted head merged, 29 words, frame 0x18, only `ra` saved):
@@ -26350,3 +26432,67 @@ t3,t2,0x400; li a0,0x42; beqz t3; li at,-3; and a0,a0,at; jal`.
 - Call args `(char *)&D_44B78_modes + K` (zero alias of the Data table symbol) bake K into the
   `addiu a0,a0,K`; the tail is literally `f = 2; if (mode & 0x200) f = 0x42; if (mode & 0x400)
   f &= ~2;` (the param reloads from its 0x18(sp) home per use, no local copy needed).
+
+
+## Dead-$v0 poison is per basic block: two candidates born after a call colour v1/a1, and a target with the first v1 / the second v0 needs a BB boundary BETWEEN their defs (gl_func_000683D4 array ctor + vtable finalize loop, 54/54 EXACT, 2026-09-09 agent-g) <a name="dead-v0-poison-is-per-bb-split-the-defs-683d4"></a>
+
+Target loop body (post1b, -O2), per element:
+
+```
+lw   t7,4(s1); addu t9,t7,s0
+lw   v1,0(t9)          # e  = self->arr[i]        (candidate, v1)
+lw   v0,28(v1)         # vt = e->vtbl (+0x1C)     (candidate, v0)
+lw   t9,44(v0)
+lh   t8,40(v0)
+jalr t9
+addu a0,t8,v1          # (*vt->fin)((char *)e + vt->fin_off)
+```
+
+preceded in the SAME basic block by `jal hook(arr[i])` whose int return is
+dead. The 99.44 wrap's residual was exactly `lw a1,28(v1)` (+ the two uses):
+the finalize vtable coloured a1, target v0.
+
+**Mechanism (measured, 16 spellings):** the dead `$v0` of an int-returning
+call poisons `$v0` for every candidate whose live range is inside that BB
+(the [373 void-callee entry](#feedback-ido-dispatcher-v0-eviction-else-tail)
+and the dispatcher `if (1)` fix are the whole-BB cures). Here TWO candidates
+are born after the call: `e` and `vt`. Poisoned, they take v1 then a1 (a0 is
+the outgoing arg). Un-poisoned as a whole -- `if (1) {}` right after the hook
+call, or a `void`-declared hook twin -- they take v0 then v1 **in definition
+order** (`e` v0, `vt` v1), still one swap off. Defining `vt` first
+(`vt = arr[i][7]; e = arr[i];`), de-naming `e` (CSE of `arr[i]`), decl order
+and the named-vs-CSE mix all leave that swap.
+
+**The lever is a BB boundary between the two defs, with the call's BB left
+poisoned:**
+
+```c
+e = ((int **)self[1])[i];
+do { vt = (int *)e[7]; } while (0);   /* or: if (1) {}  on its own line between the defs */
+((int (*)(int *))vt[11])((int *)(((short *)vt)[20] + (char *)e));
+```
+
+`e` is born in the poisoned BB and keeps v1; `vt` is born in the clean
+successor BB and takes v0; the delay-slot `addu a0,t8,v1` and the t-ring
+address chain are unchanged. `if (1) {}` between the defs and the
+`do { } while (0)` wrapper are equivalent here (both = one uopt BB split
+with no instructions).
+
+Companion facts from the same matrix:
+
+- The first call site of the loop (`obj = self->owner` CSE temp -> v1,
+  `parent = obj->vtbl` named -> v0) is at the loop head, a BB with no call
+  before the defs, so it colours right in def-priority order without a
+  lever; **reusing one pointer name across both sites** (`p` for parent AND
+  vt) makes `p` a cross-BB web and FLIPS the first site (obj v0 / p v1, +10
+  words), even though it is dead between the sites.
+- Naming the object at site 1 (`o = self->owner; p = o->vtbl`) pushes the
+  vtable to a1 there too: the named object takes v1 and the vtable then
+  finds v0 poisoned by the preceding alloc call's used return spanning the
+  preheader -- keep `self->owner` an unnamed CSE temp.
+- `(char *)e + off` emits `addu a0,OFF,e`; `off + (char *)e` emits
+  `addu a0,e,OFF` (operand order follows the spelling, inverted).
+- Both vtable offsets are `lh` = `((short *)vt)[k]`, signed.
+- The in-segment `jal 0x7C860` (0C01F218) is the existing `func_7C860 =
+  0x7C860` pin (68524 sibling); in the unit `.o` it is the blank
+  `0C000000` + R_MIPS_26 word, the accepted reloc-blind exception.
