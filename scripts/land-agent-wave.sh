@@ -6,6 +6,7 @@
 # regenerate expected/<unit>.o for any conflicting binary via the unit's correct baseline route, then gate.
 # A conflicting non-.o file aborts (needs a human). Never pushes.
 set -uo pipefail
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="/home/danjs/code/decomp/tools/build-venv/bin:$PATH"
 WT="${LAND_WT:-$(git rev-parse --show-toplevel)/projects/1080-agent-d}"
 S="${LAND_SCRATCH:-${TMPDIR:-/tmp}}"
@@ -47,4 +48,4 @@ for h in "$@"; do
   fi
   echo "== picked: $(git log --oneline -1 | cut -c1-80)"
 done
-exec "$(dirname "$0")/gate-landing-tree.sh"
+exec "$SELF_DIR/gate-landing-tree.sh"
