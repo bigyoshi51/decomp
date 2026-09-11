@@ -11439,7 +11439,7 @@ successor's hoisted first statement) -- all still open on origin/main at sweep t
 | 4F0C8 (6) | `lwc1 $f2,0(a1); lwc1 $f4,0x3C(a0); lwc1 $f12,4(a1); lwc1 $f8,0x4C(a0); mul.s; lwc1 $f14,8(a1)` | gl_func_0004F0E0 (19.7, 127w) | matrix * vec3 leaf, reloc-free head |
 | 4FD00 (6) | `lw t7,0x68(a0); sll v1,a1,3; li t1,6; addu t8,t7,v1; lhu t9,2(t8); lw t6,0x60(a0)` | gl_func_0004FD18 (43.0, 245w) | 8-byte record index |
 | 5C948 (6) | `lwc1 $f2,4(a0); lwc1 $f12,8(a1); lwc1 $f14,8(a0); lwc1 $f16,4(a1); mul.s $f4,$f2,$f12; lwc1 $f8,0(a1)` | gl_func_0005C960 (INCLUDE_ASM, 23w) | Vec3 cross product, NO relocs in 5C948..5C9BC (pure leaf, 29w) |
-| 5D1F0 (7) | `lui at,0x4000; mtc1 at,$f16; lwc1 $f0,4(a0); lwc1 $f18,0(a0); lwc1 $f2,8(a0); mul.s $f6,$f16,$f0; lwc1 $f4,0xC(a0)` | gl_func_0005D20C (10.8, 62w) | 5D754 family (2.0f quaternion product), leaf |
+| 5D1F0 (7) | `lui at,0x4000; mtc1 at,$f16; lwc1 $f0,4(a0); lwc1 $f18,0(a0); lwc1 $f2,8(a0); mul.s $f6,$f16,$f0; lwc1 $f4,0xC(a0)` | gl_func_0005D20C (10.8, 62w) | **BYTE-EXACT 69/69 2026-09-09 (agent-c)**: quat -> 3x3 in a 4-stride matrix; named inputs + int `2` + column-major statement order (IDO_CODEGEN#quat-to-3x3-column-major-int-2-5d1f0); 5D20C retired, post0b clip 0x2d71c -> 0x2d6dc |
 | 2A014 LAST word (1) | `addiu t6,a2,-242` sits at 0x2A07C = a baked-jal target (x3); 2A014 is exported at its own start and its `jr ra; nop` ends at 0x2A078 | gl_func_0002A080 (92.0, 118w; 9 RoData jumptable refs) | 2A080 is `switch (a2 - 242)` over 14 cases: needs the post-unit jumptable donor (29CCC / 44B78 recipe); 2A014 (73.1) loses its last word |
 
 (d) rows: 3DB3C (44w, 83.2) is branched into from 3DA14 @0x3DB38 -> 0x3DB48 = the 3DA14 tail
@@ -12035,4 +12035,7 @@ BYTE-EXACT, two tightened NM wraps, the 65EE4 a2-birth probe closed negative.**
   (docs/IDO_CODEGEN.md#dead-v0-poison-is-per-bb-split-the-defs-683d4). `jal 0x7C860` = existing `func_7C860`
   pin (68524 sibling), blank+reloc in the .o. Expected post1b: C-build cp. Next in post1b: 675A4 (98.89, 262 w),
   66D54 (97.99, 102 w).
+- 675A4 **NM 46 -> 13 words** (three ring/operand spellings: store-forwarded 0x18 web, `idx*4 + base`
+  cursor, `(cur | 0) & ~prev`; docs/IDO_CODEGEN.md#store-forward-ring-across-bb-and-scaled-index-first-675a4).
+  Residual = the FP 3-cycle (double threshold colours first by adjsave x2); 30 spellings inert, listed there.
 

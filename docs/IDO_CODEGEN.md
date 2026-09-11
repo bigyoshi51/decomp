@@ -14173,6 +14173,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Integer `mult` takes the RIGHT source operand in rs and allocates the right operand's temps FIRST: `(h - a0 - 1) * w` = `lw t6,w; lh t7,h; subu t8; addiu t9; mult t6,t9`, `w * (h - a0 - 1)` = `lh t6,h; subu t7; addiu t8; lw t9,w; mult t8,t9` (game_libs_func_0002CF60 EXACT 45/45, 2026-09-09 agent-c)](#mult-operand-order-head-temp-ring-2cf60) -- _A head/prologue product whose only residual is the t6..t9 numbering + `mult rs,rt` swap: swap the C operands, no local needed (a named `k = ...` local renumbers the whole ring and homes k). Complements the deeper-tree rs note under the FIFO temp-queue entry: the rs pick is source-RIGHT, not tree depth, when neither operand is a plain register._
 - [Stack-arg (5th) load register t1 = uopt candidate colour with t0 occupied; de-named = ugen ring t7, named = colour t0; ~60 spellings inert (game_libs_func_0004247C NM 22/23, 2026-09-09 agent-c)](#stack-arg-candidate-t0-vs-t1-4247c) -- _Negative result + what it rules out: prototype/varargs, dead-if keep-alives, decl/assign order, folded casts / masks on the lh operand, uchar/ushort callee returns, struct-typed globals, K&R fnptr, extra dead args. The ring is t6,t7,t8,(t9 skipped after a jalr),t0,t1,... and a subsumed mask on an lhu DOES shift the post-call pop by one (lh has no identity mask). Open: what zero-emission LR holds t0 in the target._
 - [DL-packet append macro: FUNCTION-scope g/i/p colour ONE way for every packet in a BB (v1/a1/a2); BLOCK-scope temps with `i` loaded BEFORE `g` recolour a later packet (v0/v1/a0 exact for the if-arm packet); do{}while(0) around packets regresses (game_libs_func_0004CDB0 NM 78/83, 2026-09-09 agent-c)](#packet-macro-scope-colouring-4cdb0) -- _Per-packet colours in one straight-line BB mean distinct variables per packet, not one macro var set; the CSE'd `obj->0xC` temp is coloured before a fresh `i` in the same block whatever the statement order (packet 3 residual)._
+- [Quaternion -> 3x3 (4-stride) matrix: named input locals + int `2` multiplier + COLUMN-major statement order m[0],m[4],m[8],m[1],... (row-major = 32 diff words at the same size); 5D1F0 EXACT 69/69, the "caller-set $f4/$f6 entry" was the hoisted head](#quat-to-3x3-column-major-int-2-5d1f0)
 - [Vec3 cross product leaf: three named float results with the LAST-stored one (`z`) declared FIRST (`float z, y, x;` -> z homed at the frame top 0x24 for the jr-delay `swc1 $f4,8(a2)`; `float x, y, z;` homes it at 0x1C) AND the three `o->x = x; o->y = y; o->z = z;` stores on ONE source line (separate lines emit x, y, z; one line = the target's y, x, z order) (game_libs_func_0005C948 EXACT 29/29, 2026-09-09 agent-c)](#cross-product-decl-order-same-line-stores-5c948) -- _The hoisted 6-word head (four component loads + first mul.s above `addiu sp`) was the "CALLER-SET-FPU, 8 FPU inputs at entry" cap on gl_func_0005C960. Direct `o->x = expr` stores, a local `V3 t; *o = t;` and `float t[3]` all reorder the loads and shrink the frame (27-29 diff). The same-line rule is a uopt statement-order effect, not a scheduler one: the standalone one-liner matched first and the in-tree three-liner did not._
 - [Inline address-constant base (macro `((unsigned char *)&SYM)[off]` at EVERY site) = uopt's rematerialised held base: ONE colour (v1) across an if-join for all pre-call reads, re-formed `lui/addiu` after the call for a load/store pair; a NAMED `unsigned char *reg = &SYM` local is its own candidate (a1, dropped at the join, per-site `lui at/t0` after the call) -- `volatile` pointee and a typed struct pointer keep the named shape (game_libs_func_00026CCC EXACT 32/32, 2026-09-09 agent-c)](#inline-address-constant-base-vs-named-pointer-local-26ccc) -- _Tell: the same base register before AND after a call with `addiu rX,rX,0` both times, plus a `lw a0,off(rX)` call arg after an if-join. Companion of #held-base-scalar-inline-head-compare-61728 (scalar) and #volatile-pointee-held-base-inline-addend-2dc74 (baked addend): addend 0 + multi-block = inline macro, never a local._
 - [Held-base scalar global (`lui a1; addiu a1,0; lw v1,0(a1)` hoisted head, `sw t6,0(a1)` tail): compare the global INLINE in the head and read the named local ONCE after the if (uopt PRE reloads on the call path only; a named `n` with two defs colours n=v0/&count=v1), and store `count = n + 1` BEFORE the table stores with the second index re-reading the global (`table[n + 1]` folds to `4(base)` and drops the held base) (game_libs_func_00061728 EXACT 29/29, 2026-09-09 agent-c)](#held-base-scalar-inline-head-compare-61728) -- _Tell: `addiu t6,v1,1` is the FIRST ring temp and the count store is the last `sw` off the same base register the head loaded through. `extern int`, `int[1]`, struct member and static-def spellings all give the held base once the structure is right; the callee of the guard is a blank import (a baked in-TU jal breaks the 0C000000 word)._
@@ -14191,6 +14192,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [for(;;)+if(done)break vs do-while reorders the s-reg candidates (68990 EXACT 93/93)](#for-break-vs-do-while-s-reg-candidate-order-68990) -- _do-while / while colour &a s3, done s4; the for-break form gives done s3 / &a s4 / &b s5 with the same beqz back edge; switch labels -1..4 + case 0/3 on default = addiu+1 / sltiu 6._
 - [-O2 frame bottom = dead homes for named scalars: with <= 3 named scalars the leaf frame bottom is 12 bytes, every further named scalar (int, float, pointer, constant-valued or `register` alike) adds a 4-byte home rounded to 8 -- so a target with a 12-byte bottom names at most three (gl_func_000659D0 measurements, 2026-09-09 agent-g)](#named-scalar-dead-homes-frame-bottom-659cc) -- _Loop-carried `pos = node + K` bases and named float temps therefore cost frame even when register-only; the same function shows uopt folding every unnamed `node + K` into `disp(v1)` (plain/int/V3f/volatile-pointee/cast chains), holding it only through if(1)/do-while(0)/phi forms (each +1 home), and NOT scalarizing V3f struct temps (+11 words)._
 - [Dead-$v0 poison of an int-returning call is PER BASIC BLOCK: two candidates born after the call in the same BB colour v1/a1; un-poisoning the whole BB (`if (1) {}` after the call / void callee) gives v0/v1 in def order; a target with the FIRST candidate v1 and the SECOND v0 needs a BB boundary BETWEEN the two defs -- `e = arr[i]; do { vt = e[7]; } while (0);` (gl_func_000683D4 vtable ctor/finalize loop, 54/54 EXACT, 2026-09-09 agent-g)](#dead-v0-poison-is-per-bb-split-the-defs-683d4) -- _The poisoned candidate keeps its v1 in the call BB while the clean one takes v0 in the next BB; if(1){} or do{}while(0) between the defs are equivalent. Reusing one pointer name across two call sites makes it a cross-BB web and flips the FIRST site (v0/v1 swap); the naming levers (named vt, decl order, de-named CSE `e`) are all inert against the poison. Same family as #feedback-ido-dispatcher-v0-eviction-else-tail / the 373 void-callee entry, which un-poison the whole BB._
+- [A cross-BB value held in a RING temp (target `and t6; sw t6,24(a3); beqz; ... and v0,t5,t6`) is a stored value re-read by address in the next BB -- spell `p->f = expr; ... p->g & p->f` (uopt store-forwards the ring temp across the branch; a named local makes an a1 candidate); a `base + idx*4` cursor allocates the sll temp BEFORE the loads (t7 sll / t8,t9 loads) while `idx*4 + base` allocates the loads first (t7,t8 / sll t9) and un-shifts the whole downstream ring; `(cur | 0) & ~prev` puts the candidate first in the `and` (gl_func_000675A4 46 -> 13 words, 2026-09-09 agent-g)](#store-forward-ring-across-bb-and-scaled-index-first-675a4) -- _Residual = an FP candidate 3-cycle (zero/thr/e f12/f14/f2 vs ours f14/f2/f12) that the compute_save model explains: the double threshold gets adjsave x2 and colours first into the lowest free colour; 30 spellings inert (list inside), 7.1 uopt has no type-based alias (inline double-global reads reload across a float store through the param)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -25822,6 +25824,49 @@ v1/a1/a2, packet 3 = a0/v1/a1 (i before g), if-arm packet = v1/v0/a0 (i before g
   one call-free stretch -> per-site alias extern (349E0 rule) or they CSE into one `lui/addiu v0` base.
 
 
+## Quaternion -> 3x3 (4-stride) matrix: named inputs, int `2` multiplier, COLUMN-major statement order (game_libs_func_0005D1F0 EXACT 69/69, 2026-09-09 agent-c) <a name="quat-to-3x3-column-major-int-2-5d1f0"></a>
+
+**Target** (0x114; the 7-word `game_libs_func_0005D1F0` orphan is exported at text 0x7185C, `gl_func_0005D20C`
+at +0x1C is not -- the old "caller-set $f4/$f6 entry cap" was this hoisted head): `lui at,0x4000; mtc1 at,$f16;
+lwc1 $f0,4(a0)` (y) `; lwc1 $f18,0(a0)` (x) `; lwc1 $f2,8(a0)` (z) `; mul.s $f6,$f16,$f0` (2*y, CONST FIRST) `;
+lwc1 $f4,0xC(a0)` (w) `; addiu sp,-48; lui at,0x3f80; swc1 $f4,0x20(sp)` (w spilled) `; swc1 $f6,0x1C(sp); lwc1
+$f8,0x1C(sp); mul.s $f10,$f8,$f0` ((2y)*y) ... nine stores to `0/4/8, 0x10/0x14/0x18, 0x20/0x24/0x28(a1)`, 1.0 via
+`mtc1 at,$f8` re-materialised twice, 2.0 HELD in $f16 for all twelve `2*q` products, eight of those products
+spilled at sp+0x1C..0x04 in first-store order, frame 0x30, no relocs, pure leaf.
+
+**Exact C** (`-O2 -mips2 -32 -Xcpluscomm`, first in-tree build):
+```c
+typedef struct { float x, y, z, w; } Quat5D1F0;
+void game_libs_func_0005D1F0(Quat5D1F0 *q, float *m) {
+    float x = q->x, y = q->y, z = q->z, w = q->w;
+    m[0] = 1.0f - 2 * y * y - 2 * z * z;
+    m[4] = 2 * x * y - 2 * w * z;
+    m[8] = 2 * x * z + 2 * w * y;
+    m[1] = 2 * x * y + 2 * w * z;
+    m[5] = 1.0f - 2 * x * x - 2 * z * z;
+    m[9] = 2 * y * z - 2 * w * x;
+    m[2] = 2 * x * z - 2 * w * y;
+    m[6] = 2 * y * z + 2 * w * x;
+    m[10] = 1.0f - 2 * x * x - 2 * y * y;
+}
+```
+1. **Named input locals** give the head: all four loads hoisted above `addiu sp` in first-use order (y, x, z,
+   then w after the first product), the 9-use constant coloured first ($f16), w (fewest early uses) spilled at
+   the frame top. In-place `q->y * q->y` loads (no locals) re-load every field per statement (the stores to `m`
+   may alias `q`): 109 words, no CSE.
+2. **Int `2`, grouped `2 * y * y`** = `mul.s $f16,$f0` (const first: a plain local does not outrank a literal --
+   #comma-constant-const-first-mul-5d754) then `mul.s (2y),y`. `2.0f` strength-reduces to `add.s` (the 65B40
+   rule). The 2*q products are unnamed CSE temps: 2y / 2x / 2w reused across statements and spilled around their
+   uses; 2z (one use) never homed.
+3. **Statement order = column-major** `m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]`. Row-major order
+   (`m[0], m[1], m[2], m[4], ...` or `m[0], m[4], m[1], m[8], ...`) computes/stores m[1] before the 2xz / 2wy
+   products and re-colours everything after +0x80: 32 diff words at the same size. Swapping only the m[2]/m[6]
+   pair costs 7. The target's interleaved `add.s`/`sub.s` pairs (m[1] next to m[8], m[6] next to m[2]) are the
+   scheduler pulling the register-resident products' second use forward, not a source-order hint.
+Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (5D1F0 row). Sibling shapes:
+#int-2-multiplier-keeps-mul-s-two-pointer-locals-65b40 (same maths through folded pointer locals, row 2 first),
+#comma-constant-const-first-mul-5d754 (in-place loads + comma constant).
+
 ## Vec3 cross-product leaf: z-first declaration order + same-line result stores (game_libs_func_0005C948 EXACT 29/29, 2026-09-09 agent-c) <a name="cross-product-decl-order-same-line-stores-5c948"></a>
 
 **Target** (0x74; the first 6 words were the `game_libs_func_0005C948` orphan, exported at
@@ -26496,3 +26541,48 @@ Companion facts from the same matrix:
 - The in-segment `jal 0x7C860` (0C01F218) is the existing `func_7C860 =
   0x7C860` pin (68524 sibling); in the unit `.o` it is the blank
   `0C000000` + R_MIPS_26 word, the accepted reloc-blind exception.
+
+
+## A cross-BB ring temp = store-forwarded memory value (spell the re-read by address, not a named local); `idx*4 + base` allocates the loads before the sll temp; `(x | 0) & ~y` puts the candidate first in `and` (gl_func_000675A4 46 -> 13 words, 2026-09-09 agent-g) <a name="store-forward-ring-across-bb-and-scaled-index-first-675a4"></a>
+
+Three ring/operand levers from the 1048B input-debounce routine (post1b, -O2, 262 words), each
+measured standalone against the raw target words:
+
+1. **A value that lives across a basic-block boundary in a t-register is NOT a uopt candidate.**
+   Target tail: `and t6,v0,t1; and t3,t4,v1; sw t6,24(a3); beqz a0,ELSE; sw t3,28(a3); ...
+   lw t5,36(a3); and v0,t5,t6` (then-arm re-uses t6) while the else-arm does a real
+   `lw v0,24(a3)`. A named local (`t = cur & ~prev; p->f18 = t; ... p->f24 & t`) makes `t` a
+   candidate and colours it a1 (+ shifts the ring). Spell the then-arm re-read BY ADDRESS:
+   `p->f18 = cur & ~prev; ... x = p->f18 & p->f24;` -- uopt store-forwards the ring temp of the
+   store across the branch, and the else-arm's `p->f18` (a different BB, different use shape)
+   stays a load. Operand order of the re-read: `p->f18 & p->f24` gives `and v0,t5,t6` (loaded
+   operand first); `p->f24 & p->f18` gives `and v0,t6,t2`.
+2. **Ring allocation order follows the ucode tree, and a scaled index spelled FIRST allocates
+   the two loads before the shift temp.** `cur = base + idx * 4` (`FW(0x5C) + FW(0x50)*4`)
+   emits `lw t8,80; lw t9,92; sll t7,t8` (the sll's temp was taken before the loads);
+   `idx * 4 + base` emits the target `lw t7,80; lw t8,92; sll t9,t7; addu v0,t8,t9`. The
+   difference is one ring slot, but it propagates: every later t7/t8 pair in the function
+   (four `+-0.5` flag arms, the tail) was off by one from this single statement. Casts
+   (`(char *)base + idx*4`, `&((int *)base)[idx]`, `<< 2`) do not change it; only the operand
+   order does. (Same family as #addu-operand-order-is-ucode-shape.)
+3. **`(cur | 0) & ~prev` = `and rd,cur,nor`; `cur & ~prev` and `~prev & cur` both =
+   `and rd,nor,cur`.** The deeper subtree is evaluated first and becomes the left operand; the
+   `| 0` (zero-emission) makes the candidate side the deeper one. `(cur ^ 0)` is equivalent;
+   `~(prev | 0)` does nothing; `0xFFFFFFFF ^ prev` adds a word.
+
+**Residual (13 words), measured, not closed: the FP candidate 3-cycle in the threshold block.**
+Target: `mtc1 zero,$f12` (0.0f, 4 uses: 2 `c.lt.s`, 2 conditional `swc1`), `ldc1 $f14,D_thr`
+(double, 2 `c.lt.d`), `lwc1 $f2,4(a3)` (the y value, `c.lt.s`/`neg.s`/`mov.s`); ours f14/f2/f12.
+With the FP colour preference f0, f2, f12, f14 (#fp-colouring-per-block-dowhile0-boundary-35e64)
+the target is the colouring order (e, zero, thr) and ours is (thr, e, zero) -- exactly the
+compute_save order (#uopt-regalloc-algorithm rules: `adjsave = totalsave / span`, x2 for a
+double): thr ~2 uses x2 / span 5 = 0.8, e ~2 (join use + two 0.5-arms) / 3 = 0.67, zero ~3 / 7
+= 0.43. The double colours first and takes the lowest free colour (f2 once the 80.0 constant is
+dead; f0 if var_f0 is split per axis). Inert (30): decl orders; named / `register` zero; inline
+or CSE e; volatile e; thr via pointer, block-scope initializer, whole-function span (spills
+across the earlier calls), `register`, float (then order e, thr, zero); reversed compare
+spelling; `do { } while (0)` around either or both axis blocks; merged temp_f0/var_f0 LR; split
+var_f0; struct-typed `c->x = 0.0f` stores with inline `D_thr` reads (7.1 uopt has NO
+type-based alias disambiguation: the second read reloads across the float store through the
+param). Whatever the original source did, it either lowered the double's adjsave below the two
+floats' or coloured thr on the unconstrained (bitpos) path -- uoptlist territory.
