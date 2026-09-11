@@ -14189,10 +14189,12 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [`if (*p++)` tested byte = cfe temp candidate (lbu v0); `if (*p) { p++; }` keeps the t-ring load and hoists the increment; 67BDC loop order (67C1C 29/29 EXACT)](#post-increment-test-temp-is-a-candidate-67c1c) -- _25-cell matrix; `c = *qs` before `src++` folds the cursor copy (28 w); if(1) barrier inert here._
 - [`*p++` old-value cursor at -O2: `q = p; p++; if (1) { *q = c; }` keeps `or v1,v0` + `sb 0(v1)` + `addiu v0,1` WITHOUT evicting the a1 param (game_libs_func_00067D50 memset 10/12, 2026-09-09 agent-g)](#post-increment-old-value-if1-barrier-67d50) -- _Plain `*p++`, `*p = c; p++`, `q = p++`, int-typed p all fold to `sb 0(v0)`; `q = p; p++; *q = c` without the barrier colours q into a1 and moves c to a3 (+1 word). 7.1 -O2 == 5.3 -O2 here; -O1 homes p (frame 8). Residual = the loop-bottom `n--` old-value copy's colour (target a3 before the sb, ours v1 after it) -- 40 spellings inert. Retracts the "IDO -O2 unrolls by 4 / needs a lower-opt split" note on that function._
 - [Named-scalar homes interleave with aggregates top-down in declaration order (65060 EXACT 58/58, 68990 5-scalar map)](#named-scalar-homes-interleave-declaration-order-65060) -- _a named pointer declared FIRST homes at the frame TOP; "scalar homes always bottom" retracted; count scalars above/below the aggregate._
+- [4-term lane sum: spell it REVERSED + right-associated `m3 + (p2 + (p1 + p0))` to get the left-linear chain with the m[3][c] load as the SECOND add.s operand; the natural `p0+p1+p2+m3` puts the load first and re-colours the lanes; one reused `int c` colours $v0 and blocks the `addiu v0,1` hoist (beqzl + delay-slot return); unused `float pad[5]` = 5 phantom slots above the z home (game_libs_func_0004F0C8 point projection EXACT 133/133, agent-c)](#reversed-right-assoc-sum-load-last-phantom-slots-4f0c8) -- _96-cell association/order matrix inside; T3 reversed is the ONLY 40-diff cell, every left-linear order is 72+._
 - [for(;;)+if(done)break vs do-while reorders the s-reg candidates (68990 EXACT 93/93)](#for-break-vs-do-while-s-reg-candidate-order-68990) -- _do-while / while colour &a s3, done s4; the for-break form gives done s3 / &a s4 / &b s5 with the same beqz back edge; switch labels -1..4 + case 0/3 on default = addiu+1 / sltiu 6._
 - [-O2 frame bottom = dead homes for named scalars: with <= 3 named scalars the leaf frame bottom is 12 bytes, every further named scalar (int, float, pointer, constant-valued or `register` alike) adds a 4-byte home rounded to 8 -- so a target with a 12-byte bottom names at most three (gl_func_000659D0 measurements, 2026-09-09 agent-g)](#named-scalar-dead-homes-frame-bottom-659cc) -- _Loop-carried `pos = node + K` bases and named float temps therefore cost frame even when register-only; the same function shows uopt folding every unnamed `node + K` into `disp(v1)` (plain/int/V3f/volatile-pointee/cast chains), holding it only through if(1)/do-while(0)/phi forms (each +1 home), and NOT scalarizing V3f struct temps (+11 words)._
 - [Dead-$v0 poison of an int-returning call is PER BASIC BLOCK: two candidates born after the call in the same BB colour v1/a1; un-poisoning the whole BB (`if (1) {}` after the call / void callee) gives v0/v1 in def order; a target with the FIRST candidate v1 and the SECOND v0 needs a BB boundary BETWEEN the two defs -- `e = arr[i]; do { vt = e[7]; } while (0);` (gl_func_000683D4 vtable ctor/finalize loop, 54/54 EXACT, 2026-09-09 agent-g)](#dead-v0-poison-is-per-bb-split-the-defs-683d4) -- _The poisoned candidate keeps its v1 in the call BB while the clean one takes v0 in the next BB; if(1){} or do{}while(0) between the defs are equivalent. Reusing one pointer name across two call sites makes it a cross-BB web and flips the FIRST site (v0/v1 swap); the naming levers (named vt, decl order, de-named CSE `e`) are all inert against the poison. Same family as #feedback-ido-dispatcher-v0-eviction-else-tail / the 373 void-callee entry, which un-poison the whole BB._
-- [A cross-BB value held in a RING temp (target `and t6; sw t6,24(a3); beqz; ... and v0,t5,t6`) is a stored value re-read by address in the next BB -- spell `p->f = expr; ... p->g & p->f` (uopt store-forwards the ring temp across the branch; a named local makes an a1 candidate); a `base + idx*4` cursor allocates the sll temp BEFORE the loads (t7 sll / t8,t9 loads) while `idx*4 + base` allocates the loads first (t7,t8 / sll t9) and un-shifts the whole downstream ring; `(cur | 0) & ~prev` puts the candidate first in the `and` (gl_func_000675A4 46 -> 13 words, 2026-09-09 agent-g)](#store-forward-ring-across-bb-and-scaled-index-first-675a4) -- _Residual = an FP candidate 3-cycle (zero/thr/e f12/f14/f2 vs ours f14/f2/f12) that the compute_save model explains: the double threshold gets adjsave x2 and colours first into the lowest free colour; 30 spellings inert (list inside), 7.1 uopt has no type-based alias (inline double-global reads reload across a float store through the param)._
+- [A cross-BB value held in a RING temp (target `and t6; sw t6,24(a3); beqz; ... and v0,t5,t6`) is a stored value re-read by address in the next BB -- spell `p->f = expr; ... p->g & p->f` (uopt store-forwards the ring temp across the branch; a named local makes an a1 candidate); a `base + idx*4` cursor allocates the sll temp BEFORE the loads (t7 sll / t8,t9 loads) while `idx*4 + base` allocates the loads first (t7,t8 / sll t9) and un-shifts the whole downstream ring; `(cur | 0) & ~prev` puts the candidate first in the `and` (gl_func_000675A4 46 -> 13 words, 2026-09-09 agent-g)](#store-forward-ring-across-bb-and-scaled-index-first-675a4) -- _2026-09-11: 13 -> 8 words, a dead `while (0) { e = c->y; }` anchor before the divisions colours e f2 (zero-constant anchors inert). Residual = zero/thr f12/f14 swap (was the 3-cycle zero/thr/e f12/f14/f2 vs ours f14/f2/f12) that the compute_save model explains: the double threshold gets adjsave x2 and colours first into the lowest free colour; 30 spellings inert (list inside), 7.1 uopt has no type-based alias (inline double-global reads reload across a float store through the param)._
+- [`for (i = 0; i != N; i++)` keeps the hoisted `lui/addiu` sym+K pair adjacent in the preheader; `i = 0; do {} while` lets as1 slot `or s1,zero,zero` between them (same words, 2 swapped); `== 10`/`== 0` dispatch on a call result = if/else chain, not switch; loop-invariant constants (message base, stride, 10, &local) must stay INLINE -- naming them costs a frame slot + s-order; an EXACT must call the `gl_func_00000000` blank, not the K&R in-TU `gl_func_00062F64` stub (the .o gate passes, the ROM gate fails with the stub's real jal address) (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g)](#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54) -- _Companion of 68990 (loop spelling moved s-COLOURS there; here only the schedule). Corollary gl_func_0000C784 (tail constructor, NM 95.84 -> 77/77 EXACT): same for-init lever on `or v1,zero` vs the hoisted `addiu v0,768`; the alloc-fallback head `or s0,a0; bnez a0; sw ra` = write the body on the PARAM (a `self = arg0` local puts the copy in the bnez delay); a USO data address as an int arg = `(char *)&D_00000000 + 0xD678` (a pinned `extern char D_0000D678` leaves blank hi/lo fields)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -26586,3 +26588,108 @@ var_f0; struct-typed `c->x = 0.0f` stores with inline `D_thr` reads (7.1 uopt ha
 type-based alias disambiguation: the second read reloads across the float store through the
 param). Whatever the original source did, it either lowered the double's adjsave below the two
 floats' or coloured thr on the unconstrained (bitpos) path -- uoptlist territory.
+
+**2026-09-11 addendum (13 -> 8 words): a dead `while (0) { e = c->y; }` anchor placed before
+the two divisions colours e f2** (the 80.0 constant's colour, dead after the `div.s` pair) --
+the while(0) ref-multiplier / first-appearance lever (#two-knob-principle) works on the FLOAT
+candidate. It does NOT work on the 0.0f constant: dead stores of 0.0f, a dead compare against
+0.0f, `e = 0.0f`, and a named `fzero` with dead uses all leave the zero/thr order unchanged
+(the constant LR's rank is not a ref count). Thr-span extension (load before the abs `if`: -1
+word; before the divisions: the ldc1 moves up, thr still ahead of zero) and a thr anchor (thr
+then takes f0 ahead of e) are also inert. Remaining residual = zero/thr f12/f14 swap only.
+The D+0x2200 read is a data variable (0x2210 is a float variable elsewhere in the TU; the 0.5
+double literals in the same function are inline `lui/mtc1`), not a literal-pool entry.
+
+## `for (i = 0; i != N; i++)` vs `i = 0; do { } while (i != N)`: same 102 words, but the do/while spelling lets as1 schedule `or s1,zero,zero` between the hoisted `lui s5` / `addiu s5` sym+K pair; the for-init keeps the pair adjacent. Also: an exact that calls a K&R-defined in-TU stub links to a REAL address -- the byte gate passes, the ROM gate fails (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g) <a name="for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54"></a>
+
+Per-slot poll loop (post1b, -O2, 4 iterations, 10 calls, s0-s8 all live). Three findings:
+
+1. **uopt hoists the loop-invariant constants itself; naming them costs a frame slot and
+   reorders the s-candidates.** Target preheader: `lui s5,2; addiu s5,s5,0x2570` (message base
+   `D+0x22570`), `or s1,zero,zero` (i), `addiu s8,zero,10`, `addiu s7,zero,0x68` (stride),
+   `addiu s6,sp,83` (&sp53). Writing `msgbase = D + 0x22570; ten = 10; stride = 0x68; psp53 =
+   &sp53;` as locals (the 97.99 wrap) gives frame 96 and a different s-order. Leave every one
+   of them inline (`(char *)&D_00000000 + 0x22570`, `var_s1 * 0x68`, literal `10`, `&sp53`).
+2. **`== 10` / `== 0` on a call result is an if/else CHAIN in that order**
+   (`bne v0,s8,L0; ... L0: bnez v0,JOIN`), not a `switch` -- the switch lowers its compare
+   chain in case-label order (`beqz` first, then `bne ..,s8`), 2 words off with identical arms
+   (#switch-arm-order-is-test-chain-and-layout-309ac).
+3. **The loop spelling controls the preheader schedule, not the words.** `var_s1 = 0; do { ...
+   var_s1 += 1; } while (var_s1 != 4);` emits the same 102 words but as1 places
+   `or s1,zero,zero` BETWEEN `lui s5` and `addiu s5,s5,0x2570` (it fills the lui->addiu gap
+   with the independent init). `for (var_s1 = 0; var_s1 != 4; var_s1++)` keeps the pair
+   adjacent and the `or s1` after it -- the for-init sits later in the preheader ucode than
+   the hoisted invariant, the do/while's explicit `i = 0` sits before it. Also inert: `i++` +
+   `< 4` (same swap), `while (1) { if (++i == 4) break; }` (+1 word, 46 lines). Companion of
+   #for-break-vs-do-while-s-reg-candidate-order-68990 (that one moved s-register COLOURS;
+   this one moves only the schedule).
+
+**ROM-gate trap (post1b callee stubs).** post1b.c defines `int gl_func_00062F64(a0) int a0;
+{ ... }` as a K&R in-TU stub (the direct-`jal`-with-varying-arity lever,
+#feedback-ido-knr-def-unblocks-direct-jal-varying-arity). An NM wrap may call it, but an
+EXACT must not: the reloc-blind `.o` slice compare passes (both `0C000000` + reloc) while the
+linked ROM carries the stub's real address (`0c018bd9` x10 here) against the ROM's
+runtime-patched `0c000000`. Use the unprototyped `extern int gl_func_00000000();` blank
+(absolute 0 in undefined_syms) for every cross-module call in a landed body; the registers
+and schedule are identical between the two callee spellings.
+
+**Corollary, same day (gl_func_0000C784 constructor, tail, 77/77 EXACT from NM 95.84 -- all
+three "not C-drivable" residuals were spellings):** (a) the for-init lever again:
+`v1 = 0; do { ... v1 += 0x180; } while (v1 != 0x300)` puts `or v1,zero,zero` BEFORE the
+hoisted bound `addiu v0,zero,768`; `for (v1 = 0; v1 != 0x300; v1 += 0x180)` gives the target
+`addiu v0; or v1`. (b) The alloc-fallback head `or s0,a0,zero; bnez a0,BODY; sw ra,28(sp)`
+means the PARAM is the s0 web: write the function on `arg0` itself (`if ((arg0 != 0) ||
+(arg0 = alloc(0xB8), arg0 != 0)) { ... } return arg0;`). A `self = arg0` local (any of
+`register`, if/else assignment, `if (self == 0) self = alloc`, early `return self`) emits
+the copy as a body statement after `sw ra`, and as1 then fills the `bnez` delay with the
+copy instead (`sw ra; bnez a0; or s0,a0,zero`, or worse). (c) A USO data address passed as
+an int argument (`lui a1,1; addiu a1,a1,-10632` = 0xD678) is `(char *)&D_00000000 + 0xD678`
+-- `extern char D_0000D678` pinned in undefined_syms gives the right FORM with blank hi/lo
+fields, which the reloc-blind byte gate does NOT accept (only the blank `jal` is the
+accepted exception class).
+
+## 4-term lane sum: the reversed, right-associated spelling `m3 + (p2 + (p1 + p0))` is what emits the left-linear chain with the translation load as the SECOND `add.s` operand; a reused `int c` colours $v0 and blocks the return-constant hoist; unused `float pad[5]` = five phantom slots above the z home (game_libs_func_0004F0C8 point projection EXACT 133/133, 2026-09-11 agent-c) <a name="reversed-right-assoc-sum-load-last-phantom-slots-4f0c8"></a>
+
+Target (0x214, 133 words; the 6-word orphan `lwc1 f2,0(a1); lwc1 f4,0x3C(a0); lwc1 f12,4(a1); lwc1
+f8,0x4C(a0); mul.s f6,f4,f2; lwc1 f14,8(a1)` is the exported head, bootup.uso sym 2070 @ text 0x63734;
+0x4F0E0 is not exported): leaf, frame 0x18, no relocs. Four lanes of `m[0][c]*x + m[1][c]*y + m[2][c]*z +
+m[3][c]` through a row-major 4x4 at cam+0x30 (w lane first -> $f0, x -> $f16, y -> $f18, z homed at sp+0),
+each lane `mul.s; mul.s; add.s f4,p0,p1; mul.s; add.s f10,f4,p2; lwc1 f8,m3; add.s f0,f10,f8` -- the
+m[3][c] load is the SECOND operand of the last add and the x/z lanes load through $f10 while w/y load
+through $f8. Then `c.le.s w,0 -> return 0`, `1.0f / w` in $f2, the three `*= inv`, `v->x * (cam->w *
+0.5)` / `v->y * (-cam->h * 0.5)` in double (0.5 held in $f12/$f13 from a `lui at,0x3fe0` hoisted into the
+first block), `if (outw) *outw = inv`, `beqzl a2,END; addiu v0,zero,1`, the offset adds with the 0xC0 /
+0xC4 ints loaded into **$v0** (`lw v0,0xC0(a0)`, `lw v0,0xC4(a0)`; the 0xC8/0xD0 ints in t9/t0/t1/t2),
+`addiu v0,zero,1; END: jr ra`.
+
+| lane spelling (`-O2 -mips2 -32`, all four lanes the same) | LCS diff (of 133) |
+|---|---|
+| `p0 + p1 + p2 + m3` (natural, left-linear) and every other left-linear order | 72-90: final `add.s f0,f8(m3),f10(sum)` LOAD FIRST, x/z lane loads in $f8 |
+| `m3 + (p0 + p1 + p2)` (v8) | 82: final add correct, but the inner add flips to `p2 + s01` and the head re-colours the vec loads f12/f14/f2 |
+| `(a + b) + (c + d)` (T4), any order | 123+ |
+| `m3 + (p0 + (p1 + p2))` (T3, other orders) | 60-72 |
+| **`m3 + (p2 + (p1 + p0))`** (T3 fully reversed) | **40 -> the four lanes byte-exact** (remaining diffs were the frame / v0 items below) |
+
+The load-outranks-temp rule (`#comma-constant-const-first-mul-5d754`) is what puts `m[3][c]` first in the
+natural spelling; `(0, load)`, `(float)` casts, `load * 1.0f`, `load + 0.0f`, a row pointer, `(char *)cam +
+0x6C`, `float (*m)[4]` and a `double` sum all keep it first (single-lane harness, 19 spellings). A named
+`float t = m[3][3]` does put it second but as a hoisted candidate in $f2, not the in-place $f8 temp. Only the
+mirrored right-associated tree lands it: uopt evaluates `leaf + (subtree)` subtree-first and emits the
+operands in that order at every level, so the mirror image of the target chain IS the target chain.
+
+**Return-constant hoist and the $v0 loads.** With `if (flag) { ... } return 1;` uopt hoists `addiu v0,zero,1`
+to the function top (v0 is free everywhere) and the 0xC0 / 0xD0 loads take t0/t1; `if (flag == 0) return 1;`
+gives `bnezl a2` + a `beqz zero` jump around. Loading the 0xC0 / 0xC4 offset through ONE named `int c`
+(`c = cam->c0; v->x = v->x + (cam->w * 0.5 + c + cam->d0); c = cam->c1; ...`) colours the candidate $v0,
+which blocks the hoist: `beqzl a2,END` with the return constant in the delay slot, `addiu v0,zero,1` before
+END, and the other int loads fall into t9/t0/t1/t2 as the target (two named ints `cx`/`cy` colour only one
+of them v0: 20 diffs).
+
+**Frame 0x18 with z at sp+0.** Only z is spilled (the `jr`-adjacent delay-slot store), and it homes at the
+BOTTOM of a 6-word frame: five uncoloured words sit above it. Unused non-volatile locals keep their slots
+at -O2 (`float u1..u5;`, `float r[5];`, `double u1, u2; float u3;` all give the exact 0x18 / sp+0 layout
+when declared BEFORE z; declared after z they push z up to sp+0x14). `float pad[5]` is the spelling
+landed; forwarded temps (`tx = v->x * inv; v->x = tx;`) are NOT invisible (108 diffs) and a named `double
+sx = cam->w * 0.5` is coloured, not homed (frame stays 8). Same-line result stores emit x, y, z here;
+separate lines give the target's y, x, z (the inverse of the 5C948 case -- test both, don't assume).
+Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (4F0C8 row).
