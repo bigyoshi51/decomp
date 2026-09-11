@@ -195,6 +195,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 ### uopt internals (allocator opened, 2026-06-11)
 
 - [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
+- [A `Vec3 v[5]` ARRAY keeps every intermediate field store (`v[k].x = t.x; v[k].x += b.x; v[k].x /= two` = three `swc1` to one slot) -- separate struct locals, address-taken or fed from a volatile source, get DSE'd to one store per field; `short sum[3] += rec[k]` = reload-then-forward; phantom scalar homes + do-while(0) FP blocks (game_libs_func_0004FD00 edge-midpoint plane test, NM 43.0 -> 75.9, 2026-09-11 agent-c)](#vec3-array-keeps-intermediate-stores-4fd00) -- _Tell: target stores a float slot 2-3 times in one straight-line block with no reload between (`swc1 f4,100(sp); add.s f10,f4,f8; ... swc1 f10,100(sp)`) and the N struct locals are contiguous in the frame. Residual = uopt colour order (rec/ret v0, base t0) + a DOUBLE `or` on the forwarded third sum._
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [**Dead single-var `if (v) {}` = emission-free priority boost; PLACEMENT decides winners vs span-hit losers (a7b4 49/49 + d418 CRACKED)**](#dead-empty-if-priority-boost-placement-is-everything-a7b4-d418-cracked-2026-07-03) — _Empty single-var if is deleted pre-emission but its condition-use refs + new bb survive into compute_save: tested var +loop-weight refs; everything live-through the bb takes a +1 span hit. Place it where the vars you must NOT demote are already dead (a7b4: after the loop's last call — masks dead, a1 boosted → exact). EQ_INEQ folds it if the var is value-known; multi-var conditions emit. The dead-while(0) body-ref variant did NOT count refs in these shapes._
@@ -14198,6 +14199,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [A cross-BB value held in a RING temp (target `and t6; sw t6,24(a3); beqz; ... and v0,t5,t6`) is a stored value re-read by address in the next BB -- spell `p->f = expr; ... p->g & p->f` (uopt store-forwards the ring temp across the branch; a named local makes an a1 candidate); a `base + idx*4` cursor allocates the sll temp BEFORE the loads (t7 sll / t8,t9 loads) while `idx*4 + base` allocates the loads first (t7,t8 / sll t9) and un-shifts the whole downstream ring; `(cur | 0) & ~prev` puts the candidate first in the `and` (gl_func_000675A4 46 -> 13 words, 2026-09-09 agent-g)](#store-forward-ring-across-bb-and-scaled-index-first-675a4) -- _2026-09-11: 13 -> 8 words, a dead `while (0) { e = c->y; }` anchor before the divisions colours e f2 (zero-constant anchors inert). Residual = zero/thr f12/f14 swap (was the 3-cycle zero/thr/e f12/f14/f2 vs ours f14/f2/f12) that the compute_save model explains: the double threshold gets adjsave x2 and colours first into the lowest free colour; 30 spellings inert (list inside), 7.1 uopt has no type-based alias (inline double-global reads reload across a float store through the param)._
 - [64588 homing pass (agent-g 2026-09-11): the 1C54 ">= 8 full struct copies to a shared dest flips to memcpy-form" rule did NOT fire at 15 `t = u_k` copies into a FUNCTION-scope `struct { int v; } t` (538 words, all `sw a2,8(sp)` jal-delay struct-arg stores and rotating dead u_k homes kept, frame 0x168 -> 0xF8); the target's shared t/m homes (sp+0xB4 x30 / +0xB8 x26) ARE the function-scope shape; residual = 88 bytes the target keeps below t/m + box const-web colouring](#fn-scope-shared-staging-no-memcpy-flip-64588) -- _Scalar `t.v = u_k.v` DCEs the 15 rotating u_k stores (521 words) -- keep the full copy. Frame map: every single-use home above t/m maps 1:1 at +84; the tmp Vec3 sits at 0x4C..0x54 under t/m in the target vs 0x38..0x40 above s0/ra in ours. objdiff scores both forms 95.64 (sp offsets weigh light). Callee blanks: the K&R gl_func_0001CA10 and the `gl_init_0001CA10_64588 = 0x1CA10` alias both bake real jal addresses -- an exact must go through gl_func_00000000 + a 0-valued prototyped float alias._
 - [A dead pre-loop `or v0,zero,zero` + hand-stepped cursors that "cyclically renumber" = an ELIMINATED BASIC INDUCTION VARIABLE: write the loop as `for (k = 0; k < N; k++)` with every cursor as `base + k*stride` and uopt derives one s-register IV per product, retargets the trip test onto the first pointer IV vs the baked end, and leaves k's init behind; s-colours follow first occurrence (name the arg cursor before `i = k*3`) (gl_func_0000A670 EXACT 62/62, NM 95.5 -> 100, 2026-09-11 agent-g)](#basic-iv-elimination-leaves-dead-init-a670) -- _Hand-stepped `p += 0xC; ... while (p != end)` (do/while, for, while, for(;;)+break, any init order) is 61 words with s0<->s2 / s6<->s7 rotated; the IV form is 62 words exact on first try in three spellings (named cursor, inline `(k*3)%5`, `(i = k*3)` in the arg). Both callees must be the `gl_func_00000000` blank._
+- [IV-elimination corollaries: `(i | 0) + ((i + 4) << 3)` keeps the candidate FIRST in the `addu`; every cursor derived INLINE in the call (naming one retargets the trip test); a param-based `src[k*3]` retargets the test onto the 12k byte index; `lui 1; addiu -X` is the CARRY form of `D + (0x10000 - X)`, not `D + 0x1XXXX`; for-init + `do {} while (0)` around a held-`&D` block orders it after an absolute flag store (gl_func_0000AAEC 33/33, 00009DB8 65/65, 0000AFC4 57/57 EXACT; 00009EBC 59/59 standalone, 2026-09-11 agent-g)](#iv-elimination-corollaries-candidate-first-addu-inline-cursors-aaec-9db8-afc4) -- _Three tail-unit wraps at 92-97.5 ("unreachable setup scheduling", "dead move v0,zero no C reproduces", "as1 emission-order ties") fell to the A670 lens + two known levers in ~1 hour each; the 9EBC sibling is a one-line land._
 - [A comma expression `dx = a, dy = b, dz = c` is EMITTED right-to-left (ucode z,y,x) while its ring temps are numbered left-to-right (x = f4/f6 .. z = f16/f18) -- the only spelling that gives a z-first schedule with x-first ring numbers; `!= (0, 0.0f)` puts a store-forwarded memory operand FIRST in `c.eq.s`; a named squared-length steals a colour and drops $f16 out of the ring for the whole function (gl_func_00064DEC EXACT 157/157, NM 91.5 -> 100, 2026-09-11 agent-g)](#comma-expression-emits-right-to-left-64dec) -- _Five levers: (1) `spA4[0] = len2; if (spA4[0] != ...)` = ring $f8 forwarded across the branch, 0.0f -> $f14 (a named local coloured $f14 pushed zero to $f16 and every later temp -1 phase); (2) the `while (0) { dx = pC->x; }` anchor colours pC $v0 before pB $v1 AND must name the first-coloured diff (naming dz boosted dz to $f0); (3) `do { } while (0)` around the diff block stops the &local address web from hoisting above pC's loads (else it interferes with both pointers and falls to $a2); (4) comma expression for the z-first schedule; (5) comma-constant compare. Colours are per-VARIABLE across dead gaps: the second block's loads must reuse the names in the first block's colour order. An UNUSED `f32 sumsq;` decl is load-bearing (ghost home moves both arg spill slots by 4, 33 words)._
 - [`for (i = 0; i != N; i++)` keeps the hoisted `lui/addiu` sym+K pair adjacent in the preheader; `i = 0; do {} while` lets as1 slot `or s1,zero,zero` between them (same words, 2 swapped); `== 10`/`== 0` dispatch on a call result = if/else chain, not switch; loop-invariant constants (message base, stride, 10, &local) must stay INLINE -- naming them costs a frame slot + s-order; an EXACT must call the `gl_func_00000000` blank, not the K&R in-TU `gl_func_00062F64` stub (the .o gate passes, the ROM gate fails with the stub's real jal address) (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g)](#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54) -- _Companion of 68990 (loop spelling moved s-COLOURS there; here only the schedule). Corollary gl_func_0000C784 (tail constructor, NM 95.84 -> 77/77 EXACT): same for-init lever on `or v1,zero` vs the hoisted `addiu v0,768`; the alloc-fallback head `or s0,a0; bnez a0; sw ra` = write the body on the PARAM (a `self = arg0` local puts the copy in the bnez delay); a USO data address as an int arg = `(char *)&D_00000000 + 0xD678` (a pinned `extern char D_0000D678` leaves blank hi/lo fields)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
@@ -15737,6 +15739,51 @@ the decompiled uopt on a TU (needs 32-bit build; not required — the
 dump flags below cover most needs). ugen and cfe are NOT decompiled;
 their behavior must still be probed empirically (see the addu-order
 and call-spill entries below for what was derived).
+
+## A `Vec3 v[5]` ARRAY keeps every intermediate field store; separate struct locals get DSE'd -- plus `short sum[k] += rec[k]` reload/forward, phantom scalar homes, do-while(0) per-block FP colouring (game_libs_func_0004FD00 edge-midpoint plane-side test, NM 43.0 -> 75.9, 2026-09-11 agent-c) <a name="vec3-array-keeps-intermediate-stores-4fd00"></a>
+
+Target (0x3EC, 251 words; the 6-word orphan `lw t7,0x68(a0); sll v1,a1,3; li t1,6; addu t8,t7,v1; lhu
+t9,2(t8); lw t6,0x60(a0)` is the exported head = the first vertex-record load hoisted above `addiu sp`):
+leaf, frame 0x88, no relocs, ONE basic block until the two `c.le.s`. Five Vec3 locals sit contiguously at
+sp+0x4C..0x87 (d2, d1, mid, B, A), `short sum[3]` at +0x44, a 12-byte `tmp` at +0x14 with 9 phantom words
+above it and 5 below. The tell is the FP block:
+```
+lwc1 f4,20(sp); lwc1 f8,112(sp); lwc1 f6,24(sp); swc1 f4,100(sp); add.s f10,f4,f8; lwc1 f16,116(sp)
+swc1 f6,104(sp); ... div.s f4,f10,f0; swc1 f10,100(sp); ... swc1 f4,100(sp)     <- mid.x stored THREE times
+```
+plus lw/sw triples (`lw t8,0(t6); sw t8,0(t2)`) for the `tmp = A` / `tmp = mid` struct copies through held
+`addiu t2,sp,20` / `addiu t3,sp,100` bases.
+
+| spelling | result |
+|---|---|
+| five `Vec3 fA, fB, mid, d1, d2;` with `mid.x = tp->x; mid.x += bp->x; mid.x /= two` (pointer or direct, `+=` or re-spelt, address-taken via `Vec3 *mp = &mid`) | uopt DSEs to ONE store per field (`add.s f2,f2,f0; div.s; swc1` once); d1/d2 get promoted to FP registers entirely |
+| `volatile Vec3 *tp` / `volatile Vec3 tmp` source | no effect on the destination's dead stores |
+| `volatile Vec3 mid` + register temps (`f = tp->x; mid.x = f; f += b.x; mid.x = f; ...`) | stores kept but in-place `add.s f2,f2,f0` (a named temp) instead of the target's fresh ring temps |
+| **`Vec3 v[5]` with `#define mid v[2]` etc.** | **every intermediate store survives, fresh ring temps, forwarded reads, lw/sw copies through held bases -- the FP block matches the target line for line** |
+
+Array elements are never register candidates and uopt's dead-store pass skips them; the reads are still
+store-forwarded (`add.s f10,f4,f8` uses the loaded `tmp.x`, `div.s f4,f10,f0` the add result). The same
+rule gives the integer part: `short sum[3]` with `sum[0] = rec[0]` (first vertex), `sum[0] += rec[0]` (second:
+`lh t5,68(sp)` reload) and again (third: store-forwarded from the second add's register). Struct-of-shorts
+gets promoted (sll/sra ring), `s16` temps emit sll/sra per assignment, a per-k `for` stays a loop.
+
+Frame: named scalars keep a home each even when coloured (#reversed-right-assoc-sum-load-last-phantom-slots-4f0c8);
+here `rec, pl, dot1, dot2, ret, two, zero, pad, pad` declared between `sum` and `tmp` = the 9 words above
+tmp, `Vec3 *tp` + one pad after tmp = the 5 below (frame 0x88, sum +0x44, tmp +0x14 exact).
+
+FP colours: in one basic block `two` colours $f12 and 0.0f is materialised late; `do { } while (0)` around
+each FP block (mid / d1 / d2) splits the BBs so `two` = $f0 and the hoisted 0.0f = $f12 as the target
+(#quaternion... 35E64 rule: FP colouring is per basic block). `do { } while (0)` around the sum blocks shrinks
+the frame to 0x80 (sum slot moves) -- do not.
+
+Residual (open): integer colour ORDER. Target rec=v0, a1*8=v1, a2*8=a3, plane base=t0, six=t1, &tmp=t2,
+&mid=t3, twelve=t4 -- all materialised in the prologue -- then ret=v0 / plane row=v1. Every spelling tried
+colours &tmp v0 (materialised late), &mid a3, twelve t0, base a3, row v0, ret v1 (tail `bc1fl; or v0,v1`
+vs the target's `b END; addiu v0,zero,1`): named base at top (base takes v0, rec v1) or late, `ret = 0`
+at top, dots inlined in the `if`, `return 1 / return 0` (gives `or v0,zero,zero` late, no `b END`),
+while(0) anchors, whole-body `do{}while(0)` / `for(;;){break;}` (uopt strips them, no effect). Also open:
+the third vertex's forwarded sum is a DOUBLE `or` in the target (`or t6,t8,zero; or t8,t6,zero; addu
+t6,t8,t7`) vs one `or` from the array `+=`. Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (4FD00 row).
 
 ## UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules
 
@@ -26667,6 +26714,79 @@ before being called a cap. Both callees are the USO-reloc blank `gl_func_0000000
 Landing note: the real def is 62 words where the NM body was 61, so the tail's
 `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` moved 0x5550 -> 0x5554 (EBC8 NM offset 0x5520 -> 0x5524, rule = offset
 + 0x30); a Makefile-only clip change needs the NM `.o` removed before the gate.
+
+## IV-elimination corollaries (three tail-unit wraps): `(i | 0)` keeps the candidate first in the `addu`, every cursor derived INLINE in the call, `lui 1; addiu -X` is the carry form of `D + (0x10000 - X)`, and for-init + `do {} while (0)` orders a held `&D` web after an absolute flag store (gl_func_0000AAEC 33/33, gl_func_00009DB8 65/65, gl_func_0000AFC4 57/57 EXACT, gl_func_00009EBC 59/59 standalone, 2026-09-11 agent-g) <a name="iv-elimination-corollaries-candidate-first-addu-inline-cursors-aaec-9db8-afc4"></a>
+
+Same-day follow-up to [#basic-iv-elimination-leaves-dead-init-a670](#basic-iv-elimination-leaves-dead-init-a670): three
+game_libs tail wraps whose residuals had been filed as scheduler/allocator caps were the same eliminated-IV shape plus
+one lever each. All measured standalone with `probe.sh` (7.1 -O2, jal masked), then ROM byte-identical in-tree.
+
+**gl_func_0000AAEC (NM 97.5 "IDO's unreachable setup scheduling", 3 iterations, 4-arg call).** Target
+`or s0,zero,zero; or s1,a0,zero; addiu s4,zero,3; LOOP: addiu t6,s0,4; sll t7,t6,3; addu a1,s0,t7; ...; jal; ...;
+addiu s0,s0,1; addiu s1,s1,32; bne s0,s4; addiu s2,s2,24`.
+
+| spelling | words / diffs |
+|---|---|
+| hand-stepped `self_p += 0x20; data2 += 0x18` inside `for (i = 0; i < 3; i++)` (the wrap) | 33 / 12: s1<->s2 rotated |
+| `for (i = 0; i < 3; i++) f(a0 + i*0x20, i + ((i + 4) << 3), D + 0xD438, D + 0xD3E8 + i*0x18)` | 33 / 1: `addu a1,t7,s0` (sll temp first) |
+| same with `((i + 4) << 3) + i` | 33 / 1 (same word: both orders canonicalise temp-first) |
+| `(i + 4) * 8 + i`, `i * 9 + 32`, `i + (i + 4) * 8` | 32 / 32: the product is strength-reduced into a SECOND derived IV (`addiu s2,s2,9`) |
+| **`(i | 0) + ((i + 4) << 3)`** (also `(i + 0)`, `(i << 0)`, `(i ^ 0)`; NOT `(i & 0xFFFFFFFF)` = real `and` + held -1) | **33 / 0** |
+
+The `addu` operand order is the [#store-forward-ring-across-bb-and-scaled-index-first-675a4](#store-forward-ring-across-bb-and-scaled-index-first-675a4)
+deeper-operand-first rule: a bare candidate `i` against an expression temp always comes second; `(i | 0)` makes
+it an expression of equal depth and cfe/uopt keep source order. The addend must be one that cfe folds
+(`| 0`, `+ 0`, `<< 0`, `^ 0`); a mask that survives becomes a real instruction. Keep the shift form (`<< 3`) --
+any multiply spelling turns `9i + 32` into its own IV.
+
+**Decode gotcha (cost one failed ROM gate):** the target's `lui s2,1; addiu s2,s2,-11288` is the CARRY-compensated
+pair for `D + 0xD3E8` (= A670's second-table end cursor), NOT `D + 0x1D3E8`. The 2026-05 decode read the raw hi as
+the upper half. Rule: `lui H; addiu -X` = `(H << 16) - X`; the linker regenerates the same carry from
+`(char *)&D_00000000 + 0xD3E8`, and the probe shows the off-by-one as `lui 0x1 | lui 0x2` on BOTH words (a
+standalone `.o` against the raw `.s` shows the correct constant as `lui 0x1 | lui 0x1`; treat a lui-only diff as
+a wrong constant, never as "reloc form").
+
+**gl_func_00009DB8 (NM 92.3 "dead pre-header `move v0,zero` in target; a plain `int z = 0` gets DCE'd", 3
+iterations, 7-arg call, s0-s7).** Target: `or s4,zero,zero` (real IV, `+= 12`, `bne s4,s7` with `s7 = 36`)
+AND the dead `or v0,zero,zero` at 0x4C. The wrap (`for (i = 0; i != 36; i += 12)` + hand-stepped `op += 2;
+va++; vb++; src += 3;` locals) was 64 words with the sw ra / addiu s6 prologue pair swapped.
+
+| spelling | words / diffs |
+|---|---|
+| **`for (k = 0; k < 3; k++) f(out + k*2, ((ia + k) % 5) + (((ib + k) % 8) << 3), 0, (char *)&D + 0xD430, src[k*3], src[k*3 + 1], src[k*3 + 2]);`** | **65 / 0** |
+| same with `p = src + k * 3;` named first (then `p[0..2]`), with or without `q = out + k*2; a = ia + k; b = ib + k;` | 65 / 15: s1 = `8k` becomes the trip IV vs 24, s2..s4 = a0/a1/a2 copies |
+| `i = k * 12; p = (int *)((char *)src + i);` | 65 / 15 (same) |
+
+So: with every cursor derived INLINE in the call, uopt's IVs are `src + 12k` (s0, first occurrence via the
+`src[k*3]` arg), `out + 8k` (s1), `ia + k` (s2), `ib + k` (s3) and the bare `12k` byte index (s4) -- the trip test
+is retargeted onto the constant-ended `12k` (vs 36) and k dies (the corpse). Naming ANY cursor makes it a
+candidate with its own home ordering: the trip test then lands on the `out` cursor (`8k` vs 24) and the copies
+rotate. The prologue "tie" was never a tie: `lui s6; sw ra; addiu s6` is what uopt's hoisted invariant looks
+like once the s-candidates are the derived IVs. The `% 5` / `% 8` operands must be `(ia + k)` / `(ib + k)`
+expressions, not named sums.
+
+**gl_func_00009EBC (NM 84.1, the 4-arg sibling right after 9DB8): `for (k = 0; k < 3; k++)
+f(x0 + 0x18 + k*8, ((a1 + k) % 5) + (((a2 + k) % 8) << 3), (char *)&D_00000000 + 0xD434, a3[k]);` = 59/59
+standalone** (s0 = `a0 + 24` first, s3 = `4k` trip IV vs 12, s4 = `a3 + 4k`). Not landed this run (commit
+budget); one-line land, tail clip re-probe needed (the wrap is 58 words).
+
+**gl_func_0000AFC4 (NM 92.8 "three adjacent-pair as1 emission-order ties, 12 spellings inert").** Not an IV
+case but two levers from the same week:
+
+| step | spelling | diffs |
+|---|---|---|
+| 0 | wrap: `var_v1 = 0; do { var_v1 += 4; sb x4; var_v0 += 4; } while (var_v1 != 8);` | 6 |
+| 1 | `for (var_v1 = 0; var_v1 != 8; var_v1 += 4) { sb x4; var_v0 += 4; }` (init after the hoisted `addiu a0,8`, [#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54](#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54) C784 corollary; the increment is scheduled to the loop top by as1 either way) | 4 |
+| 1' | derived `var_v0 = arg0 + var_v1` / `arg0 + k*4` cursor | 13-15: the cursor add moves into the body + frame +8 |
+| 2 | **+ `do { temp_v0 = *(char **)((char *)&D + 0x28); sp3C = 0x15; (vtable)(... + (int)&D, &sp3C); } while (0);`** (or `if (1) {}` / a `do {}` around the flag store alone) | **0** |
+| 2' | named `base = (char *)&D_00000000;` local | 8: frame +8, web still first |
+
+Mechanism of step 2 = [#comma-expression-emits-right-to-left-64dec](#comma-expression-emits-right-to-left-64dec) finding 3:
+the held `&D_00000000` web (`lui v1; addiu v1,v1,0` -- base of the `lw v0,40(v1)` vtable load AND of the
+`addu a0,t2,v1` arg) is hoisted to the top of its basic block, which put it ABOVE the absolute flag store
+(`lui at; ...; sw t0,0(at)` for `gl_flag_AFC4_bit2 = (x & 4) == 4`). The `do {} while (0)` starts the web's BB
+after the flag store; uopt then emits the flag chain first and as1 lands the target's `lui at; lui v1; andi;
+xori; sltiu; sw t0,0(at); addiu v1,v1,0; lw v0,40(v1)`.
 
 ## A comma expression is emitted right-to-left but ring-numbered left-to-right; `!= (0, 0.0f)` = operand-first `c.eq.s`; a named squared length drops $f16 out of the ring (gl_func_00064DEC EXACT 157/157, 2026-09-11 agent-g) <a name="comma-expression-emits-right-to-left-64dec"></a>
 
