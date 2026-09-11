@@ -14190,6 +14190,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [`*p++` old-value cursor at -O2: `q = p; p++; if (1) { *q = c; }` keeps `or v1,v0` + `sb 0(v1)` + `addiu v0,1` WITHOUT evicting the a1 param (game_libs_func_00067D50 memset 10/12, 2026-09-09 agent-g)](#post-increment-old-value-if1-barrier-67d50) -- _Plain `*p++`, `*p = c; p++`, `q = p++`, int-typed p all fold to `sb 0(v0)`; `q = p; p++; *q = c` without the barrier colours q into a1 and moves c to a3 (+1 word). 7.1 -O2 == 5.3 -O2 here; -O1 homes p (frame 8). Residual = the loop-bottom `n--` old-value copy's colour (target a3 before the sb, ours v1 after it) -- 40 spellings inert. Retracts the "IDO -O2 unrolls by 4 / needs a lower-opt split" note on that function._
 - [Named-scalar homes interleave with aggregates top-down in declaration order (65060 EXACT 58/58, 68990 5-scalar map)](#named-scalar-homes-interleave-declaration-order-65060) -- _a named pointer declared FIRST homes at the frame TOP; "scalar homes always bottom" retracted; count scalars above/below the aggregate._
 - [4-term lane sum: spell it REVERSED + right-associated `m3 + (p2 + (p1 + p0))` to get the left-linear chain with the m[3][c] load as the SECOND add.s operand; the natural `p0+p1+p2+m3` puts the load first and re-colours the lanes; one reused `int c` colours $v0 and blocks the `addiu v0,1` hoist (beqzl + delay-slot return); unused `float pad[5]` = 5 phantom slots above the z home (game_libs_func_0004F0C8 point projection EXACT 133/133, agent-c)](#reversed-right-assoc-sum-load-last-phantom-slots-4f0c8) -- _96-cell association/order matrix inside; T3 reversed is the ONLY 40-diff cell, every left-linear order is 72+._
+- [Memory-homed fill cursor = `short * volatile p` (lw home / addiu / sw home / sh per `*p++`, (w & 3) remainder + 4x unroll from a plain `for`); `q = p; p = q + 1; *q = 0;` puts the write-back BEFORE the `sh`; a NAMED start index `n = y * stride + x` colours the head sum + inner counter $v0 (inline: t-temp and the colours rotate); `((int *)(obj + 0xF4))[idx]` evaluates object before index; `int i, j;` declared BEFORE the volatile = 2 phantom slots above the home (game_libs_func_00043468 halfword-rect zero-fill EXACT 60/60, agent-c)](#volatile-cursor-unrolled-fill-named-index-43468) -- _the 4CDB0 D+0x204 index / D+0x240 current-object pair as an inline array index; stride word as its own per-site alias (349E0 rule)._
+- [Colour-packet twins (470E4/47394/47B28 = G_SETPRIMCOLOR/ENVCOLOR/BLENDCOLOR): RGBA floats * 255.0f through the unsigned float->int FCSR sequence into `unsigned char col[4]` homes, reversed right-assoc pack `a | (b<<8 | (g<<16 | r<<24))` for the left-linear or-chain, named float inputs = hoisted loads + $f16 constant, `float r, g;` before the array / `float b, a;` after = frame 0x10; NM 172/172 by mnemonic, residual = hoisted 2^31 `lui at` scheduled before the g/b/a loads + the pack's t-temp numbering (agent-c)](#colour-packet-twins-unsigned-cvt-head-order-470e4) -- _one body, three symbols; the old "caller-set $t6 + $f4" verdict was the hoisted head._
 - [for(;;)+if(done)break vs do-while reorders the s-reg candidates (68990 EXACT 93/93)](#for-break-vs-do-while-s-reg-candidate-order-68990) -- _do-while / while colour &a s3, done s4; the for-break form gives done s3 / &a s4 / &b s5 with the same beqz back edge; switch labels -1..4 + case 0/3 on default = addiu+1 / sltiu 6._
 - [-O2 frame bottom = dead homes for named scalars: with <= 3 named scalars the leaf frame bottom is 12 bytes, every further named scalar (int, float, pointer, constant-valued or `register` alike) adds a 4-byte home rounded to 8 -- so a target with a 12-byte bottom names at most three (gl_func_000659D0 measurements, 2026-09-09 agent-g)](#named-scalar-dead-homes-frame-bottom-659cc) -- _Loop-carried `pos = node + K` bases and named float temps therefore cost frame even when register-only; the same function shows uopt folding every unnamed `node + K` into `disp(v1)` (plain/int/V3f/volatile-pointee/cast chains), holding it only through if(1)/do-while(0)/phi forms (each +1 home), and NOT scalarizing V3f struct temps (+11 words)._
 - [Dead-$v0 poison of an int-returning call is PER BASIC BLOCK: two candidates born after the call in the same BB colour v1/a1; un-poisoning the whole BB (`if (1) {}` after the call / void callee) gives v0/v1 in def order; a target with the FIRST candidate v1 and the SECOND v0 needs a BB boundary BETWEEN the two defs -- `e = arr[i]; do { vt = e[7]; } while (0);` (gl_func_000683D4 vtable ctor/finalize loop, 54/54 EXACT, 2026-09-09 agent-g)](#dead-v0-poison-is-per-bb-split-the-defs-683d4) -- _The poisoned candidate keeps its v1 in the call BB while the clean one takes v0 in the next BB; if(1){} or do{}while(0) between the defs are equivalent. Reusing one pointer name across two call sites makes it a cross-BB web and flips the FIRST site (v0/v1 swap); the naming levers (named vt, decl order, de-named CSE `e`) are all inert against the poison. Same family as #feedback-ido-dispatcher-v0-eviction-else-tail / the 373 void-callee entry, which un-poison the whole BB._
@@ -26693,3 +26695,76 @@ landed; forwarded temps (`tx = v->x * inv; v->x = tx;`) are NOT invisible (108 d
 sx = cam->w * 0.5` is coloured, not homed (frame stays 8). Same-line result stores emit x, y, z here;
 separate lines give the target's y, x, z (the inverse of the 5C948 case -- test both, don't assume).
 Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (4F0C8 row).
+
+## Memory-homed fill cursor: `short * volatile p` gives the per-`*p++` lw/addiu/sw/sh round trip and the (w & 3) + 4x-unrolled loops; `q = p; p = q + 1; *q = 0;` orders the write-back before the store; a named start index colours the head sum and the inner counter $v0 (game_libs_func_00043468 halfword-rect zero-fill EXACT 60/60, 2026-09-11 agent-c) <a name="volatile-cursor-unrolled-fill-named-index-43468"></a>
+
+Target (0xF0, 60 words; the 7-word `lui v1; lw v1,0(v1); lui t1; addiu t1; multu a1,v1; lw t8,0x204(t1); lw
+t7,0x240(t1)` orphan is the exported head at text 0x57AD4): frame 0x10, cursor homed at sp+4, `blez a3` (h)
+guard with the cursor's initial store in the delay slot, per row `blez a2` (w), `andi v1,a2,3; beqz; or a0,v1`
+remainder loop `lw v1,4(sp); addiu v0,v0,1; addiu t6,v1,2; sw t6,4(sp); bne a0,v0; sh zero,0(v1)`, `beq v0,a2`,
+then a 4x unrolled body (`lw v1,4(sp); addiu v0,v0,4; addiu t8,v1,2; sw t8,4(sp); sh zero,0(v1)` x4 with
+t8/t7/t9/t2), the stride re-read `lui v1; lw v1,0(v1)`, `lw t3,4(sp); subu t4,v1,a2; sll; addiu t0,t0,1; addu;
+bne t0,a3; sw t6,4(sp)`. Colours: j = v0 (and the head's `y*stride + x` sum = v0), stride and the cursor
+reload = v1, remainder = a0, i = t0 (a1 is NOT reused).
+
+**Exact C** (`-O2 -mips2 -32 -Xcpluscomm`):
+```c
+extern int D_43468_a;   /* stride word: its own lui/lw pair, per-site alias of D_00000000 */
+void game_libs_func_00043468(int x, int y, int w, int h) {
+    int i, j;
+    short * volatile p;
+    int n;
+    short *q;
+    n = y * D_43468_a + x;
+    p = (short *)((int *)(*(int *)((char *)&D_00000000 + 0x240) + 0xF4))[*(int *)((char *)&D_00000000 + 0x204)] + n;
+    for (i = 0; i < h; i++) {
+        for (j = 0; j < w; j++) { q = p; p = q + 1; *q = 0; }
+        p += D_43468_a - w;
+    }
+}
+```
+| knob | wrong spelling -> effect |
+|---|---|
+| cursor homing | plain `short *p` is register-coloured (42 words, no home); `short *cur[1]` array form homes it but re-loads for the `sh` and emits the store first (62 words) |
+| write-back order | `*p++ = 0` / `*p = 0; p++` = `sh` BEFORE the `addiu/sw` write-back; `p++; p[-1] = 0` re-reads p (65 words); `q = p++; *q = 0` = store first. Only the explicit `q = p; p = q + 1; *q = 0;` puts the write-back first |
+| colours | inline `y * stride + x` in the cursor expression = t-ring sum and the candidates colour stride/q v0, i v1, j a0, rem a1 (34 diff lines); the named `n` makes the sum a candidate coloured v0 = the target's j colour, then stride v1 / rem a0 / i t0. `j`-first declaration, a named `s = stride` local, an explicit `j = 0` before the loop, an unused pointer -- no effect |
+| object/index order | `*(int *)(obj + idx * 4 + 0xF4)` (any grouping/cast) loads the index first (t7 idx, t9 obj, `addu t2,t8,t9`); the array form `((int *)(obj + 0xF4))[idx]` (or `((short **)...)[idx]`, or `idx * 4 + obj + 0xF4`) loads the object first (t7 obj, t8 idx, t9 idx<<2, `addu t2,t7,t9`) |
+| frame 0x10 / home at +4 | `p` declared FIRST = frame 8, home at +4; `int i, j;` (or any two scalars) BEFORE the volatile = two phantom words above it (frame 0x10, home +4); three scalars before it = frame 0x10 with the home at +0; four = 0x18 |
+Also: the 4x unroll with the `& 3` remainder pre-loop is uopt's own from the plain counted `for` -- do not hand-unroll.
+The stride word must be a DISTINCT symbol from the `&D_00000000` base or uopt folds it into `lw v1,0(t1)` off the
+held base (the 349E0 per-site alias rule); the reloc-blind gate cannot see which data word it is.
+Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (43468 row).
+
+## Colour-packet twins: unsigned float->int FCSR sequences into `unsigned char col[4]`, the reversed right-assoc pack, and two residuals -- hoisted `lui at,0x4f00` scheduled before the named-input loads, and the pack's t-temp numbering (game_libs_func_000470E4 / 47394 / 47B28 NM 172/172 by mnemonic, 2026-09-11 agent-c) <a name="colour-packet-twins-unsigned-cvt-head-order-470e4"></a>
+
+Three byte-identical 0x2B0 functions except the packet command word (`lui t9,0xfa00` / `0xfb00` / `0xf900`);
+each is a 6-word exported orphan head (`lui at,0x437f; mtc1 at,$f16; lwc1 $f0,0(a1); addiu t8,zero,1; lw
+t6,0x254(a0); mul.s $f4,$f0,$f16`) + a `gl_func_*` successor that was wrapped as "caller-set $t6 + $f4, permanent
+cap". Body: `obj = self->0x254->0x158` (v0, held to the end); c[0..3] * 255.0f each through IDO's `(unsigned)`
+float->int sequence (`cfc1 t7; ctc1 t8=1; cvt.w.s; cfc1; andi 0x78; beqzl ... mfc1` with the `lui at,0x4f00`
+2^31 bias path and the `bltz -> -1` clamp, saved FCSR in t7/t9/t1/t3, results t8/t0/t2/t4) stored `sb` to sp+4..7;
+then the 4CDB0 packet kit (`lw v1,0xC(v0); lw a2,4(v1); addiu; sw; lw t6,0xC(v0); lw t7,0(t6); sll t8,a2,3; addu
+a3`) with word 1 = `(r<<24)|(g<<16)|(b<<8)|a` rebuilt from four `lbu` reloads. Frame 0x10, col at sp+4.
+
+| knob | result |
+|---|---|
+| inputs inline `c[i] * 255.0f` | loads NOT hoisted (they stay behind each conversion's cfc1/ctc1 barrier), 255.0f in $f0: 148 diff lines |
+| **named `float r, g, b, a` assigned before the first conversion** | loads hoisted above the first `cfc1`, constant coloured $f16, inputs $f0/$f2/$f12/$f14 (the 5D1F0 rule) |
+| interleaved `r = c[0]; col[0] = r * 255.0f; g = c[1]; ...` | the g/b/a loads cannot cross the first conversion's ctc1 (barrier): not hoisted |
+| four separate `unsigned char r8, g8, b8, a8` | register-promoted, no sb/lbu homes (162 words) |
+| **`unsigned char col[4]`** | sb to sp+4..7 and lbu reloads for the pack, as the target |
+| pack `(r<<24)\|(g<<16)\|(b<<8)\|a` (natural) | cfe/uopt puts `a \| r<<24` first: `or t3,t0(a),t2(r<<24)` |
+| **`col[3] \| ((col[2] << 8) \| ((col[1] << 16) \| (col[0] << 24)))`** | the target's left-linear `((r<<24 \| g<<16) \| b<<8) \| a` (the #reversed-right-assoc-sum-load-last-phantom-slots-4f0c8 rule again) |
+| named `unsigned int w1 = pack` before the packet | an `andi 0xff` appears (u8 promotion through a named int): worse |
+| `float r, g, b, a; unsigned char col[4];` | frame 0x18 (four phantom float slots above col); `col` first then the floats = frame 8; `float r, g; col; float b, a;` (or two pointers before col) = **frame 0x10 with col at sp+4** |
+
+**Residual (64 strict diff lines, 172/172 by mnemonic):** (a) the head schedules `lui at,0x4f00` (the hoisted 2^31
+bias constant of conversion 1) BEFORE `lwc1 f2,4(a1); lwc1 f12,8(a1); lwc1 f14,12(a1); lw v0,0x158(t6)`; we emit the
+three input loads first, then `lui`, then `lw v0`. Loads assigned before or after `obj`, r's product as a named float,
+`(unsigned int)` casts, a struct-pointer `c`, a named 255.0f, reversed assignment order -- all keep loads-first (the
+reversed order also re-colours the inputs). (b) the pack's ten t-temps: target `lbu t4,5; lbu t1,4; lbu t8,6; lbu t3,7;
+sll t5; sll t2; or t6; sll t9; or t0; or t4` vs ours `t2/t0/t5/t8/t3/t1/t4/t6/t7/t9` -- the same tree, uopt's temp
+colouring differs (t4 reused at the end, t7 skipped), so it is downstream of (a) or of the frame/phantom layout, not
+the expression. Everything else (all four conversion sequences, the packet kit colours v0/v1/a2/a3, the FCSR save
+registers, the lane result registers) is exact. Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c
+(470E4 row).
