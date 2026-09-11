@@ -14201,6 +14201,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [64588 homing pass (agent-g 2026-09-11): the 1C54 ">= 8 full struct copies to a shared dest flips to memcpy-form" rule did NOT fire at 15 `t = u_k` copies into a FUNCTION-scope `struct { int v; } t` (538 words, all `sw a2,8(sp)` jal-delay struct-arg stores and rotating dead u_k homes kept, frame 0x168 -> 0xF8); the target's shared t/m homes (sp+0xB4 x30 / +0xB8 x26) ARE the function-scope shape; residual = 88 bytes the target keeps below t/m + box const-web colouring](#fn-scope-shared-staging-no-memcpy-flip-64588) -- _Scalar `t.v = u_k.v` DCEs the 15 rotating u_k stores (521 words) -- keep the full copy. Frame map: every single-use home above t/m maps 1:1 at +84; the tmp Vec3 sits at 0x4C..0x54 under t/m in the target vs 0x38..0x40 above s0/ra in ours. objdiff scores both forms 95.64 (sp offsets weigh light). Callee blanks: the K&R gl_func_0001CA10 and the `gl_init_0001CA10_64588 = 0x1CA10` alias both bake real jal addresses -- an exact must go through gl_func_00000000 + a 0-valued prototyped float alias._
 - [A dead pre-loop `or v0,zero,zero` + hand-stepped cursors that "cyclically renumber" = an ELIMINATED BASIC INDUCTION VARIABLE: write the loop as `for (k = 0; k < N; k++)` with every cursor as `base + k*stride` and uopt derives one s-register IV per product, retargets the trip test onto the first pointer IV vs the baked end, and leaves k's init behind; s-colours follow first occurrence (name the arg cursor before `i = k*3`) (gl_func_0000A670 EXACT 62/62, NM 95.5 -> 100, 2026-09-11 agent-g)](#basic-iv-elimination-leaves-dead-init-a670) -- _Hand-stepped `p += 0xC; ... while (p != end)` (do/while, for, while, for(;;)+break, any init order) is 61 words with s0<->s2 / s6<->s7 rotated; the IV form is 62 words exact on first try in three spellings (named cursor, inline `(k*3)%5`, `(i = k*3)` in the arg). Both callees must be the `gl_func_00000000` blank._
 - [IV-elimination corollaries: `(i | 0) + ((i + 4) << 3)` keeps the candidate FIRST in the `addu`; every cursor derived INLINE in the call (naming one retargets the trip test); a param-based `src[k*3]` retargets the test onto the 12k byte index; `lui 1; addiu -X` is the CARRY form of `D + (0x10000 - X)`, not `D + 0x1XXXX`; for-init + `do {} while (0)` around a held-`&D` block orders it after an absolute flag store (gl_func_0000AAEC 33/33, 00009DB8 65/65, 0000AFC4 57/57 EXACT; 00009EBC 59/59 standalone, 2026-09-11 agent-g)](#iv-elimination-corollaries-candidate-first-addu-inline-cursors-aaec-9db8-afc4) -- _Three tail-unit wraps at 92-97.5 ("unreachable setup scheduling", "dead move v0,zero no C reproduces", "as1 emission-order ties") fell to the A670 lens + two known levers in ~1 hour each; the 9EBC sibling is a one-line land._
+- [Struct-copy cursor init `or t9,a0` vs `sw ra` is an as1 SOURCE-LINE tie: the copy written as an initializer ON THE BRACE LINE (`{ struct B buf = *src; ...`) sinks the ra-save after it (gl_func_0000BDE8 EXACT 52/52, NM 96.15 -> 100, 2026-09-11 agent-g)](#struct-copy-brace-line-init-before-sw-ra-bde8) -- _C3E8 lever generalised: `sw ra` belongs to the entry line, the struct-copy's `or t9,a0` (uopt CSEs `&buf` into the first call's a0 and derives the dst cursor from it) to the copy's line; separate lines = line order (sw ra first). A plain `buf = *src;` statement on the brace line also works; copy + first call joined on a LATER line does not._
+- ["0.0f in THREE FP regs" = two zero PSEUDOS: a 2-use store zero (candidate $f12) + a 1-use `x / denom` numerator (ring $f16); spell exactly ONE side as the cast class `(float)0` and the other as the literal `0.0f`; the pre-call zero's spelling is free (ring $f4 either way); int tail `p->x += q->y * 1000` must be the COMPOUND form for base-first `addu` (gl_func_0000D318 EXACT 64/64, NM 96.17 -> 100, 2026-09-11 agent-g)](#two-zero-pseudos-literal-vs-cast-compound-tail-d318) -- _120-triple sweep: `(float)0` / `(float)0.0` / `(float)0u` hash to ONE pseudo, `0.0f` to another; same class on both sides = a 4-use candidate spanning the call (pre-call $f12, one fewer mtc1, ring -1); `0.0` (double) as the numerator promotes the div.s. `x = x + p` emits product-first `addu t3,t1,t2` and renumbers the tail t-regs._
 - [A comma expression `dx = a, dy = b, dz = c` is EMITTED right-to-left (ucode z,y,x) while its ring temps are numbered left-to-right (x = f4/f6 .. z = f16/f18) -- the only spelling that gives a z-first schedule with x-first ring numbers; `!= (0, 0.0f)` puts a store-forwarded memory operand FIRST in `c.eq.s`; a named squared-length steals a colour and drops $f16 out of the ring for the whole function (gl_func_00064DEC EXACT 157/157, NM 91.5 -> 100, 2026-09-11 agent-g)](#comma-expression-emits-right-to-left-64dec) -- _Five levers: (1) `spA4[0] = len2; if (spA4[0] != ...)` = ring $f8 forwarded across the branch, 0.0f -> $f14 (a named local coloured $f14 pushed zero to $f16 and every later temp -1 phase); (2) the `while (0) { dx = pC->x; }` anchor colours pC $v0 before pB $v1 AND must name the first-coloured diff (naming dz boosted dz to $f0); (3) `do { } while (0)` around the diff block stops the &local address web from hoisting above pC's loads (else it interferes with both pointers and falls to $a2); (4) comma expression for the z-first schedule; (5) comma-constant compare. Colours are per-VARIABLE across dead gaps: the second block's loads must reuse the names in the first block's colour order. An UNUSED `f32 sumsq;` decl is load-bearing (ghost home moves both arg spill slots by 4, 33 words)._
 - [`for (i = 0; i != N; i++)` keeps the hoisted `lui/addiu` sym+K pair adjacent in the preheader; `i = 0; do {} while` lets as1 slot `or s1,zero,zero` between them (same words, 2 swapped); `== 10`/`== 0` dispatch on a call result = if/else chain, not switch; loop-invariant constants (message base, stride, 10, &local) must stay INLINE -- naming them costs a frame slot + s-order; an EXACT must call the `gl_func_00000000` blank, not the K&R in-TU `gl_func_00062F64` stub (the .o gate passes, the ROM gate fails with the stub's real jal address) (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g)](#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54) -- _Companion of 68990 (loop spelling moved s-COLOURS there; here only the schedule). Corollary gl_func_0000C784 (tail constructor, NM 95.84 -> 77/77 EXACT): same for-init lever on `or v1,zero` vs the hoisted `addiu v0,768`; the alloc-fallback head `or s0,a0; bnez a0; sw ra` = write the body on the PARAM (a `self = arg0` local puts the copy in the bnez delay); a USO data address as an int arg = `(char *)&D_00000000 + 0xD678` (a pinned `extern char D_0000D678` leaves blank hi/lo fields)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
@@ -27041,3 +27043,73 @@ colouring differs (t4 reused at the end, t7 skipped), so it is downstream of (a)
 the expression. Everything else (all four conversion sequences, the packet kit colours v0/v1/a2/a3, the FCSR save
 registers, the lane result registers) is exact. Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c
 (470E4 row).
+
+## Struct-copy cursor init `or t9,a0` before `sw ra` is the as1 source-line tie: initializer on the brace line (gl_func_0000BDE8 EXACT 52/52, 2026-09-11 agent-g) <a name="struct-copy-brace-line-init-before-sw-ra-bde8"></a>
+
+Tail-unit NM wrap at 96.15 for three months as "list-scheduler ordering of two independent prologue insns".
+Target prologue: `addiu sp,-424; sw s0; or s0,a0; addiu a0,sp,40; or t9,a0; sw ra,28(sp); or t8,a1; addiu t0,a1,384;
+LOOP(3-word unrolled 384-byte copy)`. The wrap (`struct B384 buf1; struct B8 buf2; buf1 = *src;` on three lines)
+emitted `addiu a0,sp,40; sw ra; or t9,a0` -- a pure 2-word reorder, everything else exact.
+
+Mechanism = [#same-line-brace-return-sinks-arg-home-c3e8](#same-line-brace-return-sinks-arg-home-c3e8): as1 breaks the
+tie between two ready, independent instructions by SOURCE LINE. `sw ra` carries the function-entry line (the `{`);
+the copy-cursor init `or t9,a0` carries the `buf1 = *src` line (uopt CSEs `&buf1` into the first call's `a0` and
+derives the block-copy destination cursor from it, hence the `or` rather than a second `addiu`). On separate lines the
+line order wins (ra-save first); on ONE line the copy init sinks first.
+
+| spelling | diffs |
+|---|---|
+| `{` / decls / `buf1 = *src;` on their own lines (the wrap) | 2 |
+| `void f(int s0, struct B384 *src) { struct B384 buf1; struct B8 buf2; buf1 = *src;` (one line) | **0** |
+| `void f(int s0, struct B384 *src) { struct B384 buf1 = *src; struct B8 buf2;` (initializer on the brace line) | **0** (landed) |
+| decls on their own lines, `buf1 = *src; gl_func_00000000(&buf1);` joined on a LATER line | 2 |
+
+Layout-neutral (52-word wrap -> 52-word def, no clip change). The brace-line layout is load-bearing: a reformat
+that splits the line regresses to the swap. Grep for the class: an NM wrap whose only residual is `sw ra` swapped
+with the first instruction of a struct copy / the first statement's temp.
+
+## "0.0f in three FP regs" = two zero pseudos (literal vs cast class) + compound-assign tail (gl_func_0000D318 EXACT 64/64, 2026-09-11 agent-g) <a name="two-zero-pseudos-literal-vs-cast-compound-tail-d318"></a>
+
+Tail-unit NM wrap at 96.17 ("the target materializes 0.0f in THREE distinct FP regs; IDO CSEs mine into one fewer
+mtc1-zero, FP ring renumbers, not C-forceable"). Target post-call block: `lui/mtc1 f2 = 255 (named denom, candidate);
+f6 = 235; f10 = 80; mtc1 zero,f16; div.s f8,f6,f2; lw v1(obj); mtc1 zero,f12; ...; swc1 f12,0xA8; swc1 f12,0xA4;
+div.s f0,f10,f2; swc1 f8,0x64; div.s f18,f16,f2; swc1 f0,0x68; swc1 f0,0x6C; swc1 f18,0x70`, and pre-call
+`mtc1 zero,f4; swc1 f4,0xAC(v0)`.
+
+With every zero spelled `0.0f` uopt value-numbers all four uses into ONE candidate: pre-call store, `0/denom`
+numerator, two post-call stores -> `$f12` on both sides of the call, one `mtc1 zero` fewer, ring temps -1
+(f4/f6/f8/f10 vs f6/f8/f10/f16), epilogue shifted a word. The target has two zero PSEUDOS in the post-call block:
+the two-use store zero (a candidate, coloured `$f12` in the f0/f2/f12/f14 candidate class) and the one-use
+numerator (a ring temp, `$f16` = next after f10). The pre-call `0xAC` zero is then a one-use ring temp (`$f4`) on
+its own -- it only joined the candidate when the candidate had the numerator's third post-call use.
+
+Lever = [#game-libs-64124-distinct-f4-zero-via-cast-2026-07-03](#game-libs-64124-distinct-f4-zero-via-cast-2026-07-03)
+(differing literal FORM = distinct pseudo). Sweep of all 120 ordered (pre, stores, numerator) triples over
+`0.0f` / `(float)0` / `(float)0.0` / `0.0` / `(float)0u`:
+
+| stores | numerator | result |
+|---|---|---|
+| `0.0f` | `(float)0` / `(float)0.0` / `(float)0u` | **0 diffs** (any pre-call spelling) |
+| `(float)0` / `(float)0.0` / `0.0` / `(float)0u` | `0.0f` | **0 diffs** (any pre-call spelling) |
+| same class on both sides (`0.0f`/`0.0f`, `(float)0`/`(float)0.0`, ...) | | 34-37 (one 4-use candidate) |
+| any | `0.0` (double literal) | 41 (`0.0 / denom` promotes the div to double) |
+
+So `(float)0`, `(float)0.0`, `(float)0u` (and `0.0` in a float STORE) hash to ONE cast-class pseudo, `0.0f` to
+another; exactly one side must be each. Landed as `obj->0xA8 = obj->0xA4 = 0.0f` stores + `(float)0 / denom`.
+
+Second lever, the int tail: target `lw t0,52(sp) (a1 reload); lw t9,0xA0(s0); lw t1,0x88(t0); t2 = t1*1000 (sll/subu/
+sll/addu/sll); addu t3,t9,t2; sw t3,0xA0(s0)`. `a0[0xA0/4] = a0[0xA0/4] + a1[0x88/4] * 1000` emits the product FIRST
+(`addu t3,t1,t2`, deeper-operand-first) and renumbers the reload/load temps (t9/t2/t0); the COMPOUND
+`a0[0xA0/4] += a1[0x88/4] * 1000` gives the target's base-first addu and t0/t9/t1/t2 exactly (the FP-compound
+operand flip of game_uso A604 applied to an int RMW).
+
+Landing notes: the prototyped per-site alias `gl_proto_D318` (single-float args, direct jal) needs a
+`gl_proto_D318 = 0x00000000;` pin in undefined_syms_auto.txt once the body is on the build path -- an NM wrap never
+links it, and `make` then fails at the ELF link with the ROM left STALE (cmp still passes: check the make exit code
+first). Tail NM clip 0x555C -> 0x5560 (63-word wrap -> 64-word def; EBC8 NM offset 0x5530 + 0x30).
+
+**Sibling gl_func_0000D8E0 (tail, NM 91.6 "255/255 numerator-CSE cap, same as D7B8"): 54/54 STANDALONE with
+`*(float *)(v0 + 0x70) = (float)255 / denom;` (also `(float)255.0`, or `denom = (float)255;` + `255.0f` numerator).
+The comma form `(0, 255.0f) / denom` does NOT split it (still `div.s f6,f0,f0`), and `255.0 / denom` promotes.
+Not landed (commit budget); one-line land + tail clip re-probe. gl_func_0000D7B8 carries the same cap note -- try
+the same cast-class numerator first.**
