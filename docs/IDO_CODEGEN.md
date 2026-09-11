@@ -196,6 +196,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 
 - [UOPT INTERNALS OPENED: the allocator source is readable at references/ido](#uopt-internals-opened-the-allocator-source-is-readable-at-referencesido) — _n64decomp/ido = decompiled uopt with ORIGINAL symbol names (Chow priority-based coloring); key files, pass pipeline. Read this before theorizing about any regalloc cap._
 - [A `Vec3 v[5]` ARRAY keeps every intermediate field store (`v[k].x = t.x; v[k].x += b.x; v[k].x /= two` = three `swc1` to one slot) -- separate struct locals, address-taken or fed from a volatile source, get DSE'd to one store per field; `short sum[3] += rec[k]` = reload-then-forward; phantom scalar homes + do-while(0) FP blocks (game_libs_func_0004FD00 edge-midpoint plane test, NM 43.0 -> 75.9, 2026-09-11 agent-c)](#vec3-array-keeps-intermediate-stores-4fd00) -- _Tell: target stores a float slot 2-3 times in one straight-line block with no reload between (`swc1 f4,100(sp); add.s f10,f4,f8; ... swc1 f10,100(sp)`) and the N struct locals are contiguous in the frame. Residual = uopt colour order (rec/ret v0, base t0) + a DOUBLE `or` on the forwarded third sum._
+- [Sheared `switch` range-normalise head: `addiu t6,a2,-242` on the tail of the PREVIOUS symbol is the next function's hoisted jumptable index, not a caller-set $t6 (game_libs 2A014 -> 2A07C boundary fix, merged NM 93.87; loop-arm first-read-inline lever; the two 3E1B0 copies stand)](#sheared-switch-normalise-head-2a07c) -- _Oracle tell: baked jal targets land on the orphan word. `a2 -= 242` before the switch materialises the `or v0,a2` copy but keeps the normalised value in a2._
 - [UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules](#uopt-regalloc-algorithm-priority-based-coloring--the-actual-rules) — _compute_save priority = savings/span; "-ve save" = spill home; coloring order = constrained-by-priority then unconstrained-by-BITPOS (first-occurrence order); lowest-free-register wins ties; spilltemps homes in bitpos order with region-based slot sharing._
 - [UOPT DUMP-FLAG REFERENCE: -Wo,-zdbug:N levels and friends](#uopt-dump-flag-reference--wo-zdbugn-levels-and-friends) — _zdbug 1=itab(+operand order +M3 homes), 2=post-reemit, 5=regalloc sets, 6=coloring trace; -dowhyuncolor; pass kill-switches -zcopy/-zcomo/-zstor/-zscm; -zmovc=movcost knob._
 - [**Dead single-var `if (v) {}` = emission-free priority boost; PLACEMENT decides winners vs span-hit losers (a7b4 49/49 + d418 CRACKED)**](#dead-empty-if-priority-boost-placement-is-everything-a7b4-d418-cracked-2026-07-03) — _Empty single-var if is deleted pre-emission but its condition-use refs + new bb survive into compute_save: tested var +loop-weight refs; everything live-through the bb takes a +1 span hit. Place it where the vars you must NOT demote are already dead (a7b4: after the loop's last call — masks dead, a1 boosted → exact). EQ_INEQ folds it if the var is value-known; multi-var conditions emit. The dead-while(0) body-ref variant did NOT count refs in these shapes._
@@ -15769,7 +15770,12 @@ gets promoted (sll/sra ring), `s16` temps emit sll/sra per assignment, a per-k `
 
 Frame: named scalars keep a home each even when coloured (#reversed-right-assoc-sum-load-last-phantom-slots-4f0c8);
 here `rec, pl, dot1, dot2, ret, two, zero, pad, pad` declared between `sum` and `tmp` = the 9 words above
-tmp, `Vec3 *tp` + one pad after tmp = the 5 below (frame 0x88, sum +0x44, tmp +0x14 exact).
+tmp, `Vec3 *tp` + one pad after tmp = the 5 below (frame 0x88, sum +0x44, tmp +0x14 exact). The same
+pad rule closed game_libs_func_00036074 (object-state constructor, 108/108 EXACT, hoisted 0.0f/1.0f/&D
+head merged with gl_func_00036088): three Vec3 temps a/b/c with 6/3/7/3 `s32 pad` words around them =
+frame 0x88, a +0x64, b +0x4C, c +0x24; the copies IN are lw/sw struct assignments, the copies OUT are
+per-field float stores, and uopt rebases every object store after the first call's hoisted `a0 = o +
+0xDC` argument to negative offsets.
 
 FP colours: in one basic block `two` colours $f12 and 0.0f is materialised late; `do { } while (0)` around
 each FP block (mid / d1 / d2) splits the BBs so `two` = $f0 and the hoisted 0.0f = $f12 as the target
@@ -15784,6 +15790,29 @@ at top, dots inlined in the `if`, `return 1 / return 0` (gives `or v0,zero,zero`
 while(0) anchors, whole-body `do{}while(0)` / `for(;;){break;}` (uopt strips them, no effect). Also open:
 the third vertex's forwarded sum is a DOUBLE `or` in the target (`or t6,t8,zero; or t8,t6,zero; addu
 t6,t8,t7`) vs one `or` from the array `+=`. Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (4FD00 row).
+
+## Sheared `switch` range-normalise head: the `addiu t6,a2,-242` word on the tail of gl_func_0002A014 is game_libs_func_0002A07C's hoisted jumptable index; the "caller-set $t6 dispatch cap" retired (merged NM 93.87, 2026-09-11 agent-c) <a name="sheared-switch-normalise-head-2a07c"></a>
+
+gl_func_0002A080's head was `addiu sp; sltiu at,t6,14; sw ra; beqz at,DEFAULT; or v0,a2,zero; sll t6,2;
+lui at; addu; lw t6,0x1020(at); jr t6` with $t6 "caller-set" -- it is set by the word BEFORE the symbol
+(0x2A07C, splat had glued it onto 2A014 after that function's `jr ra; nop`): uopt hoists the switch's
+`index = a2 - 242` above `addiu sp` exactly like the 0.0f / base-load heads of the fake-param sweep.
+Tell: `scripts/uso-sym-oracle.py` / baked-jal scan puts three call targets ON the orphan word. Fix =
+move the word (2A014.s 0x6C -> 0x68, new game_libs_func_0002A07C.s 0x1DC) + the post-unit single-unit
+baseline refresh (strip + EXPECTED_BASELINE=1, 29CCC donor active: .text identical, symtab moves).
+
+The C is `switch (a2)` with the opcode case values 242..255 (IDO subtracts the minimum itself; a
+`switch (a2 - 242)` with 0..13 cases is the same emit); arms in source order = target layout. Loop-arm
+lever: `a1[a1[0x18] + 0x13] -= 1;` (inline deref for the FIRST cursor read -> ring t5) then `n =
+a1[0x18]` (named second read -> v0); a named first read colours v0 and shifts the arm. Pop arm: guard
+first, then `m = (n - 1) & 0xFF` = one v1 web with the addiu in the bnez delay slot (two statements =
+two webs a0/v1). Residual = the two copy-prop-immune copies (3E1B0 class, #switch-break-tailmerge-
+sequential-ifs-2a080 item 4): `or v0,a2,zero` (compares read v0) and `or a0,v0,zero; sll t0,a0,2`.
+New negative results: `register int cmd`, `unsigned` param/local, volatile launder, `a0 = (char *)n`
+index, else-arm `n = n - 1` redefinition all fold; `a2 -= 242; switch (a2)` DOES emit `or v0,a2,zero`
+first but the normalised value then lives in a2 (`sltiu at,a2,14; sll t6,a2,2`), and a dead `if (cmd ==
+0) a2 = 1;` materialises the copy at +3 words. Exact route when cracked: the 29CCC/44B78 jumptable
+donor splice on the post objects. Ledger: MATCHING_WORKFLOW#game-libs-fake-param-exact-sweep-agent-c (2A014 row).
 
 ## UOPT REGALLOC ALGORITHM: priority-based coloring — the actual rules
 
@@ -26767,8 +26796,8 @@ expressions, not named sums.
 
 **gl_func_00009EBC (NM 84.1, the 4-arg sibling right after 9DB8): `for (k = 0; k < 3; k++)
 f(x0 + 0x18 + k*8, ((a1 + k) % 5) + (((a2 + k) % 8) << 3), (char *)&D_00000000 + 0xD434, a3[k]);` = 59/59
-standalone** (s0 = `a0 + 24` first, s3 = `4k` trip IV vs 12, s4 = `a3 + 4k`). Not landed this run (commit
-budget); one-line land, tail clip re-probe needed (the wrap is 58 words).
+standalone** (s0 = `a0 + 24` first, s3 = `4k` trip IV vs 12, s4 = `a3 + 4k`). LANDED 59/59 in-tree the same
+day (agent-g a4a5ef47f): ROM byte-identical first build, tail NM clip 0x5558 -> 0x555C (the wrap was 58 words).
 
 **gl_func_0000AFC4 (NM 92.8 "three adjacent-pair as1 emission-order ties, 12 spellings inert").** Not an IV
 case but two levers from the same week:
