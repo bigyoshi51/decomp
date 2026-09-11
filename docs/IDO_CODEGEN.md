@@ -14196,6 +14196,9 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [-O2 frame bottom = dead homes for named scalars: with <= 3 named scalars the leaf frame bottom is 12 bytes, every further named scalar (int, float, pointer, constant-valued or `register` alike) adds a 4-byte home rounded to 8 -- so a target with a 12-byte bottom names at most three (gl_func_000659D0 measurements, 2026-09-09 agent-g)](#named-scalar-dead-homes-frame-bottom-659cc) -- _Loop-carried `pos = node + K` bases and named float temps therefore cost frame even when register-only; the same function shows uopt folding every unnamed `node + K` into `disp(v1)` (plain/int/V3f/volatile-pointee/cast chains), holding it only through if(1)/do-while(0)/phi forms (each +1 home), and NOT scalarizing V3f struct temps (+11 words)._
 - [Dead-$v0 poison of an int-returning call is PER BASIC BLOCK: two candidates born after the call in the same BB colour v1/a1; un-poisoning the whole BB (`if (1) {}` after the call / void callee) gives v0/v1 in def order; a target with the FIRST candidate v1 and the SECOND v0 needs a BB boundary BETWEEN the two defs -- `e = arr[i]; do { vt = e[7]; } while (0);` (gl_func_000683D4 vtable ctor/finalize loop, 54/54 EXACT, 2026-09-09 agent-g)](#dead-v0-poison-is-per-bb-split-the-defs-683d4) -- _The poisoned candidate keeps its v1 in the call BB while the clean one takes v0 in the next BB; if(1){} or do{}while(0) between the defs are equivalent. Reusing one pointer name across two call sites makes it a cross-BB web and flips the FIRST site (v0/v1 swap); the naming levers (named vt, decl order, de-named CSE `e`) are all inert against the poison. Same family as #feedback-ido-dispatcher-v0-eviction-else-tail / the 373 void-callee entry, which un-poison the whole BB._
 - [A cross-BB value held in a RING temp (target `and t6; sw t6,24(a3); beqz; ... and v0,t5,t6`) is a stored value re-read by address in the next BB -- spell `p->f = expr; ... p->g & p->f` (uopt store-forwards the ring temp across the branch; a named local makes an a1 candidate); a `base + idx*4` cursor allocates the sll temp BEFORE the loads (t7 sll / t8,t9 loads) while `idx*4 + base` allocates the loads first (t7,t8 / sll t9) and un-shifts the whole downstream ring; `(cur | 0) & ~prev` puts the candidate first in the `and` (gl_func_000675A4 46 -> 13 words, 2026-09-09 agent-g)](#store-forward-ring-across-bb-and-scaled-index-first-675a4) -- _2026-09-11: 13 -> 8 words, a dead `while (0) { e = c->y; }` anchor before the divisions colours e f2 (zero-constant anchors inert). Residual = zero/thr f12/f14 swap (was the 3-cycle zero/thr/e f12/f14/f2 vs ours f14/f2/f12) that the compute_save model explains: the double threshold gets adjsave x2 and colours first into the lowest free colour; 30 spellings inert (list inside), 7.1 uopt has no type-based alias (inline double-global reads reload across a float store through the param)._
+- [64588 homing pass (agent-g 2026-09-11): the 1C54 ">= 8 full struct copies to a shared dest flips to memcpy-form" rule did NOT fire at 15 `t = u_k` copies into a FUNCTION-scope `struct { int v; } t` (538 words, all `sw a2,8(sp)` jal-delay struct-arg stores and rotating dead u_k homes kept, frame 0x168 -> 0xF8); the target's shared t/m homes (sp+0xB4 x30 / +0xB8 x26) ARE the function-scope shape; residual = 88 bytes the target keeps below t/m + box const-web colouring](#fn-scope-shared-staging-no-memcpy-flip-64588) -- _Scalar `t.v = u_k.v` DCEs the 15 rotating u_k stores (521 words) -- keep the full copy. Frame map: every single-use home above t/m maps 1:1 at +84; the tmp Vec3 sits at 0x4C..0x54 under t/m in the target vs 0x38..0x40 above s0/ra in ours. objdiff scores both forms 95.64 (sp offsets weigh light). Callee blanks: the K&R gl_func_0001CA10 and the `gl_init_0001CA10_64588 = 0x1CA10` alias both bake real jal addresses -- an exact must go through gl_func_00000000 + a 0-valued prototyped float alias._
+- [A dead pre-loop `or v0,zero,zero` + hand-stepped cursors that "cyclically renumber" = an ELIMINATED BASIC INDUCTION VARIABLE: write the loop as `for (k = 0; k < N; k++)` with every cursor as `base + k*stride` and uopt derives one s-register IV per product, retargets the trip test onto the first pointer IV vs the baked end, and leaves k's init behind; s-colours follow first occurrence (name the arg cursor before `i = k*3`) (gl_func_0000A670 EXACT 62/62, NM 95.5 -> 100, 2026-09-11 agent-g)](#basic-iv-elimination-leaves-dead-init-a670) -- _Hand-stepped `p += 0xC; ... while (p != end)` (do/while, for, while, for(;;)+break, any init order) is 61 words with s0<->s2 / s6<->s7 rotated; the IV form is 62 words exact on first try in three spellings (named cursor, inline `(k*3)%5`, `(i = k*3)` in the arg). Both callees must be the `gl_func_00000000` blank._
+- [A comma expression `dx = a, dy = b, dz = c` is EMITTED right-to-left (ucode z,y,x) while its ring temps are numbered left-to-right (x = f4/f6 .. z = f16/f18) -- the only spelling that gives a z-first schedule with x-first ring numbers; `!= (0, 0.0f)` puts a store-forwarded memory operand FIRST in `c.eq.s`; a named squared-length steals a colour and drops $f16 out of the ring for the whole function (gl_func_00064DEC EXACT 157/157, NM 91.5 -> 100, 2026-09-11 agent-g)](#comma-expression-emits-right-to-left-64dec) -- _Five levers: (1) `spA4[0] = len2; if (spA4[0] != ...)` = ring $f8 forwarded across the branch, 0.0f -> $f14 (a named local coloured $f14 pushed zero to $f16 and every later temp -1 phase); (2) the `while (0) { dx = pC->x; }` anchor colours pC $v0 before pB $v1 AND must name the first-coloured diff (naming dz boosted dz to $f0); (3) `do { } while (0)` around the diff block stops the &local address web from hoisting above pC's loads (else it interferes with both pointers and falls to $a2); (4) comma expression for the z-first schedule; (5) comma-constant compare. Colours are per-VARIABLE across dead gaps: the second block's loads must reuse the names in the first block's colour order. An UNUSED `f32 sumsq;` decl is load-bearing (ghost home moves both arg spill slots by 4, 33 words)._
 - [`for (i = 0; i != N; i++)` keeps the hoisted `lui/addiu` sym+K pair adjacent in the preheader; `i = 0; do {} while` lets as1 slot `or s1,zero,zero` between them (same words, 2 swapped); `== 10`/`== 0` dispatch on a call result = if/else chain, not switch; loop-invariant constants (message base, stride, 10, &local) must stay INLINE -- naming them costs a frame slot + s-order; an EXACT must call the `gl_func_00000000` blank, not the K&R in-TU `gl_func_00062F64` stub (the .o gate passes, the ROM gate fails with the stub's real jal address) (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g)](#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54) -- _Companion of 68990 (loop spelling moved s-COLOURS there; here only the schedule). Corollary gl_func_0000C784 (tail constructor, NM 95.84 -> 77/77 EXACT): same for-init lever on `or v1,zero` vs the hoisted `addiu v0,768`; the alloc-fallback head `or s0,a0; bnez a0; sw ra` = write the body on the PARAM (a `self = arg0` local puts the copy in the bnez delay); a USO data address as an int arg = `(char *)&D_00000000 + 0xD678` (a pinned `extern char D_0000D678` leaves blank hi/lo fields)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 
@@ -26601,6 +26604,127 @@ word; before the divisions: the ldc1 moves up, thr still ahead of zero) and a th
 then takes f0 ahead of e) are also inert. Remaining residual = zero/thr f12/f14 swap only.
 The D+0x2200 read is a data variable (0x2210 is a float variable elsewhere in the TU; the 0.5
 double literals in the same function are inline `lui/mtc1`), not a literal-pool entry.
+
+## Function-scope shared staging `t`/`m` at 15 struct-by-value ctor expansions: no memcpy-form flip, the target's shared sp+0xB4/0xB8 homes reproduced, residual = 88 frame bytes below them + box const-web colouring (gl_func_00064588 NM 95.64, 2026-09-11 agent-g) <a name="fn-scope-shared-staging-no-memcpy-flip-64588"></a>
+
+Target (post1b, 537 words, frame 0x150, s0 + ra, 37 blank jals): the 1C54/7BC struct-by-value ctor kit at
+15 expansions (13 simple slots + 2 box slots). Slot histogram of the target: `8(sp)` x15 (the jal-delay
+`sw a2,8(sp)` struct-arg store), `180(sp)` x30 = ONE `t` home for all 15 expansions, `184(sp)` x26 = ONE
+`m` home, one descending dead `u_k` home per slot (0x148 .. 0xCC), `336(sp)` x9 = the arg0 home.
+
+| spelling | words | frame | t / m homes |
+|---|---|---|---|
+| 1C54 kit: per-expansion `{ char *m; struct SB t; t = u_k; ... }` sibling blocks (as landed 2026-07-15) | 538 | 0x168 | 30 stacked homes sp+0x28..0x9C (sibling scopes never overlay) |
+| **function-scope `char *m; struct SB t;`, same full `t = u_k;` copies** | 538 | 0xF8 | ONE each, sp+0x28 / +0x2C (target: +0xB4 / +0xB8) |
+| function-scope + scalar `t.v = u_k.v;` | 521 | 0xF8 | rotating u_k stores DCE'd (1C54 rule confirmed) |
+| block-scope m, function-scope t, scalar copy | 521 | 0x130 | -- |
+
+So the "shared-dest full struct copy flips to memcpy-form at >= 8 sites" clause of
+#sibling-scope-no-overlay-structcopy-memcpy-flip-1c54 is NOT a general rule: with a 4-byte
+`struct { int v; }` dest and K&R (unprototyped) callee it stays scalarized at 15 sites, and the
+function-scope form is exactly the target's homing (shared t/m). Both forms score 95.64 in objdiff (sp
+offsets weigh light), so the block-scoped wrap was never "closer". Remaining, measured standalone with
+labels and sp offsets masked: (1) the frame -- the target keeps 88 more bytes BELOW t/m (its tmp Vec3 at
+0x4C..0x54, a 2-use slot at 0x38, one at 0x94; ours puts t/m directly above s0/ra and every single-use
+home above t/m maps 1:1 at +84), i.e. extra declared locals or per-box-slot block scoping; (2) ~50
+register-number diffs inside the two box-slot regions (the 1000/-1000/0 and 1/1/0 constant webs:
+`mtc1`/`swc1`/`sw` numbering); (3) the per-site `gl_ref_*` aliases carry 0 imms under HI16/LO16 in the
+.o where the target bakes `lui 0x2 / addiu` (link-resolved through undefined_syms_auto.txt, ROM-neutral).
+For an EXACT the 37 calls must go through `gl_func_00000000` and a 0-valued prototyped float alias: the
+K&R `gl_func_0001CA10` and the current `gl_init_0001CA10_64588 = 0x0001CA10` alias both link a real jal
+address into the ROM (the .o gate passes, the ROM gate fails -- same trap as 66D54's 62F64 stub).
+
+## A dead pre-loop `or v0,zero,zero` = an eliminated basic induction variable; hand-stepped cursors rotate the s-colours, `base + k*stride` derivations restore them (gl_func_0000A670 EXACT 62/62, 2026-09-11 agent-g) <a name="basic-iv-elimination-leaves-dead-init-a670"></a>
+
+Target (game_libs tail, -O2, 62 words, frame 0x38, s0-s7 + ra): 8 iterations of two blank calls
+`f(arg + k*0x30, (3k) % 5, (3k) % 8, D + 0xD268 + k*0x24)` / `f(..., D + 0xD388 + k*0xC)`, the `% 5` as
+`div` by a held `s6 = 5` (with the -1/0x80000000 break checks), the `% 8` as `andi; bgez; addiu -8`, the
+loop test `bne s2,s7` on the 0xD388 cursor vs `s7 = D + 0xD3E8`, and -- before the loop -- a dead
+`or v0,zero,zero` (0x4C). The 95.5% wrap (hand-stepped `p0 += 0x30; p2 += 0xC; i += 3; p3 += 0x24;
+while (p2 != end)`) was 61 words with s0<->s2 and s6<->s7 rotated, and called the dead `v0 = 0` "a dead
+local IDO didn't DCE that no C form reproduces".
+
+| spelling | words / diffs |
+|---|---|
+| hand-stepped cursors: do/while, `for (p2 = ...; p2 != end; p2 += 0xC)`, `while`, `for (;;) { ... if (p2 == end) break; }` (any init order) | 61 / 53-57 |
+| `for (k = 0; k < 8; k++) { i = k * 3; f(arg0 + k*0x30, i % 5, i % 8, D + 0xD268 + k*0x24); f(..., D + 0xD388 + k*0xC); }` | 62 / 10 (s0<->s1 only) |
+| same with `p = arg0 + k * 0x30;` named BEFORE `i = k * 3;` -- or inline `(k * 3) % 5`, or `(i = k * 3) % 5` in the first arg | **62 / 0** |
+| pointer cursors stepped by hand inside a `for (k = 0; k < 8; k++)` | 64 / 55 |
+| `for (k = 0; k < 24; k += 3)` with `k*0x10` / `k*0xC` / `k*4` cursors | 60 / 56 |
+
+Why: uopt's `findinduct`/`eliminduct` treats `k` as the basic IV and each `k*stride (+ base)` as a derived
+IV with its own s-register and increment; the loop exit is re-expressed on the first pointer IV against the
+folded end constant (`lui/addiu -11288` = 0xD3E8, one hi/lo pair) and `k` itself dies -- except its
+preheader init, which is what the dead `or v0,zero,zero` is. Hand-stepped cursors are ordinary variables:
+same 61 words of loop body, but the s-colours follow their (different) first-occurrence order and there is
+no k to leave a corpse. The IV colours also follow first occurrence: the arg cursor product must appear
+before `k * 3` to take s0 (s0 = arg cursor, s1 = 3k, s2 = 0xD388 cursor, s3 = 0xD268 cursor, s4/s5 = the two
+remainders, s6 = 5, s7 = end). The same "dead pre-loop zero move" signature elsewhere (66A50 family, the
+unfilled -O0 cases in #feedback-ido-o0-return-value-dead-double-b) should be re-read as an eliminated IV
+before being called a cap. Both callees are the USO-reloc blank `gl_func_00000000`: the in-TU K&R
+`gl_func_0000959C` links its real address into the ROM (byte gate passes, ROM gate fails).
+
+Landing note: the real def is 62 words where the NM body was 61, so the tail's
+`NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` moved 0x5550 -> 0x5554 (EBC8 NM offset 0x5520 -> 0x5524, rule = offset
++ 0x30); a Makefile-only clip change needs the NM `.o` removed before the gate.
+
+## A comma expression is emitted right-to-left but ring-numbered left-to-right; `!= (0, 0.0f)` = operand-first `c.eq.s`; a named squared length drops $f16 out of the ring (gl_func_00064DEC EXACT 157/157, 2026-09-11 agent-g) <a name="comma-expression-emits-right-to-left-64dec"></a>
+
+Target (post1b, -O2, 157 words, frame 0xA8, s0 + ra; 5 blank jals): integrate two Vec3 fields, snapshot
+`delta = vel - prev` through THREE stack temps (`sp70 -> sp7C -> sp54`, word copies, then float stores to
++0x330), `prev = vel` through `sp7C`, three more Vec3 copies after a call, then `len2 = x*x + y*y + z*z;
+if (len2 != 0) { len = sqrtf(len2); dir = vel / len; } else { zeros }`. The 91.5% wrap had the right shape
+for ten weeks; every residual was a colouring/emission-order effect, measured standalone (`probe.sh`, jal masked):
+
+| step | spelling | words off |
+|---|---|---|
+| 0 | wrap as landed (named `sumsq`, if(1)-materialised `pB`/`pC`, z,y,x diffs) | 91 |
+| 1 | `spA4[0] = dy*dy + dz*dz + dx*dx; if (spA4[0] != 0.0f) { r = sqrtf(spA4[0]); ...}` (no named sum) | 36 |
+| 2 | `while (0) { dz = pC->x; }` anchor before the `FF(0xB8) +=` line (pC coloured $v0, pB $v1) | 31 |
+| 3 | + `FF(0xFC) = sp34.z;` BEFORE `FF(0x100) = FF(0xD8);` (last pre-jal ring pair) | 26 |
+| 4 | + diff block inside `do { ... } while (0);` (&sp7C web no longer hoisted above pC's loads: $a2 -> $v0) | 9 |
+| 5 | + diffs in x,y,z order, anchor names `dx`, later block reads 318->dy / 320->dz / 31C->dx | 9 (same 9: the schedule) |
+| 6 | + `dx = pB->x - pC->x, dy = pB->y - pC->y, dz = pB->z - pC->z;` (ONE comma expression) | 1 |
+| 7 | + `if (spA4[0] != (0, 0.0f))` | **0** |
+
+What each one is:
+
+1. **A named float that is stored AND tested across a branch is a candidate; the target's is not.** Named
+   `sumsq` coloured $f14 (4th FP colour after dz/dy/dx = f0/f2/f12), so the 0.0f constant (5 uses across the
+   arms) took $f16 -- and a candidate holding $f16 removes it from the ring for the WHOLE function: every
+   temp from the second `lwc1` on was one phase early (`lwc1 $f18,792` where the target has `$f16`). Spelling
+   the sum as an array element that is re-read by address (`spA4[0]`, #store-forward-ring-across-bb-and-scaled-index-first-675a4)
+   makes it a store-forwarded ring temp (`add.s $f8; swc1 $f8,164(sp); c.eq.s $f8; mov.s $f12,$f8` for the
+   sqrtf arg) and the constant colours $f14. The 5.3-style `struct { f32 v; }` home lands at 0x28, not 0xA4;
+   `Vec3 spA4[1]` grows the frame 8; the 1-element float array is the only home that sits at the frame top.
+2. **The `while (0)` anchor's ASSIGNED variable gets the ref boost too.** `while (0) { dz = pC->x; }`
+   coloured pC first (target $v0) but also promoted `dz` to $f0; the target order is dx f0 / dy f2 / dz f12 =
+   plain bitpos order, so the anchor must name `dx` (the variable that is first anyway).
+3. **An address-of-local CSE web (`addiu v0,sp,124`, 12 uses over two call-separated regions) is
+   hoisted to the top of its basic block.** In one flat BB it is defined before pC's loads, interferes with
+   both pointer webs and with a0/a1 (both regions), and colours $a2; a `do { } while (0)` around the diff
+   statements puts the BB start after pC's last use, and the web takes $v0 (pC's colour, lowest free).
+   `if (1) { }`, a do-while around only the copies, or around only the subs all work the same.
+4. **cfe emits the operands of a comma expression right-to-left.** Three assignment statements in x,y,z
+   order give ring numbers x = f4/f6, y = f8/f10, z = f16/f18 AND an x-first schedule; in z,y,x order the
+   ring numbers move with them (z = f4/f6). The target has x-first ring numbers with a z-first schedule
+   (`lwc1 $f18,8(v0); lwc1 $f16,8(v1); ... sub.s $f12,$f16,$f18` first): the comma expression numbers the
+   ring in source order but emits the assignments last-first. Store order of the three results is
+   irrelevant (uopt emits each store right after its sub either way); chained `sp70.x = dx = ...` regresses
+   (+5), an indexed `for` over the three floats is not unrolled (+150).
+5. **`x != (0, 0.0f)` = `c.eq.s x,zero`; `x != 0.0f`, `0.0f != x`, `!(x == 0.0f)`, `x != (f32)0`, `*p`,
+   `p[i].v`, `((Vec3 *)p)->x` all = `c.eq.s zero,x`.** The #comma-constant-const-first-mul-5d754 rank
+   rule transfers to compares: the comma makes the literal an expression operand and the (forwarded) memory
+   operand outranks it. `x != 0` / `x != 0.0` / `x != -0.0f` change the constant's materialisation (+3).
+6. **Colours are per-variable across dead gaps.** The later block (`lwc1 $f2,792; $f12,800; $f0,796`) reuses
+   the diff-block colours, so it must read 0x318 into dy, 0x320 into dz, 0x31C into dx and sum
+   `dy*dy + dz*dz + dx*dx`; any other naming swaps f2/f12 there.
+7. **A dead `f32 sumsq;` declaration is load-bearing** (#named-scalar-dead-homes-frame-bottom-659cc): dropping
+   it moved both arg spill homes (`sw a0,40(sp)` / `sw a1,36(sp)`) down by 4 = 33 words. Keep the ghost.
+
+Also: the sqrt-family callee must be the PROTOTYPED `f32 gl_func_00000000_sqf(f32)` blank
+(undefined_syms_auto.txt) -- a K&R extern promotes the arg to double (cvt.d.s + mov.d) and an in-TU stub
+would link a real address.
 
 ## `for (i = 0; i != N; i++)` vs `i = 0; do { } while (i != N)`: same 102 words, but the do/while spelling lets as1 schedule `or s1,zero,zero` between the hoisted `lui s5` / `addiu s5` sym+K pair; the for-init keeps the pair adjacent. Also: an exact that calls a K&R-defined in-TU stub links to a REAL address -- the byte gate passes, the ROM gate fails (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g) <a name="for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54"></a>
 
