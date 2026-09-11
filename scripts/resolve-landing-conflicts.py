@@ -74,4 +74,15 @@ for path in sys.argv[1:]:
         if path=='Makefile': out+=resolve_makefile(o,t)
         elif path=='undefined_syms_auto.txt': out+=resolve_syms(o,t)
         else: print('!! cannot resolve',path); sys.exit(2)
+    if path=='Makefile':
+        # post-pass: a unit's clip / REPLACE_FUNC_BODY := line must exist once; keep the LAST
+        def key(l):
+            m=re.match(r'^(.*?:\s*[A-Z_]+\s*[:+]?=)', l); return m.group(1) if m else None
+        idx={}
+        for i,l in enumerate(out):
+            k=key(l)
+            if k and ('CLIP_KEEP_ALIGN' in k or 'REPLACE_FUNC_BODY :=' in k): idx.setdefault(k,[]).append(i)
+        kill=set(i for v in idx.values() if len(v)>1 for i in v[:-1])
+        if kill: print('dropped duplicate assignment lines:', len(kill))
+        out=[l for i,l in enumerate(out) if i not in kill]
     open(path,'w').write(''.join(out)); print('resolved',path)
