@@ -14235,6 +14235,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Same-stride cursor sweep: three hand-stepped `+= 0x44` pointers whose ONLY residual is the preheader `addiu sN,sN,K` init ORDER (colours already right) are eliminated-IV derivations of one `for (k = 0; k < 10; k++)` -- uopt emits the derived-IV inits in its own order (s3..s0, reverse of the lui block), retargets the trip test onto the LAST-occurring cursor vs its folded end, and leaves no k corpse when k has only linear uses; a struct-array spelling `((Rec *)D)[k].f` loses it (8 diffs), the store folded into the call arg loses it (6) (gl_func_00033B6C EXACT 30/30, NM 98.67 -> 100, 2026-09-11 agent-c)](#same-stride-cursor-sweep-iv-init-order-33b6c) -- _Companion of A670 (rotated colours) and 66D54 (lui/addiu adjacency): the third signature of the same lens is a REVERSED init block with matching colours. Sibling lens in the same session: a product-vs-base `addu` operand order + a skipped `$tN` before a `sll 1; bltz` bit test = product-first spelling + a 1-bit BITFIELD test (game_libs_func_0001CF68 29/29 EXACT); an x4-unrolled loop's remainder/copy/field a2<->a3 "unroller cap" = the body temp must be a BLOCK-scoped `s32 f` (game_libs_func_00020FFC 77/77 EXACT). All three landed in-tree the same day. Fourth (2026-10-14): a 3-cycle rotation among two named webs + an int carrier = the carrier belongs one web over and the displaced web is an inline CSE expression (gl_func_00057700 109/109 EXACT)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 - [26C6C (post, 90.42 -> EXACT 12/12): entry `or a2,a1,zero` + `sw a1,0x24(sp)` home with no `&a1` use = a `char` PARAMETER (IDO homes the narrow param and works on a copy); the standalone cc harness schedules the same body differently, so verify in-tree (2026-10-14 agent-c)](#char-param-home-copy-26c6c)
+- [358DC (post0b, 72.71 -> EXACT 24/24): forward `beq v0,1,L1; lui | beqz v0,L0; lui | b end; lw ra` two-way dispatch = `if (k == 1) goto L1; if (k != 0) return; goto L0;` (switch sorts 0-first, if/else-if gives bne fallthrough) (2026-10-14 agent-c)](#forward-two-way-goto-dispatch-358dc)
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -27772,3 +27773,15 @@ for the 9 basis-row zeros, `mtc1 zero,$f2` for the 6 at 0x30C..0x320), three 1.0
 General rule: for any straight-line store block where the target's register/constant numbering looks "rotated" relative to the
 emitted order, permute whole store blocks in the SOURCE (cheap: N! compiles of a 50-word function) before calling it a cap.
 
+
+
+## 358DC: forward two-way dispatch with each case lui in a branch delay = goto chain, not switch / else-if (gl_func_000358DC EXACT 24/24, 2026-10-14 agent-c) <a name="forward-two-way-goto-dispatch-358dc"></a>
+
+Target `lw v0,4(a0); li at,1; or a1,a0,zero; beq v0,at,L1; lui t6,%hi(D); beqz v0,L0; lui a0,%hi(D);
+b end; lw ra` then L1 block (`b end; lw ra`) then L0 block falling into the epilogue. Shapes tried:
+`switch` (case 1 first or case 0 first, with/without default/extra cases) always tests 0 first and puts
+`or a1` BEFORE `li at`; `if (k == 1) {..} else if (k == 0) {..}` gives `bne v0,at` + fallthrough;
+`if (k == 1) goto L1; if (k == 0) goto L0; return;` gives `bnez v0,end; lui; b L0; nop`. EXACT:
+`if (k == 1) goto L1; if (k != 0) return; goto L0; L1: ...; return; L0: ...;` (or the same with
+`goto E` / `E:;` instead of returns). The vtable call `(*(void (**)())(*(char **)&D + 0x58))(x, a0)`
+as ONE expression gives the target `lw t6 / lw t9 / jalr t9`; via `g`/`f` locals it is v0/v1.
