@@ -27542,6 +27542,14 @@ loaded from `rec + 0x10` all emit `addu v1,t3,a1` (same family as
 [2495C](#struct-member-array-index-operand-order-2495c)).
 Tail `lw t7,0(v1); or v0,v1,zero; bnez t7,end; nop; b end; li v0,0` = `if (*e == 0) return 0;
 return e;` (the `!= 0 -> return e` order inverts it).
+Sibling 2842C (88.25 -> EXACT 57/57, same day): identical recipe (one-arg lookup, typed record with
+`unsigned char b1` sub-count and `int *tbl` at +0xC, `v = rec->tbl[a1]; if (v == 0) store; return v;`);
+its old documented "ra-save ordering + regalloc" residual was entirely the extra call arg.
+Third sibling 28358 (85.47 -> EXACT 53/53, same day) is the control case: its target has NO a2 copy and
+`sw ra` in the bne delay, so there the lookup really takes `(a0, a1)`. Its tail
+`bnez v1,L; addu t8; sw t8; b end; or v0,v1,zero; L: or v0,v1,zero` (the move duplicated on both
+paths) needs `if (v == 0) { store; return v; } return v;` -- one trailing `return v` shares a single
+`or v0,v1` in the bnez delay, and `if (v != 0) return v; store; return v;` inverts the branch.
 
 ## 232E8: a struct-typed extern alias and a cast view of the same symbol compile differently (`addu` operand order) (gl_func_000232E8 EXACT 46/46, 2026-10-14 agent-c) <a name="typed-extern-vs-cast-view-addu-232e8"></a>
 
