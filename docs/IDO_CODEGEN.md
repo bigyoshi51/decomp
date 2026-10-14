@@ -171,7 +171,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Byte-copy into a stack buffer: `andi n,3` remainder loop + `beql` skip + 4x unrolled `lbu/sb` body with the src PARAM homed and reloaded from its home (`lw v1,0xB4(sp)`), unused a0 homed too = the plain rolled `for (i=0;i<n;i++) buf[i]=src[i]; buf[i]=0;` (gl_func_00061BC8 40.4 -> EXACT 48/48, 2026-10-14 agent-c)](#rolled-byte-copy-stack-buf-61bc8) -- _A hand-unrolled NM body is the tell to roll it back up; the arg homes come from the unroller, not from `&param` or varargs._
 - [Two global-table loops sharing &D: do-while + one NAMED limit per loop, cursor bump before the field writes, no named byte local, and the second loop's `s0 = ..; end2 = ..;` JOINED ON ONE LINE (gl_func_0002D2F4 78.0 -> EXACT 30/30, 2026-10-14 agent-c)](#two-loop-shared-base-sameline-init-2d2f4) -- _Tell: two independent lui/addiu pairs per loop (cursor+limit) and the s-reg pair scheduled `lui s0; lui s1; addiu s1; addiu s0`; the old NM called the shared &D base a CSE cap._
 - [Strength-reduced cursors: write the PLAIN INDEXED loop, not hand-held pointers (gl_func_0002A904 70.65 -> EXACT 40/40) + gbi packet `{ G *_g = gfx++; ... }` post-increment shape (game_libs_func_0001D3E0 75.3 -> EXACT 52/52), 2026-10-14 agent-c](#plain-indexed-loop-strength-reduction-2a904-gbi-postinc-1d3e0) -- _Tell (2A904): several s-reg cursors all `lui sN; addiu sN,K` off ONE symbol, each `addiu +stride`, end test `bne s1,s4` against a materialized end address. Tell (1D3E0): `or v1,a0` copy before the packet + `addiu a0,8` scheduled between the two word stores._
-- [Typed global struct member access flips a strength-reduced address to SR-cursor-first `addu` (game_libs_func_0001CC98 78.5 -> EXACT 51/51, gl_func_0001FAE8 81.8 -> EXACT 57/57) + plain-loop rewrite of gl_func_00049308 (79.3 -> EXACT 41/41 on first compile), 2026-10-14 agent-c](#typed-global-member-sr-cursor-first-addu-1cc98) -- _Tell: in a loop `addu aN,<SR off>,<loaded base>` (cursor FIRST) off a pointer field of a held global; every `(char*)`/int-cast/compound/two-statement spelling of `&base[i].m` emits base-first; `&G.recs[i].m` through a typed global struct emits cursor-first._
+- [Typed global struct member access flips a strength-reduced address to SR-cursor-first `addu` (game_libs_func_0001CC98 78.5 -> EXACT 51/51, gl_func_0001FAE8 81.8 -> EXACT 57/57) + plain-loop rewrite of gl_func_00049308 (79.3 -> EXACT 41/41 on first compile), 2026-10-14 agent-c](#typed-global-member-sr-cursor-first-addu-1cc98) + gl_func_000260B4 84.7 -> EXACT 80/80 (member-vs-char-arith is a per-site two-way addu-order switch) + gl_func_00029494 71.3 -> EXACT 74/74 (pointer-typed -1 = separate constant web) -- _Tell: in a loop `addu aN,<SR off>,<loaded base>` (cursor FIRST) off a pointer field of a held global; every `(char*)`/int-cast/compound/two-statement spelling of `&base[i].m` emits base-first; `&G.recs[i].m` through a typed global struct emits cursor-first._
 - [Struct-by-value arg built by a COMMA expression `fn((s.w = x, s))`: direct `sw a0,0x20(sp)` + `sw a0,0(sp)` and an extra 8-byte frame block (gl_func_0003E968 82.1 -> EXACT 22/22, 2026-10-14 agent-c)](#comma-struct-arg-frame-block-3e968) -- _`s.w = x; fn(s);` = frame -8, s 8 lower; `s = *p` / `fn(s = *p)` = `addiu v0,sp,N` address form; plain `fn(*p)` = no local copy at all._
 - [Struct-by-value at the CALL SITE requires a K&R callee definition](#feedback-ido-struct-by-value-knr-callee-prereq) — _cfe rejects struct arg vs int-typed ANSI callee; convert callee def to K&R (byte-neutral for int params). + two-homes-no-reload forwarding; if(1){} blocks copy-prop hoist._
 - [Before accepting a "scheduler cap": check per-jal arg-register loads](#feedback-ido-scheduler-cap-check-arg-arity) — _missing aN setups = fewer call args (AA28); sw v0 in delay = result spill not arg (66210). Re-derive arity before lever-grinding._
@@ -14253,7 +14253,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [68C14 (post1b, NM 78.17 -> 97.62): a dead int return of the FIRST call (K&R blank) makes v0 costly for every block-1 web -- a VOID alias of the pre-call moves the stream pointer pair to v0/v1 and lets the next call's string args hoist into a0/a1; every named local owns a frame word in decl order (spilled ones live there), so decl order alone places all spill homes; `f[1] = p[0]; n = f[1];` drops one ref of n under the s-reg threshold (2026-10-14 agent-g)](#void-precall-decl-order-homes-68c14) -- _Residual: target colours n's call-free block-1 split piece ($a2); build leaves it on a ring temp._
 - [D548 (tail, NM 79.6 -> EXACT 86/86): `addiu t1,a1,K; sw t1,F(s0); or a1,t1` after a `slti`/`beqz` on the same field = the bump is written ON THE FIELD and the call arg re-reads it (`if (o->F < N) o->F += K; g(.., o->F, ..)`) -- uopt forwards into a1 on both paths; every local spelling drops the move or colours the sum v0. An FP quotient reloaded from a spill after a call = the SAME `g / 255.0f` written again (CSE across the call), not a named local -- a named quotient costs a frame word (2026-10-14 agent-g)](#field-forward-bump-cse-quotient-d548) -- _Plus: reuse numerator names (b = 250 then b = 255.0 double then b = 0.0) to keep the name count = target frame._
 - [D0D0 (tail, NM 78.59 -> 89.49): `sw a1,4(sp)` before each of 3 jals = 4-byte struct key passed by value (`k.v = <int at D+0xD680>`; reload via hoisted &k); OPEN: target re-loads the key per iteration (`lui t9,1; lw t9,-0x2980(t9)`) but every spelling gets its address promoted into s5/s7 (+s8 save) (2026-10-14 agent-g)](#struct-key-byvalue-address-promotion-d0d0) -- _negative list inside._
-- [64388: stack-frame map = DECL ORDER (every declared scalar owns a home slot, even register-allocated ones); struct copy through a carrier `t = d; e = t;`; `if (1) {}` around a 3-component block sets x/y/z FP colouring; base reuse avoids a new slot (gl_func_00064388 NM 79.13 -> 97.30, 2026-10-14 agent-g)](#decl-order-frame-map-carrier-copy-64388) -- _read the target's slot gaps as scalar counts between structs._
+- [64388: stack-frame map = DECL ORDER (every declared scalar owns a home slot, even register-allocated ones); struct copy through a carrier `t = d; e = t;`; `if (1) {}` around a 3-component block sets x/y/z FP colouring; base reuse avoids a new slot (gl_func_00064388 NM 79.13 -> 97.30, 2026-10-14 agent-g)](#decl-order-frame-map-carrier-copy-64388) -- _read the target's slot gaps as scalar counts between structs (probe: not universal, see 690A8 caveat)._
 - [68044 (post1b, NM 75.93 -> EXACT): octant atan2 = PARAMS OVERWRITTEN in place (`arg1 = -arg1`; neg.s f20,f20) + `s16 v` result (per-arm sll/sra); final `(f32)v / 32768.0f * K` gives mul.s fd,quot,K only when K is a NAMED pad-struct extern (`D_68044_2210.v`), not an inline `*(f32 *)((char *)&D + 0x2210)` deref (2026-10-14 agent-g)](#octant-atan2-param-overwrite-named-const-68044) -- _In-unit callee with a BAKED jal = gl_ref_<section addr> alias, not a direct call._
 - [65148 (post1b, NM 75.76 -> ~60/66): a 3x4 affine transform with row results in f14/f16/f18 held to the end = NAMED row results with all three stores after the last row, plus the 4F0C8 reversed right-assoc row spelling; an unnamed (CSE'd) input component trims one named word so the call-crossing temp spill lands on the target slot (2026-10-14 agent-g)](#named-row-results-late-stores-65148) -- _Residual: accumulators rotate f16/f18/f14 vs f14/f16/f18._
 - [6337C (post1b, NM 97.81 -> EXACT 64/64): list-walk iterator with cur/next homed in stack slots = two ADDRESS-TAKEN locals (not a volatile struct) so `cur = next` forwards the stored load (ring t8); loop tail advances via `next = next[1]` (not cur[1]) to keep the reload in a ring temp (2026-10-14 agent-g)](#address-taken-iterator-locals-forwarded-ring-6337c) -- _Tell: target `lw t8,X(s0); sw t8,next(sp); beqz t8; sw t8,cur(sp); lw t0,4(t8)` (no reload between the store and the use) and the loop tail `lw t7,next(sp)`; build colours the pointer v1._
@@ -28369,6 +28369,25 @@ were the whole residual; `for (i = 0; i < *(int *)(self + 0x90); i++) { rec = (*
 *(char **)(D + 0x254); if (rec->0x54 >= q->0x10C && rec->0x50 <= q->0x110) gl_func_00000000(rec); }` builds the
 s1 = i*4 cursor, hoists &D into s3, re-reads the bound after the call and folds `i++` into both `bnezl` likely slots.
 
+**gl_func_000260B4 (same block, 84.7 -> EXACT 80/80, 2026-10-14 agent-c run 62):** registry resolve sweep. Extending
+the shared `gl_1CC98_GS` with `regs` (+0x2030, 0x14 records), `nents` (+0x2534) and `ents[]` (+0x2540, 0xC records) and
+writing `for (i = 0; i < G.nents; i++) if (G.ents[i].active == 1) ...` produced the fresh `lui s0` entry IV (`lh 0x2540(s0)`),
+the separate s5 base and the post-call count re-read. Two `addu` orders then needed opposite spellings in the SAME function:
+(a) `tbl + r*16 + 0x18` (tbl = a callee's return) -- every `char *` spelling gave product-first `addu t3,t2,s3`; a typed
+pointer `struct { char p0[0x18]; struct { signed char b; char p[15]; } e[1]; } *tbl` with `tbl->e[r].b` gives tbl-first.
+(b) `rec = regs + j` (regs loaded from the typed global): `&G.regs[j]` and `G.regs + j` give `lw t8; mflo t7; addu v1,t7,t8`
+(product first); the char-arithmetic `(Reg *)((char *)G.regs + j * 0x14)` gives the target `lw t7; mflo t8; addu v1,t7,t8`.
+So member-vs-char-arith is a two-way switch for addu order -- when one spelling is wrong, try the other per site. A
+decl-order `int pad;` before the 0x18-byte frame struct gave the 0x78 frame (struct at sp+0x4C).
+
+**gl_func_00029494 (same block, 71.3 -> EXACT 74/74, run 62):** record reset loop; `r = &G.recs[i]; r->e = TEMPLATE;
+r->b30 = 0; ...; r->w1C = blank(G.tbl2198, 0x1C0);` with the template a SECOND Data symbol (sym1243 @0x197A4, own typed
+alias `extern Elem D_197a4_29494;`) -- the struct assignment gave the interleaved 8-word copy with the last word stored in
+the jal delay slot. One gotcha: three `-1` stores, one into a POINTER field (`Elem *elem` at +0x44). `r->elem = (Elem *)-1`
+is a different u-code constant from the int `-1`s, so IDO built two `li sN,-1` webs (s4+s6, one extra s-reg, frame +8);
+storing through an int lvalue `*(int *)&r->elem = -1` shares the target's single s3 web. (Opposite use of the 23494
+`unsigned neg` trick: there the split was WANTED.)
+
 **Negative (game_libs_func_00023F98, NM 74.4 unchanged):** oracle = section 0x38604 NOT exported, TU-local (baked jal
 `0x0C00E181` from 22760 / 23E60 / 24D90 / 25320), lui/addiu base = sym1255 (D_00000000_345c0). Target keeps `s` in s0
 (frame 0x20, a0 not homed) with only `tag` homed; every probe (`char`/`u8`/`short` tag, `static` + caller, if/else vs
@@ -28379,9 +28398,12 @@ packet shape to rewrite -- not part of the hand-written-output vein.
 ## 64388: the stack frame is a DECL-ORDER map -- every declared scalar owns a home slot; carrier struct copies; `if (1)` blocks set 3-component FP colouring (gl_func_00064388 NM 79.13 -> 97.30, 2026-10-14 agent-g) <a name="decl-order-frame-map-carrier-copy-64388"></a>
 
 Target frame 0xB0 with Vec3 locals at 164/148/108/96/68/48 and unexplained 4..24-byte gaps between them; the old wrap
-(0x98) put all scalars after the structs. In IDO 7.1 -O2 locals are laid out top-down in declaration order and EVERY
-declared scalar gets a 4-byte home even if it lives in a register its whole life (unused `f32 pad[n]` also gets slots,
-cf. 4F0C8). So count the gap words between consecutive structs and declare that many of your real scalars there:
+(0x98) put all scalars after the structs. In IDO 7.1 -O2 locals are laid out top-down in declaration order; here EVERY
+declared scalar took a 4-byte home even though it lives in a register (unused `f32 pad[n]` / unused ints always take
+slots, cf. 4F0C8). CAVEAT: this is not universal -- in sibling gl_func_000690A8 (same unit) the register-only scalars
+(x/y/z/m/s/p) took NO slot (frame 0x30 = f32 v[3] + the loop counter's home only). Probe per function: add/remove one
+used scalar decl and watch the frame/offsets. When it holds, count the gap words between consecutive structs and
+declare that many of your real scalars there:
 `Vec3 m; f32 len; f32 g[3]; f32 spd; f32 ax,ay,az,bx,by,bz; Vec3 t; Vec3 d; f32 c0,c1,c2,one; Vec3 e; Vec3 *pv,*qv;
 Vec3 h;` reproduced every offset (m 164, len 160, g 148, spd 144, six scalars 120..143, t 108, d 96, four 80..95, e 68,
 pv/qv 60..67, h 48) and the CSE temp of `arg0 + 0x1C` (spilled across two calls) lands at 40 only when the scalar count
@@ -28402,4 +28424,10 @@ Other levers in the same function:
   (the 6612C `self = a0; a0 = 0;` trick was unnecessary here and actually spilled `self` to the stack).
 Open residuals (~2.7%): `len` colours f0 (target f2); the six sub loads issue pair-wise (target: all pv loads z,y,x then all
 qv loads) -- named-load spellings spill one value or change the frame; g[] copy temps f8/f16 swapped; mtc1 one slot early.
+
+Sibling gl_func_000690A8 (same session, NM 63.13 -> 85.28): an m2c graft with three `volatile f32` stack temps re-decoded
+as `f32 v[3]` (an array stays memory-resident: the cvt/sw/lw round trips) + two inline column-vector transforms.
+`count * sizeof(Vec3s)` keeps the alloc size in shift form (`sll 2; subu; sll 1`) -- a plain `count * 6` CSEs its 6
+with the loop's `idx * 6` and turns into `multu`. A loop-1 `for (i = 0; ...)` plus `for (i = 0; ...)` again for loop 2
+reproduces the target's `or t0,zero,zero` spilled across both calls with loop 2's offsets initialized as constants.
 
