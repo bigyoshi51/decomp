@@ -14241,6 +14241,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [66C74 (post1b, NM 85.12 -> EXACT 56/56): `volatile` on the FIRST self-relative store pins the param->s0 copy at the prologue (else uopt reads the early self uses from a0 and as1 sinks `or s0,a0,zero` below); `i++;` as its own statement in a do-while keeps the unrolled slot-0 group first; absolute-flag store via `&D+off` = `lui at; sw (at)` (2026-10-14 agent-g)](#volatile-first-store-pins-param-sreg-copy-66c74) -- _Tell: target's first stores use s0 with `or s0,a0,zero` at slot 3, build uses a0 for 1-2 uses then copies. if(0)/while(0)/register/self=self are all inert; only the volatile store flips it._
 - [635D8 (post1b, NM 83.22 -> EXACT 37/37): a param home reload right after a call lands in v1 instead of v0 = the call's dead int return def still occupies v0; a void-typed alias of the blank callee frees v0. Plus tail store SOURCE order for an unscheduled cvt.s.w->swc1 pair (2026-10-14 agent-g)](#void-alias-frees-v0-for-reload-635d8) -- _Tell: target `jal; ...; lw v0,home(sp)` with v0 never used as a return, build `lw v1,home`._
 - [688F8 (post1b, NM 80.46 -> EXACT 26/26): inlined cfront ctor pair `new Derived` -> base ctor re-tests a copy of `this` with a dead alloc fallback; forward gotos + two distinct base-0 vtable symbols + local DECL order picks the spill slot (2026-10-14 agent-g)](#inlined-ctor-pair-decl-order-spill-slot-688f8) -- _Tell: `beqz v0,end; or a1,v0; bnez v0,store; or v1,v0` (a redundant second null test) then a dead `jal alloc; sw v0,X(sp)` and two vtable stores via v1 / a1._
+- [6337C (post1b, NM 97.81 -> EXACT 64/64): list-walk iterator with cur/next homed in stack slots = two ADDRESS-TAKEN locals (not a volatile struct) so `cur = next` forwards the stored load (ring t8); loop tail advances via `next = next[1]` (not cur[1]) to keep the reload in a ring temp (2026-10-14 agent-g)](#address-taken-iterator-locals-forwarded-ring-6337c) -- _Tell: target `lw t8,X(s0); sw t8,next(sp); beqz t8; sw t8,cur(sp); lw t0,4(t8)` (no reload between the store and the use) and the loop tail `lw t7,next(sp)`; build colours the pointer v1._
 - [6612C (post1b, NM 94.81 -> EXACT 43/43): head `sw ra; sw s1; sw s0; lw a1,N(a0); or s0,a0,zero` (raw-param load, copy as a BODY move after the saves) = an UNcoalesced local copy: `int *self = a0; r = f(a0, a0[10]+8); a0 = 0; while (r != K) r = f(self, ...);` -- the dead `a0 = 0` kill is what stops uopt coalescing the copy into the param (2026-10-14 agent-g)](#dead-param-kill-uncoalesced-local-copy-6612c) -- _Tell: build has the prologue move `sw s0; or s0,a0` + `lw (s0)`; target saves all s-regs first and reads a0 once. Inverse of 63DC4._
 - [63DC4 (post1b, NM 94.58 -> EXACT 48/48): prologue `or s0,a0,zero` at slot 2 (before the arg home stores, bnez delay = last home store) = the PARAMETER itself is the s-reg variable and gets reassigned (`if (p != 0 || (p = alloc()) != 0)`); a local copy `T *s0 = a0;` sinks the copy into the bnez delay (2026-10-14 agent-g)](#reassigned-param-sreg-prologue-move-63dc4) -- _Tell: build has `bnez a0; or s0,a0,zero` but target has the or right after `sw s0` and a home store in the delay. volatile-first-store is inert here._
 - [65360 (post1b, NM 86.69 -> EXACT 58/58): two `mtc1 zero` regs = two DISTINCT zero constants (`0.0` double literal + `0.0f`); their f0/f2 order follows SOURCE order of first use, and the as1 scheduler then reorders the independent store groups -- sweep store-BLOCK permutations of the source, the target's emitted order is NOT the source order (2026-10-14 agent-g)](#dual-zero-constants-source-order-65360) -- _Tell: a store-only init with mtc1 zero,f0 AND mtc1 zero,f2 and a late field load hoisted above a zero block. One literal spelling = one shared f-reg (-1 word)._
@@ -14252,6 +14253,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [26C6C (post, 90.42 -> EXACT 12/12): entry `or a2,a1,zero` + `sw a1,0x24(sp)` home with no `&a1` use = a `char` PARAMETER (IDO homes the narrow param and works on a copy); the standalone cc harness schedules the same body differently, so verify in-tree (2026-10-14 agent-c)](#char-param-home-copy-26c6c)
 - [358DC (post0b, 72.71 -> EXACT 24/24): forward `beq v0,1,L1; lui | beqz v0,L0; lui | b end; lw ra` two-way dispatch = `if (k == 1) goto L1; if (k != 0) return; goto L0;` (switch sorts 0-first, if/else-if gives bne fallthrough) (2026-10-14 agent-c)](#forward-two-way-goto-dispatch-358dc)
 - [29000 (post, 96.36 -> EXACT 11/11): a "t8/t9 vs t9/t0 ring-colouring cap" on a `lbu; ori K; sb` RMW of a single bit = a ONE-BIT BITFIELD set (`s->bit = 1`), which burns one extra ring temp; a plain `char |= K` numbers one temp lower (2026-10-14 agent-c)](#single-bit-bitfield-set-extra-ring-temp-29000)
+- [5B5D8 (post0b, 96.11 -> EXACT 9/9): word RMW `lw t8; sll t7; and t9,t8,at(0xFFFFFF); addu t0,t7,t9` with t6 unused = the kept low bits read as an unsigned :24 BITFIELD plus `(a2 & 0xFF) << 24`; homed unused first arg = `char` param (2026-10-14 agent-c)](#bitfield-low24-read-shift-first-5b5d8)
 - [2831C (post, 95.67 -> EXACT 15/15): "multi-def web XOR per-arm jr" cap (3-way range lookup, last arm `addiu v1` + `jr; or v0,v1,zero`, others `jr; addiu v0`) = ONE result local assigned in if / else-if / else + a single `return r;` (2026-10-14 agent-c)](#single-result-local-if-chain-2831c)
 - [2DD58 (post, 92.5 -> EXACT 14/14): `sw a0` home + `or a2,a0` + `andi a0,a2,0xFF` in a 1-param wrapper = a `char` param (third application of the 26C6C rule; the copy goes to the first a-reg not used by the call args) (2026-10-14 agent-c)](#char-param-home-copy-26c6c)
 
@@ -27873,6 +27875,22 @@ places the sb after the lwc1. Diagnostic: any `lbu/lhu; ori/andi; sb/sh` RMW who
 slot past the "natural" numbering -> try a bitfield before calling it a colouring cap. Standalone harness reproduced
 it byte-exact; verified in-tree too.
 
+## 5B5D8: top-byte replace whose shift is numbered BEFORE the load (t6 skipped) = :24 bitfield read + `(x & 0xFF) << 24` (game_libs_func_0005B5D8 EXACT 9/9, 2026-10-14 agent-c) <a name="bitfield-low24-read-shift-first-5b5d8"></a>
+
+Target (no-frame leaf): `sw a0,0(sp); lw t8,-0x10(a1); lui at,0xff; ori at,0xffff; sll t7,a2,24; and t9,t8,at;
+addu t0,t7,t9; jr ra; sw t0,-0x10(a1)`. The old wrap (`(void)&a0; *p = (a2 << 24) + (*p & 0xFFFFFF)`) scored 96.11
+as a "skipped-temp colouring cap": every plain spelling (operand swaps, named temps, BB splits, goto, `~0xFF000000`,
+unsigned/char/short casts on a2, unsigned `<<8>>8`) numbers the LOAD first (`lw t6 ... and t7 ... sll t8/t9`).
+IDO numbers by expression shape, not source order, so commuting `+` never helps.
+EXACT: `void f(char a0, int *a1, int a2) { a1[-4] = ((a2 & 0xFF) << 24) + ((BF *)&a1[-4])->low; }` with
+`typedef struct { unsigned int top:8; unsigned int low:24; } BF;`. Pieces: (1) reading the low 24 bits through an
+unsigned bitfield (word load + mask) numbers the shift before the load (alone: `lw t7; sll t6; and t8; addu t9`);
+(2) the `& 0xFF` on a2 is folded away by the shift but burns one ring temp (t6), lifting everything by one;
+(3) an unused `char` first param is homed by IDO (`sw a0,0(sp)`) with no `&a0` trick. Writing the byte via the
+bitfield (`p->top = a2`) narrows to a single `sb` -- not this shape. Rule: on a mask-and-merge RMW whose load
+is numbered after the inserted value, read the kept bits through a bitfield; count skipped ring temps to decide
+how many foldable `& mask` / casts to add.
+
 ## 688F8: inlined derived/base ctor pair; local decl order picks the jal-delay spill slot (gl_func_000688F8 EXACT 26/26, 2026-10-14 agent-g) <a name="inlined-ctor-pair-decl-order-spill-slot-688f8"></a>
 
 Target shape (frame 0x20, unused `a0` homed at 0x20): `jal alloc(0x30); beqz v0,end; or a1,v0; bnez v0,store; or v1,v0; li a0,0x20; jal alloc; sw v0,0x18(sp); lw a1,0x18(sp); beqz v0,skip; or v1,v0; store: v1[7]=&D1; skip: a1[7]=&D2; end: return a1`. Old wraps read this as "paranoid double-check" and fought the frame/spill with volatile levers (capped at 80.46%). It is a cfront `new Derived` with the base ctor inlined: the base ctor tests ITS OWN `this` (a copy of p); IDO does not propagate `p != 0` into the copy, so the dead `alloc(0x20)` fallback is emitted and p (a1) is spilled across it in the jal delay.
@@ -27905,3 +27923,25 @@ EXACT, first compile: `char *r; if (a1 < a0->lo) r = a0->rec[0]; else if (a1 <= 
 r = a0->rec[2]; return r;`. Early `return`s are the WRONG source shape for this pattern: write the single-exit form
 and let IDO tail-duplicate the jr itself. Check this spelling first whenever one return arm carries a
 `move v0,vN` while its siblings compute straight into v0.
+
+## 6337C: address-taken iterator locals let uopt forward the head pointer; advance through `next` keeps the ring temp (gl_func_0006337C EXACT 64/64, 2026-10-14 agent-g) <a name="address-taken-iterator-locals-forwarded-ring-6337c"></a>
+
+List walk whose `cur` / `next` live in adjacent stack slots (sp+44 / sp+48) and are reloaded after the call. A `volatile struct { int *cur, *next; } it;` reproduces the slots but forbids store-to-load forwarding, so the head pointer has to be a NAMED local `n` -> a uopt candidate -> `$v1`, and every following ring temp shifts (97.81%). Target instead keeps the head in the load's own ring temp (`lw t8,48(s0); sw t8,48(sp); beqz t8; sw t8,44(sp); lw t0,4(t8)`).
+
+Fix: plain locals made memory-resident by the 69B94 barrier (`if (1) { bar = &cur; bar = &next; }`; decl order next, cur gives next the higher slot). Memory-resident but non-volatile -> uopt forwards `cur = next` from the value just stored, and the pointer stays a ring temp:
+
+```c
+next = (int *) self[0x30 / 4];
+cur = next;
+val = cur ? (next = (int *) cur[1], cur[0]) : 0;
+while (val != 0) {
+    ... cur[0] ... call ...
+    cur = next;
+    val = cur ? (next = (int *) next[1], cur[0]) : 0;   /* next[1], NOT cur[1] */
+}
+```
+
+The loop tail needs the advance read through `next` (the reload): with `cur[1]` the reloaded value is shared by three uses and becomes a `$v1` candidate (14 diff lines); `next[1]` (or `val = (cur = next) ? (next = next[1], cur[0]) : 0`) keeps it in ring `$t7`. Probed-inert tail forms: if/else arm, `cur != 0`, `*cur`, block-scope `n`, same-line. The 69B94-style single rotated `while (cur = next, ...)` copy also lands the head in t8 but colours `val` v1 and breaks the tail layout.
+
+Second application, same day: gl_func_00069B94 (post1b, 98.66 -> EXACT 41/41) -- the wrap that had cracked the layout with that rotated single-copy `while` still carried the `$v1` key / `$v0` next residual; rewriting it as explicit pre-loop advance + tail `next = next[1]` advance closed all 10 words. Any list walk with stack-homed iterator slots and a ternary advance: try this shape first.
+
