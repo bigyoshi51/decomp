@@ -14260,6 +14260,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [66674 (post1b, 70.75 -> EXACT 28/28): list append whose exit `sw a0,28(sp); lw a0,28(sp)` + 0x30 frame was mis-read as OUR spill -- it is the TARGET: a separate `last` cursor (`for (; cur; cur = cur[1]) last = cur;`) spilled at loop exit, data stored before next=0 in source, +8 frame = `volatile int pad[2]` (2026-10-14 agent-g)](#list-append-last-cursor-exit-spill-66674) -- _Read old NM notes with the sides checked: build-left / target-right._
 - [3FA54 (post0b, 91.86 -> EXACT 21/21): a "dead spill of caller a2 into a local slot in the jal delay" cap (`sw a2,0x64(sp)`, build 1 insn short) = a FIELD STORE into an escaping stack message record (`s.arg = a2`); the "result" register local was also a record field reloaded after the calls (2026-10-14 agent-c)](#stack-record-field-not-dead-spill-3fa54) -- _Tell: an `sw aN,K(sp)` with K inside the `&buf` range that is passed to the jal; size the record from the frame (0xA0 here)._
 - [3EDBC (post0b, 90.88 -> EXACT 24/24): same 0xA0 stack record pinned to the frame top under an unused 16-byte local; tail `lw v0,home; lw/ori/sw via v0; ...; li v0,1` (late li, v0 as the store base) = `*a0 |= 1; if (1) {} return 1;` -- the empty if splits the return constant into its own BB (2026-10-14 agent-c)](#late-return-constant-bb-split-3edbc)
+- [3EE50 (post0b, 76.43 -> EXACT 28/28): "inter-jal t-reg reload order + 4-reg permutation" INSN_PATCH note = source order of the post-call record-field stores; t6..t9 follow source evaluation order, the scheduler then sorts the stores (2026-10-14 agent-c)](#record-store-order-picks-treg-3ee50) -- _Tell: the li-constant temp gets the LAST t-reg although its store issues first -> write that statement after the loads._
+- [52674 (post0b, 88.22 -> EXACT 23/23): "-O1 lower-opt cap" for unfolded `ori K1; ori K2; ori K3` = one `v |= K;` statement per constant at -O2 (only a single-expression OR chain folds); the local then takes v0 and an empty `if (1) {}` returns v0 to the preceding base (2026-10-14 agent-c)](#separate-or-statements-unfolded-52674)
 - [5E138 (post0b, 89.73 -> EXACT 22/22): rolled 4x4 transpose loop (row ptr += 16, col ptr += 4, end rematerialised from sp, jal arg recomputed in delay) = plain NESTED `for i { for j { dst[i][j] = src[j][i]; } }` -- inner fully unrolled, outer strength-reduced; a single pointer loop shares the dst base in a1, a single index loop fully unrolls (2026-10-14 agent-c)](#nested-loop-inner-unroll-outer-sr-5e138)
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -27997,6 +27999,28 @@ with 16 unused bytes at 0x18 -- `char pad[16];` declared AFTER the record reprod
 pinned to the frame top in declaration order).
 
 
+
+## 3EE50: t-reg numbering of post-call record stores = source statement order (gl_func_0003EE50 EXACT 28/28, 2026-10-14 agent-c) <a name="record-store-order-picks-treg-3ee50"></a>
+
+Target after the first jal: `lw t6,a5; lw t7,a3; lw t8,a4; lw v0,a2; li t9,1; sw t9,+0x48; sw t6,+0x60; sw t7,+0x58; sw t8,+0x5C; lw t0,0(v0); li t1,2; sw zero,+0x54; sw t1,+0; addiu a0; sw v0,+0x50; jal; sw t0,+0x4C`.
+Same 0xA0 record as 3FA54 (type@0, sub@8 filled by call 1, fields 0x48..0x60). A typed record fixes
+the frame at once; the remaining diff was only t-reg names. IDO numbers the temps in SOURCE
+evaluation order, then the scheduler hoists stores independently -- so the `1` constant whose store
+issues FIRST but owns t9 was written AFTER the three arg loads: `s.f60 = a5; s.f58 = a3; s.f5C = a4;
+s.f48 = 1; s.f4C = *a2; s.f54 = 0; s.type = 2; s.f50 = a2;`. Writing `s.f48 = 1` first gives the
+same instruction order with t6=1 (8 operand diffs). Recipe: read the t-reg numbers as the source
+order, the store order as the scheduler's -- they are independent.
+
+## 52674: unfolded consecutive `ori` constants at -O2 = one `|=` statement each (game_libs_func_00052674 EXACT 23/23, 2026-10-14 agent-c) <a name="separate-or-statements-unfolded-52674"></a>
+
+Target: `lui v0; addiu v0; sw zero,4(v0); sw zero,0(v0); lui v0; lw v0,4(v0); lui at,2; ...; ori v0,v0,0x2000; ori v0,v0,1; ori v0,v0,0x8000; ...; or v0,v0,at; lui at; sw v0,4(at)`.
+A 2026-05 note called the three unfolded `ori`s an -O1 cap ("-O2 folds them to one `ori 0xA001`").
+Wrong: -O2 folds only the single-expression chain `x | 0x2000 | 1 | 0x8000 | 0x20000` (even
+fully parenthesised). Separate statements on a local, `v = sym[1]; v |= 0x2000; v |= 1; v |= 0x8000;
+v |= 0x20000; dst[1] = v;`, stay unfolded and keep `v` in v0. Side effect: the earlier `addiu` base
+for the two zero stores moves to v1; an empty `if (1) {}` between those stores and `v = ...`
+(the BB lever, see #late-return-constant-bb-split-3edbc) gives it v0 back. Before splitting a file
+to -O1 for "less constant folding", try one statement per constant.
 
 ## 66674: list append -- `last` cursor spilled at loop exit; statement order picks the home-load hoist (gl_func_00066674 EXACT 28/28, 2026-10-14 agent-g) <a name="list-append-last-cursor-exit-spill-66674"></a>
 
