@@ -14227,11 +14227,14 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [641DC (post1b, 84.70 -> EXACT 107/107): "IDO keeps a2 in s0 and spills self to its arg home" was the accumulate spelling -- `Vec3 *pp = &a0->v10; pp->x += a2->x; ...` hands s0 to a0; a 36-byte BLOCK-scope pad in the if-arm sits BELOW the compiler spill slot, a function-scope pad sits ABOVE it](#vec3-pointer-accumulate-flips-s0-block-pad-below-spill-641dc) -- _Tell: two pointer params both live across calls, the target saves the one with more field traffic in s0 but your build picks the other. Frame gaps split around the spill slot = function-scope pad above + block-scope pad below._
 - [63F34 (post1b, 87.22 -> EXACT 108/108): write reflected components STRAIGHT BACK into the local struct (`s.x = d * n.x - s.x;` x3, then `sqrtf(s.x*s.x + ...)`) instead of named tx/ty/tz -- uopt forwards the stores, so the values ride ring temps (f4/f16/f6) not coloured f14/f16/f18; dot product reversed+right-assoc `z + (y + x)`; comma operand `(0, var)` on every commutative op whose target puts the variable first](#store-forward-local-struct-ring-temps-63f34) -- _Tell: three results stored to a stack struct and then squared, target's result regs are recycled load/sum temps, build's are a fresh coloured triple. Also 693A4: same reversed sum lifts a 3x3 rotate 51 -> 93/148 LCS; residual there is an ADJACENT-PAIR ring swap (t8<->t9, t4<->t5, f8<->f10), not a phase shift._
 - [693A4 (post1b, NM 92.84 -> 95.88, LCS 93 -> 114/148): in a reversed right-assoc 3x3 row `m20*v2 + (m10*v1 + X)` the INNERMOST product's textual order is NOT canonicalised -- `v[0]*m0` vs `m0*v[0]` flips fs/ft and pair-swaps the whole f-ring; and two pointer loads on ONE source line vs two lines pair-swaps the head sub.s ring (2026-10-14 agent-g)](#innermost-product-order-same-line-head-693a4) -- _Sweep the innermost product's operand order per row (3x2 grid) and same-line joins of the pointer-setup statements before calling an FP pair swap a cap._
+- [66C74 (post1b, NM 85.12 -> EXACT 56/56): `volatile` on the FIRST self-relative store pins the param->s0 copy at the prologue (else uopt reads the early self uses from a0 and as1 sinks `or s0,a0,zero` below); `i++;` as its own statement in a do-while keeps the unrolled slot-0 group first; absolute-flag store via `&D+off` = `lui at; sw (at)` (2026-10-14 agent-g)](#volatile-first-store-pins-param-sreg-copy-66c74) -- _Tell: target's first stores use s0 with `or s0,a0,zero` at slot 3, build uses a0 for 1-2 uses then copies. if(0)/while(0)/register/self=self are all inert; only the volatile store flips it._
+- [65360 (post1b, NM 86.69 -> EXACT 58/58): two `mtc1 zero` regs = two DISTINCT zero constants (`0.0` double literal + `0.0f`); their f0/f2 order follows SOURCE order of first use, and the as1 scheduler then reorders the independent store groups -- sweep store-BLOCK permutations of the source, the target's emitted order is NOT the source order (2026-10-14 agent-g)](#dual-zero-constants-source-order-65360) -- _Tell: a store-only init with mtc1 zero,f0 AND mtc1 zero,f2 and a late field load hoisted above a zero block. One literal spelling = one shared f-reg (-1 word)._
 - [6337C (post1b, 87.45 -> 97.81): `beqz n,J; ...; b J; lw v0,0(n); J:` (a then-arm that branches to the very next word with the value load in the delay slot, 0 hoisted into v0 before the beqz) is a TERNARY `val = n ? (it.next = n[1], n[0]) : 0`, not an if; a function-scope named temp used only before the loop (`base`) keeps a frame home that pushes the iterator slots down 4 -- move it into a block scope](#ternary-b-to-next-tail-block-scope-base-6337c) -- _Fixes val s1 -> v0, drops s2, frame 64 -> 56. Residual: list pointer n colours v1 where the target has ring-looking t8/t7._
 - [A comma expression `dx = a, dy = b, dz = c` is EMITTED right-to-left (ucode z,y,x) while its ring temps are numbered left-to-right (x = f4/f6 .. z = f16/f18) -- the only spelling that gives a z-first schedule with x-first ring numbers; `!= (0, 0.0f)` puts a store-forwarded memory operand FIRST in `c.eq.s`; a named squared-length steals a colour and drops $f16 out of the ring for the whole function (gl_func_00064DEC EXACT 157/157, NM 91.5 -> 100, 2026-09-11 agent-g)](#comma-expression-emits-right-to-left-64dec) -- _Five levers: (1) `spA4[0] = len2; if (spA4[0] != ...)` = ring $f8 forwarded across the branch, 0.0f -> $f14 (a named local coloured $f14 pushed zero to $f16 and every later temp -1 phase); (2) the `while (0) { dx = pC->x; }` anchor colours pC $v0 before pB $v1 AND must name the first-coloured diff (naming dz boosted dz to $f0); (3) `do { } while (0)` around the diff block stops the &local address web from hoisting above pC's loads (else it interferes with both pointers and falls to $a2); (4) comma expression for the z-first schedule; (5) comma-constant compare. Colours are per-VARIABLE across dead gaps: the second block's loads must reuse the names in the first block's colour order. An UNUSED `f32 sumsq;` decl is load-bearing (ghost home moves both arg spill slots by 4, 33 words)._
 - [`for (i = 0; i != N; i++)` keeps the hoisted `lui/addiu` sym+K pair adjacent in the preheader; `i = 0; do {} while` lets as1 slot `or s1,zero,zero` between them (same words, 2 swapped); `== 10`/`== 0` dispatch on a call result = if/else chain, not switch; loop-invariant constants (message base, stride, 10, &local) must stay INLINE -- naming them costs a frame slot + s-order; an EXACT must call the `gl_func_00000000` blank, not the K&R in-TU `gl_func_00062F64` stub (the .o gate passes, the ROM gate fails with the stub's real jal address) (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g)](#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54) -- _Companion of 68990 (loop spelling moved s-COLOURS there; here only the schedule). Corollary gl_func_0000C784 (tail constructor, NM 95.84 -> 77/77 EXACT): same for-init lever on `or v1,zero` vs the hoisted `addiu v0,768`; the alloc-fallback head `or s0,a0; bnez a0; sw ra` = write the body on the PARAM (a `self = arg0` local puts the copy in the bnez delay); a USO data address as an int arg = `(char *)&D_00000000 + 0xD678` (a pinned `extern char D_0000D678` leaves blank hi/lo fields)._
 - [Same-stride cursor sweep: three hand-stepped `+= 0x44` pointers whose ONLY residual is the preheader `addiu sN,sN,K` init ORDER (colours already right) are eliminated-IV derivations of one `for (k = 0; k < 10; k++)` -- uopt emits the derived-IV inits in its own order (s3..s0, reverse of the lui block), retargets the trip test onto the LAST-occurring cursor vs its folded end, and leaves no k corpse when k has only linear uses; a struct-array spelling `((Rec *)D)[k].f` loses it (8 diffs), the store folded into the call arg loses it (6) (gl_func_00033B6C EXACT 30/30, NM 98.67 -> 100, 2026-09-11 agent-c)](#same-stride-cursor-sweep-iv-init-order-33b6c) -- _Companion of A670 (rotated colours) and 66D54 (lui/addiu adjacency): the third signature of the same lens is a REVERSED init block with matching colours. Sibling lens in the same session: a product-vs-base `addu` operand order + a skipped `$tN` before a `sll 1; bltz` bit test = product-first spelling + a 1-bit BITFIELD test (game_libs_func_0001CF68 29/29 EXACT); an x4-unrolled loop's remainder/copy/field a2<->a3 "unroller cap" = the body temp must be a BLOCK-scoped `s32 f` (game_libs_func_00020FFC 77/77 EXACT). All three landed in-tree the same day. Fourth (2026-10-14): a 3-cycle rotation among two named webs + an int carrier = the carrier belongs one web over and the displaced web is an inline CSE expression (gl_func_00057700 109/109 EXACT)._
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
+- [26C6C (post, 90.42 -> EXACT 12/12): entry `or a2,a1,zero` + `sw a1,0x24(sp)` home with no `&a1` use = a `char` PARAMETER (IDO homes the narrow param and works on a copy); the standalone cc harness schedules the same body differently, so verify in-tree (2026-10-14 agent-c)](#char-param-home-copy-26c6c)
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -27710,4 +27713,62 @@ head `pa = node; pb = parent; e = pa.T - pb.T` pair-swaps f8/f10 when the two po
 join sweep of the whole body found only that one join mattered. Residual is int-only: the loop's t-ring is an
 adjacent-pair swap (target t9 | t8 t5 t4 t7 t6, build t8 | t9 t4 t5 t6 t7) immune to statement order, s16/s32 types,
 decl order, IV step order, inlining entry/src and if-arm inversion.
+
+## 66C74: volatile first store pins the param->s0 copy; do-while with a separate `i++;` for a fully-unrolled 4-slot init (gl_func_00066C74 EXACT 56/56, 2026-10-14 agent-g) <a name="volatile-first-store-pins-param-sreg-copy-66c74"></a>
+
+Init fn: flag store, `self->13E8 = 0`, two calls on self+0x11B0 (spilled), then a 4-slot loop (int=3, two u8=0, s16=0)
+that IDO fully unrolls, then three more calls. Three independent levers, each worth a block:
+
+| lever | diff words (of 56) |
+|---|---|
+| 2026-05 wrap: `for (i=0;i<4;i++)`, literal `*(volatile int *)0x416B0 = 2` | 22 |
+| flag store via `*(int *)((char *)&D_00000000 + 0x416B0) = 2` (target `lui at,4; sw t6,0x16B0(at)` is the sym+off macro; the literal colours `lui t7`) | 23 (head now right, but self early uses go to a0) |
+| `i = 0; do { ... } while (++i < 4);` | 11 |
+| `... i++; } while (i < 4);` (increment as its own statement) | 7 |
+| `*(volatile int *)(self + 0x13E8) = 0;` (the first self-relative store) | **0 EXACT** |
+
+The for-loop unroll peels the slot-0 group to the END; `++i` in the condition keeps slot 0 first but schedules its `sh`
+below the slot-1..3 `sw`s; only the separate `i++;` statement gives the target order. Store permutations inside the body,
+array-vs-cast addressing views and straight-line hand unrolls are all inert or worse. For the head: with a non-volatile
+first store uopt reads `self` from a0 for the first two uses and the `or s0,a0,zero` sinks below the flag store; `if (0)`
+dead refs (call/store), `while (0) { self = 0; }`, `register`, `self = self;`, statement order and same-line joins are all
+inert. Making the first self-relative store `volatile` (same `sw zero,0x13E8(s0)` bytes) pins the copy at slot 3. Cf. the
+63DC4/6612C "prologue move s0,a0 hoist-vs-sink is a tie" note -- try the volatile-first-store lever there.
+
+
+
+## 26C6C: `or a2,a1,zero` + home store of a1 with no address-taken use = a `char` param; standalone harness mis-schedules it (gl_func_00026C6C EXACT 12/12, 2026-10-14 agent-c) <a name="char-param-home-copy-26c6c"></a>
+
+Target `addiu sp,-0x20; or a2,a1,zero; sw ra,0x14; sw a1,0x24(sp); sll t6,a2,24; sw t6,0x1C; jal; addiu a1,sp,0x1C`.
+The old NM draft (`int a1` + `int *dummy = &a1` to force the home) scored 90.42: it gets the home store but
+shifts from a1 directly (no a2 copy, t7 instead of t6). Declaring the param `char` (`void f(int a0, char a1)
+{ int local; local = a1 << 24; g(a0, &local); }`) reproduces both the home store and the a2 copy and is EXACT
+in-tree. Rule: an entry param copy into the next a-register PLUS a home store of the original, with the
+param never address-taken, = a narrow (char/short) parameter, not a 3rd call arg and not `&a1`.
+GOTCHA: the same body compiled standalone (same cc flags, K&R extern callee, even with the sibling
+wrappers above it) emits `or; sll t6,a2; sw ra; sw a1; addiu a1; jal; sw t6` (sll hoisted, store in the
+jal delay) -- a false "scheduling cap". ~80 standalone shape variants (BB-split `if (1) {}`, comma args,
+volatile, unions, struct params) never produced the target order; the first in-tree build did. For tiny
+wrappers, build the NM object in-tree (`make non_matching_objects` + report) before grinding scheduling.
+Same `or a2,a1` + `sw a1` shape: next-door 26C9C (`a1 << 16`, short param candidate).
+
+## 65360: two zero registers = two distinct zero constants; store-block SOURCE order differs from the emitted order (gl_func_00065360 EXACT 58/58, 2026-10-14 agent-g) <a name="dual-zero-constants-source-order-65360"></a>
+
+Store-only transform reset: a stack Vec3 copy of *a1 written to 0xDC and 0xB4, 15 zero stores in two groups (target `mtc1 zero,$f0`
+for the 9 basis-row zeros, `mtc1 zero,$f2` for the 6 at 0x30C..0x320), three 1.0f diagonal stores, then a vtable call.
+
+1. **Two zero regs = two constant candidates.** Writing every zero as `0.0f` gives one shared `$f0` (57 words). Spell one group
+   `= 0.0;` (double literal into a float lvalue) and the other `= 0.0f;` -- either assignment works; what decides which group gets
+   `$f0` is source order (below), not the literal type.
+2. **Emitted store order != source order.** Writing the stores in the target's emitted order swaps f0/f2 AND leaves the last
+   `lwc1 (tmp.z)` + its store at the end (22 diff words). A 120-permutation sweep of the five store blocks (0xB4/0xB8 pair, the
+   0xBC store, the 0x30C group, the basis zeros, the ones) x two vtable-load positions found exactly one exact order:
+   `B4, B8, BC, 0x30C-group, basis zeros, ones`, with `v0 = obj->vtable` straight after the second copy. uopt numbers the
+   constants in that order (0x30C group numbered first) and as1 sinks the 0x30C group and
+   the BC store below the basis zeros because they are independent stores off the same base.
+3. Frame 0x38 with the Vec3 at sp+36: `volatile int padA[2];` declared above the Vec3 and `volatile int padB;` below
+   (the volatile-pad phantom-slot lever); plain `f32 pad[N]` / a second unused Vec3 are deleted at -O2 and do nothing.
+
+General rule: for any straight-line store block where the target's register/constant numbering looks "rotated" relative to the
+emitted order, permute whole store blocks in the SOURCE (cheap: N! compiles of a 50-word function) before calling it a cap.
 
