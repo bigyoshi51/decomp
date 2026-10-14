@@ -167,6 +167,9 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [GROUP vec components into `f32[N]` arrays to force contiguity + memory-residence (separate scalars get reg-kept + DCE'd through the taken address) (gl_func_00065494 32->42% 2026-06-22)](#group-vec-components-into-f32n-arrays-to-force-contiguity--memory-residence-gl_func_00065494-32-42-2026-06-22) — _When a fn passes a vecN by address (`&sp168`) AND accumulates its components in a loop, declaring them as separate scalars lets -O2 keep them in FP regs and DCE the ones it can't prove are read through the address — too few swc1/lwc1/div.s, too-small frame. Declare the group `f32 sp168[3]` (index 0 = lowest offset) to force contiguous + memory-resident; every accumulation then round-trips to stack like the target. On 65494: div.s 2->6, swc1 40->53, lwc1 55->65, 32%->42%. Pass BY NAME (decays to `f32*`). Co-fixes: distinct-named placeholder externs called DIRECTLY = `jal` (USO has no relocs, jal word is 0x0C000000 regardless, objdiff credits); 3-word int struct-copy temp for lw/sw; PROTOTYPE the fn-ptr so an f32 arg goes via mfc1 not double-promote (cvt.d.s); short->int slot is `*(int*)p=sval` (lh+sw) not cvt.s.w. RESIDUAL = pure coloring cap (9 saved regs + spilled counter vs target's 8 + spilled loop-invariant)._
 - [Dual-back-edge loop shape (`do{}while(perma-0 flag); <dead tail>; goto top;`) unlocks saved-reg PROMOTION of loop-invariant data-template pointers; plain `do{}while(1)` re-materializes them inline (gl_func_00034EB4 53.84->94.01% 2026-06-23)](#dual-back-edge-loop-shape-dowhileperma-0-flag-tail-goto-top-unlocks-saved-reg-promotion-of-loop-invariant-data-template-pointers-gl_func_00034eb4-5384-9401-2026-06-23) — _A raw-word USO (re-)init orchestrator loops over a bank of fixed data-seg template ptrs (`&D + 0x1E484..0x1E508`, + base `&D+0`), each passed once/iter to a callback; target promotes the 4 templates to s5-s8 + base to s3 (9-saved-reg / 0x40 frame). Two levers: (1) ref templates as `(char*)&D_00000000 + off` NOT raw `(char*)0x1E484` — symbol form gives the target `lui 0x2 + signed addiu` with R_MIPS_HI16/LO16 relocs (raw-int = reloc-blind `lui 0x1 + ori`, never matches relocatable USO); (2) plain `do{}while(1)` leaves each template used once/iter and IDO RE-MATERIALIZES inline (small frame, no promotion) — give the loop the target's dual-back-edge shape `int s4=0; loop_top: <peel>; do{...}while(s4==0); <dead 0x6C tail>; goto loop_top;` so IDO rotates it into `beqzl s4` + never-taken fall-through, which raises perceived pressure enough to promote templates->s5-s8 + base->s3 and grow the frame exactly. Word count 144->167 (exact), 70->94% in one edit. RESIDUAL (cap): the &D_0 flag read CSE-folds onto base/s3 in our build vs target's throwaway `lui t6; lw t6,0(t6)`; same-symbol CSE-vs-recompute scheduler choice, permuter 1210->760 only via noise. Left NM at 94%._
 - [Global-array element base NOT folded into field offsets: compute the base BEFORE an unrelated `if` (game_libs_func_00026AA4 81.2 -> EXACT 21/21, 2026-10-14 agent-c)](#base-before-if-blocks-offset-fold-26aa4) -- _Tell: `addiu t7,t6,0x2D00; addu v0,t7,&D` then small offsets (1, 0x12, 0x1C, 0x20), where the sibling folds to `sb 0x2D01(v0)`._
+- [Ring-buffer push: two-statement entry pointer (`e = ring; e += idx;`) puts the address-constant base FIRST in the addu; `& 0xFF` on the byte index burns the skipped t6; byte `head++`/`head--` + inline &D macro hold the base across the if-join (game_libs_func_00026BD8 81.5 -> EXACT 19/19, 2026-10-14 agent-c)](#two-statement-entry-ptr-base-first-addu-26bd8) -- _Tell: `addu v0,a2,tN` (base first) then `sw x,OFF(v0); addiu v0,v0,OFF; sw y,4(v0)`; every one-expression `e = base + idx` spelling emits `addu v0,tN,a2`._
+- [Byte-copy into a stack buffer: `andi n,3` remainder loop + `beql` skip + 4x unrolled `lbu/sb` body with the src PARAM homed and reloaded from its home (`lw v1,0xB4(sp)`), unused a0 homed too = the plain rolled `for (i=0;i<n;i++) buf[i]=src[i]; buf[i]=0;` (gl_func_00061BC8 40.4 -> EXACT 48/48, 2026-10-14 agent-c)](#rolled-byte-copy-stack-buf-61bc8) -- _A hand-unrolled NM body is the tell to roll it back up; the arg homes come from the unroller, not from `&param` or varargs._
+- [Two global-table loops sharing &D: do-while + one NAMED limit per loop, cursor bump before the field writes, no named byte local, and the second loop's `s0 = ..; end2 = ..;` JOINED ON ONE LINE (gl_func_0002D2F4 78.0 -> EXACT 30/30, 2026-10-14 agent-c)](#two-loop-shared-base-sameline-init-2d2f4) -- _Tell: two independent lui/addiu pairs per loop (cursor+limit) and the s-reg pair scheduled `lui s0; lui s1; addiu s1; addiu s0`; the old NM called the shared &D base a CSE cap._
 - [Struct-by-value arg built by a COMMA expression `fn((s.w = x, s))`: direct `sw a0,0x20(sp)` + `sw a0,0(sp)` and an extra 8-byte frame block (gl_func_0003E968 82.1 -> EXACT 22/22, 2026-10-14 agent-c)](#comma-struct-arg-frame-block-3e968) -- _`s.w = x; fn(s);` = frame -8, s 8 lower; `s = *p` / `fn(s = *p)` = `addiu v0,sp,N` address form; plain `fn(*p)` = no local copy at all._
 - [Struct-by-value at the CALL SITE requires a K&R callee definition](#feedback-ido-struct-by-value-knr-callee-prereq) — _cfe rejects struct arg vs int-typed ANSI callee; convert callee def to K&R (byte-neutral for int params). + two-homes-no-reload forwarding; if(1){} blocks copy-prop hoist._
 - [Before accepting a "scheduler cap": check per-jal arg-register loads](#feedback-ido-scheduler-cap-check-arg-arity) — _missing aN setups = fewer call args (AA28); sw v0 in delay = result spill not arg (66210). Re-derive arity before lever-grinding._
@@ -14247,6 +14250,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [D288 (tail, NM 72.69 -> 97.86): a param homed in the PROLOGUE (`sw a0,32(sp)` before any call) and reloaded from its home before AND after the call (t-ring chain, no s-reg, no copy) = the param is ADDRESS-TAKEN; a dead block-scope `if (1) { int **bar = &self; }` reproduces it with NO extra frame word (fn-scope bar costs +8) (2026-10-14 agent-g)](#block-scope-addr-taken-param-home-d288) -- _Residual there: target splits the child live range at the call (pre v1 / post a3); build keeps one web._
 - [68C14 (post1b, NM 78.17 -> 97.62): a dead int return of the FIRST call (K&R blank) makes v0 costly for every block-1 web -- a VOID alias of the pre-call moves the stream pointer pair to v0/v1 and lets the next call's string args hoist into a0/a1; every named local owns a frame word in decl order (spilled ones live there), so decl order alone places all spill homes; `f[1] = p[0]; n = f[1];` drops one ref of n under the s-reg threshold (2026-10-14 agent-g)](#void-precall-decl-order-homes-68c14) -- _Residual: target colours n's call-free block-1 split piece ($a2); build leaves it on a ring temp._
 - [D548 (tail, NM 79.6 -> EXACT 86/86): `addiu t1,a1,K; sw t1,F(s0); or a1,t1` after a `slti`/`beqz` on the same field = the bump is written ON THE FIELD and the call arg re-reads it (`if (o->F < N) o->F += K; g(.., o->F, ..)`) -- uopt forwards into a1 on both paths; every local spelling drops the move or colours the sum v0. An FP quotient reloaded from a spill after a call = the SAME `g / 255.0f` written again (CSE across the call), not a named local -- a named quotient costs a frame word (2026-10-14 agent-g)](#field-forward-bump-cse-quotient-d548) -- _Plus: reuse numerator names (b = 250 then b = 255.0 double then b = 0.0) to keep the name count = target frame._
+- [D0D0 (tail, NM 78.59 -> 89.49): `sw a1,4(sp)` before each of 3 jals = 4-byte struct key passed by value (`k.v = <int at D+0xD680>`; reload via hoisted &k); OPEN: target re-loads the key per iteration (`lui t9,1; lw t9,-0x2980(t9)`) but every spelling gets its address promoted into s5/s7 (+s8 save) (2026-10-14 agent-g)](#struct-key-byvalue-address-promotion-d0d0) -- _negative list inside._
+- [68044 (post1b, NM 75.93 -> EXACT): octant atan2 = PARAMS OVERWRITTEN in place (`arg1 = -arg1`; neg.s f20,f20) + `s16 v` result (per-arm sll/sra); final `(f32)v / 32768.0f * K` gives mul.s fd,quot,K only when K is a NAMED pad-struct extern (`D_68044_2210.v`), not an inline `*(f32 *)((char *)&D + 0x2210)` deref (2026-10-14 agent-g)](#octant-atan2-param-overwrite-named-const-68044) -- _In-unit callee with a BAKED jal = gl_ref_<section addr> alias, not a direct call._
 - [65148 (post1b, NM 75.76 -> ~60/66): a 3x4 affine transform with row results in f14/f16/f18 held to the end = NAMED row results with all three stores after the last row, plus the 4F0C8 reversed right-assoc row spelling; an unnamed (CSE'd) input component trims one named word so the call-crossing temp spill lands on the target slot (2026-10-14 agent-g)](#named-row-results-late-stores-65148) -- _Residual: accumulators rotate f16/f18/f14 vs f14/f16/f18._
 - [6337C (post1b, NM 97.81 -> EXACT 64/64): list-walk iterator with cur/next homed in stack slots = two ADDRESS-TAKEN locals (not a volatile struct) so `cur = next` forwards the stored load (ring t8); loop tail advances via `next = next[1]` (not cur[1]) to keep the reload in a ring temp (2026-10-14 agent-g)](#address-taken-iterator-locals-forwarded-ring-6337c) -- _Tell: target `lw t8,X(s0); sw t8,next(sp); beqz t8; sw t8,cur(sp); lw t0,4(t8)` (no reload between the store and the use) and the loop tail `lw t7,next(sp)`; build colours the pointer v1._
 - [6612C (post1b, NM 94.81 -> EXACT 43/43): head `sw ra; sw s1; sw s0; lw a1,N(a0); or s0,a0,zero` (raw-param load, copy as a BODY move after the saves) = an UNcoalesced local copy: `int *self = a0; r = f(a0, a0[10]+8); a0 = 0; while (r != K) r = f(self, ...);` -- the dead `a0 = 0` kill is what stops uopt coalescing the copy into the param (2026-10-14 agent-g)](#dead-param-kill-uncoalesced-local-copy-6612c) -- _Tell: build has the prologue move `sw s0; or s0,a0` + `lw (s0)`; target saves all s-regs first and reads a0 once. Inverse of 63DC4._
@@ -28194,4 +28199,100 @@ too. Writing `base = (char *)&D + a0 * 352 + 0x2D00;` as the FIRST statement (be
 the base lives in the entry block, its multiply lands in the bnez delay slot, and the uses in the join block
 see an opaque base. Re-probe any "offset not folded / full base materialized" residual by moving the base
 computation above the nearest preceding branch.
+
+## 68044: octant atan2 — overwrite params in place, s16 result, named pad-struct constant flips mul.s order (gl_func_00068044 EXACT, 2026-10-14 agent-g) <a name="octant-atan2-param-overwrite-named-const-68044"></a>
+
+The old 75.93% wrap used fresh locals for the negated args (`temp_f20 = -arg1`),
+which costs two extra callee-saved FP regs (f24/f26, frame 0x38 vs 0x28). The
+target negates IN PLACE (`neg.s f20,f20` / `neg.s f22,f22`): write
+`arg1 = -arg1; arg0 = -arg0;` and only f20/f22 are used. The per-arm
+`sll v1,16; sra v1,16` before each `b` is a `s16 v` result assigned in every
+arm; `(f32)v` then converts it directly (`mtc1 v1`).
+
+Operand order of the final `mul.s f0,f10,f16` (quotient as fs, constant as ft):
+`(f32)v / 32768.0f * *(f32 *)((char *)&D_00000000 + 0x2210)` and every
+reordering/parenthesisation of it (including `K * (q)` and a named quotient
+`q * K`) emit `mul.s f0,f16,f10`; a named `f32 k = K;` local fixes the order
+but hoists the load and colours f2. Declaring the constant as a pad-struct
+extern (`extern struct { char pad[0x2210]; float v; } D_68044_2210;`, pinned
+`= 0x00000000` in undefined_syms) and writing `... * D_68044_2210.v` gives
+exactly the target order AND schedule. Treat "inline cast-deref vs named
+global" as an operand-order lever for FP constants loaded via `lui at; lwc1`.
+
+The 8 `jal 0x7C650` are BAKED in-unit calls to game_libs_func_00067FE4: a
+direct call links to the splat VRAM (0x0C019FF9, ROM mismatch); call through
+`extern int gl_ref_0007C650(float, float);` pinned `= 0x0007C650` (USO section
+address = splat + 0x1466C in this run).
+
+## Ring-buffer push: two-statement entry pointer puts the base first in the addu (game_libs_func_00026BD8 EXACT 19/19, 2026-10-14 agent-c) <a name="two-statement-entry-ptr-base-first-addu-26bd8"></a>
+
+Target: `lui a2;addiu a2 (&D); lbu t7,0x53B8(a2); sll t8,t7,3; addu v0,a2,t8; sw a0,0x5430(v0); lw t9,0(a1);
+addiu v0,v0,0x5430; sw t9,4(v0); lbu t0,0x53B8(a2); lbu t2,0x53B9(a2); addiu t1,t0,1; andi v1,t1,0xff;
+bne t2,v1; sb t1,0x53B8(a2) (delay); addiu t3,v1,-1; sb t3,0x53B8(a2)`. The old NM note (named `char *base`,
+u8 local h) called it a whole-function regalloc cap (17/19 register diffs). Four independent levers, each
+verified load-bearing by removing it from the exact body:
+
+1. **&D inline at every site** (`#define B ((unsigned char *)&D_00000000)`), no named base local -- the named
+   local is dropped at the if-join and the conditional store re-forms `lui at` (see #inline-address-constant-base-vs-named-pointer-local-26ccc).
+2. **`B[0x53B8]++; if (B[0x53B9] == B[0x53B8]) B[0x53B8]--;`** on the byte itself: the `sb` stores the
+   un-truncated `t1` while compare and decrement use the forwarded `andi v1`. A u8 local stores the andi'd value.
+3. **`& 0xFF` on the byte index** = one burned ring temp (the target's ring starts at t7; see #subsumed-mask-single-ring-slot-burn-2a55c-2a740-cracked-2026-07-03).
+4. **Entry pointer in TWO statements:** `Ring *e = (Ring *)(B + 0x5430); e += B[0x53B8] & 0xFF; e->a = a0; e->b = *a1;`.
+   Every single-expression spelling (`(Ring *)(B+0x5430) + i`, `&ring[i]`, `B + i*8 + 0x5430`, `i*8 + B`, `(unsigned)` cast,
+   `*e++`, if(1) barriers, named copy of a1/base) emits `addu v0,tN,a2` (index first); the compound `e += i` on a
+   pointer already holding the address constant emits `addu v0,a2,tN`. The first store still folds +0x5430 and
+   the second sees the materialized `addiu v0,v0,0x5430`. Probe the two-statement split whenever the only
+   residual is a swapped addu operand order on a global-base + scaled-index address.
+
+## Rolled byte copy into a stack buffer = IDO's unrolled remainder+4x body with homed params (gl_func_00061BC8 EXACT 48/48, 2026-10-14 agent-c) <a name="rolled-byte-copy-stack-buf-61bc8"></a>
+
+Target (frame 0xB0, `char buf[0x80]` at sp+0x30): `sw a0,0xB0(sp); sw a1,0xB4(sp); blez a2; or a3,zero,zero (delay);
+andi a1,a2,3; beqz a1; or a0,a1` + remainder loop that reloads src with `lw v1,0xB4(sp)`, `beql a3,a2` skip, 4x
+unrolled main loop (`lw t0,0xB4(sp)` once, `lbu/sb` at +0..+3 / -4..-1), then `sb zero,0(buf+i)` and the call.
+The old NM (40.4) hand-wrote the remainder and 4x body. The exact source is the rolled loop:
+`for (i = 0; i < n; i++) buf[i] = src[i]; buf[i] = 0; callee(&D, buf, 0x140); return 1;` with `int a0` unused.
+The a0/a1 home stores and the src reload from its home are produced by uopt's unroller here; do not reach
+for `&src`, varargs or volatile (the `char **p = &src` probe goes to 52 words with a reload per byte).
+
+## Two global-table loops sharing &D: named per-loop limits + same-line init (gl_func_0002D2F4 EXACT 30/30, 2026-10-14 agent-c) <a name="two-loop-shared-base-sameline-init-2d2f4"></a>
+
+Target: after a call, `lui v0; lui v1; addiu v1,0x2000; addiu v0,0` then a bottom-tested loop (`lbu t6,0x3280(v0);
+addiu v0,0x80; sltu at,v0,v1; andi t7,t6,0xff7f; sw zero,0x3250(v0); bnez; sb t7,0x3200(v0)`), then
+`lui s0; lui s1; addiu s1,0x3280; addiu s0,0x2D00` and a call loop `bne s0,s1`. The old NM (`for` loops
+with inline `&D + K` bounds, named `char c`) had uopt CSE &D into s1 and recompute the second limit in
+the loop. What worked, each step checked in tree:
+
+1. **do-while + a named limit per loop** (`end`, `end2`): one shared limit variable is promoted to s1 for
+   both loops; inline limits CSE the &D base into s1.
+2. **Bump the cursor first**, then write `+0x3250` / `+0x3200` (the target's offsets are relative to the
+   advanced cursor); the scheduler hoists the lbu above the addiu by itself.
+3. **`*(unsigned char *)(p + 0x3200) &= 0xFF7F;`**: no named `char c` (a named byte becomes a v1 variable
+   and pushes the limit to a0); a plain `char` `&= ~0x80` emits `addiu v1,zero,-129; and`.
+4. **`s0 = &D + 0x2D00; end2 = &D + 0x3280;` on ONE LINE.** On separate lines the two lui/addiu pairs
+   schedule `lui s0; lui s1; addiu s0; addiu s1` (s0 first) or `lui s1; lui s0; addiu s1; addiu s0`
+   (end2 first). Joined, they give the target's `lui s0; lui s1; addiu s1; addiu s0`. Comma-`for` init
+   also matches. Another case of the same-line scheduling lever (#same-line-inner-unrolled-loop-42374).
+
+## D0D0: struct-key-by-value lookups in a loop; the per-iteration key re-load is not reproduced (gl_func_0000D0D0 NM 78.59 -> 89.49, 2026-10-14 agent-g) <a name="struct-key-byvalue-address-promotion-d0d0"></a>
+
+Shape: per child, three calls `f(D, key, owner + 0xDC, 0)` with
+`lui t9,1; lw t9,-0x2980(t9); lw a0,0(s3); sw t9,104(sp); lw a1,0(s5); sw a1,4(sp); ...; jal`.
+The `sw a1,4(sp)` is the 7BC struct-by-value home (#struct-by-value-arg-carrier-7bc);
+`k.v = <int load>; f(D, k, ...)` with a K&R `gl_func_00000000` reproduces the
+store-to-local + reload-through-hoisted-&k (s5..s7) + arg-slot store exactly.
+The old fn-ptr (`jalr s4`) decode missed the struct and scored 78.6.
+
+Open residual: the target keeps each key load in place, destructive, every
+iteration. Every spelling tried has the key ADDRESS promoted into an s-reg
+(costing s8 and shifting saves/locals +4): per-site `extern int` aliases
+pinned at 0xD680.. (`lw t9,0(s5)`), per-site pad-struct aliases
+(`addiu t9,s5,0x7FFF; lw 0x5681(t9)`), `*(int *)((char *)&D_00000000 + 0xD680)`
+(shared 0x8000-biased base), whole-struct global copy `k = G` (address-based
+copy), `volatile` externs, literal `*(int *)0xD680` (`dli s5,0xd680`),
+block-scoped struct locals, and `if (1) {}` barriers around the loads, the
+calls, the -6553600.0f store and the step (barriers around the loads fix the
+s1/s2/s3 renumbering: 72 -> 52 diff lines, objdiff 89.49). The third key
+(D688) is not promoted in any variant (its value feeds a1 directly). Next
+thing to try: a different loop spelling (for / goto) or a key source that is
+not a plain global (e.g. a field of a global struct pointer known invariant).
 

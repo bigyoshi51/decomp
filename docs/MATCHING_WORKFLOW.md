@@ -16,6 +16,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [USO expected-side reloc injection (spimdisasm-migration phase 1) is score-NEGATIVE: objdiff 3.7 already fully credits blind literal-0 vs reloc-to-blank; C234/55A0/6808 residuals are structural, NOT reloc rendering (bootup_uso 526-site prototype, agent-f 2026-08-23)](#uso-expected-reloc-injection-negative)
 - [NM-body GROWTH in a clipped unit shifts tail symbols past NON_MATCHING_TEXT_CLIP_KEEP_ALIGN — sentinel false-drops (62F08 100->20) until the Makefile clip is advanced to the tail's new end (54E78 pass, 2026-08-22)](#nm-clip-advance-on-body-growth) — _clip = last real fn's end in the NM object; recompute as st_value+st_size of the tail symbol after `make non_matching_objects` prints the resize warnings; sentinels re-probe 100 after. Baseline-vs-edit stash test distinguishes this from a real regression._
 - [Whole-TU identity vein extends into gu/+libc: "anonymous float math" NM wraps can be library shapes (ortho.c 111/111 FULL-word first compile incl. blank-jal reloc fields; internal-call rename + add-elf-func-symbol splice-key re-inject; REPLACE_FUNC_BODY := parse-time donor-var order gotcha; 70320=bcopy handwritten .s not C-landable) (agent-h 2026-08-22)](#whole-tu-gu-libc-identity-vein) — _verify with the raw .s, disasm-func.py windowed a fictional body._
+- [game_libs 69F64 = libultra osRecvMesg: a 61.7% "m2c -O2 transcription" NM wrap was a verbatim 5.3 -O1 libultra body; 78/78 first compile via the 69E04 donor recipe (agent-g 2026-10-14)](#game-libs-69f64-osrecvmesg-donor) — _scan down-band NM wraps for the -O1 libultra frame (all args homed, saveMask in s0, base reloaded per field) before grinding._
 - [kernel/bootup identity sweep (agent-f 2026-08-22): 5C50=__osDevMgrMain + 4E50=osLeoDiskInit EXACT (2 permanent-cap retractions: "debugger dispatcher" and "D6/D7 shared-$at no-compiler-family"); method + donor gotchas + negatives inside](#kernel-bootup-identity-sweep-2026-08-22)
 - [game_libs library-identity audit (agent-f 2026-08-22): 5 exacts landed — 70A14=guMtxL2F (caller-set-$f0 cap = splat glabel +8 artifact), 743C4=lldiv (jal-0 pair = __ll_div/__ll_mul intrinsics; __ll_mul kernel-pin rename load-bearing), 6F1D8+6F1FC=strchr (one fn splat-split, 2 keys 1 donor); 6F17C=memcpy + 6F218=osCreateMesgQueue LANDED 2026-08-22 (lead-zero-pad re-home recipe inside); NEGATIVES: 6F250/2A4/2C8/35C = handwritten cache asm](#game-libs-identity-audit-2026-08-22)
 - [6A144 = libultra fsin/__sinf (gu/sinf.c verbatim, IDO 5.3 -O2 donor, 112/112 first compile): ONE function splat-split into SIX tiny fragments whose cap notes ("caller-set $f2 double-poly", "prologue-stolen $at", "jr ra; lwc1 f0,0(sp)" tail) were all interior branch targets; the size-sort "unstarted" list is dominated by such fragments -- cluster them by adjacency and probe the merged stream as a library shape before grinding (agent-g 2026-09-05)](#sinf-six-fragment-identity-2026-09-05)
@@ -12039,4 +12040,25 @@ BYTE-EXACT, two tightened NM wraps, the 65EE4 a2-birth probe closed negative.**
 - 675A4 **NM 46 -> 13 words** (three ring/operand spellings: store-forwarded 0x18 web, `idx*4 + base`
   cursor, `(cur | 0) & ~prev`; docs/IDO_CODEGEN.md#store-forward-ring-across-bb-and-scaled-index-first-675a4).
   Residual = the FP 3-cycle (double threshold colours first by adjsave x2); 30 spellings inert, listed there.
+
+## game_libs 69F64 = libultra osRecvMesg: down-band NM wrap was a libultra -O1 body (agent-g 2026-10-14) <a name="game-libs-69f64-osrecvmesg-donor"></a>
+
+`gl_func_00069F64` (post1b, 0x138) sat at 61.67% as an m2c-derived -O2 body
+(`FW(arg0, 0x8)` loop with gotos). Its asm is the textbook IDO 5.3 -O1 libultra
+frame: all three args homed at 0x28/0x2C/0x30(sp), `jal` (= __osDisableInt)
+result kept in s0, and `lw tN,0x28(sp)` reloading `mq` before EVERY field access.
+Field offsets 8/0xC/0x10/0x14 + `% msgCount` + `state = 8` + a pop/start-thread
+pair after `*fullqueue != 0` = `osRecvMesg` (os/recvmesg.c), and it sits right
+after osSendMesg (69E04, already a 5.3 -O1 donor) and osViGetCurrentLine (69F54).
+
+Recipe (identical to 69E04): `src/game_libs/game_libs_ido53_69F64.c` = recvmesg.c
+verbatim with OS-API callees collapsed to `gl_func_00000000` and
+`__osRunningThread` as `((Thread *)D_00000000)->state`; Makefile `CC := $(IDO53_DIR)/cc`
++ `OPT_FLAGS := -O1` for the donor, `GAMELIBS_69F64_DONOR` defined BEFORE the
+post1b `REPLACE_FUNC_BODY :=` line (parse-time expansion), and the same C as the
+plain (non-NM) body in post1b (-O2 stand-in 0x12C, replaced to 0x138, 8 donor
+relocs imported). 78/78 words on the first compile; expected/ needed no refresh
+(raw slice equal at the same st_value). Lesson: in a libultra island, any
+down-band wrap whose asm homes every arg and reloads the base per field is a
+library function at the island's own -O1, not an -O2 grind target.
 
