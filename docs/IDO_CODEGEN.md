@@ -27825,6 +27825,10 @@ andi a0,a2,0xFF` in a 1-param wrapper = `void f(char a0) { g(0x82030000 | ((a0 &
 goes to the next FREE a-reg after the call args (a2 here, since a0/a1 are the call's args), so an `or aN,aM` copy
 that looks like a 3rd call arg is the same narrow-param signal. Standalone again hoisted the sll above `sw ra`;
 in-tree was exact on the first build.
+Fourth application 2026-10-14 (agent-c): game_libs_func_0002DD38 (85.0 -> EXACT 8/8) -- no-frame leaf `sw a0,0(sp);
+andi a0,a0,0xFF; sw a0,D1; li t6,0xD2; sw t6,D2` = `void f(unsigned char a0) { D1 = a0; D2 = 0xD2; }`. With no later
+use of the param there is no copy register: IDO zero-extends in place. `char a0` + `a0 & 0xFF` and `int a0` both drop the
+home and use t6. Update any in-TU prototype of the callee to the narrow type (a u8 caller arg keeps its codegen).
 
 ## 65360: two zero registers = two distinct zero constants; store-block SOURCE order differs from the emitted order (gl_func_00065360 EXACT 58/58, 2026-10-14 agent-g) <a name="dual-zero-constants-source-order-65360"></a>
 
@@ -27923,6 +27927,10 @@ EXACT, first compile: `char *r; if (a1 < a0->lo) r = a0->rec[0]; else if (a1 <= 
 r = a0->rec[2]; return r;`. Early `return`s are the WRONG source shape for this pattern: write the single-exit form
 and let IDO tail-duplicate the jr itself. Check this spelling first whenever one return arm carries a
 `move v0,vN` while its siblings compute straight into v0.
+Second application 2026-10-14 (agent-c): game_libs_func_00023B98 (96.18 -> EXACT 17/17), a 3-case switch over USO data
+words whose last case is `lw v1,0x2024(v1); jr; move v0,v1` -- previously capped after ~20 anti-coalesce probes on the
+per-case `return` form. `switch (idx) { case 0: r = A; break; case 1: r = B; break; case 2: r = C; break; default:
+r = 0; break; } return r;` is exact (case/default order inert; an if/else-if chain gives bne+fallthrough instead).
 
 ## 6337C: address-taken iterator locals let uopt forward the head pointer; advance through `next` keeps the ring temp (gl_func_0006337C EXACT 64/64, 2026-10-14 agent-g) <a name="address-taken-iterator-locals-forwarded-ring-6337c"></a>
 
