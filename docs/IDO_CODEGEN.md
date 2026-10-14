@@ -170,6 +170,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Ring-buffer push: two-statement entry pointer (`e = ring; e += idx;`) puts the address-constant base FIRST in the addu; `& 0xFF` on the byte index burns the skipped t6; byte `head++`/`head--` + inline &D macro hold the base across the if-join (game_libs_func_00026BD8 81.5 -> EXACT 19/19, 2026-10-14 agent-c)](#two-statement-entry-ptr-base-first-addu-26bd8) -- _Tell: `addu v0,a2,tN` (base first) then `sw x,OFF(v0); addiu v0,v0,OFF; sw y,4(v0)`; every one-expression `e = base + idx` spelling emits `addu v0,tN,a2`._
 - [Byte-copy into a stack buffer: `andi n,3` remainder loop + `beql` skip + 4x unrolled `lbu/sb` body with the src PARAM homed and reloaded from its home (`lw v1,0xB4(sp)`), unused a0 homed too = the plain rolled `for (i=0;i<n;i++) buf[i]=src[i]; buf[i]=0;` (gl_func_00061BC8 40.4 -> EXACT 48/48, 2026-10-14 agent-c)](#rolled-byte-copy-stack-buf-61bc8) -- _A hand-unrolled NM body is the tell to roll it back up; the arg homes come from the unroller, not from `&param` or varargs._
 - [Two global-table loops sharing &D: do-while + one NAMED limit per loop, cursor bump before the field writes, no named byte local, and the second loop's `s0 = ..; end2 = ..;` JOINED ON ONE LINE (gl_func_0002D2F4 78.0 -> EXACT 30/30, 2026-10-14 agent-c)](#two-loop-shared-base-sameline-init-2d2f4) -- _Tell: two independent lui/addiu pairs per loop (cursor+limit) and the s-reg pair scheduled `lui s0; lui s1; addiu s1; addiu s0`; the old NM called the shared &D base a CSE cap._
+- [Strength-reduced cursors: write the PLAIN INDEXED loop, not hand-held pointers (gl_func_0002A904 70.65 -> EXACT 40/40) + gbi packet `{ G *_g = gfx++; ... }` post-increment shape (game_libs_func_0001D3E0 75.3 -> EXACT 52/52), 2026-10-14 agent-c](#plain-indexed-loop-strength-reduction-2a904-gbi-postinc-1d3e0) -- _Tell (2A904): several s-reg cursors all `lui sN; addiu sN,K` off ONE symbol, each `addiu +stride`, end test `bne s1,s4` against a materialized end address. Tell (1D3E0): `or v1,a0` copy before the packet + `addiu a0,8` scheduled between the two word stores._
 - [Struct-by-value arg built by a COMMA expression `fn((s.w = x, s))`: direct `sw a0,0x20(sp)` + `sw a0,0(sp)` and an extra 8-byte frame block (gl_func_0003E968 82.1 -> EXACT 22/22, 2026-10-14 agent-c)](#comma-struct-arg-frame-block-3e968) -- _`s.w = x; fn(s);` = frame -8, s 8 lower; `s = *p` / `fn(s = *p)` = `addiu v0,sp,N` address form; plain `fn(*p)` = no local copy at all._
 - [Struct-by-value at the CALL SITE requires a K&R callee definition](#feedback-ido-struct-by-value-knr-callee-prereq) — _cfe rejects struct arg vs int-typed ANSI callee; convert callee def to K&R (byte-neutral for int params). + two-homes-no-reload forwarding; if(1){} blocks copy-prop hoist._
 - [Before accepting a "scheduler cap": check per-jal arg-register loads](#feedback-ido-scheduler-cap-check-arg-arity) — _missing aN setups = fewer call args (AA28); sw v0 in delay = result spill not arg (66210). Re-derive arity before lever-grinding._
@@ -28295,4 +28296,39 @@ s1/s2/s3 renumbering: 72 -> 52 diff lines, objdiff 89.49). The third key
 (D688) is not promoted in any variant (its value feeds a1 directly). Next
 thing to try: a different loop spelling (for / goto) or a key source that is
 not a plain global (e.g. a field of a global struct pointer known invariant).
+
+## Strength-reduced cursors from the plain indexed loop (2A904) + gbi post-increment packets (1D3E0) (2026-10-14 agent-c) <a name="plain-indexed-loop-strength-reduction-2a904-gbi-postinc-1d3e0"></a>
+
+**gl_func_0002A904 (game_libs_post, 0xA0).** Target: four s-reg cursors s0/s1/s2/s4 each
+`lui sN,0; addiu sN,sN,K` off the SAME Data symbol (sym1255 = `D_00000000_345c0`, K = 0 /
+0x32F0 / 0x3280 / 0x52F0), plus a separate `v0 = &REG` for four pre-loop stores; loop body
+`sw s2,0x32F8(s0); sw zero,0x32F0(s0); f(s3, s1)`, three `addiu +0x80`, `bne s1,s4`. The old
+NM (70.65) hand-held every cursor as a `char *` and could not stop IDO deriving/merging the
+bases. The fix was to write the loop the way the source did:
+`for (i = 0; i < 64; i++) { E[i].w8 = REG + 0x3280 + i * 0x80; E[i].w0 = 0; f(REG + 0x5368, &E[i]); }`
+with `E = (Elem *)(REG + 0x32F0)`. uopt strength-reduces `i` away: the store base becomes its
+own IV (a FRESH `&REG` materialization in s0, not CSE'd with the v0 of the pre-loop stores),
+`&E[i]` becomes the s1 IV, the table address the s2 IV, and `i < 64` is replaced by
+`s1 != &E[64]` (s4). It matched 40/40 on the first compile. **Rule:** a run of `lui/addiu`
+cursors off one symbol, all bumped by the same stride, with an end test against a
+materialized end address, is uopt's IV output. Write the indexed loop; do not hand-write
+the cursors.
+
+**game_libs_func_0001D3E0 (game_libs_post, 0xD0).** Target per packet: `or v1,a0,zero` (copy
+of the cursor) before the first store, `sw w0,0(v1)`, the w1 load, then `addiu a0,a0,8`
+BEFORE `sw w1,4(v1)`. The second packet does the same through `or a2,a0`. The w0 temp ring
+skips t2 (`lbu t3`). The old NM (75.3) wrote `a0[0] = ..; a0[1] = ..; a0 += 2;`, which IDO
+folds into one +16 bump with -8/-4 offsets. EXACT 52/52 on the first compile with the
+libultra gbi macro body: `{ G *_g = gfx++; _g->w0 = _SHIFTL(7,24,8) | _SHIFTL(2,16,8) |
+_SHIFTL(a1,0,16); _g->w1 = ptr; }`. The post-increment gives the copy and the early bump.
+The zero-emission `& 0xFF` that `_SHIFTL(byte,16,8)` puts on the lbu value is the phantom
+allocation that skips t2. **Rule:** if a display-list writer shows a cursor copy into a
+fresh register and the bump between the w0 and w1 stores, use the `_g = gfx++` macro shape
+with _SHIFTL-masked fields, not array stores.
+
+**Also (same session): game_libs_func_0002266C -> game_libs_func_00022674.** The body was
+already byte-exact under a placeholder extern. The 2 leading zero words were inter-object
+pad (bootup.uso Sym 1322 exports splat 0x22674). Its HI/LO pair is sym1255, so it uses the
+existing `D_00000000_345c0`. 2266C stays as a 2-word INCLUDE_ASM pad (the 2D36C precedent),
+and the post expected/ refresh changed only the symbol table.
 
