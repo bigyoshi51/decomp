@@ -14256,6 +14256,11 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [5B5D8 (post0b, 96.11 -> EXACT 9/9): word RMW `lw t8; sll t7; and t9,t8,at(0xFFFFFF); addu t0,t7,t9` with t6 unused = the kept low bits read as an unsigned :24 BITFIELD plus `(a2 & 0xFF) << 24`; homed unused first arg = `char` param (2026-10-14 agent-c)](#bitfield-low24-read-shift-first-5b5d8)
 - [2831C (post, 95.67 -> EXACT 15/15): "multi-def web XOR per-arm jr" cap (3-way range lookup, last arm `addiu v1` + `jr; or v0,v1,zero`, others `jr; addiu v0`) = ONE result local assigned in if / else-if / else + a single `return r;` (2026-10-14 agent-c)](#single-result-local-if-chain-2831c)
 - [2DD58 (post, 92.5 -> EXACT 14/14): `sw a0` home + `or a2,a0` + `andi a0,a2,0xFF` in a 1-param wrapper = a `char` param (third application of the 26C6C rule; the copy goes to the first a-reg not used by the call args) (2026-10-14 agent-c)](#char-param-home-copy-26c6c)
+- [67220 (post1b, 76.12 -> EXACT 17/17): a "prologue-schedule tie" (`sw s0; or s0,a0,zero; sw ra; lw t6,K(s0)` vs build `sw ra; sw s0; lw t6,K(a0); or s0,a0`) on a busy-wait poll loop = the polled flag read is VOLATILE; a plain read's rotated pre-test copy-props onto the raw a0 (2026-10-14 agent-g)](#volatile-poll-read-pins-param-sreg-67220) -- _Tell: a `while (p->flag == 0) f();` whose first load already uses the s-reg copy and the param move sits among the prologue saves._
+- [66674 (post1b, 70.75 -> EXACT 28/28): list append whose exit `sw a0,28(sp); lw a0,28(sp)` + 0x30 frame was mis-read as OUR spill -- it is the TARGET: a separate `last` cursor (`for (; cur; cur = cur[1]) last = cur;`) spilled at loop exit, data stored before next=0 in source, +8 frame = `volatile int pad[2]` (2026-10-14 agent-g)](#list-append-last-cursor-exit-spill-66674) -- _Read old NM notes with the sides checked: build-left / target-right._
+- [3FA54 (post0b, 91.86 -> EXACT 21/21): a "dead spill of caller a2 into a local slot in the jal delay" cap (`sw a2,0x64(sp)`, build 1 insn short) = a FIELD STORE into an escaping stack message record (`s.arg = a2`); the "result" register local was also a record field reloaded after the calls (2026-10-14 agent-c)](#stack-record-field-not-dead-spill-3fa54) -- _Tell: an `sw aN,K(sp)` with K inside the `&buf` range that is passed to the jal; size the record from the frame (0xA0 here)._
+- [3EDBC (post0b, 90.88 -> EXACT 24/24): same 0xA0 stack record pinned to the frame top under an unused 16-byte local; tail `lw v0,home; lw/ori/sw via v0; ...; li v0,1` (late li, v0 as the store base) = `*a0 |= 1; if (1) {} return 1;` -- the empty if splits the return constant into its own BB (2026-10-14 agent-c)](#late-return-constant-bb-split-3edbc)
+- [5E138 (post0b, 89.73 -> EXACT 22/22): rolled 4x4 transpose loop (row ptr += 16, col ptr += 4, end rematerialised from sp, jal arg recomputed in delay) = plain NESTED `for i { for j { dst[i][j] = src[j][i]; } }` -- inner fully unrolled, outer strength-reduced; a single pointer loop shares the dst base in a1, a single index loop fully unrolls (2026-10-14 agent-c)](#nested-loop-inner-unroll-outer-sr-5e138)
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -27952,4 +27957,65 @@ while (val != 0) {
 The loop tail needs the advance read through `next` (the reload): with `cur[1]` the reloaded value is shared by three uses and becomes a `$v1` candidate (14 diff lines); `next[1]` (or `val = (cur = next) ? (next = next[1], cur[0]) : 0`) keeps it in ring `$t7`. Probed-inert tail forms: if/else arm, `cur != 0`, `*cur`, block-scope `n`, same-line. The 69B94-style single rotated `while (cur = next, ...)` copy also lands the head in t8 but colours `val` v1 and breaks the tail layout.
 
 Second application, same day: gl_func_00069B94 (post1b, 98.66 -> EXACT 41/41) -- the wrap that had cracked the layout with that rotated single-copy `while` still carried the `$v1` key / `$v0` next residual; rewriting it as explicit pre-loop advance + tail `next = next[1]` advance closed all 10 words. Any list walk with stack-homed iterator slots and a ternary advance: try this shape first.
+
+
+
+## 67220: busy-wait poll loop -- the prologue `or s0,a0` + first load via s0 = a VOLATILE flag read (gl_func_00067220 EXACT 17/17, 2026-10-14 agent-g) <a name="volatile-poll-read-pins-param-sreg-67220"></a>
+
+Target: `addiu sp; sw s0; or s0,a0,zero; sw ra; lw t6,0x13E8(s0); bnezl t6,end; lw ra; L: jal f; nop; lw t7,0x13E8(s0); beqz t7,L; nop; ...`. Every plain spelling of `while (*(int *)(a0 + 0x13E8) == 0) f();` -- local copy `char *s0 = a0`, param used directly, `register`, K&R, int* param, explicit if + do-while rotation -- gives `sw ra; sw s0; lw t6,0x13E8(a0); or s0,a0,zero` (4 words): the rotated pre-test is a use of the never-redefined param, so uopt copy-propagates the raw a0 into it and the s0 copy becomes an ordinary body move after the saves (the 6612C shape). goto/for-break loops lose the rotation (16 words); passing a0 to the callee is 5 words.
+
+EXACT: `while (*(volatile int *)(a0 + 0x13E8) == 0) f();` -- a volatile load is not a copy-prop / CSE candidate, so the pre-test reads through the s-reg variable and the param->s0 move goes to the prologue slot right after `sw s0` (the 63DC4 placement). Semantically right too: the flag is set by another thread. Rule: a poll loop whose FIRST field load already uses the s-reg copy, with `or sN,aK` among the prologue saves, wants the polled read volatile before any param/local re-spelling. Related: #volatile-first-store-pins-param-sreg-copy-66c74 (the store-side twin), #reassigned-param-sreg-prologue-move-63dc4, #dead-param-kill-uncoalesced-local-copy-6612c.
+
+## 3FA54: "dead arg spill in a jal delay slot" = a field store into the escaping stack record (gl_func_0003FA54 EXACT 21/21, 2026-10-14 agent-c) <a name="stack-record-field-not-dead-spill-3fa54"></a>
+
+Target: `addiu sp,-0xB8; li t6,0x33; sw a0,0xB8(sp); ...sw t6,0x18(sp); [a1==0] sw zero,0x68(sp); [a1==1] sw 1,0x68(sp); jal; sw a2,0x64(sp); jal (a0=sp+0x18); lw v0,0x68(sp)`.
+The old NM read `sw a2,0x64(sp)` as an IDO "dead spill" of the caller's a2 and the return value as a
+register local, leaving the build 1 insn short. Both offsets lie INSIDE the record whose address
+(`sp+0x18`) is passed to both calls: 0x64 = record+0x4C, 0x68 = record+0x50. So the C is
+
+```c
+typedef struct { int type; char p1[72]; int arg; int res; char p2[0xA0 - 84]; } Msg;
+Msg s; s.type = 0x33; if (a1 == 0) s.res = 0; if (a1 == 1) s.res = 1;
+s.arg = a2; call(&s); call(&s); return s.res;
+```
+
+The `s.arg = a2` store is scheduled into the first jal's delay slot by itself; the escaping record forces
+`return s.res` to reload. Record size comes from the frame: 0xB8 - 0x18 = 0xA0 (0x98 gives frame 0xB0).
+The unused a0 is homed (`sw a0,0xB8(sp)`) by IDO with no source help. Before declaring any
+"spill of an incoming arg into a local slot" cap, check whether the slot falls inside an `&local`
+range that escapes to a call -- it is then a plain field assignment.
+
+## 3EDBC: late `li v0,1` + v0 as the final store base = return constant in its own basic block (gl_func_0003EDBC EXACT 24/24, 2026-10-14 agent-c) <a name="late-return-constant-bb-split-3edbc"></a>
+
+Target tail: `lw v0,0xC8(sp); lw t7,0(v0); ori t8,t7,1; sw t8,0(v0); lw ra; addiu sp; addiu v0,zero,1; jr ra; nop`.
+Plain `*a0 |= 1; return 1;` emits `lw v1,home; li v0,1` early (v0 reserved for the return, pointer
+in v1). Any basic-block boundary between the store and the return gives the target: `if (1) {}`
+after the store (used), `if (1) { *a0 |= 1; }`, a `goto end; end:` or `do { } while (0)` around the
+store all work; a nested `{ int *p = a0; ... }` or `{ int r = 1; return r; }` do not.
+Frame part: the record (`struct { int type; char p[0x9C]; }`, same as 3FA54) sits at sp+0x28..0xC8
+with 16 unused bytes at 0x18 -- `char pad[16];` declared AFTER the record reproduces it (aggregates are
+pinned to the frame top in declaration order).
+
+
+
+## 66674: list append -- `last` cursor spilled at loop exit; statement order picks the home-load hoist (gl_func_00066674 EXACT 28/28, 2026-10-14 agent-g) <a name="list-append-last-cursor-exit-spill-66674"></a>
+
+Target: `addiu sp,-48; ...; jal factory; lw a0,0(a0); lw a0,48(sp); lw t6,52(sp); sw zero,4(v0); sw t6,0(v0); lw v1,0(a0); bnez v1,W; nop; b end; sw v0,0(a0); W: beqz v1,X; or a0,v1; L: lw v1,4(v1); bnezl v1,L; or a0,v1; X: sw a0,28(sp); lw a0,28(sp); sw v0,4(a0)`. The 2026-06 wrap note claimed IDO spilled OUR cursor -- the sides were swapped; the exit spill/reload pair and the 0x30 frame are the target's.
+
+EXACT shape: `node[0] = data; node[1] = 0; cur = *head; if (cur == 0) *head = node; else { for (; cur != 0; cur = (int *)cur[1]) last = cur; last[1] = (int)node; }` with an unused `volatile int pad[2];` declared between `cur` and `last` (frame 40 -> 48, `last` stays at 0x1C). (a) A separate `last` written only inside the loop is possibly-uninitialised at the exit, so uopt gives it a home and stores/reloads it there once, while the loop keeps it in a0 (the `while (cur[1]) cur = cur[1]` walk gives a 40-frame bnez+nop body instead). (b) Storing `next = 0` first in source keeps the data home reload after the store; writing `node[0] = data` first lets the scheduler hoist `lw t6,data` above BOTH stores while keeping the next=0 store first -- the target order. (c) The address-taken barrier (`if (1) bar = &last;`, 6337C) is WRONG here: it makes every iteration store `last` (15 words).
+
+## 5E138: rolled 4-store loop with sp-rematerialised end = nested index loop, inner unrolled (gl_func_0005E138 EXACT 22/22, 2026-10-14 agent-c) <a name="nested-loop-inner-unroll-outer-sr-5e138"></a>
+
+Target: `or v1,a0; addiu a0,sp,0x68 (end); addiu v0,sp,0x28; loop: lwc1/swc1 x4 with v0 += 16 and
+v1 += 4; bne v0,a0; jal; addiu a0,sp,0x28 (delay)`, frame 0x68 with an 8-byte hole.
+- Single-level `for (i..4)` with the four stores spelled out: IDO FULLY unrolls it (16 straight lw/sw).
+- Pointer loop `for (p = dst; p != dst + 16; p += 4)`: right loop, but `dst` is CSE'd into a1 for the
+  init, the end (a1+64) and the jal arg (`or a0,a1`) and the frame is 0x60.
+- An old goto-loop + `register` + `volatile int pad` NM got within 1 insn (the a1 share).
+- `for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) dst[i][j] = src[j][i];` (float[4][4] or flat
+  `dst[i*4+j] = src[j*4+i]`): EXACT, including the frame hole. IDO unrolls only the innermost loop,
+  then strength-reduces the outer one with an sp-relative end constant, so nothing is shared.
+Tell: a rolled loop whose body is N identical copies with stepped offsets, and an end pointer
+built straight from sp, is an unrolled inner loop. Write the nested loops before reaching for
+goto/register/pad tricks.
 
