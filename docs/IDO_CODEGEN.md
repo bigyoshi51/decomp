@@ -14241,6 +14241,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [66C74 (post1b, NM 85.12 -> EXACT 56/56): `volatile` on the FIRST self-relative store pins the param->s0 copy at the prologue (else uopt reads the early self uses from a0 and as1 sinks `or s0,a0,zero` below); `i++;` as its own statement in a do-while keeps the unrolled slot-0 group first; absolute-flag store via `&D+off` = `lui at; sw (at)` (2026-10-14 agent-g)](#volatile-first-store-pins-param-sreg-copy-66c74) -- _Tell: target's first stores use s0 with `or s0,a0,zero` at slot 3, build uses a0 for 1-2 uses then copies. if(0)/while(0)/register/self=self are all inert; only the volatile store flips it._
 - [635D8 (post1b, NM 83.22 -> EXACT 37/37): a param home reload right after a call lands in v1 instead of v0 = the call's dead int return def still occupies v0; a void-typed alias of the blank callee frees v0. Plus tail store SOURCE order for an unscheduled cvt.s.w->swc1 pair (2026-10-14 agent-g)](#void-alias-frees-v0-for-reload-635d8) -- _Tell: target `jal; ...; lw v0,home(sp)` with v0 never used as a return, build `lw v1,home`._
 - [688F8 (post1b, NM 80.46 -> EXACT 26/26): inlined cfront ctor pair `new Derived` -> base ctor re-tests a copy of `this` with a dead alloc fallback; forward gotos + two distinct base-0 vtable symbols + local DECL order picks the spill slot (2026-10-14 agent-g)](#inlined-ctor-pair-decl-order-spill-slot-688f8) -- _Tell: `beqz v0,end; or a1,v0; bnez v0,store; or v1,v0` (a redundant second null test) then a dead `jal alloc; sw v0,X(sp)` and two vtable stores via v1 / a1._
+- [D6E8 (tail, NM 78.5 -> EXACT 52/52): runtime `div.s` colour normalisation = NAMED float locals const-propagated by uopt (their dead homes are the extra frame words); a `255.0` DOUBLE literal assigned to the float numerator stops uopt CSE-ing it with the `255.0f` divisor (own lui/mtc1); one `||` early-out saves a ring slot (2026-10-14 agent-g)](#double-literal-defeats-fp-const-cse-d6e8) -- _Tell: N extra frame words with no stores to them + `lui at,K; mtc1` per numerator + `div.s fX,fY,f0` with f0 = the divisor constant materialised once._
+- [D288 (tail, NM 72.69 -> 97.86): a param homed in the PROLOGUE (`sw a0,32(sp)` before any call) and reloaded from its home before AND after the call (t-ring chain, no s-reg, no copy) = the param is ADDRESS-TAKEN; a dead block-scope `if (1) { int **bar = &self; }` reproduces it with NO extra frame word (fn-scope bar costs +8) (2026-10-14 agent-g)](#block-scope-addr-taken-param-home-d288) -- _Residual there: target splits the child live range at the call (pre v1 / post a3); build keeps one web._
 - [6337C (post1b, NM 97.81 -> EXACT 64/64): list-walk iterator with cur/next homed in stack slots = two ADDRESS-TAKEN locals (not a volatile struct) so `cur = next` forwards the stored load (ring t8); loop tail advances via `next = next[1]` (not cur[1]) to keep the reload in a ring temp (2026-10-14 agent-g)](#address-taken-iterator-locals-forwarded-ring-6337c) -- _Tell: target `lw t8,X(s0); sw t8,next(sp); beqz t8; sw t8,cur(sp); lw t0,4(t8)` (no reload between the store and the use) and the loop tail `lw t7,next(sp)`; build colours the pointer v1._
 - [6612C (post1b, NM 94.81 -> EXACT 43/43): head `sw ra; sw s1; sw s0; lw a1,N(a0); or s0,a0,zero` (raw-param load, copy as a BODY move after the saves) = an UNcoalesced local copy: `int *self = a0; r = f(a0, a0[10]+8); a0 = 0; while (r != K) r = f(self, ...);` -- the dead `a0 = 0` kill is what stops uopt coalescing the copy into the param (2026-10-14 agent-g)](#dead-param-kill-uncoalesced-local-copy-6612c) -- _Tell: build has the prologue move `sw s0; or s0,a0` + `lw (s0)`; target saves all s-regs first and reads a0 once. Inverse of 63DC4._
 - [63DC4 (post1b, NM 94.58 -> EXACT 48/48): prologue `or s0,a0,zero` at slot 2 (before the arg home stores, bnez delay = last home store) = the PARAMETER itself is the s-reg variable and gets reassigned (`if (p != 0 || (p = alloc()) != 0)`); a local copy `T *s0 = a0;` sinks the copy into the bnez delay (2026-10-14 agent-g)](#reassigned-param-sreg-prologue-move-63dc4) -- _Tell: build has `bnez a0; or s0,a0,zero` but target has the or right after `sw s0` and a home store in the delay. volatile-first-store is inert here._
@@ -14263,6 +14265,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [3EE50 (post0b, 76.43 -> EXACT 28/28): "inter-jal t-reg reload order + 4-reg permutation" INSN_PATCH note = source order of the post-call record-field stores; t6..t9 follow source evaluation order, the scheduler then sorts the stores (2026-10-14 agent-c)](#record-store-order-picks-treg-3ee50) -- _Tell: the li-constant temp gets the LAST t-reg although its store issues first -> write that statement after the loads._
 - [52674 (post0b, 88.22 -> EXACT 23/23): "-O1 lower-opt cap" for unfolded `ori K1; ori K2; ori K3` = one `v |= K;` statement per constant at -O2 (only a single-expression OR chain folds); the local then takes v0 and an empty `if (1) {}` returns v0 to the preceding base (2026-10-14 agent-c)](#separate-or-statements-unfolded-52674)
 - [5E138 (post0b, 89.73 -> EXACT 22/22): rolled 4x4 transpose loop (row ptr += 16, col ptr += 4, end rematerialised from sp, jal arg recomputed in delay) = plain NESTED `for i { for j { dst[i][j] = src[j][i]; } }` -- inner fully unrolled, outer strength-reduced; a single pointer loop shares the dst base in a1, a single index loop fully unrolls (2026-10-14 agent-c)](#nested-loop-inner-unroll-outer-sr-5e138)
+- [42374 (post0b, 58.32 -> EXACT 25/25): "const-fold + bnel cost-model cap" on a rolled 4-store ushort fill = IDO x4 unroll of a plain nested `for x { for y g[y][x] = K; }` over a `ushort[320]` grid; the inner `for` header and body must share ONE line or the offset-0 store sinks into the bne delay (2026-10-14 agent-c)](#same-line-inner-unrolled-loop-42374) -- _Tell: inner counter steps by 4 with N stores at row-stride offsets + pointer bump in the bne delay; outer counter pre-scaled by the element size. Also 5FFD0 (73.5 -> EXACT): `return 0;` on its own line after `if (g) return f(..);` orders `or a1,a3` before `or v0,zero`; param overwrite instead of a copy local fixes the frame. Also 57194+571E4 (boundary): a "tail-merge to a shared epilogue past this fn's end" + a successor with an "unfilled jr-delay" = the else arm split off by splat (bgezl into successor+4 with its first word in the likely slot); merged EXACT 34/34 on the first compile._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -28022,6 +28025,46 @@ for the two zero stores moves to v1; an empty `if (1) {}` between those stores a
 (the BB lever, see #late-return-constant-bb-split-3edbc) gives it v0 back. Before splitting a file
 to -O1 for "less constant folding", try one statement per constant.
 
+## 42374: rolled 4-store fill loop = x4-unrolled plain nested loop; inner `for` + body on one line (game_libs_func_00042374 EXACT 25/25, 2026-10-14 agent-c) <a name="same-line-inner-unrolled-loop-42374"></a>
+
+Target: `lw v0,0xF4(t9) (grid); ori a2,zero,0xFFFF; addu a0,v0,a1; L1: addiu a0,a0,0x7D00; li v1,50; L2: addiu v1,v1,4; sh a2,0/0x280/0x500/0x780(a0); bne v1,a3(150),L2; addiu a0,a0,0xA00; addiu a1,a1,2; bnel a1,t0(300),L1; addu a0,v0,a1`.
+The old NM (goto loops + `register`, 25 vs 24 insns, 58.32) called the separate `addu; addiu 0x7D00`
+and the `bnel` an IDO cost-model cap. It is the compiler's own output for
+
+```c
+typedef unsigned short Row[320];
+Row *g = ((Row **)(*(int **)(*(int *)((char *)&D_00000000 + 0x240) + 0x148)))[a0 + 0x3D];
+for (x = 50; x < 150; x++) {
+    for (y = 50; y < 150; y++) g[y][x] = 0xFFFF;
+}
+```
+
+IDO unrolls the 100-trip inner loop by 4 (counter += 4, four stores at 0x280 strides), strength-reduces
+the outer index to a1 = 2x (100..300) with 0x7D00 = 50 rows, and rotates the outer loop (bnel + the
+pointer `addu` in the likely slot). Two knobs: (1) a `base` local for `*(D+0x240)` puts it in v0 and
+renames the whole ring -- write the grid load as one expression; (2) LINE LAYOUT: with the inner body on
+its own line the scheduler emits `sh 0x280; sh 0x500; sh 0x780; addiu a0,0xA00; bne; sh -0xA00(a0)` (the
+offset-0 store sinks into the delay); with `for (...) g[y][x] = K;` on ONE line the pointer bump goes in
+the delay -- the target. Compare #nested-loop-inner-unroll-outer-sr-5e138 (same unroll family). Any
+"unrolled-by-N store block with counter += N" is a plain loop -- reconstruct the trip count first.
+
+Second case, same day (gl_func_0005FFD0, post0b, 73.5 -> EXACT 22/22): `if (g != NULL) return f(g, a0, g->44);`
+followed by `return 0;`. With `return 0;` on the SAME line as the `if`, the preset `or v0,zero,zero` is
+scheduled above the arg move `or a1,a3,zero`; on its own (later) line it issues after -- the target. The
+rest of that fix: overwrite the param (`if (f(a0, buf)) a0 = buf;`) instead of a `p = a0` copy local --
+the copy got its own home (frame 0x88) while the param keeps the caller-slot home (frame 0x80, `lw a3,0x80(sp)`
+in the beqz delay). Rule: when two independent instructions of adjacent statements are swapped, try
+moving the second statement to its own line / joining it before reaching for regalloc levers.
+
+Third case, same day (game_libs_func_00057194 + 571E4, post0b, 83.3 / 84.3 -> EXACT 34/34 as ONE symbol):
+the 57194 wrap blamed "-O1 cross-jump to a shared epilogue past this fn's end" for its `bgezl t7,571E8;
+lw v0,0xC(a0)` and the 571E4 wrap blamed an "unfilled jr-delay (-g3 carve) + renumber" on its `jr ra; nop`.
+Both were ONE function split by splat: the bgezl targets successor+4 with the successor's first word in
+the likely slot. Oracle: 57194 (section 0x6B800) exported, 571E4 (0x6B850) not. Merged .s (0x50+0x38),
+plain `if (bit19 || bit23) { emit(0xBA001402, 0x100000); return; } emit(0xBA001402, 0);` matched on the
+first compile; baseline via scripts/elf-symtab-merge-orphan.py. Tell: a branch whose target lies past
+the symbol end, landing one word into the next symbol, is a boundary bug, never a tail-merge cap.
+
 ## 66674: list append -- `last` cursor spilled at loop exit; statement order picks the home-load hoist (gl_func_00066674 EXACT 28/28, 2026-10-14 agent-g) <a name="list-append-last-cursor-exit-spill-66674"></a>
 
 Target: `addiu sp,-48; ...; jal factory; lw a0,0(a0); lw a0,48(sp); lw t6,52(sp); sw zero,4(v0); sw t6,0(v0); lw v1,0(a0); bnez v1,W; nop; b end; sw v0,0(a0); W: beqz v1,X; or a0,v1; L: lw v1,4(v1); bnezl v1,L; or a0,v1; X: sw a0,28(sp); lw a0,28(sp); sw v0,4(a0)`. The 2026-06 wrap note claimed IDO spilled OUR cursor -- the sides were swapped; the exit spill/reload pair and the 0x30 frame are the target's.
@@ -28042,4 +28085,19 @@ v1 += 4; bne v0,a0; jal; addiu a0,sp,0x28 (delay)`, frame 0x68 with an 8-byte ho
 Tell: a rolled loop whose body is N identical copies with stepped offsets, and an end pointer
 built straight from sp, is an unrolled inner loop. Write the nested loops before reaching for
 goto/register/pad tricks.
+
+## D6E8: named float locals + a DOUBLE literal numerator = runtime div.s with an un-CSE'd numerator constant (gl_func_0000D6E8 EXACT 52/52, 2026-10-14 agent-g) <a name="double-literal-defeats-fp-const-cse-d6e8"></a>
+
+Target: frame 0x30 with only ra (0x14) and a node spill (0x1C) used, then `lui at,0x437F; mtc1 f0` (255 divisor, once), `lui/mtc1` for 250 / 219 / 68 AND a second `lui at,0x437F; mtc1 f8` (255 numerator), four `div.s fX,fY,f0`.
+- `250.0f / 255.0f` literal/literal is folded by cfe (rodata load). The old NM used `float inv = 255.0f; 250.0f / inv` -- runtime div.s, but the frame was 0x20 and `255.0f / inv` CSE'd into `div.s f8,f0,f0` (-2 words).
+- Fix: declare `float r, g, b, a;` FIRST (their dead -O2 homes are exactly the 4 unexplained frame words 0x20..0x2C, pushing the spill to 0x1C), assign the components, divide by the LITERAL: uopt const-propagates the locals but does not fold FP division, so each becomes lui/mtc1 + div.s.
+- The numerator equal to the divisor: `a = 255.0f` -> uopt CSEs it with the divisor literal (one f0, `div.s f8,f0,f0`). `a = 255.0;` (DOUBLE literal, converted to float by cfe) is a distinct constant node -> its own `lui/mtc1 f8`. Same family as 65360's `0.0` + `0.0f` two-zero-register lever: a double vs float spelling of an equal FP constant is the handle on uopt's FP constant CSE.
+- Ring: two `if (..) return;` early-outs burned one t-ring slot vs `if (node == 0 || (o->b4 & 2) == 0) return;`; and an int constant store (`= 30`) that the target materialises in the LAST ring slot is written AFTER the neighbouring reload statement (store order is restored by the scheduler).
+
+## D288: dead block-scope `&param` = prologue home + reload-around-call with no frame cost (gl_func_0000D288 NM 72.69 -> 97.86, 2026-10-14 agent-g) <a name="block-scope-addr-taken-param-home-d288"></a>
+
+Tell: `sw a0,32(sp)` in the prologue, the first field load still through a0, then after `or a0,<arg>` the param is re-read from 32(sp) into a ring temp (`lw t7,32(sp); lw t8,0x44(t7)`), and post-call `lw v1,32(sp)` again -- no s-reg, no `or a3,a0` copy. That is an address-taken (memory-resident) param that uopt store-forwards while a0 is intact. `if (1) { int **bar = &self; }` with `bar` BLOCK-scoped gives it with zero emitted code and no frame word (fn-scope `int **bar;` adds 8 bytes of frame). Companion shapes from the same function: re-reading `self->[0x44]` per use instead of a named `parent` moved the callee-crossing spill to the target slot; a cfront vcall `fn(o + vt->h, child)` with `o = self` assigned after the call reproduces `lh t9; addu a0,t9,v1; lw t9,fn; jalr t9; nop`. Remaining residual (unsolved): the target splits a call-crossing candidate (pre-call v1, post-call reload into a3 then `or a1,a3`), the build keeps one web in a2.
+
+## 66B64 data point: TU-DEFINED aggregate at -O1 gives the shared-$at store pair but ugen copies the constant (2026-10-14 agent-g) <a name="tu-defined-aggregate-o1-shared-at-66b64"></a>
+Extends #shared-at-absolute-store-cap-66a50 (still a cap). `struct { int a, b; } canary = {0};` DEFINED in the TU (not extern), IDO 7.1/5.3 -O1: `lui t8,0x1234; ori t8; lui at,%hi(canary); or t9,t8,zero; lui a0; sw t8,%lo(canary)(at); sw t9,%lo+4(at)` -- the one-lui-two-sw shape IS reachable, but ugen materialises the second constant use as a copy (`or t9,t8`; every spelling: chained, `b = a`, register int m (-> s0), U/void* types, same-line). At -O2 the same TU struct/array (also volatile, -g3, if(1), loop forms) is base-CSE'd by uopt (`lui v0; addiu v0; sw 0/4(v0)`); TU-defined scalars give two section-relative luis at every level. And -O1 also homes/reloads the param around the first call (`sw a0; jal; lw a0` vs target `jal; sw a0`), which a no-arg first call (`gl_func_00000000();`, a0 passthrough) fixes. So the target store pair is -O2-scheduled code with no-uopt store shapes -- no single compile mode found.
 
