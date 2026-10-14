@@ -14205,6 +14205,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - ["0.0f in THREE FP regs" = two zero PSEUDOS: a 2-use store zero (candidate $f12) + a 1-use `x / denom` numerator (ring $f16); spell exactly ONE side as the cast class `(float)0` and the other as the literal `0.0f`; the pre-call zero's spelling is free (ring $f4 either way); int tail `p->x += q->y * 1000` must be the COMPOUND form for base-first `addu` (gl_func_0000D318 EXACT 64/64, NM 96.17 -> 100, 2026-09-11 agent-g)](#two-zero-pseudos-literal-vs-cast-compound-tail-d318) -- _120-triple sweep: `(float)0` / `(float)0.0` / `(float)0u` hash to ONE pseudo, `0.0f` to another; same class on both sides = a 4-use candidate spanning the call (pre-call $f12, one fewer mtc1, ring -1); `0.0` (double) as the numerator promotes the div.s. `x = x + p` emits product-first `addu t3,t1,t2` and renumbers the tail t-regs._
 - [D7B8 / D8E0 siblings LANDED (74/74, 54/54): the "255/255 numerator-CSE cap" is the same cast-class lever (`(float)255 / denom`); D7B8's other two residuals were the v0 spill SLOT (declare the spilled pointer FIRST: `char *v0; int a3; float denom;`) and a constant int store that only SINKS into the next `lw` load-delay slot (t1/t9/t0 numbering) when written AFTER the address-arithmetic store (2026-09-11 agent-g)](#d7b8-numerator-cast-decl-order-slot-store-order-sink) -- _12-variant decl-order x store-order sweep; 0 diffs only for v0-first + `0xA0 = a0->0x6C + 0x108` before `0x9C = 14`. Source order = ring order for the two stores; the scheduler then hoists the `addiu t1,14` and fills the load delay with its `sw`._
 - [E05C (tail, 96.91 -> EXACT 47/47): a "v1-vs-v0 vtable-pointer renumber" that was a CONTROL-FLOW decode error (the beqz over the flags&1 block also skipped the `func(0x24, a2)` call -- it belongs inside the block); the unreferenced-param dead `if (a1) {}` (E118 lever) removes the `sw a1` home ONLY as the first statement BEFORE the first call (declaration-initializer call = ref after the call = home stays); `a2_var = -1` must be assigned AFTER that call or it materialises pre-jal + spills (2026-09-11 agent-g)](#e05c-branch-target-decode-dead-if-before-first-call) -- _Always re-derive each conditional branch's TARGET from the target words before grinding a colouring residual; the vt v0/v1 pick fell out on its own once the third call moved inside the block. CDDC-form vtable tail (named `new_a0`, fn-ptr deref inline) for ring t9/t0 + `addu a0,t0,s0`._
+- [C49C (tail, 82.29 -> EXACT 21/21): a one-word copy whose value temp SKIPS a ring slot (`lw t6,home; lw t8,0(v0); sw t8,4(t6)`, no t7) is a 4-BYTE STRUCT assignment (eval_mov pops a pair, uses pop #2); plus the C8B8 one-arg last call; transfer C28C 99.83 -> EXACT, retiring its "uoptlist-only skipped-t8" cap (2026-10-14 agent-g)](#c49c-one-word-struct-move-skips-ring-slot) -- _Skipped t-slot around a single lw/sw copy: try `typedef struct { int x; } W;` assignment before calling it a cap._
+- [E368 (tail, 98.45 -> EXACT 42/42): a "named read temp lands v1 vs target t2" RMW renumber cap was the spelling of the field pointer -- `int *v = base + 0x18; *v &= ~4;` gives the advance-then-store `lw tN,24(v0); addiu v0,24; sw 0(v0)` with an UNNAMED ring temp (2026-10-14 agent-g)](#e368-field-pointer-compound-rmw-ring-temp) -- _When a RMW read sits in v0/v1 but the target uses a t-ring temp, drop the named temp and use a compound op on a pointer local._
 - [E5D0 (tail, 98.72 -> EXACT 39/39): a documented "self-in-$a0 spilltemp-reload colouring cap" (zdbug trace even showed the target colouring) was the DEAD $v0 DEF of a K&R int callee right before the region; a void-returning alias for that call frees $v0 (2026-10-14 agent-g)](#e5d0-void-alias-frees-v0-spilltemp-cap) -- _Before calling any post-call v0/v1/a0 renumber a cap, re-probe the last jal through a void alias (38C0/082F8 lever)._
 - [69B94 (post1b, 94.39 -> 98.66 NM): a list walk whose loop-bottom advance is a DUPLICATE of the pre-loop advance is ONE rotated `while (node = next, (node ? (next = node[1], key = node[0]) : (key = 0)) != 0)` -- the comma/ternary condition hoists the `or v0,zero,zero` else-arm above the beqz; dead `key =` arm assignments are load-bearing (2026-10-14 agent-g)](#rotated-while-ternary-advance-69b94)
 - [CE38 (tail, 93.35 -> EXACT 150/150): entry-array refresh loop; four stacked levers -- count local re-read only after the call groups, `D.x * 0x30 + base` product-first for the t-ring, NEVER a named entry cursor, void alias on each group's second call, and an emission-free `if (n) {}` that lifts the constant-1 LR over two pass-through params (s5=1 vs s7)](#ce38-dead-if-lifts-constant-lr-over-passthrough-params) -- _the s-reg residual `1 in s7, a1/a2 in s5/s6` resisted param types, decl/assignment order of param copies, `one` locals (propagated), K&R; any emission-free dead construct (`if (n) {}`, `if (self) {}`, `if (i) {}` at ~45 of 136 body positions) flips it. A dead construct BEFORE the first load splits the entry BB and moves `or s0,a0` above the count load (count -> a0): place it after._
@@ -27247,6 +27249,35 @@ become candidates (a2/a3) and flip the addu operands. Tail NM clip 0x5570 -> 0x5
 sits below EBC8, whose NM offset moved 0x5540 -> 0x553C).
 
 
+
+## C49C: a one-word STRUCT assignment skips one temp-ring slot (gl_func_0000C49C EXACT 21/21, 2026-10-14 agent-g) <a name="c49c-one-word-struct-move-skips-ring-slot"></a>
+Target: `jal g(self); sw a0,32(sp)` / `lw t6,32(sp); lw t8,0(v0); or a1,v0,zero; sw t8,4(t6)` -- the copied value takes t8 with
+t7 never used. A plain `self[1] = r[0]` gives `lw t6,0(v0); lw t7,32(sp); sw t6,4(t7)` (value first, contiguous ring). Writing
+the copy as an assignment of a 4-byte struct (`typedef struct { int x; } W;` field on both sides, or `*(W *)&a0[1] = *(W *)r`)
+reproduces the target exactly: ugen's eval_mov pops a DATA PAIR for any struct move and binds the second pop, so a 1-word
+move burns one slot (the same mechanism the C28C 16-byte move documents in its ping-pong). Rule: a single lw/sw copy whose
+value register is one ring slot past where it should be = a one-word struct assignment. Combined here with the
+[C8B8 rule](#c8b8-param-in-a1-means-single-arg-call): r sits in a1 from the top and no later call rewrites a1, so the last call
+is `g(r)` (the `g(r, r)` wrap coloured r a2, +2 copies, 23 words). In-tree: ROM path layout-neutral (INCLUDE_ASM 21 -> def 21);
+old NM body 23 words, so the tail NM clip moves -8.
+
+**Transfer (same day): gl_func_0000C28C (tail, 99.83 -> EXACT 59/59).** The wrap carried a five-session "definitive uoptlist
+cap": after a 16-byte struct move (t7/t6 ping-pong) the `self->4 = arg1->0` copy took t9 with t8 never used, and the ugen
+analysis concluded "the original popped one extra scratch strictly between the move's pair-pop and the istr's value-pop; no
+C grammar reaches the window" (~25 spellings incl. `c:32` bitfields). It is the same lever: make the copied field a
+one-word struct (`typedef struct { int x; } W;` as the first field of the record and at self+4) and write `self->f4 =
+arg1->a` -- the move pops (t8, t9) and uses t9. 0 diffs, nothing else changed. The "pop with no instruction" is the unused
+half of the data pair, not a deleted instruction.
+
+## E368: field-pointer local + compound `&=`/`|=` = advance-then-store RMW with an unnamed ring temp (gl_func_0000E368 EXACT 42/42, 2026-10-14 agent-g) <a name="e368-field-pointer-compound-rmw-ring-temp"></a>
+Target arms: `lw t4,68(a2); lw v0,96(t4); lw t5,24(v0); addiu v0,v0,24; ori t6,t5,4; sw t6,0(v0)` (and the `and ~4` twin with
+t1/t2/t3). The 98.45% wrap reproduced the address shape with a REASSIGNED base and a named read
+(`int *v = base; int t = v[6]; v = v + 6; *v = t | 4;`) and left 11 words: the named `t` became a uopt candidate and coloured
+$v1, cascading every later ring temp by one (filed as a "constrained-pool v1 preference" cap). Writing the pointer as the field
+address up front and using a compound operator -- `int *v = (int *)(base + 0x18); *v |= 4;` -- gives the identical
+`lw 24(v0); addiu v0,24; sw 0(v0)` advance (IDO folds the +0x18 into the load and materialises it for the store) with the read as an
+unnamed ugen ring temp: 0 diffs. Rule: if a RMW's read lands in $v0/$v1 but the target spends a $t ring slot, the temp is not a
+named local in the original; remove it and spell the RMW as a compound op through a pointer local.
 
 ## E5D0: post-call "self $a0 / factory $v1 vs target $v1 / $v0" spilltemp-reload cap was the dead $v0 def of a K&R int callee (gl_func_0000E5D0 EXACT 39/39, 2026-10-14 agent-g) <a name="e5d0-void-alias-frees-v0-spilltemp-cap"></a>
 Shape: `f = call1(...); self->x60 = f; call2(f, -2); f = self->x60; if (f->n >= 11) ...; f = self->x60; if (f->n >= 12) ...`.
