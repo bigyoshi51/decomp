@@ -14219,8 +14219,11 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [DB80 (tail, 86.5 -> EXACT 68/68): three by-ref msgcode locals at 0x44/0x2C/0x20 = function-scope l0 between pads + BLOCK-scope l1/l2 per arm (+ one block int in the outer if); a global read TWICE inline (not a named local) keeps `bne const,val` operand order; empty `if (v0) {}` on the first arm flips all three dispatches' v0/v1. Plus CBF0 (97.78 -> 98.92): naming an in-range difference `d = x - lo` moves the FP knot to the target colours (2026-10-14 agent-g)](#db80-block-scope-msg-slots-inline-global-twice) -- _by-ref local slot offsets: search block-scope placement before more pads; a named compare local can swap bne operands._
 - [ABBC (tail, 83.2 -> EXACT 64/64): a `beqzl i / beql i,sN / b` ladder with the case blocks AFTER it is a `switch (i)` (if/else-if gives bnez + fallthrough); sN = hoisted loop constant, not a local; `((f & 2) << 1) | (f & 1)` written shifted-term-first gives the target's andi-1 = t9 / and-2,sll = t0,t1 (2026-10-14 agent-g)](#abbc-switch-ladder-hoisted-const) -- _hand-carried `one`/`limit`/cursor locals in an old wrap = m2c reading IDO's hoisted constants; delete them._
 - [2495C (post, 84.91 -> EXACT 115/115): flat `(char *)&D + cnt * 100 + 0x157C` always emits `addu v1,idx,base`; a struct-typed view of D with `&GD.recs[GD.cnt]` gives `addu v1,base,idx`. Plus: `lbu a1` reload in the first jal delay = prototyped `unsigned char` param passed on; a missed struct-copy word; frame 0x40 -> 0x28 by deleting named temporaries (2026-10-14 agent-c)](#struct-member-array-index-operand-order-2495c) -- _a 1-insn `addu` operand swap on a computed record address: try the struct member array before more flat spellings. Sibling 24C08 (84.68 -> EXACT 98/98): index loop `i != 2` = LFTR'd end pointer in its own s-reg; a char store of literal `1` takes its OWN constant register -- store a hoisted `int one = 1` instead Third sibling 24E28 (78.68 -> EXACT 66/66): same struct view + a typed bank-entry struct for base-first `addu`, store order by permutation Fourth sibling 24F30 (79.45 -> EXACT 69/69): a hand-walked dual-use sentinel pointer loop was the whole "&D materialised once" cap; `for (i = 0; i != 16; i++)` over `GS.slots[i]` + break-only `s = &slots[i]` (uninit on exhaust = `lw v1,28(sp)` home fill) reproduced all three lui/addiu pairs; see [24F30](#index-loop-uninit-break-ptr-24f30). Run-list sibling 232E8 (86.72 -> EXACT 46/46): struct-TYPED extern alias vs cast view flips `addu` order, see [232E8](#typed-extern-vs-cast-view-addu-232e8)._
+- [235E4 (post, 76.0 -> EXACT 82/82): tail `li 0; li 16; addiu 4; bnel .` = empty `for (i = 0; i < 16; i++) {}` (unrolled delay loop, no return) with `if (1) {}` before it; ori/andi flag pair with skipped t6/t8 = 1-bit bitfields; `if (1) {}` after a void call moved a v1 load to v0 (2026-10-14 agent-c)](#tail-delay-loop-bitfield-pair-235e4)
+- [25044 (post, 60.64 -> EXACT 33/33): gate `lw 0x215C` through `lui/addiu 0` = read via a `volatile` struct-pointer local; its `addiu at,1` beside a loop-held s-reg 1 = `unsigned` word compared to `1U` (2026-10-14 agent-c)](#volatile-gate-read-unsigned-const-25044) -- _slot-pool teardown counterpart of 24F30; both levers needed._
 - [66EEC (post1b, 81.90 -> NM 96.23): a source-order goto ladder where only SOME compare constants sit in s-regs (5/6 in s7/s8, but 1/4/2 rematerialised in `at` and `==4` NOT sharing the loop-bound s3=4) means the compared value is UNSIGNED -- u32 constants are separate uopt candidates from the int 1/4 used elsewhere](#unsigned-compare-consts-separate-candidates-66eec) -- _Tell: an int ladder hoists the most-used constant (1: call arg + flag) and reuses the loop bound register for its equal compare. Also: a by-ref byte local only used in one case lands below the function-scope words when declared in that case's block. Residual = the 52144 last-beq inversion._
 - [641DC (post1b, 84.70 -> EXACT 107/107): "IDO keeps a2 in s0 and spills self to its arg home" was the accumulate spelling -- `Vec3 *pp = &a0->v10; pp->x += a2->x; ...` hands s0 to a0; a 36-byte BLOCK-scope pad in the if-arm sits BELOW the compiler spill slot, a function-scope pad sits ABOVE it](#vec3-pointer-accumulate-flips-s0-block-pad-below-spill-641dc) -- _Tell: two pointer params both live across calls, the target saves the one with more field traffic in s0 but your build picks the other. Frame gaps split around the spill slot = function-scope pad above + block-scope pad below._
+- [63F34 (post1b, 87.22 -> EXACT 108/108): write reflected components STRAIGHT BACK into the local struct (`s.x = d * n.x - s.x;` x3, then `sqrtf(s.x*s.x + ...)`) instead of named tx/ty/tz -- uopt forwards the stores, so the values ride ring temps (f4/f16/f6) not coloured f14/f16/f18; dot product reversed+right-assoc `z + (y + x)`; comma operand `(0, var)` on every commutative op whose target puts the variable first](#store-forward-local-struct-ring-temps-63f34) -- _Tell: three results stored to a stack struct and then squared, target's result regs are recycled load/sum temps, build's are a fresh coloured triple. Also 693A4: same reversed sum lifts a 3x3 rotate 51 -> 93/148 LCS; residual there is an ADJACENT-PAIR ring swap (t8<->t9, t4<->t5, f8<->f10), not a phase shift._
 - [A comma expression `dx = a, dy = b, dz = c` is EMITTED right-to-left (ucode z,y,x) while its ring temps are numbered left-to-right (x = f4/f6 .. z = f16/f18) -- the only spelling that gives a z-first schedule with x-first ring numbers; `!= (0, 0.0f)` puts a store-forwarded memory operand FIRST in `c.eq.s`; a named squared-length steals a colour and drops $f16 out of the ring for the whole function (gl_func_00064DEC EXACT 157/157, NM 91.5 -> 100, 2026-09-11 agent-g)](#comma-expression-emits-right-to-left-64dec) -- _Five levers: (1) `spA4[0] = len2; if (spA4[0] != ...)` = ring $f8 forwarded across the branch, 0.0f -> $f14 (a named local coloured $f14 pushed zero to $f16 and every later temp -1 phase); (2) the `while (0) { dx = pC->x; }` anchor colours pC $v0 before pB $v1 AND must name the first-coloured diff (naming dz boosted dz to $f0); (3) `do { } while (0)` around the diff block stops the &local address web from hoisting above pC's loads (else it interferes with both pointers and falls to $a2); (4) comma expression for the z-first schedule; (5) comma-constant compare. Colours are per-VARIABLE across dead gaps: the second block's loads must reuse the names in the first block's colour order. An UNUSED `f32 sumsq;` decl is load-bearing (ghost home moves both arg spill slots by 4, 33 words)._
 - [`for (i = 0; i != N; i++)` keeps the hoisted `lui/addiu` sym+K pair adjacent in the preheader; `i = 0; do {} while` lets as1 slot `or s1,zero,zero` between them (same words, 2 swapped); `== 10`/`== 0` dispatch on a call result = if/else chain, not switch; loop-invariant constants (message base, stride, 10, &local) must stay INLINE -- naming them costs a frame slot + s-order; an EXACT must call the `gl_func_00000000` blank, not the K&R in-TU `gl_func_00062F64` stub (the .o gate passes, the ROM gate fails with the stub's real jal address) (gl_func_00066D54 EXACT 102/102, 2026-09-11 agent-g)](#for-init-vs-dowhile-preheader-lui-addiu-adjacency-66d54) -- _Companion of 68990 (loop spelling moved s-COLOURS there; here only the schedule). Corollary gl_func_0000C784 (tail constructor, NM 95.84 -> 77/77 EXACT): same for-init lever on `or v1,zero` vs the hoisted `addiu v0,768`; the alloc-fallback head `or s0,a0; bnez a0; sw ra` = write the body on the PARAM (a `self = arg0` local puts the copy in the bnez delay); a USO data address as an int arg = `(char *)&D_00000000 + 0xD678` (a pinned `extern char D_0000D678` leaves blank hi/lo fields)._
 - [Same-stride cursor sweep: three hand-stepped `+= 0x44` pointers whose ONLY residual is the preheader `addiu sN,sN,K` init ORDER (colours already right) are eliminated-IV derivations of one `for (k = 0; k < 10; k++)` -- uopt emits the derived-IV inits in its own order (s3..s0, reverse of the lui block), retargets the trip test onto the LAST-occurring cursor vs its folded end, and leaves no k corpse when k has only linear uses; a struct-array spelling `((Rec *)D)[k].f` loses it (8 diffs), the store folded into the call arg loses it (6) (gl_func_00033B6C EXACT 30/30, NM 98.67 -> 100, 2026-09-11 agent-c)](#same-stride-cursor-sweep-iv-init-order-33b6c) -- _Companion of A670 (rotated colours) and 66D54 (lui/addiu adjacency): the third signature of the same lens is a REVERSED init block with matching colours. Sibling lens in the same session: a product-vs-base `addu` operand order + a skipped `$tN` before a `sll 1; bltz` bit test = product-first spelling + a 1-bit BITFIELD test (game_libs_func_0001CF68 29/29 EXACT); an x4-unrolled loop's remainder/copy/field a2<->a3 "unroller cap" = the body temp must be a BLOCK-scoped `s32 f` (game_libs_func_00020FFC 77/77 EXACT). All three landed in-tree the same day. Fourth (2026-10-14): a 3-cycle rotation among two named webs + an int carrier = the carrier belongs one web over and the displaced web is an inline CSE expression (gl_func_00057700 109/109 EXACT)._
@@ -27491,6 +27494,36 @@ if (i == 16) return 0;
   (`w1C, b1 = 3, b2, w18`); other orders hoisted `li 3` above the arg4 test or moved `a2 = 1` out of
   the jal delay slot.
 
+## 25044: a gate read that keeps its own `lui/addiu` base + its own `addiu at,1` next to a slot loop (gl_func_00025044 EXACT 33/33, 2026-10-14 agent-c) <a name="volatile-gate-read-unsigned-const-25044"></a>
+
+Target: `lui t6; addiu t6,0; lw t7,0x215C(t6); addiu at,1; beq t7,at,ret` ahead of the 24F30-style
+slot loop (`lui s0 / lui s2; addiu s2,0x540`, `addiu s1,1` held for `bnel s1,flag`). Two independent
+levers, both required:
+- `if (GS.x215C == 1)` with int types makes uopt share ONE s-reg `1` between the gate and the loop's
+  `flag == 1` (`beq t7,s3`). Declaring the gate word `unsigned` and comparing `1U` makes it a separate
+  u-code constant, so it rematerialises as `addiu at,1` and the loop keeps its own s1 (the 66EEC rule,
+  [#unsigned-compare-consts-separate-candidates-66eec](#unsigned-compare-consts-separate-candidates-66eec)).
+- The plain struct view, a plain struct-pointer local, and the unsigned fix alone all fold the read to
+  `lui t6; lw t6,%lo(D+0x215C)(t6)`. Reading through `volatile GS *g = &GS;` keeps the held-base form
+  `lui/addiu 0` + `lw 0x215C(base)` (same family as
+  [#volatile-pointee-held-base-inline-addend-2dc74](#volatile-pointee-held-base-inline-addend-2dc74)).
+
+## 235E4: unrolled empty delay loop as a function tail, bitfield flag pair, `if (1) {}` after a call to recolour a v1 temp (gl_func_000235E4 EXACT 82/82, 2026-10-14 agent-c) <a name="tail-delay-loop-bitfield-pair-235e4"></a>
+
+- A success-path tail of `or v0,zero,zero; addiu v1,zero,16; addiu v0,v0,4; bnel v0,v1,.; addiu v0,v0,4`
+  then the epilogue is NOT a `return 16` or a `do { i += 4; } while (i != 16)` (IDO folds both to
+  `li v0,16`). It is an empty `for (i = 0; i < 16; i++) {}` that IDO unrolls x4, with no return
+  statement (v0 just holds the counter). `i < 4`, `i != 16; i += 4`, and dead loads in the body are
+  all removed. The counter takes v1 unless an `if (1) {}` comes right before the loop
+  ([34180 kit](#device-tick-coloring-kit-34180)).
+- `lbu t7; ori t9,t7,0x80; sb t9; andi t0,t9,0xBF; sb t0` with t6/t8 skipped = two 1-bit
+  `unsigned char` bitfields set to 1 and 0. `b0 |= 0x80; b0 &= 0xBF` emits the same ops but packs the
+  ring as t6/t8/t9.
+- A held-argument home reload (`lw t5,52(sp)`) at the head of a store block, with its store sunk into
+  the jal delay slot, means the store comes FIRST in the source.
+- A run-buffer pointer load right after a void jal-0 call came out as `lw v1` (target `lw v0`). An
+  `if (1) {}` right after that call fixed it; the usual decl-order and statement-order swaps did not.
+
 ## 232E8: a struct-typed extern alias and a cast view of the same symbol compile differently (`addu` operand order) (gl_func_000232E8 EXACT 46/46, 2026-10-14 agent-c) <a name="typed-extern-vs-cast-view-addu-232e8"></a>
 
 `cnt = *(cur + G.buf);` (G = `{ char p0[0x2028]; unsigned char *buf; }`) emits the target's index-first
@@ -27502,6 +27535,11 @@ in-tree, where D_00000000 is `extern int`. Rule: if a struct view works in the h
 file, check whether the harness declared the symbol with the struct type, and give the function a
 typed alias. Precedent for the alias route: `gl_d_233A0` (array alias). The same alias lifted sibling
 233E4 from 97.05 to 97.27, leaving only its bnez/bnezl fill.
+Third sibling 22FC0 (71.68 -> EXACT 44/44, same day): the same recipe with its own typed alias
+`gl_d_22FC0` (struct also carries the u16 limit at +0x202C for the `idx >= lim` early return). Its
+`ret = f(last)` result is only assigned inside the loop, so the empty-run return is a home fill
+(`sw v0,0x28(sp)` in the bgtzl fall-through, `lw v0,0x28(sp)` at the join) -- same uninit-variable
+signature as [24F30](#index-loop-uninit-break-ptr-24f30); do not initialise it.
 
 ## 66EEC: u32 compare constants are separate uopt candidates (goto ladder with partial s-reg constant hoist) (gl_func_00066EEC NM 81.90 -> 96.23, 2026-10-14 agent-g) <a name="unsigned-compare-consts-separate-candidates-66eec"></a>
 Target: an infinite message pump `for (;;) { recv(mq, &msg, 1); v = *msg; if (v == 0) continue; if (v == 5) goto c5; if (v == 6)
@@ -27579,3 +27617,22 @@ build's 0x50, with pp/out/local at 0x7C/0x70/0x64 and the compiler's `swc1 $f2` 
 declared after `local` fills 0x58..0x63 (puts the spill at 0x54), and the remaining 36 bytes must be a BLOCK-scope `Vec3 padB[3]`
 in the then-arm -- block locals are homed below the spill slot, so `int pad[12]` at function scope gives frame 0x80 but the spill
 at 0x30. Callee: per-site prototyped `f32 gl_func_00000000_sq641DC(f32)` blank (K&R would promote the arg to double).
+
+## 63F34: store-forward through the local struct instead of named temps; reversed dot; comma pins (game_libs_func_00063F34 EXACT 108/108, 2026-10-14 agent-g) <a name="store-forward-local-struct-ring-temps-63f34"></a>
+
+Target (post1b, 0x1B0, frame 0x50): `s = obj->v114` (int struct copy), `d = s.n` (n = arg2 unit vector), `s = d*n - s`,
+`len = sqrtf(|s|^2)` (prototyped `f32 gl_func_00000000_s(f32)` blank), then a clamp-scaled push through the 0x16C object.
+The 2026-07 wrap (86.98) had named `tx/ty/tz` for the reflected components, stored to sp44 AND squared from the names:
+uopt coloured them f14/f16/f18 while the target recycles ring temps (`sub.s f4 ... swc1 f4,68(sp)`, `sub.s f16`, `sub.s f6`).
+
+| lever | LCS (of 108) |
+|---|---|
+| 2026-07 wrap (`x*nx + y*ny; += z*nz`, named tx/ty/tz) | 58 |
+| drop the names: `sp44.unk0 = d * n.x - sp44.unk0;` x3 and `sqrtf(sp44.unk0*sp44.unk0 + ...)` (uopt forwards the stores) + dot spelled `z + (y + x)` | 95 (all 18 dot/assoc permutations x 3 forms swept; only the reversed right-assoc reaches it) |
+| `n.x * (0, s.x)` innermost product + `n.i * (0, d)` in each reflect | 99 |
+| `(f150 * f360) + (0, arg3)` in the scale term | **108 EXACT** |
+
+Textual operand order of the muls is canonicalised away (64-cell sweep, all identical); only a comma (or assignment-expression)
+operand flips which register is `fs` (#feedback-ido-fp-commutative-operand-order-assignment-lever). A `Q *` struct view of n
+instead of `*(f32 *)(arg2 + K)` collapses to 59 -- keep the cast-deref spelling.
+
