@@ -54,7 +54,7 @@ def resolve_makefile(ours,theirs):
         return res
     return ours+theirs
 def resolve_syms(ours,theirs):
-    seen=set(re.match(r'\s*(\S+)\s*=',l).group(1) for l in ours if '=' in l)
+    seen=set(m.group(1) for m in (re.match(r'\s*(\S+)\s*=',l) for l in ours) if m)
     res=ours[:]
     for l in theirs:
         m=re.match(r'\s*(\S+)\s*=',l)
