@@ -171,7 +171,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Byte-copy into a stack buffer: `andi n,3` remainder loop + `beql` skip + 4x unrolled `lbu/sb` body with the src PARAM homed and reloaded from its home (`lw v1,0xB4(sp)`), unused a0 homed too = the plain rolled `for (i=0;i<n;i++) buf[i]=src[i]; buf[i]=0;` (gl_func_00061BC8 40.4 -> EXACT 48/48, 2026-10-14 agent-c)](#rolled-byte-copy-stack-buf-61bc8) -- _A hand-unrolled NM body is the tell to roll it back up; the arg homes come from the unroller, not from `&param` or varargs._
 - [Two global-table loops sharing &D: do-while + one NAMED limit per loop, cursor bump before the field writes, no named byte local, and the second loop's `s0 = ..; end2 = ..;` JOINED ON ONE LINE (gl_func_0002D2F4 78.0 -> EXACT 30/30, 2026-10-14 agent-c)](#two-loop-shared-base-sameline-init-2d2f4) -- _Tell: two independent lui/addiu pairs per loop (cursor+limit) and the s-reg pair scheduled `lui s0; lui s1; addiu s1; addiu s0`; the old NM called the shared &D base a CSE cap._
 - [Strength-reduced cursors: write the PLAIN INDEXED loop, not hand-held pointers (gl_func_0002A904 70.65 -> EXACT 40/40) + gbi packet `{ G *_g = gfx++; ... }` post-increment shape (game_libs_func_0001D3E0 75.3 -> EXACT 52/52), 2026-10-14 agent-c](#plain-indexed-loop-strength-reduction-2a904-gbi-postinc-1d3e0) -- _Tell (2A904): several s-reg cursors all `lui sN; addiu sN,K` off ONE symbol, each `addiu +stride`, end test `bne s1,s4` against a materialized end address. Tell (1D3E0): `or v1,a0` copy before the packet + `addiu a0,8` scheduled between the two word stores._
-- [Typed global struct member access flips a strength-reduced address to SR-cursor-first `addu` (game_libs_func_0001CC98 78.5 -> EXACT 51/51, gl_func_0001FAE8 81.8 -> EXACT 57/57) + plain-loop rewrite of gl_func_00049308 (79.3 -> EXACT 41/41 on first compile), 2026-10-14 agent-c](#typed-global-member-sr-cursor-first-addu-1cc98) + gl_func_000260B4 84.7 -> EXACT 80/80 (member-vs-char-arith is a per-site two-way addu-order switch) + gl_func_00029494 71.3 -> EXACT 74/74 (pointer-typed -1 = separate constant web) + gl_func_0001CD64 61.1 -> EXACT 129/129 (int count, decl-order buf, clamp arm order) -- _Tell: in a loop `addu aN,<SR off>,<loaded base>` (cursor FIRST) off a pointer field of a held global; every `(char*)`/int-cast/compound/two-statement spelling of `&base[i].m` emits base-first; `&G.recs[i].m` through a typed global struct emits cursor-first._
+- [Typed global struct member access flips a strength-reduced address to SR-cursor-first `addu` (game_libs_func_0001CC98 78.5 -> EXACT 51/51, gl_func_0001FAE8 81.8 -> EXACT 57/57) + plain-loop rewrite of gl_func_00049308 (79.3 -> EXACT 41/41 on first compile), 2026-10-14 agent-c](#typed-global-member-sr-cursor-first-addu-1cc98) + gl_func_000260B4 84.7 -> EXACT 80/80 (member-vs-char-arith is a per-site two-way addu-order switch) + gl_func_00029494 71.3 -> EXACT 74/74 (pointer-typed -1 = separate constant web) + gl_func_0001CD64 61.1 -> EXACT 129/129 (int count, decl-order buf, clamp arm order) + gl_func_00027E24 NM 73.1 -> 96.8 (held sub-base locals, per-predecessor join var, store-order permutation probe; &buf.b3-in-s7 unsolved) -- _Tell: in a loop `addu aN,<SR off>,<loaded base>` (cursor FIRST) off a pointer field of a held global; every `(char*)`/int-cast/compound/two-statement spelling of `&base[i].m` emits base-first; `&G.recs[i].m` through a typed global struct emits cursor-first._
 - [Struct-by-value arg built by a COMMA expression `fn((s.w = x, s))`: direct `sw a0,0x20(sp)` + `sw a0,0(sp)` and an extra 8-byte frame block (gl_func_0003E968 82.1 -> EXACT 22/22, 2026-10-14 agent-c)](#comma-struct-arg-frame-block-3e968) -- _`s.w = x; fn(s);` = frame -8, s 8 lower; `s = *p` / `fn(s = *p)` = `addiu v0,sp,N` address form; plain `fn(*p)` = no local copy at all._
 - [Struct-by-value at the CALL SITE requires a K&R callee definition](#feedback-ido-struct-by-value-knr-callee-prereq) — _cfe rejects struct arg vs int-typed ANSI callee; convert callee def to K&R (byte-neutral for int params). + two-homes-no-reload forwarding; if(1){} blocks copy-prop hoist._
 - [Before accepting a "scheduler cap": check per-jal arg-register loads](#feedback-ido-scheduler-cap-check-arg-arity) — _missing aN setups = fewer call args (AA28); sw v0 in delay = result spill not arg (66210). Re-derive arity before lever-grinding._
@@ -14254,6 +14254,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [D548 (tail, NM 79.6 -> EXACT 86/86): `addiu t1,a1,K; sw t1,F(s0); or a1,t1` after a `slti`/`beqz` on the same field = the bump is written ON THE FIELD and the call arg re-reads it (`if (o->F < N) o->F += K; g(.., o->F, ..)`) -- uopt forwards into a1 on both paths; every local spelling drops the move or colours the sum v0. An FP quotient reloaded from a spill after a call = the SAME `g / 255.0f` written again (CSE across the call), not a named local -- a named quotient costs a frame word (2026-10-14 agent-g)](#field-forward-bump-cse-quotient-d548) -- _Plus: reuse numerator names (b = 250 then b = 255.0 double then b = 0.0) to keep the name count = target frame._
 - [D0D0 (tail, NM 78.59 -> 89.49): `sw a1,4(sp)` before each of 3 jals = 4-byte struct key passed by value (`k.v = <int at D+0xD680>`; reload via hoisted &k); OPEN: target re-loads the key per iteration (`lui t9,1; lw t9,-0x2980(t9)`) but every spelling gets its address promoted into s5/s7 (+s8 save) (2026-10-14 agent-g)](#struct-key-byvalue-address-promotion-d0d0) -- _negative list inside._
 - [64388: stack-frame map = DECL ORDER (every declared scalar owns a home slot, even register-allocated ones); struct copy through a carrier `t = d; e = t;`; `if (1) {}` around a 3-component block sets x/y/z FP colouring; base reuse avoids a new slot (gl_func_00064388 NM 79.13 -> 97.30, 2026-10-14 agent-g)](#decl-order-frame-map-carrier-copy-64388) -- _read the target's slot gaps as scalar counts between structs (probe: not universal, see 690A8 caveat)._
+- [697C4: a float load hoisted INTO the loop-guarded preheader with its `lui at` ABOVE the guard = a .rodata float LITERAL, not a D-variable; `p = &a[i].y; *p = *p + x` materialises the element pointer (folded lh, addiu, sh 0); `if (f) { amp = f; half = f / 2; }` gives the copy + pre-guard half (gl_func_000697C4 NM 62.85 -> 92.35; + `if (1)` around a late store group un-rotates named FP results: gl_func_00065148 99.55 -> EXACT, 2026-10-14 agent-g)](#float-literal-preheader-hoist-elem-ptr-697c4) -- _Tell: `lui at,0` before `beqzl count`, `lwc1 fN,%lo(at)` after it; variables/pad-structs only hoist the address._
 - [68044 (post1b, NM 75.93 -> EXACT): octant atan2 = PARAMS OVERWRITTEN in place (`arg1 = -arg1`; neg.s f20,f20) + `s16 v` result (per-arm sll/sra); final `(f32)v / 32768.0f * K` gives mul.s fd,quot,K only when K is a NAMED pad-struct extern (`D_68044_2210.v`), not an inline `*(f32 *)((char *)&D + 0x2210)` deref (2026-10-14 agent-g)](#octant-atan2-param-overwrite-named-const-68044) -- _In-unit callee with a BAKED jal = gl_ref_<section addr> alias, not a direct call._
 - [65148 (post1b, NM 75.76 -> ~60/66): a 3x4 affine transform with row results in f14/f16/f18 held to the end = NAMED row results with all three stores after the last row, plus the 4F0C8 reversed right-assoc row spelling; an unnamed (CSE'd) input component trims one named word so the call-crossing temp spill lands on the target slot (2026-10-14 agent-g)](#named-row-results-late-stores-65148) -- _Residual: accumulators rotate f16/f18/f14 vs f14/f16/f18._
 - [6337C (post1b, NM 97.81 -> EXACT 64/64): list-walk iterator with cur/next homed in stack slots = two ADDRESS-TAKEN locals (not a volatile struct) so `cur = next` forwards the stored load (ring t8); loop tail advances via `next = next[1]` (not cur[1]) to keep the reload in a ring temp (2026-10-14 agent-g)](#address-taken-iterator-locals-forwarded-ring-6337c) -- _Tell: target `lw t8,X(s0); sw t8,next(sp); beqz t8; sw t8,cur(sp); lw t0,4(t8)` (no reload between the store and the use) and the loop tail `lw t7,next(sp)`; build colours the pointer v1._
@@ -28399,6 +28400,22 @@ s7 two-step copy. (4) The 3-way clamp: `if (v < lo) { if (hi < v) x = c; else x 
 both give `beqz` layouts; `if (v >= lo) x = lo; else if (v <= hi) x = hi; else x = c;` gives the target's two `bnezl`
 with the next load in the likely slot. (5) `G.elems = buf;` BEFORE `p = gfx;` puts `or s8,a0` in the blez delay slot.
 
+**gl_func_00027E24 (same block, NM 73.1 -> 96.8, run 63):** 0x4F8 attach/detach pass. Own typed alias
+(`D_345c0_27E24`) with a record view `{ char *c @0xC; Sub s @0x30; Bits e @0xB0 }`. Levers, each worth a block:
+(1) held `s = &r->s;` and `e = &r->e;` locals reproduce the target's s0/s2 sub-bases (field offsets relative to
++0x30, and the re-materialised `addiu s0,s1,48` copies on both sides of the first branch). (2) Nested if/else so only
+the CALL-FREE exits use `continue` (they get their own `count*13*16` tail copy in the delay slots) while call paths
+fall to the shared bottom `lw v1,count` reload. (3) A join test whose predecessors each produce the value in v0
+(one of them `andi v0,s5,0xff` = the just-stored constant forwarded) is an explicit `act` variable assigned in every
+predecessor (`act = s->b0; goto chk;` / `act = s->b0; chk: if (act)`), not `if (s->b0)` at the join. (4) Store
+order inside a block: brute-forced all 24 permutations of 4 statements by script (score per variant) -- cheap and
+decisive (+0.8). (5) Spelling `o->def` per use instead of a `d` local flips which of o/d gets a0. (6) `if (A && B)
+goto X;` emits `bgezl/beqzl` straight to the join; `if (!A || !B) { act = ...; goto chk; } goto X;` emits the
+target's `bgez; nop; ...; bnez X; nop; b join` shape. (7) `q = &sub->snd` assigned BEFORE the if keeps
+`addiu v0,s0,28` materialised (inside the arm it folds). Unsolved: target holds `&buf.b3` (a byte INSIDE the
+address-taken stack struct) in s7 from the preheader and stores through it; every dominating `pb = &buf.b3`
+spelling folds back to `sb x,103(sp)`; a guarded (non-dominating) def gets s7 but adds a spill + duplicate blez.
+
 **Negative (game_libs_func_00023F98, NM 74.4 unchanged):** oracle = section 0x38604 NOT exported, TU-local (baked jal
 `0x0C00E181` from 22760 / 23E60 / 24D90 / 25320), lui/addiu base = sym1255 (D_00000000_345c0). Target keeps `s` in s0
 (frame 0x20, a0 not homed) with only `tag` homed; every probe (`char`/`u8`/`short` tag, `static` + caller, if/else vs
@@ -28441,4 +28458,36 @@ as `f32 v[3]` (an array stays memory-resident: the cvt/sw/lw round trips) + two 
 `count * sizeof(Vec3s)` keeps the alloc size in shift form (`sll 2; subu; sll 1`) -- a plain `count * 6` CSEs its 6
 with the loop's `idx * 6` and turns into `multu`. A loop-1 `for (i = 0; ...)` plus `for (i = 0; ...)` again for loop 2
 reproduces the target's `or t0,zero,zero` spilled across both calls with loop 2's offsets initialized as constants.
+
+## 697C4: float-literal preheader hoist, materialised element pointer for `+=`, copy-before-guard amp (gl_func_000697C4 NM 62.85 -> 92.35, 2026-10-14 agent-g) <a name="float-literal-preheader-hoist-elem-ptr-697c4"></a>
+
+- **Float literal vs D-variable.** Target: `lui at,0` sits ABOVE the loop guard (`beqzl v0,...`) and `lwc1 f18,0x2244(at)`
+  sits in the guarded preheader, value loop-invariant in f18. Every spelling as a variable -- `*(f32*)(D + 0x2244)`, a
+  pad-struct alias `D_x.v`, `extern const`, a plain `extern f32` -- only hoists the ADDRESS (`lui a2; addiu a2`) and
+  keeps the `lwc1` inside the loop (stores in the loop may alias). A local `k = ...` before the `for` loads it above the
+  guard. A float LITERAL (`w *= 0.01f`) reproduces the shape exactly: the D+0x2244 word is a game_libs `.rodata` literal.
+  The NM reloc goes against `.rodata` (bytes differ only in %lo), so this is fine for an NM wrap; an exact would need
+  the literal pool placed at that offset.
+- **`w *= K` vs `s = w * K`.** A separate `s` lets uopt sink the mul to its first use and costs an extra FP reg (here
+  that pushed a value into callee-saved f20 -> sdc1 + frame growth). Overwriting `w` pins the mul up front (`mul.s
+  f0,f0,f18` right after the branch), matching the target.
+- **Materialised element pointer for read-modify-write.** Target: `addu v0,t3,a1; lh t4,2(v0); addiu v0,v0,2; ... sh
+  t9,0(v0)` (the scheduler moved the load above the addiu and folded the 2). `dst[i].y += d`, `dst[i].y = dst[i].y + d`
+  and `((s16*)dst)[i*3+1] += d` all fold the offset into BOTH lh and sh. `p = &dst[i].y; *p = *p + d;` (also `p =
+  (s16*)&dst[i] + 1; *p += d`) keeps p as a value and gives the target shape.
+- **Copy + half before the inner guard.** `lw v1,0x94(s0); beqz v1; or t0,v1,zero` then the `/2` sequence on v1 BEFORE
+  `beqz count`: `if (self->f94 != 0) { amp = self->f94; half = self->f94 / 2; for (...) }`. `amp = f; if (amp) { half =
+  amp / 2;` sinks half into the loop preheader (after the count guard) and colours amp a3.
+- Three separate RNG temps (`r`, `r2`, `r3`) instead of one reused `r` moved amp/half/seed-pointer onto the target's
+  t0/t1/a2 (one reused r splits webs differently). Two-word stack iterator: `Nd *it[2]` (array = stays on the stack;
+  see #homed-array-vs-struct-scalarize-padarrays-411c / #volatile-iterator-struct-stack-homed-walk-6337C) and the
+  walk as `it[1] = head; while ((it[0] = it[1], it[0] ? (it[1] = it[0]->next, it[0]->data) : 0) != 0) call(it[0]->data, ...)`.
+- Frame: `s32 pad[2]; f32 v[4];` reproduces 0x48 with v at sp+48 and it at sp+40 (v[3] put v at +52).
+- Residual: expression t-reg numbering (t4.. vs t6.. from the first insn), loop-2 r/element colours, the 3x3 row-1
+  schedule (where the `m[8]` load and the `v[0]` spill fall), and the list loop's second advance loading it[1] into v0
+  instead of t9 (A/B/C/D/E advance spellings, `d` vs no `d`, void call alias: all identical or worse).
+- **Same session, gl_func_00065148 99.55 -> EXACT 66/66:** the three row results r0..r2 were named and stored after the
+  last row, but the accumulators rotated (build r0 f16 / r1 f18 / r2 f14; target f14/f16/f18). Wrapping ONLY the three
+  late stores in `if (1) { ... }` fixed the colouring; wrapping the row defs (or defs + stores) is worse. Try the
+  `if (1)` block on the store group first whenever named FP results rotate by one register.
 
