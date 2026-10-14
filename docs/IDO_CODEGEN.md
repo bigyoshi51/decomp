@@ -14240,6 +14240,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [693A4 (post1b, NM 92.84 -> 95.88, LCS 93 -> 114/148): in a reversed right-assoc 3x3 row `m20*v2 + (m10*v1 + X)` the INNERMOST product's textual order is NOT canonicalised -- `v[0]*m0` vs `m0*v[0]` flips fs/ft and pair-swaps the whole f-ring; and two pointer loads on ONE source line vs two lines pair-swaps the head sub.s ring (2026-10-14 agent-g)](#innermost-product-order-same-line-head-693a4) -- _Sweep the innermost product's operand order per row (3x2 grid) and same-line joins of the pointer-setup statements before calling an FP pair swap a cap._
 - [66C74 (post1b, NM 85.12 -> EXACT 56/56): `volatile` on the FIRST self-relative store pins the param->s0 copy at the prologue (else uopt reads the early self uses from a0 and as1 sinks `or s0,a0,zero` below); `i++;` as its own statement in a do-while keeps the unrolled slot-0 group first; absolute-flag store via `&D+off` = `lui at; sw (at)` (2026-10-14 agent-g)](#volatile-first-store-pins-param-sreg-copy-66c74) -- _Tell: target's first stores use s0 with `or s0,a0,zero` at slot 3, build uses a0 for 1-2 uses then copies. if(0)/while(0)/register/self=self are all inert; only the volatile store flips it._
 - [635D8 (post1b, NM 83.22 -> EXACT 37/37): a param home reload right after a call lands in v1 instead of v0 = the call's dead int return def still occupies v0; a void-typed alias of the blank callee frees v0. Plus tail store SOURCE order for an unscheduled cvt.s.w->swc1 pair (2026-10-14 agent-g)](#void-alias-frees-v0-for-reload-635d8) -- _Tell: target `jal; ...; lw v0,home(sp)` with v0 never used as a return, build `lw v1,home`._
+- [688F8 (post1b, NM 80.46 -> EXACT 26/26): inlined cfront ctor pair `new Derived` -> base ctor re-tests a copy of `this` with a dead alloc fallback; forward gotos + two distinct base-0 vtable symbols + local DECL order picks the spill slot (2026-10-14 agent-g)](#inlined-ctor-pair-decl-order-spill-slot-688f8) -- _Tell: `beqz v0,end; or a1,v0; bnez v0,store; or v1,v0` (a redundant second null test) then a dead `jal alloc; sw v0,X(sp)` and two vtable stores via v1 / a1._
 - [6612C (post1b, NM 94.81 -> EXACT 43/43): head `sw ra; sw s1; sw s0; lw a1,N(a0); or s0,a0,zero` (raw-param load, copy as a BODY move after the saves) = an UNcoalesced local copy: `int *self = a0; r = f(a0, a0[10]+8); a0 = 0; while (r != K) r = f(self, ...);` -- the dead `a0 = 0` kill is what stops uopt coalescing the copy into the param (2026-10-14 agent-g)](#dead-param-kill-uncoalesced-local-copy-6612c) -- _Tell: build has the prologue move `sw s0; or s0,a0` + `lw (s0)`; target saves all s-regs first and reads a0 once. Inverse of 63DC4._
 - [63DC4 (post1b, NM 94.58 -> EXACT 48/48): prologue `or s0,a0,zero` at slot 2 (before the arg home stores, bnez delay = last home store) = the PARAMETER itself is the s-reg variable and gets reassigned (`if (p != 0 || (p = alloc()) != 0)`); a local copy `T *s0 = a0;` sinks the copy into the bnez delay (2026-10-14 agent-g)](#reassigned-param-sreg-prologue-move-63dc4) -- _Tell: build has `bnez a0; or s0,a0,zero` but target has the or right after `sw s0` and a home store in the delay. volatile-first-store is inert here._
 - [65360 (post1b, NM 86.69 -> EXACT 58/58): two `mtc1 zero` regs = two DISTINCT zero constants (`0.0` double literal + `0.0f`); their f0/f2 order follows SOURCE order of first use, and the as1 scheduler then reorders the independent store groups -- sweep store-BLOCK permutations of the source, the target's emitted order is NOT the source order (2026-10-14 agent-g)](#dual-zero-constants-source-order-65360) -- _Tell: a store-only init with mtc1 zero,f0 AND mtc1 zero,f2 and a late field load hoisted above a zero block. One literal spelling = one shared f-reg (-1 word)._
@@ -14250,6 +14251,9 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [-O1 (ugen) `G.data = CONST; f(&G, CONST2, G.data)`: the constant is born in a t-temp and forwarded with `addu a2,tN,zero`; a target that materialises it straight into `$a2` (`lui a2; ori a2; sw a2,K(at)`) is NOT reachable by literal / assignment-as-arg / plain, `register` or int local / pointer-typed field / `register` third param / IDO 5.3 / volatile / address-of-member constant spellings (game_libs_func_00065EE4, 2026-09-09 agent-g)](#o1-a2-born-constant-negative-65ee4) -- _Also observed at -O1: a plain global-load argument (`G.base`) is evaluated AFTER `&G` (a0 first) while `G.base + 4` is evaluated before it; the target evaluates the plain load first (lui a1 before lui a0, lw a1 in the jal slot). volatile G pins call-2's a1-first order but adds a `lw a2`._
 - [26C6C (post, 90.42 -> EXACT 12/12): entry `or a2,a1,zero` + `sw a1,0x24(sp)` home with no `&a1` use = a `char` PARAMETER (IDO homes the narrow param and works on a copy); the standalone cc harness schedules the same body differently, so verify in-tree (2026-10-14 agent-c)](#char-param-home-copy-26c6c)
 - [358DC (post0b, 72.71 -> EXACT 24/24): forward `beq v0,1,L1; lui | beqz v0,L0; lui | b end; lw ra` two-way dispatch = `if (k == 1) goto L1; if (k != 0) return; goto L0;` (switch sorts 0-first, if/else-if gives bne fallthrough) (2026-10-14 agent-c)](#forward-two-way-goto-dispatch-358dc)
+- [29000 (post, 96.36 -> EXACT 11/11): a "t8/t9 vs t9/t0 ring-colouring cap" on a `lbu; ori K; sb` RMW of a single bit = a ONE-BIT BITFIELD set (`s->bit = 1`), which burns one extra ring temp; a plain `char |= K` numbers one temp lower (2026-10-14 agent-c)](#single-bit-bitfield-set-extra-ring-temp-29000)
+- [2831C (post, 95.67 -> EXACT 15/15): "multi-def web XOR per-arm jr" cap (3-way range lookup, last arm `addiu v1` + `jr; or v0,v1,zero`, others `jr; addiu v0`) = ONE result local assigned in if / else-if / else + a single `return r;` (2026-10-14 agent-c)](#single-result-local-if-chain-2831c)
+- [2DD58 (post, 92.5 -> EXACT 14/14): `sw a0` home + `or a2,a0` + `andi a0,a2,0xFF` in a 1-param wrapper = a `char` param (third application of the 26C6C rule; the copy goes to the first a-reg not used by the call args) (2026-10-14 agent-c)](#char-param-home-copy-26c6c)
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -27814,6 +27818,11 @@ jal delay) -- a false "scheduling cap". ~80 standalone shape variants (BB-split 
 volatile, unions, struct params) never produced the target order; the first in-tree build did. For tiny
 wrappers, build the NM object in-tree (`make non_matching_objects` + report) before grinding scheduling.
 Same `or a2,a1` + `sw a1` shape: next-door 26C9C (`a1 << 16`, short param candidate).
+Third application 2026-10-14 (agent-c): gl_func_0002DD58 (92.5 -> EXACT 14/14) -- `sw a0,0x18(sp); or a2,a0,zero;
+andi a0,a2,0xFF` in a 1-param wrapper = `void f(char a0) { g(0x82030000 | ((a0 & 0xFF) << 8), 1000); }`. The copy
+goes to the next FREE a-reg after the call args (a2 here, since a0/a1 are the call's args), so an `or aN,aM` copy
+that looks like a 3rd call arg is the same narrow-param signal. Standalone again hoisted the sll above `sw ra`;
+in-tree was exact on the first build.
 
 ## 65360: two zero registers = two distinct zero constants; store-block SOURCE order differs from the emitted order (gl_func_00065360 EXACT 58/58, 2026-10-14 agent-g) <a name="dual-zero-constants-source-order-65360"></a>
 
@@ -27847,3 +27856,52 @@ b end; lw ra` then L1 block (`b end; lw ra`) then L0 block falling into the epil
 `if (k == 1) goto L1; if (k != 0) return; goto L0; L1: ...; return; L0: ...;` (or the same with
 `goto E` / `E:;` instead of returns). The vtable call `(*(void (**)())(*(char **)&D + 0x58))(x, a0)`
 as ONE expression gives the target `lw t6 / lw t9 / jalr t9`; via `g`/`f` locals it is v0/v1.
+
+---
+
+## 29000: `lbu x; ori K; sb x` single-bit set whose temps are one ring slot too high = a one-bit BITFIELD, not `char |= K` (game_libs_func_00029000 EXACT 11/11, 2026-10-14 agent-c) <a name="single-bit-bitfield-set-extra-ring-temp-29000"></a>
+
+Target (no-frame leaf): `sw a1,0x48(a0); lw t6,0x50(a1); lbu t9,0x60(a0); lui at; lbu t7,5(t6); ori t0,t9,0x10;
+sb t7,0x30(a0); lwc1 f4,0x2050(at); sb t0,0x60(a0); jr ra; swc1 f4,0x6c(a0)`. The ring skips t8: the RMW byte
+lands in t9 and the OR result in t0. `a0->b60 |= 0x10` (unsigned char) emits the SAME instructions in the same order
+but numbers them t8/t9; the old NM wrap misread this as an unfixable REG_ALLOC_ORDER colouring cap (96.36).
+
+EXACT: declare the word at 0x60 as `unsigned int f0:3, bit:1, rest:28;` and write `a0->bit = 1;` (big-endian:
+the 4th bit from the MSB = 0x10 of the first byte, so IDO narrows to lbu/ori/sb). The bitfield insert lowers through
+one extra (eliminated) temp, which consumes t8 before the load. Statement order `b30 = ...; f6C = ...; bit = 1;`
+places the sb after the lwc1. Diagnostic: any `lbu/lhu; ori/andi; sb/sh` RMW whose temps sit exactly one ring
+slot past the "natural" numbering -> try a bitfield before calling it a colouring cap. Standalone harness reproduced
+it byte-exact; verified in-tree too.
+
+## 688F8: inlined derived/base ctor pair; local decl order picks the jal-delay spill slot (gl_func_000688F8 EXACT 26/26, 2026-10-14 agent-g) <a name="inlined-ctor-pair-decl-order-spill-slot-688f8"></a>
+
+Target shape (frame 0x20, unused `a0` homed at 0x20): `jal alloc(0x30); beqz v0,end; or a1,v0; bnez v0,store; or v1,v0; li a0,0x20; jal alloc; sw v0,0x18(sp); lw a1,0x18(sp); beqz v0,skip; or v1,v0; store: v1[7]=&D1; skip: a1[7]=&D2; end: return a1`. Old wraps read this as "paranoid double-check" and fought the frame/spill with volatile levers (capped at 80.46%). It is a cfront `new Derived` with the base ctor inlined: the base ctor tests ITS OWN `this` (a copy of p); IDO does not propagate `p != 0` into the copy, so the dead `alloc(0x20)` fallback is emitted and p (a1) is spilled across it in the jal delay.
+
+```c
+int *b; int *p;              /* b FIRST: spill slot sp+0x18; p first -> sp+0x1C */
+p = alloc(0x30);
+if (p == 0) goto end;
+b = p;
+if (b != 0) goto store;
+b = alloc(0x20);
+if (b == 0) goto skip;
+store: b[7] = (int)&D_00000000;
+skip:  p[7] = (int)&D_00000000_688f8;   /* distinct base-0 alias */
+end:   return p;
+```
+
+Levers, each load-bearing: (1) forward gotos -- the structured `if (b == 0) b = alloc(); if (b) b[7] = ..` form re-tests b after the merge (`or v1,v0` + extra `beqz v1`) and adds a `beqz zero` early-return; (2) two DISTINCT symbols for the two vtable stores -- one shared `&D_00000000` CSEs the lui/addiu into v0 and grows a branch-around; (3) declaration order of the two locals moves the spill slot by 4 (no frame change). Same-size near-misses with a jal-delay `sw v0,X(sp)` one slot off: permute local DECL order before reaching for volatile pads.
+
+---
+
+## 2831C: per-arm `jr` tail-dups PLUS one arm returned via `or v0,v1,zero` = a single result local assigned in an if / else-if / else chain (game_libs_func_0002831C EXACT 15/15, 2026-10-14 agent-c) <a name="single-result-local-if-chain-2831c"></a>
+
+Target: `lbu t6,1(a0); slt at,a1,t6; beql at,zero,L; lbu t7,2(a0); jr ra; addiu v0,a0,8; L: lbu t7,2(a0);
+addiu v1,a0,24; slt at,t7,a1; bnez at,E; nop; jr ra; addiu v0,a0,16; E: jr ra; or v0,v1,zero`. Earlier passes
+(ternary, goto-end, explicit 2-def webs, comma carriers, if(1)) all got EITHER the v1 web OR the per-arm `jr`
+tail-dups, never both, and the wrap was filed as a uopt phase-order cap.
+
+EXACT, first compile: `char *r; if (a1 < a0->lo) r = a0->rec[0]; else if (a1 <= a0->hi) r = a0->rec[1]; else
+r = a0->rec[2]; return r;`. Early `return`s are the WRONG source shape for this pattern: write the single-exit form
+and let IDO tail-duplicate the jr itself. Check this spelling first whenever one return arm carries a
+`move v0,vN` while its siblings compute straight into v0.
