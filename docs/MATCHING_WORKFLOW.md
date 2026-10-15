@@ -12096,6 +12096,11 @@ jumptable function, dump its tables and nearby rodata words.
   whole structural fix; the only colouring item was the tail ramp (write it on the field, no local - see the
   donor header).
 - gl_func_00002B94 (99.85 -> EXACT): see IDO_CODEGEN #struct-assign-through-arg-reg-reassoc-2b94.
+- gl_func_00003C0C (72.0 -> EXACT 107/107, agent-g run 61): one `lwc1 0xCF8(at)` = the 0.1f literal (RoData +0xCF8),
+  donor-pinned. Fresh donor decode matched on the third compile: re-read `p->slot` for every store after the first call,
+  `-2.0f - r * 2` (int 2 keeps `mul.s`), and the `lw 20(v0); addiu v0,v0,20; sw 0(v0)` counter is ONE pointer expression
+  `q = (s32 *)(chain + 0x14); *q += a1;` (a named intermediate for `chain`, or `((s32 *)g)[5] += a1`, folds 0x14 into the sw).
+  The old in-unit wrap's 72% was mostly K&R-cast calls; prototyped blank aliases ((obj,f32,f32) and f32-returning) fixed them.
 - **Landing a base-unit (game_libs.c) jumptable / float-literal function:** an in-unit compile can never bake the
   `%lo(.rodata)` word, so land it as an IDO 7.1 -O2 REPLACE_FUNC_BODY donor (`src/game_libs/game_libs_o2_<addr>.c`,
   added to the `C_FILES` filter-out list, `GAMELIBS_<addr>_DONOR` + `REPLACE_FUNC_BODY +=` on both game_libs.c.o
