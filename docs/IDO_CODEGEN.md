@@ -231,7 +231,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first (timproc twins CRACKED)](#addu-operand-order-is-ucode-shape-not-allocator--array-ixa-emits-base-first-flat-ptr-arith-emits-deeper-operand-first-timproc-twins-cracked) — _`typedef int Row[10]; Row *base; base[idx]` = addu rd,base,scaled; flat ptr/int arith = deeper-operand(scaled)-first. Cracked both twins to 100.0 after 862k failed permuter iters. Check target's operand order, pick the spelling; verify via zdbug:1. 2026-07-23: `p += expr` = 4th base-first spelling (plain/self-assign = scaled-first); same-var += webs coalesce colors — middle-web-in-own-temp target = coloring residual (1D870 95.1)._
 - [Empty-else `key = 0` arm: uopt hoists the else-arm zero above the beq (leaving `beq zero,zero` b-over-empty-else) AND keeps the var's web off the jal so it colors v0; the same zero as a plain statement after a call FLOATS above the jal and forces an s-reg (69B94 59.95->94.39, 2026-07-23)](#empty-else-zero-arm-69b94) — _linked-list walk: `if (node) {next=node[1]; key=node[0];} else {key=0;}` after the call = or v0,zero post-jal + b-over-else; `key=0;` before the if = or s0,zero pre-jal + s1-s3 cascade. Composes with if(1){bar=&node;bar=&next} address-taken barrier for memory-resident list cursors (32/36(sp) homes, per-use reloads). `next = self->head; node = next;` init order sinks node's home-store into the beq delay. Residual class: reloaded-cursor temp coloring v0 blocks the loop's else-hoist._
 - [Uncoalesced fetch-copy `or s0,v0,zero` in the loop-test delay (plain bne, nop-free) resists every copy-spelling — but the sibling 39EE4 vt dead-def lever + lowest-slot volatile pads still clear dispatch+frame (38DC0 89.5->95.4, 2026-07-30)](#uncoalesced-fetch-copy-cap-38dc0) — _n=node copy always coalesces to s0 (plain copy, dead if(0) defs on either side, fall-off-end int, explicit return node = trailing move, condition-embedded fetch, empty-else): 8 spellings probed. Same-name web reuse (node doubling as fn-ptr carrier) is the ONLY splitter but colors the tested web $a2 with copy-source guard uses (+1 insn). Composable wins: named vt + if(0){vt=NULL} + direct expression call = lw t9 BEFORE lh + jalr t9 on any vtable dispatch (not just 39EE4); 2 volatile pads declared LAST at function scope lift ALL homes +8 uniformly (frame-solver addendum: pads-at-END = global shift, pads-in-inner-block = shift only that block)._
-- [Unrolled-sum-loop kit: `q=src;src++` old-ptr-copy body (frees $a0 -> arg homes to 0(sp)); inline `len/4` bound = single CSE web (named n splits webs + blocks lui delay-slot hoist); destructive `sum=chk-sum` tail (97B4 BYTE-EXACT, 2026-07-23)](#unrolled-sum-loop-kit-old-ptr-copy-body-inline-bound-cse-single-web-destructive-tail-reuse-game_libs_func_000097b4-byte-exact) — _inline-expression bounds CSE to one temp web where a named var splits def+loop webs; fresh named tail temps renumber, destructive reuse pins; `key-(chk-sum)` inline reassociates._
+- [Named local vs inline call-arg expression swaps two s-reg colours at an identical emit position; strlen-in-for-test + stride local (gui B58 EXACT, 2026-10-15 agent-g)](#inline-call-arg-div-swaps-sreg-colour-b58)
+- [Unrolled-sum-loop kit: `q=src;src++` old-ptr-copy body (frees $a0 -> arg homes to 0(sp)); inline `len/4` bound = single CSE web (named n splits webs + blocks lui delay-slot hoist); destructive `sum=chk-sum` tail (97B4 BYTE-EXACT, 2026-07-23)](#unrolled-sum-loop-kit-old-ptr-copy-body-inline-bound-cse-single-web-destructive-tail-reuse-game_libs_func_000097b4-byte-exact) — _inline-expression bounds CSE to one temp web where a named var splits def+loop webs; fresh named tail temps renumber, destructive reuse pins; `key-(chk-sum)` inline reassociates. Addendum B958: named `n` bound suppresses the unroll entirely; leaf s0 pointer = `register` param._
 - [LONGEST-SPAN LR LANDS IN AN ARG REGISTER (a0), not v0 — function-tail base-pointer cap + isop-mode-check %-mover (func_0001304C pass 15)](#longest-span-lr-lands-in-an-arg-register-a0-not-v0--the-function-tail-base-pointer-cap-and-the-isop-mode-check-mover-that-survives-it-func_0001304c-pass-15) — _a base ptr loaded once + held across the whole tail = longest LR = lowest save/span priority = colored LAST = lands in a0 (derefs grab v0/v1 first); a build coloring it into v0 rebases the whole tail = arg-register-targeting cap (no pseudo-order lever, permuter floors). BUT inlining `mode == N` deref into the compare (isop → Uneq swap → bne const-first) is a real monotonic %-mover that stacks anyway (92.5→92.61)._
 - [Value-returning lookup with -1 default: if-return (not ternary) frees v0 → base lands in v1; + array-index + split-pointer levers (game_libs_func_00027300)](#value-returning-lookup-with--1-default-use-ifcondreturn-x-return--1-not-a-ternary-to-free-v0-for-the-return-pushing-the-held-base-into-v1--plus-array-index--split-pointer-levers-game_libs_func_00027300-body-byte-exact) — _`return cond ? load : -1` near-misses with the body shifted one v-reg (base in v0, result moved). Three levers (27300 12→0 body diffs): (1) `if(cond){return load;} return -1;` reserves v0 for the return so the held strided base colors into v1, byte loads straight to v0; (2) array-index `((int*)(p+OFF))[i]` gives addu base-first; (3) split chained inner deref into a named local → IDO reuses the dead arg reg for the load. CAVEAT: cross-fn tail-merge (-1 path beql-branches into the NEXT symbol's jr) is NOT C-reproducible — body can be byte-exact but the two-symbol split blocks a per-symbol byte_verify land; keep INCLUDE_ASM._
 - [STRUCT-BY-VALUE MARSHALLING: the 4-byte-struct lever pack (44F4 79.57 -> 100.0)](#feedback-ido-struct-by-value-marshalling-lever) — _`sw a2,8(sp)` in jal delay = struct-by-value arg homed to its own arg slot; `addiu sN,sp,K` held in s-reg = struct local (ILDA web colorable — char* &local never is); store-direct+load-via-pointer pair = struct copy; `bne base,-K` = `if (base+K == NULL)`; iter alloc-fail can skip to NEXT iter, not epi._
@@ -14301,6 +14302,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [44EDC (post0b, 98.29 -> EXACT 167/167): teardown driver "s-reg rotation + v0/v1 swap + lui a0 vs lui s0" = index arg0 directly in both counter loops, write the vtable-slot load first, and route the last call arg through the named s0 local (agent-c 2026-10-15)](#named-sreg-local-colours-lui-temp-44edc) -- _a `lui sN; lw aX,off(sN)` feeding a call = the load was assigned to a named sN variable first; a pointer cursor in the wrong s-reg = index the base by the counter instead._
 - [295BC (post, 98.15 -> EXACT 114/114): "t2 vs t3 on the else-arm `lb`" = a signed 1-bit bitfield read for the byte sign test, plus `<< 8 << 1` instead of `<< 7 << 1 << 1`; the .s carried two leading zero pad words (agent-c 2026-10-15)](#bitfield-sign-read-shift-chain-ring-295bc) -- _sign tests and shift chains each have a ring cost; a leading all-zero pair in the .s is the predecessor's pad (SUFFIX_BYTES_FORCE on it + expected/ symtab edit)._
 - [38830 (post0b, 84.6 -> EXACT 77/77): "switch-lowering order cap" on a goto dispatch chain = the last test is `if (tag != 2) return; goto L2;` (agent-c 2026-10-15)](#goto-chain-last-test-inverted-keeps-arm-last-38830) -- _target ends the compare chain with `beql last; b epilogue` and the last arm placed at the end? Invert the last test so IDO does not pull that arm up as the fall-through._
+- [5591C (post0b, 96.70 -> EXACT 88/88): "uopt refuses the guarded a3 home reload as the struct-copy induction base (`or t2,v0,zero`)" = read the parameter THROUGH its home slot, `((T **)&a0)[3]`, in a function that already takes `&a0`; then store-order swap for a t5/t6 pair (agent-c 2026-10-15)](#param-read-via-home-slot-coalesces-copy-base-5591c) -- _a guarded `if (p) s = *p;` block-copy with an extra `or tN,v0,zero` before the copy loop, in a function whose params are all homed (because `&a0` is taken) = spell the param read via the home-slot array._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -16303,6 +16305,32 @@ pre-loop, `blez n` guard):
    chk - sum`) gets its own reg and shifts the whole tail's temp numbering.
    Also: `key - (chk - sum)` written inline gets REASSOCIATED to
    `(key - chk) + sum`; the named destructive form pins the tree.
+
+**Addendum (2026-10-15 agent-g, gl_func_0000B958 25.5 -> 94.2 NM):** the same kit drives
+a two-array EQUALITY predicate (`for (i = 0; i < a3/4; i++) { y = a2; x = a1; a2++; a1++;
+if (*x != *y) return 0; } return 1;`). Three extra facts: (1) a named `n = a3/4` local
+does not just split webs -- it SUPPRESSES the x4 unroll outright (24-insn plain loop); the
+inline bound unrolls. (2) An s0 pointer inside a LEAF (frame -8, `or s0,a1,zero`) = a
+`register` PARAM on that pointer; `register` on the other pointer or on a local copy colors
+the wrong one. (3) `*a1++ != *a2++` (no old-ptr copies) materializes xor/sltu compares
+instead of `beq t,t`. Residual is a single first-copy delay-slot swap that ~30 statement /
+decl / loop-form permutations never move.
+
+<a id="inline-call-arg-div-swaps-sreg-colour-b58"></a>
+## Named local vs inline call-arg expression swaps two s-reg colours even when the emit position is identical (gui_func_00000B58 45.8 -> EXACT, 2026-10-15 agent-g)
+
+Glyph-string loop: `s5 = (h << 10) / h;` at the top of the non-space arm, later passed as the
+last arg of a 7-arg call. Everything was byte-exact except s4/s5 swapped between that quotient and
+a `unsigned char gi = idx;` narrowed copy (both live across two calls). Seven decl orders, block
+scoping, `int gi = idx & 0xFF`, and moving `gi =` around never moved it. Writing the quotient
+INLINE as the call argument (`f(..., (w << 10) / w, (h << 10) / h)`) fixed it: IDO STILL emits the
+div + break 7/6 guards at the top of the arm (same position as the named form), but the value is
+now an expression temp rather than a named candidate, so its colouring priority drops below `gi`.
+Rule: when two call-spanning values have the right code and swapped s-regs, try un-naming one
+(inline its expression at the use) before touching decl order. Same function also: a strlen bound
+re-called in the `for` test (`i < (unsigned)strlen(a3)`) = per-iteration jal + `sltu` with the
+pointer param homed/reloaded while a copy walks; a multiply by a `stride = 0x14` LOCAL = held s8 +
+multu instead of shift-adds.
 
 ## ADDU OPERAND ORDER IS UCODE SHAPE, NOT ALLOCATOR — array-IXA emits base-first; flat ptr-arith emits deeper-operand-first (timproc twins CRACKED)
 
@@ -23988,6 +24016,8 @@ source-spelling lever, independent of TU position.
 
 ## GUARDED struct block-copy: or-copy induction cap + the 43pp shape kit (gl_func_0005591C 53.7->96.7, 2026-08-22 agent-g) {#guarded-struct-copy-induction-orcopy-5591c}
 
+> **SOLVED 2026-10-15 (agent-c): not a cap.** Read a3 through the home slot, `((T **)&a0)[3]`, and the reload coalesces with the copy base; see [#param-read-via-home-slot-coalesces-copy-base-5591c](#param-read-via-home-slot-coalesces-copy-base-5591c).
+
 Target shape (88 insns): setup call, 5 zeroed-global clears, a v0-accumulated
 guard (`v0=0; if(!a0) v0=1; else if (*a0!=0x3E8) v0=1; if (v0) call(...)`),
 then `if (a3) s = *a3;` (0x4C struct, IDO 3-word-unrolled block copy into
@@ -28936,6 +28966,12 @@ predecessor as an all-zero pad: `SUFFIX_BYTES_FORCE := gl_func_00029494=0x000000
 NON_MATCHING twin). expected/ metadata only: `scripts/elf-symtab-edit.py in.o out.o gl_func_00029494::0x130
 game_libs_func_000295BC:0xcbb4:0x1c8`, then check that `.text` and `objdump -r` are unchanged.
 
+Same recipe closed game_libs_func_0005AFB0 (post0b, 1 leading pad word, body already byte-exact): the old
+"1-word pad has no legal emission host" disposition (2026-06-10) predates SUFFIX_BYTES_FORCE on matched-C
+predecessors -- `gl_func_0005AF64=0x00000000` plus `elf-symtab-edit.py ... gl_func_0005AF64::0x50
+game_libs_func_0005AFB0:0x26b58:0x20`. Remember the NM build grows by the pad too: re-probe the unit clip.
+Grep for other `leading nop` / `leading pad` NM wraps whose body is already exact.
+
 ## Goto dispatch chain: write the LAST test inverted to keep its arm at the end (gl_func_00038830 84.6 -> EXACT, 2026-10-15 agent-c) <a name="goto-chain-last-test-inverted-keeps-arm-last-38830"></a>
 
 Target: `beq tag,12,L12; beq 13,L13; beq 14,L14; beql tag,2,L2 (delay = L2's first load); b epilogue`, then
@@ -29029,3 +29065,27 @@ from idx; call blank(&tab[idx], min, sec, hundredths, arg3); }` -- the A1B0 ms s
    `&a0[idx]` and `a0 + idx` (typed Entry8 *) both colour the pair the other way (t5 reload / t2 shift);
    the byte-offset spelling `(char *)a0 + idx * 8` (and `<< 3`) gives the target colours. Same class as
    the A1B0 / A4D0 siblings: address arithmetic spelling, not decl order, moves this t-pair.
+
+## Param read through its home slot lets uopt use the reload as the copy-loop base (gl_func_0005591C 96.70 -> EXACT, 2026-10-15 agent-c) <a name="param-read-via-home-slot-coalesces-copy-base-5591c"></a>
+
+Target (game_libs post0b 0x5591C, 0x160): `s.unk00 = &a0` (so a0-a3 are all homed at 176..188(sp) and every
+param use is a home reload), then `if (a3) s = *a3;` -- a 0x4C-byte struct copy lowered to IDO's 3-word
+unrolled copy loop -- then the struct passed by value.
+
+1. Target: `lw t9,188(sp); ...; beqz t9,skip; ...; addiu t3,t9,72; loop: lw t2,0(t9); addiu t9,t9,12 ...`
+   -- the a3 reload is tested AND used destructively as the induction pointer. Every spelling with the
+   plain param name (`if (a3) s = *a3`, `a3->inner` through a wrapper struct, `while (a3) {...; break;}`,
+   `goto skip`, a copied local `q = a3`, `(q = a3) != 0`, `register`, int a3 + cast) emits
+   `lw v0,188(sp); beqz v0; or t2,v0,zero` -- uopt keeps the param's reload in v0 and copies it into a
+   fresh induction register (+1 insn, cascading t-ring renumbering through both copy loops).
+2. Fix: read the parameter through the home-slot array the function already addresses:
+   `if (((Gl5591CArg **)&a0)[3] != 0) s = *((Gl5591CArg **)&a0)[3];` -- the load is now an ordinary
+   memory expression (CSE'd once), not the param variable, and it coalesces with the copy base (lw t9,
+   no copy). Plausibly the original was a varargs-style read (va_list off &a0).
+3. The leftover `t6=1 / t5=a2` swap (the constant 1 hoisted above the guard vs the a2 reload) closed by
+   moving `s.unk38 = 1;` to after `s.unk14 = a2;` -- statement order of independent stores picks the
+   pair's colours.
+
+Recognition: a function that takes `&a0` (all params homed) and whose guarded block-copy has a stray
+`or tN,vX,zero` right before the copy loop. Try the `((T **)&a0)[n]` spelling for that param first.
+

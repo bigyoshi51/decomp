@@ -10473,6 +10473,15 @@ EXPECTED_BASELINE=1`, `cp` that to `expected/`, restore the `.c`, `rm` the
 the new baseline's `.text` is byte-identical to the old one and `readelf -sW`
 differs only in the merged symbols.
 
+**Strip gotcha (2026-10-15 agent-g, game_libs_o0_949C):** `strip_decomp_in_file` also
+rewrites a function NAME that appears inside a block comment ahead of its definition
+(a header note like "now also holds gl_func_0000959C, ...") -> `cfe: Unterminated
+comment` and the baseline make fails. For a tiny unit just write the pure-INCLUDE_ASM
+file by hand (one INCLUDE_ASM line per symbol), build it with EXPECTED_BASELINE=1,
+then restore. Also: moving a unit's start by a non-16 multiple can drop the trailing
+section-alignment pad word from the INCLUDE_ASM baseline (tail 0x565c -> 0x5580, not
+0x5584): harmless, the pad word belongs to no symbol and the TRUNCATE no-ops.
+
 **Fourth worked case (2026-09-05, agent-c): game_libs_func_00028E14 -- the
 scanner's "A" was itself a tail; the chain was FOUR symbols, and the compare
 base register decides hoisting.** `find-beql-dup-misplits.py` reported
