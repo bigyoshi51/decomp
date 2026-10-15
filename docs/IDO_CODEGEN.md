@@ -28971,6 +28971,11 @@ Same recipe closed game_libs_func_0005AFB0 (post0b, 1 leading pad word, body alr
 predecessors -- `gl_func_0005AF64=0x00000000` plus `elf-symtab-edit.py ... gl_func_0005AF64::0x50
 game_libs_func_0005AFB0:0x26b58:0x20`. Remember the NM build grows by the pad too: re-probe the unit clip.
 Grep for other `leading nop` / `leading pad` NM wraps whose body is already exact.
+Also closed game_libs_func_0004DD0C (2 pad words + `void f(int a0) {}` = `jr ra; sw a0,0(sp)`; pad on
+gl_func_0004DCD4). Quick finder: list report.json NM functions whose `.s` first word is `0x00000000`.
+Gotcha: replacing an INCLUDE_ASM with C of the same total size still moved the post0b NM build by -0x18 (six
+stray zero words inside the far-downstream NM gl_func_00061478 vanished, an asm-processor block artifact), so
+the clip step failed with ".text smaller than requested". Always re-probe the clip from the rebuilt NM object.
 
 ## Goto dispatch chain: write the LAST test inverted to keep its arm at the end (gl_func_00038830 84.6 -> EXACT, 2026-10-15 agent-c) <a name="goto-chain-last-test-inverted-keeps-arm-last-38830"></a>
 
