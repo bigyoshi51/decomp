@@ -14328,6 +14328,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso E91C (98.98 -> EXACT 118/118): a `move a2,v1` copy of a CSE'd mask into its arg register = the arg is a no-op-CAST copy `(unsigned)(w & 0x20)` of the value the `!= 0` test uses; a uniform "global renumber" can be a named word local that should be inlined at every use, plus one int local REUSED for later short-lived values to pull them into a1 (agent-g 2026-10-15)](#noop-cast-arg-copy-and-inline-word-e91c)
 - [game_uso D458 (98.61 -> EXACT 90/90): `subu a1,s0,s0; addiu a1,a1,K` = a same-base POINTER DIFFERENCE `(char *)p + A - ((char *)p + B)` (IDO folds A-B but not p-p; `x-x` / `x*0` fold to li); a "HI16-only unpaired reloc cap" is just `(char *)&sym + off` with the offset baked into the addiu (agent-g 2026-10-15)](#pointer-difference-self-subu-d458)
 - [game_uso 7ACC (98.96 -> EXACT 84/84): a value in an ARG register (`lw a1,..`/`lw a2,..`) where the build has a ugen temp (t3/t9) = a REUSED named local or a DEAD PARAM reassigned (each web keeps the var's colour); taking a1/a2 that way pushes a long-lived call result from a2 to t0 and renumbers the tail temps; decl order fixes its call-spill slot. Also 7448 natural-form probe (agent-g 2026-10-15)](#reused-local-webs-and-dead-param-colour-7acc) -- _tell: the target's temps skip one t-register (t2.. where build has t1..) and the result is copied `or t0,v0,zero` instead of `or a2,v0,zero`._
+- [game_uso 6CF0 (97.64 -> EXACT 102/102): a `volatile` reload used only to defeat CSE moves the param-web SPLIT point; an int-typed read (`(char *)a0[0x30/4]` vs the earlier `*(char **)`) also stays out of CSE and leaves the split alone; a dead `addiu v0,v0,K` after folded `K(v0)` reads = `p += K` placed BEFORE reads through p (agent-g 2026-10-15)](#type-split-cse-and-dead-bump-6cf0)
+- [game_uso FD04 (97.08 -> EXACT 50/50): a single-use `addiu aN,v1,K` + `lwc1 0x10(aN)` that refuses to fold = a base local spelled `(float *)(*(char **)(s0 + 0xB4) + K)` with the LOAD INLINE (a named `base2 + K` folds); the same spelling dropped the do-while(0) BB-split hacks and fixed a store-order 'scheduler tie' (agent-g 2026-10-15)](#inline-load-base-plus-k-no-fold-fd04)
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29605,3 +29607,40 @@ to word 3; every C position gives v0 (def after the 0x6F8 base) or a1 (def insid
 block-2/3 base to a2 and q to a3). 34/36 words. Tried: positions 0..18, register/float*/self-alias/param
 forms, one or two `if (1) {}` / label / goto BB splits at every position, dead early defs of t2/q. Next
 idea: an fc spelling whose web is created AFTER q while its def stays early.
+
+## Defeat CSE with a TYPE change, not `volatile` (it moves the param-web split); dead `addiu v0,v0,K` = bump-then-read-through (game_uso_func_00006CF0 97.64 -> EXACT, 2026-10-15 agent-g) <a name="type-split-cse-and-dead-bump-6cf0"></a>
+
+Two cells were left in the wrap, both labelled "not C-reachable":
+
+1. **Param-web split point.** The target reads `a0->0x30` twice (`lw t7,48(a0)` for a struct copy, then
+   `lw v0,48(a0)`). The wrap forced the second load with `*(char * volatile *)(a0 + 0x30)`. That kept the
+   load, but uopt then split the a0 web (copy `or a2,a0,zero`, a2 spilled to a0's home across the calls)
+   just before the volatile read, so stage 2 and the 0x6C test read via a2. The target splits after the 0x6C
+   test. **Fix:** read the second one with a different type, `p = (char *)a0[0x30 / 4];` (an int load,
+   while the first is `*(char **)`). IDO's CSE doesn't merge the two, the second lw stays, and the split
+   falls at the branch as in the target. `*(int *)`, `*(unsigned int *)` and `a0[...]` on either side
+   all work. Prefer this to `volatile` whenever a duplicate load is the only reason for the qualifier.
+2. **Dead `addiu v0,v0,0x318`** after three loads already folded to `792/796/800(v0)`. Writing
+   `p += 0x318;` AFTER the reads gets DCE'd. Put it BEFORE them and read through the bumped pointer:
+   `p += 0x318; rx = *(float *)(p + 0) * s; ry = *(float *)(p + 4) * s; ...` plus the existing zero-emission
+   `if (p) {}`. Copyprop folds the reads back to `0x318(v0)`, and the bump def survives as the dead
+   addiu. Without the `if (p) {}` you get 16 diff lines.
+
+## A base local `= *(T **)(p + OFF) + K` with the load INLINE keeps `addiu rB,rL,K` + `0x10(rB)` unfolded; a named intermediate folds (game_uso_func_0000FD04 97.08 -> EXACT, 2026-10-15 agent-g) <a name="inline-load-base-plus-k-no-fold-fd04"></a>
+
+Target: `lw v1,0xB4(s0); addiu a1,v1,0x788; addiu a0,v1,0x31C; lwc1 f4,0(a0); lwc1 f6,16(a1); ... lw v0,0xB4(s0);
+addiu v0,v0,0x2FC; swc1 f10,12(v0); swc1 f0,8/4/0(v0)`. The 97.08 wrap went through named reload locals
+(`base2 = *(char **)(s0 + 0xB4); base_788 = (float *)(base2 + 0x788);`). IDO folded the single-use 0x788 base
+into `lwc1 f6,0x798(v1)`, and three do-while(0) blocks still left the 1.0f store sinking below the zero stores
+("ugen store-scheduler tie").
+
+Fix: no intermediate. Write each base as `base_K = (float *)(*(char **)((char *)s0 + 0xB4) + K);`. The 0xB4
+load is CSE'd between the first two, the bases stay as `addiu` into arg registers with the 0x10 offset on the
+access, and the third one becomes `lw v0; addiu v0,v0,K` in a single register. The do-while(0) blocks were then
+not needed (removing them is what put the 1.0f store first). The zero stores have to be written high-to-low
+on separate lines; the same three on one line schedule in a different order. Same rule as the exact 74D8
+sibling (`t = *(char **)(a0 + 0x30) + K; *(float *)(t + 0x10) = ...`). **Recognition:** `addiu rB,rX,K`
+followed by a single small-offset access `0x10(rB)`, where folding would be legal, means `load + K` was
+assigned to a local directly from the load expression. Check this before calling it a fold cap (FC34's
+a3 = +0x770 turned out to be an extra call arg instead; tell the two apart by whether rB is still live
+at a jal).
