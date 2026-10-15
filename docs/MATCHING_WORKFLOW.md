@@ -272,7 +272,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Lone 1-word pad INCLUDE_ASM emits 2 words (+4 shift): fold stray nops into a neighbor's .s tail; caller-set-$t6 'cap' = stolen-prologue misread (3rd instance); sub-55 libultra identity grep kit; 27784=osAiSetNextBuffer via per-site-extern %hi-CSE-kill (277E0 = its tail, 4th caller-set retraction); refresh-expected-baseline.py: no flags + run AFTER .s merges; non-hw 5.3-fingerprint sweep: 71384=osPfsInitPak (pfs sibling family = blank jals in 70xxx-71xxx); pfs vein RESOLVED 2026-07-30: 71384/71624/717CC landed 5.3 -O1 donors, 71304/71144 = game code (size-coincidence trap)](#one-word-pad-include-asm-emits-two-words)
 - [post0b clip re-probe must be SPLICE-AWARE: probe the post-replace-body .o (make prints true .text size), not a standalone compile (4C5E4, 2026-08-22 agent-g)](#clip-reprobe-splice-aware) — _Donor splices grow .text before the clip; standalone probe truncated sentinel 62F08 to 30%._
 - [Pinned-jal decode audit: jal-vs-call-count scanner, 4 FP classes (alias-externs, macros, loop rotation, jalr), one genuine find 71E0 63.1->84.5 via (u32)dst>0U alloc-fallback restore; sweep CLOSED (agent-h 2026-08-22)](#pinned-jal-decode-audit)
-- [game_libs base-unit `lui at,0; lwc1 fN,0xE2C(at)` next to a jumptable offset = a FLOAT LITERAL in the USO .rodata, not `&D+0xE2C` global; read the switch tables AND literals from section 7 before trusting an old decode (76F0 88.80->92.47, agent-g 2026-10-15)](#game-libs-rodata-literals-and-tables-76f0) — _RoData file offset = lw/lwc1 imm + 4; three &D+0 float sites that each re-materialize `lui/addiu v0` = three distinct globals; case->arm mapping from the table fixed a mis-assigned switch1/switch2 arm._
+- [game_libs base-unit `lui at,0; lwc1 fN,0xE2C(at)` next to a jumptable offset = a FLOAT LITERAL in the USO .rodata, not `&D+0xE2C` global; read the switch tables AND literals from section 7 before trusting an old decode (76F0 88.80->92.47; 7344 77.5->EXACT, 2B94 EXACT via `<fn>_rodata` donor pin, agent-g 2026-10-15)](#game-libs-rodata-literals-and-tables-76f0) — _RoData file offset = lw/lwc1 imm + 4; three &D+0 float sites that each re-materialize `lui/addiu v0` = three distinct globals; case->arm mapping from the table fixed a mis-assigned switch1/switch2 arm._
 
 
 ---
@@ -12088,4 +12088,20 @@ for 76F0 value - 0x1BD5C) showed the old wrap had a switch1 arm hung off switch2
 LAST entry of some tables (unrelocated word); read the raw words for those. Net
 88.80 -> 92.47 with no colouring work. Before grinding colouring on any game_libs
 jumptable function, dump its tables and nearby rodata words.
+
+**Follow-ups (agent-g run 60, 2026-10-15): two base-unit EXACTs on this lever.**
+- gl_func_00007344 (77.52 -> EXACT 225/225): table at RoData +0xDE8 = 0x7380, 0x764C, 0x746C, 0x74F0,
+  0x75E4, 0x7380, 0x7560 for cases 0..6 (value - 0x1466C). Case 1 is the post-switch address (NO arm), and
+  the old wrap had hung 1/6 on the case-2 arm and shifted 2/3/6. Rewriting the labels from the table was the
+  whole structural fix; the only colouring item was the tail ramp (write it on the field, no local - see the
+  donor header).
+- gl_func_00002B94 (99.85 -> EXACT): see IDO_CODEGEN #struct-assign-through-arg-reg-reassoc-2b94.
+- **Landing a base-unit (game_libs.c) jumptable / float-literal function:** an in-unit compile can never bake the
+  `%lo(.rodata)` word, so land it as an IDO 7.1 -O2 REPLACE_FUNC_BODY donor (`src/game_libs/game_libs_o2_<addr>.c`,
+  added to the `C_FILES` filter-out list, `GAMELIBS_<addr>_DONOR` + `REPLACE_FUNC_BODY +=` on both game_libs.c.o
+  targets) with `<fn>_rodata = <the lw/lwc1 immediate>` appended to undefined_syms_auto.txt; the host keeps a tiny
+  placeholder body. game_libs.c's expected/ needs NO refresh: its slice for the function is the INCLUDE_ASM words, and
+  the build differs only at the reloc-offset words (objdiff 100, ROM cmp byte-identical). The four 2B94 literals
+  landed in the donor's .rodata at +0..+0xC in first-use order, matching the USO's 0xCB8..0xCC4 - check the donor's
+  `.rodata` order against the target immediates before pinning one base.
 
