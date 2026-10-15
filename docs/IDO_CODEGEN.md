@@ -14320,6 +14320,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [6280C (post0b, 56.7 -> EXACT 56/56): three webs rotated across a3/a2/v1 (scanner "a3 &0xffff" was a plain local) = a spilled `sw aN` before a jal with nothing setting aN is an EXTRA assert argument; passing `lo` pins it to a2 (agent-c 2026-10-15); 2nd instance 4D3E4 78.1 -> EXACT + `call-shape-scan.py --spill` flags the pattern](#spilled-arg-reg-is-extra-assert-arg-6280c) -- _rotation, not a coloring cap._
 - [2FB74 (post, 97.0 -> EXACT 612/612): one local reused by several switch cases is ONE web set; splitting the case-39 use into its own local undid a v/c/b rotation (a2/v1/a3 -> a3/a2/v1) that the --spill scanner had pinned on an extra arg; a named test local after an intervening store became a v0 global web (inline the test); `p = &global` inside the inner arm keeps `lui/addiu` unfolded (agent-c 2026-10-15); reverse lever 5B3E0 (post0b, 77.7 -> EXACT): reusing a loop cursor and a u32 header local for later pointers fixed v0/v1 and the spill slot](#per-case-local-split-rotation-2fb74) -- _split or merge locals before adding call args._
 - [Int-returning blank callee defines $v0 at the call, so a local live across it cannot colour v0: use a VOID blank alias; read order decides store-forward vs reload (gl_func_00037BEC post0b 67.5 -> EXACT, agent-c 2026-10-15)](#void-alias-frees-v0-across-call-37bec) -- _target spills a local around a call and reloads it into v0, build uses v1: retype that call void._
+- [A spilled local RE-STORED to its own home before a later call (`sw v1,60(sp)` with no new def) = a BB boundary between the calls: `if (1) { ... }` around the later call (gl_func_0003E868 post0b 61.3 -> EXACT, agent-c 2026-10-15)](#bb-break-respill-3e868) -- _also: a jal-0 result that is never used means the object is the earlier call's result._
 - [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
@@ -29878,4 +29879,18 @@ local `lst` is spilled around the third call and comes back in **v0**. The build
   Things that did NOT stop the forward: `if (1) {}` around the read or the store, int/char* type split, struct-typed
   field, array-index spelling, a merged local carrying the call2 result.
 - Both levers are needed together: with the int blank, `lst` first still forwards (v0 stays busy, so n copies it).
+- Second instance, gl_func_0002722C (post, 54.9 -> EXACT): a state byte spilled across an ARG-LESS cb came back in v1 (target v0)
+  and the &D base took a3 (target v1); calling the cb through the existing void blank `gl_func_00000000_void` fixed both.
+  Same fn: `int state` (not `unsigned char`) dropped the frame from 0x28 to 0x20.
+
+## A spilled local stored to its home a second time = BB boundary before the later call (gl_func_0003E868 61.3 -> EXACT, 2026-10-15 agent-c) <a name="bb-break-respill-3e868"></a>
+Target: `jal 0; sw v0,60(sp)` (spill obj), `lw v1,60(sp)` after the call, then later `sw v1,60(sp)` AGAIN right before the
+next `jalr`, with no new value in between. The build stored once and only reloaded.
+- uopt places caller-save spill code per basic block. Inside one BB it sees the home already holds the value and drops the
+  second store. Wrap the later call (and its setup) in `if (1) { ... }`: zero code, new BB, and the second store comes back.
+  A second variable (`obj = inter;`) also gives two stores, but to two different homes, and the return web moves to t0.
+- Same fn: the `jal 0` result was never used. The object returned is the first `jalr` result (`obj = vt->fn(..); cb(a1, obj);`),
+  not the cb's return. Read the reloads (`lw v1,60(sp)` from the slot written in the jal delay) before trusting a sketch.
+- Frame layout came from unreferenced arrays in declaration order: `char *obj; char pad1[4]; int stk[2]; char pad2[0x14];` put obj
+  at 0x3C, a dead word at 0x38, stk at 0x30 (see #unreferenced-array-first-decl-frame-pad-33228).
 
