@@ -14316,6 +14316,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [2A014 (post, 75.9 -> EXACT 26/26): entry `sw a1,home; andi a1,a1,0xff` = an `unsigned char` param narrowed IN PLACE (a1 not passed on); a ring that starts at t7 after it = folded `(unsigned short)v` cast on the table byte; scanner "missing a1" was the entry narrowing, the calls take only the pass-through a0 (agent-c 2026-10-15)](#uchar-param-inplace-narrow-ushort-burn-2a014) -- _`andi a1,a1` (not `andi t6,a1`) plus a home store means the param itself is u8; `a1 & 0xFF` in the index drops the home store._
 - [1EE78 (post, 83.5 -> EXACT 42/42): K&R `u16` param narrowed IN PLACE (`sw a3,home; andi a3,a3,0xffff; bnez a3`) only under `if (!a3)` -- `a3 == 0`, `a3 <= 0`, casts and masks all narrow into t0/v1; plus Gfx-pair `dl++` post-increments and one-line pair statements (agent-c 2026-10-15)](#knr-u16-not-test-inplace-narrow-1ee78) -- _the scanner's "missing a3" at the call was the entry narrowing, not an argument._
 - [2AA30 (post, 82.5 -> EXACT 65/65): a store sitting in a `bltz` (non-likely) delay slot runs on BOTH paths, so the C does the store BEFORE the test (`o->h8--; if (o->b29) return;`); that is also why `addiu t7,v1,-1` fills the earlier `bnez` slot. Same fn: post-call `or a1,v0,zero` before a `-1` test = the result is the NEXT call's a1 (agent-c 2026-10-15)](#store-in-nonlikely-delay-slot-runs-first-2aa30) -- _decrement after the latch test sinks the `addiu` and leaves a nop._
+- [2BAAC (post, 84.9 -> EXACT 43/43): u8 param passed on to a call stays in a1 only if the callee is PROTOTYPED with an `unsigned char` param (K&R / int prototype copy op into s0 and grow the frame); `beqz zero` arms all landing on the set-bit block = shared fall-through tail with an early `return` in the clear arm; u8 bitfield store burns one ring slot vs `|= 8` (agent-c 2026-10-15)](#uchar-prototype-keeps-param-in-a1-2baac) -- _scanner false positive: `andi a1,a1` + home store, then `or v0,a1` copy for the tests._
+- [6280C (post0b, 56.7 -> EXACT 56/56): three webs rotated across a3/a2/v1 (scanner "a3 &0xffff" was a plain local) = a spilled `sw aN` before a jal with nothing setting aN is an EXTRA assert argument; passing `lo` pins it to a2 (agent-c 2026-10-15)](#spilled-arg-reg-is-extra-assert-arg-6280c) -- _rotation, not a coloring cap._
 - [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
@@ -14325,6 +14327,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso FC34 (97.96 -> EXACT 52/52): a "single-use base+K that refuses to fold" (`addiu a3,v1,K` hoisted above a branch, then `lwc1 0x10(a3)`) held in an ARG register across a jal = an extra call argument; after a by-value Pair2 (a1/a2) the next word is a3 -- call through a prototyped zero-address alias with the extra param (agent-g 2026-10-15)](#extra-arg-after-pair2-a3-base-fc34) -- _also D288 negative: splitting a value's web at a call (v1 before / reload into a3 after) is not reached by copies, re-reads, block memory locals or arg-order changes._
 - [game_uso E91C (98.98 -> EXACT 118/118): a `move a2,v1` copy of a CSE'd mask into its arg register = the arg is a no-op-CAST copy `(unsigned)(w & 0x20)` of the value the `!= 0` test uses; a uniform "global renumber" can be a named word local that should be inlined at every use, plus one int local REUSED for later short-lived values to pull them into a1 (agent-g 2026-10-15)](#noop-cast-arg-copy-and-inline-word-e91c)
 - [game_uso D458 (98.61 -> EXACT 90/90): `subu a1,s0,s0; addiu a1,a1,K` = a same-base POINTER DIFFERENCE `(char *)p + A - ((char *)p + B)` (IDO folds A-B but not p-p; `x-x` / `x*0` fold to li); a "HI16-only unpaired reloc cap" is just `(char *)&sym + off` with the offset baked into the addiu (agent-g 2026-10-15)](#pointer-difference-self-subu-d458)
+- [game_uso 7ACC (98.96 -> EXACT 84/84): a value in an ARG register (`lw a1,..`/`lw a2,..`) where the build has a ugen temp (t3/t9) = a REUSED named local or a DEAD PARAM reassigned (each web keeps the var's colour); taking a1/a2 that way pushes a long-lived call result from a2 to t0 and renumbers the tail temps; decl order fixes its call-spill slot. Also 7448 natural-form probe (agent-g 2026-10-15)](#reused-local-webs-and-dead-param-colour-7acc) -- _tell: the target's temps skip one t-register (t2.. where build has t1..) and the result is copied `or t0,v0,zero` instead of `or a2,v0,zero`._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29534,3 +29537,71 @@ cb takes `flags` as a 3rd arg (`or a2,s1,zero`; flags then lives in s1 and is
 never homed). The 7-arg call's 4th arg is the otherwise unused param `b`
 (`lw a3,64(sp)`), not `c`.
 
+## u8 param passed on stays in a1 only with an `unsigned char` prototype (gl_func_0002BAAC 84.9 -> EXACT, 2026-10-15 agent-c) <a name="uchar-prototype-keeps-param-in-a1-2baac"></a>
+
+Target: `sw a1,28(sp); andi a1,a1,0xff; slti at,a1,128; ... bnez at; or v0,a1,zero`, the three mode tests on
+v0, and at the jal only a2/a3/a0-spill set up (a1 is the narrowed op, untouched). Frame 24, no s-regs.
+
+1. **Callee prototype decides the copy.** With `unsigned char op` and a K&R (or `int`-param) callee taking
+   `op` as its 2nd arg, IDO keeps op in **s0** (`or s0,a1` at entry, `or a1,s0` before the jal, frame 32).
+   Dropping op from the call gives the `or v0,a1` copy but then a1 is not an argument. Prototyping the
+   callee as `int f(char *, unsigned char, char *, char *)` keeps the narrowed a1 as the argument AND
+   gives the v0 test copy. (`short` 2nd param: still off; `int`: s0 again.)
+2. **Every arm's `beqz zero` lands on the `ori 8` block** while the call arm's `bnez t0` also goes there
+   and its fall-through clears the bit then jumps to the epilogue: the set is a shared tail after the
+   if/else chain and the clear arm ends in `return`.
+3. **Ring t4/t5 on the set block** (t3 unused): write the flag as an `unsigned char` bitfield
+   (`->f3 = 0/1`). `|= 8` / `& ~8` forms ring at t3/t4.
+4. Baked `jal 0x400A4` with no expected reloc: new `gl_ref_000400A4` pin.
+5. Sibling **game_libs_func_0002BB58** (76.7 -> EXACT): the "missing `sw a1,4(sp)` arg-home sentinel" was the
+   same u8 in-place narrowing. `(float)` of a bare `unsigned char` param emits the unsigned `bgez` + 2^32
+   fixup; write `(int)a1 / 127.0f` for the plain `mtc1; cvt.s.w`.
+
+## A pre-jal spill of an unset aN is an extra call argument (gl_func_0006280C 56.7 -> EXACT, 2026-10-15 agent-c) <a name="spilled-arg-reg-is-extra-assert-arg-6280c"></a>
+
+Target: `sra a3,a1,16; andi a3,0xffff` (outer index), later `lw a2,52(sp); andi a2,0xffff` (inner index), the
+row offset `hi*12` in v1; before the 2nd assert jal `or a1,a3; sw v1,24(sp); sw a2,28(sp); jal; sw a3,32(sp)`.
+The wrap passed `(fmt, hi)` to every assert and got the same code with the three webs rotated
+(hi a2 / lo v1 / off a3) -- every spelling of the u16 splits, decl orders, struct-vs-int-array indexing and
+named offset locals kept the rotation. The tell: a2 is live at the jal (spilled around it) but nothing
+sets it for the call, while the inner index is exactly what a2 holds. `assert(fmt, hi, lo)` makes lo
+prefer a2, which pushes hi to a3 and the offset to v1. The 3rd assert may take lo too (both match).
+Same family as #extra-call-arg-and-test-member-before-naming-3d8a8; the scanner's "a3 &0xffff" flag
+here was not a param narrowing (no home store).
+
+
+
+## Reused local webs + dead-param reassignment colour arg registers; a call result pushed a2 -> t0 (game_uso_func_00007ACC 98.96 -> EXACT, 2026-10-15 agent-g) <a name="reused-local-webs-and-dead-param-colour-7acc"></a>
+
+Target (0x150, frame 0x38, one jal to an in-unit 4-arg callee whose result `r` lives to the end and is spilled
+across a second call): `or t0,v0,zero` after the call, `lw a1,44(v0)` (r+0x2C) in a beqzl delay + fall-through,
+`lw a2,0x958(v1)` (null-tested pointer), `lw a1,0x958(v1)` (its reload in the second sub), tail temps
+`t2,t3,t4..`, r spilled at 0x30(sp). The old wrap had everything but colours: r in a2, r+0x2C in ugen temp t3,
+the tested pointer in a1, the reload in t9, temps `t1,t2..`, spill at 0x2C. It had been labelled
+"permuter-immune coloring permutation".
+
+| change (cumulative) | diff lines (standalone, of 84) |
+|---|---|
+| old wrap | 34 |
+| reload written as `inner = *(tbl+0x958)` (reuse the tested-pointer local for a new web) | 30 (reload -> a1) |
+| `inner = r[0x2C/4]; *a1 = (int)inner;` (third web of the same local) | 42 (r+0x2C -> a1, but r still a2) |
+| the tested pointer stored into the DEAD PARAM `arg3` (already in a2, home at 0x40) | 4 (r -> t0, temps renumber; only the spill slot left) |
+| `int *r;` declared before `int v;` | **0 = EXACT** |
+
+Mechanism: uopt colours each web of a named local separately, and a web of a variable gets an ARG register
+(a1) where the same value written inline is an expression temp left to ugen's t-register rotation. The dead
+param keeps its incoming register (a2), so the long-lived `r` can no longer take a2 and drops to t0; that
+one extra t-register in use is why every later ugen temp shifts up by one. **Tell:** target temps skip one
+t-register relative to the build AND some loads land in a1/a2 where the build has t-temps. Try: reuse one
+local for those loads, then put the most important one into a dead param that is already in the register
+you want. Declaration order then fixes the call-spill slot (here r before v: 0x30 instead of 0x2C).
+
+Related probe, game_uso_func_00007448 (98.06 NM, not landed): the old `t = table; if (1) { t += K; }`
+bases aren't needed. The natural `t = *(char**)(a0 + 0x30) + K; ... *(float*)(t + 0x10)` form (the same
+spelling as the exact sibling 74D8) gives every base the target's register and position. The table load
+is CSE'd while no aliasing store comes between, and the 0x768 store folds. The one residual is
+`fc = a0 + 0x35C` (an anti-fold copy for the 0x10(a3) load): the target colours it a3 and hoists the addiu
+to word 3; every C position gives v0 (def after the 0x6F8 base) or a1 (def inside block 1, which pushes the
+block-2/3 base to a2 and q to a3). 34/36 words. Tried: positions 0..18, register/float*/self-alias/param
+forms, one or two `if (1) {}` / label / goto BB splits at every position, dead early defs of t2/q. Next
+idea: an fc spelling whose web is created AFTER q while its def stays early.
