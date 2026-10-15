@@ -233,6 +233,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Uncoalesced fetch-copy `or s0,v0,zero` in the loop-test delay (plain bne, nop-free) resists every copy-spelling — but the sibling 39EE4 vt dead-def lever + lowest-slot volatile pads still clear dispatch+frame (38DC0 89.5->95.4, 2026-07-30)](#uncoalesced-fetch-copy-cap-38dc0) — _n=node copy always coalesces to s0 (plain copy, dead if(0) defs on either side, fall-off-end int, explicit return node = trailing move, condition-embedded fetch, empty-else): 8 spellings probed. Same-name web reuse (node doubling as fn-ptr carrier) is the ONLY splitter but colors the tested web $a2 with copy-source guard uses (+1 insn). Composable wins: named vt + if(0){vt=NULL} + direct expression call = lw t9 BEFORE lh + jalr t9 on any vtable dispatch (not just 39EE4); 2 volatile pads declared LAST at function scope lift ALL homes +8 uniformly (frame-solver addendum: pads-at-END = global shift, pads-in-inner-block = shift only that block)._
 - [Named local vs inline call-arg expression swaps two s-reg colours at an identical emit position; strlen-in-for-test + stride local (gui B58 EXACT, 2026-10-15 agent-g)](#inline-call-arg-div-swaps-sreg-colour-b58)
 - [GfxRing DL builder caching the builder in a global/field and re-reading it once per packet: `b = G = expr;` (global) / `a0->c = expr; b = a0->c;` (field) keep packet 1 on the forwarded t7 temp; block-scoping one per-packet local moves the register rotation onto it; int-literal `/ 2` keeps a held 2.0f div.s (gui 16A4/055C 78->98, 2DE0 +5, 2026-10-15 agent-g)](#gfxring-cached-builder-per-packet-reread-16a4) — _Also a GOTCHA: comparing `build/src` (INCLUDE_ASM path) against expected/ is a tautological 100% — always diff the build/non_matching object._
+- [Call-arg `x + mem` emits `addu aN,mem,x` in BOTH operand spellings; `px = x; px += mem;` gives `addu aN,x,mem` (x first, like `x += mem`) — the last diff in gui_func_00000D04 95.7 -> EXACT, 2026-10-15 agent-g](#copy-then-plus-assign-addu-order-d04) — _plus: raw `*p != c` test + `f(*p)` loads straight into a0 (beql a0), named glyph[0]/[1] locals fix the stack-arg store schedule._
+- [Clamp ladders like `MAX((s16)x,0)`, a RAW `(y)<0` guard next to an `(s16)x<0` one, negu-shl `B4` words and a divide computed inside both if-arms = the stock gbi.h `gSPScisTextureRectangle` macro; re-decode with the macro text (gui 329C 74->85, 2026-10-15 agent-g)](#gbi-macro-redecode-scistexrect-329c) — _named locals keep their decl-order frame homes; count them to fix the frame._
 - [Unrolled-sum-loop kit: `q=src;src++` old-ptr-copy body (frees $a0 -> arg homes to 0(sp)); inline `len/4` bound = single CSE web (named n splits webs + blocks lui delay-slot hoist); destructive `sum=chk-sum` tail (97B4 BYTE-EXACT, 2026-07-23)](#unrolled-sum-loop-kit-old-ptr-copy-body-inline-bound-cse-single-web-destructive-tail-reuse-game_libs_func_000097b4-byte-exact) — _inline-expression bounds CSE to one temp web where a named var splits def+loop webs; fresh named tail temps renumber, destructive reuse pins; `key-(chk-sum)` inline reassociates. Addendum B958: named `n` bound suppresses the unroll entirely; leaf s0 pointer = `register` param._
 - [LONGEST-SPAN LR LANDS IN AN ARG REGISTER (a0), not v0 — function-tail base-pointer cap + isop-mode-check %-mover (func_0001304C pass 15)](#longest-span-lr-lands-in-an-arg-register-a0-not-v0--the-function-tail-base-pointer-cap-and-the-isop-mode-check-mover-that-survives-it-func_0001304c-pass-15) — _a base ptr loaded once + held across the whole tail = longest LR = lowest save/span priority = colored LAST = lands in a0 (derefs grab v0/v1 first); a build coloring it into v0 rebases the whole tail = arg-register-targeting cap (no pseudo-order lever, permuter floors). BUT inlining `mode == N` deref into the compare (isop → Uneq swap → bne const-first) is a real monotonic %-mover that stacks anyway (92.5→92.61)._
 - [Value-returning lookup with -1 default: if-return (not ternary) frees v0 → base lands in v1; + array-index + split-pointer levers (game_libs_func_00027300)](#value-returning-lookup-with--1-default-use-ifcondreturn-x-return--1-not-a-ternary-to-free-v0-for-the-return-pushing-the-held-base-into-v1--plus-array-index--split-pointer-levers-game_libs_func_00027300-body-byte-exact) — _`return cond ? load : -1` near-misses with the body shifted one v-reg (base in v0, result moved). Three levers (27300 12→0 body diffs): (1) `if(cond){return load;} return -1;` reserves v0 for the return so the held strided base colors into v1, byte loads straight to v0; (2) array-index `((int*)(p+OFF))[i]` gives addu base-first; (3) split chained inner deref into a named local → IDO reuses the dead arg reg for the load. CAVEAT: cross-fn tail-merge (-1 path beql-branches into the NEXT symbol's jr) is NOT C-reproducible — body can be byte-exact but the two-symbol split blocks a per-symbol byte_verify land; keep INCLUDE_ASM._
@@ -14309,6 +14311,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [62E10 (post0b, 85.7 -> EXACT 28/28): "as1 scheduling tie, `li at,0x17` vs `lui a0,%hi(str)`" = an assert spelled `if (!(tag == K)) fail(...)`, not `if (tag != K)` (agent-c 2026-10-15)](#assert-not-eq-spelling-schedules-at-late-62e10) -- _when the compare constant's `li at` is scheduled one slot off against hoisted call args, try the `!(a == b)` spelling._
 - [35FD4 (post0b, 91.2 -> EXACT 30/30): "fn-ptr cast for a float-prototyped blank call emits `lui t9; jalr`" = declare a pinned prototyped alias of the blank instead (agent-c 2026-10-15)](#float-prototype-blank-alias-direct-jal-35fd4) -- _a prototyped `extern` alias pinned to 0 gives single-precision float args AND a direct jal._
 - [3E2B0 (post0b, 96.2 -> EXACT 59/59): "hardcoded-jal cap + 8-byte spill-slot-allocator frame diff" = hA is the result of the call BEFORE `H(&hA)` (sw v0 in the delay slot), H is void, and a register-only `char *g = &D` local cost a frame-top slot (agent-c 2026-10-15)](#register-only-pointer-local-shifts-frame-slots-3e2b0) -- _all spill slots 4 low with the right frame size? delete a register-only local (e.g. `g = &D`) and spell the address inline._
+- [28E94 (post, 93.1 -> EXACT 78/78): a `addiu v0,a0,K` base kept after a jal = a pointer local named BEFORE the call (uopt rematerializes it, never folds); `lbu;ori 1;sb;ori 8;sb` with two skipped temp names = BITFIELD sets; extra 3rd call arg (agent-c 2026-10-15)](#remat-base-local-and-bitfield-temp-skips-28e94) -- _a folded `sb x,K+n(a0)` where target has `addiu v0,a0,K; sb x,n(v0)` after a call: move the `p = obj + K` up above the call._
 - [4DB50 (post0b, 92.9 -> EXACT 46/46): "unfused beq/beq/b not reachable from switch/if/goto" = 38830 inverted-last-test goto chain + one block local for the arg shared by two arms; plus a 3rd call arg (`lw a2` of the pre-increment count) (agent-c 2026-10-15)](#inverted-last-test-plus-shared-arg-local-4db50) -- _neither-successor-adjacent if: IDO branches on the C condition to the goto target and `b`s to the fallthrough label, so write the test the way the asm branches._
 - [2BA38 (post, 92.6 -> EXACT 29/29): "stack-byte-spill idiom" = an `unsigned char` param that is a hidden 2nd arg of the first call: entry `sw a1,home; lbu a1,home+3` + `sw a1,0x18` in the jal delay (agent-c 2026-10-15)](#narrow-param-as-call-arg-entry-lbu-spill-2ba38) -- _entry narrow-through-home + own spill slot for a param the C never touches before the call = it is a call argument._
 
@@ -29205,4 +29208,67 @@ GOTCHA hit during this work: `objdump expected/` vs `build/src/<unit>.c.o` for a
 function compares INCLUDE_ASM against itself (false "exact"). Diff `build/non_matching/...`.
 Fast scorer: `objdiff-cli diff -1 expected/src/<u>.c.o -2 <candidate.o> -o - <func>` and read
 `right.symbols[name==func].match_percent` (~20 ms, same number report.json uses).
+
+<a id="gbi-macro-redecode-scistexrect-329c"></a>
+## Hand-decoded "clamp ladder" display-list code is often a stock gbi.h macro: re-decode with the macro text (gui_func_0000329C 74.1 -> 85.3, 2026-10-15 agent-g)
+
+Signs: the packet words are `0xE4......` (G_TEXRECT), then `0xB4000000` and `0xB3000000`
+(RDPHALF_1/2), each guarded by `(s16)(v<<2) > 0 ? .. : 0` clamps; the X-side guard tests
+`(s16)xl < 0` but the Y-side tests the RAW `yl < 0`; the B4 word is `(-a << 16) | (-b & 0xFFFF)`;
+the dsdx/dtdy divide shows up inside both arms of the B4 if/else. That is
+`gSPScisTextureRectangle(pkt, xl, yl, xh, yh, tile, s, t, dsdx, dtdy)` from gbi.h (copy it from
+`references/oot/include/ultra64/gbi.h` or papermario's `PR/gbi.h`), with s = t = 0. Its asymmetric
+`((yl) < 0)` is the "raw Y guard" that hand decodes had to special-case. Passing dsdx as an inline
+expression (not a local set beforehand) gives the divide in both B4 arms: uopt's PRE moves the
+B3-word use into the arm that skips it. `pkt` is evaluated once per packet, so a GfxRing bump
+written as a `{ ... }` block per packet matches. `0xBB000001, 0x80008000` before it is gSPTexture.
+In 329C this rewrite took the hand-written 14-local version from 74.1 to 85.3 with the same op
+multiset. Frame: named locals keep decl-order homes (see
+`#feedback-ido-frame-slot-home-assignment-rule`). The target's w@0x3C / h@0x38 meant six named
+decls before them. Still open in 329C and 2DE0: the target keeps the ring ctx, switch value and
+x-side MAX temps in callee-saved s0. Named-variable and statement-order spellings did not reproduce it.
+Same rewrite on the f32-scale sibling gui_func_00002DE0 (x = x0 + (-(w/2))*sx, fw = w*sx): 77.5 -> 80.7.
+On gui_func_00000F04 (the per-glyph string version) it gave only +1.5 (82.2 -> 83.6, not committed).
+There the old decode was already close, and the leftover is colouring: the ring ctx and the x-side
+MAX temps share one register in all four targets (s0 in 329C/2DE0, a1 in 3714, a3 in F04).
+For 3714 the macro form scored lower than the old decode (80.8 vs 83.0).
+
+## Rematerialized pointer local keeps an `addiu v0,a0,K` base; bitfield sets show as temp-name skips (gl_func_00028E94 93.1 -> EXACT, 2026-10-15 agent-c) <a name="remat-base-local-and-bitfield-temp-skips-28e94"></a>
+
+Target (78w, frame 0x38): after the second jal it re-derives `addiu v0,a0,48` and stores `sb t8,3(v0)` / `sb t2,5(v0)`;
+earlier it keeps `addiu v1,a0,176` in v1 (spilled at sp+0x1C across the second jal). The wrap computed `v0 = obj + 0x30`
+right before the stores: uopt folds that into `sb ..,51(a0)` / `53(a0)` no matter the spelling (int-cast, `register`,
+bitfield struct type, even `return v0`). Moving `b30 = obj + 0x30; xf = obj + 0xB0;` to the TOP of the function (above the
+first call, b30 also used for the first `obj+0x30` store) makes the value live across the calls; uopt rematerializes it
+from the reloaded a0 at its next use instead of spilling, and the rematerialized copy is a real base register. Same for xf
+(the `addiu v1,a0,176` right after the first call's reloads).
+
+Temp numbering: target `lbu t0,0(a1)` ... `ori t3,t0,1; sb; ori t4,t3,8; sb` against the wrap's `lbu t9; ori t1; ori t2`
+-- one name skipped before the load and two between load and first ori. Spelling the two `|=` as 1-bit bitfield sets
+(`d->active = 1; d->ready = 1;` in a big-endian `{x0:4, ready:1, x1:2, active:1, ...}` struct) emits the same
+lbu/ori/sb but consumes the extra temp names; the whole function's temp naming then lined up. `(word << 13) < 0` on the
+byte whose bit 0x04 was just set/cleared = one 1-bit bitfield read; `(b & ~0xE0) | ((v & 3) << 5)` = a 3-bit bitfield store.
+
+Also: the scanner's `nm=jal/01 tgt=jal/012` at site 1 was the resolved sub-id passed as a 3rd arg (`3CF18(obj, d, id)`,
+same callee/args as sibling gl_func_000289B0). The final +0x10 frame with v1 at 0x1C came from 12 bytes of unused local
+(`char pad[12]`; three unused ints are equivalent; named copies of the sub-record pointer perturbed colouring instead).
+
+<a id="copy-then-plus-assign-addu-order-d04"></a>
+## `px = x; px += mem;` puts the variable first in addu when `x + mem` will not (gui_func_00000D04 95.7 -> EXACT, 2026-10-15 agent-g)
+
+The last diff in D04 was `addu a1,s3,t9` (target, s3 = the x accumulator, t9 = a freshly loaded
+table word) vs `addu a1,t9,s3` for the call argument `x + tbl[k]`. Swapping the C operands
+(`tbl[k] + x`), adding parentheses, or moving the offset gave the same order. uopt canonicalises
+the commutative add of a variable and a load. The same function's `x += tbl[k]` already emitted
+`addu s3,s3,t6` with the variable first. Copying into a fresh local and then using `+=`
+(`px = x; px += tbl[k]; f(..., px, ...)`) reproduces that and lands in a1 with no extra move.
+`x - -tbl[k]` adds a negu (+1 insn). Other D04 levers, all from the old residual list:
+- `lbu v0` + `move a0,v0` in the delay slot vs target `lbu a0; beql a0,at`: test the raw
+  `*p != ' '` and call `f(*p)`. A named `c = *p` local is what puts the char in v0
+  (compare `#extra-call-arg-and-test-member-before-naming-3d8a8`).
+- Stack-arg schedule (`lw t0,0(v1); lw t1,4(v1)` together, then `sw t0,16; sw t1,20` before the jal):
+  read glyph[0]/[1] into named locals next to the already-named glyph[2].
+- A `0xBB000001/0x80008000` pair whose lui/ori/lw order is off: one source line
+  (`#feedback-one-line-stores-fix-schedule-order`). `if ((unsigned)(i = 0) < f(a3))` moves the
+  `move s8,zero` after the a3 arg copy.
 
