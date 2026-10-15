@@ -14289,6 +14289,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [83CC (game_libs, 70.8 -> EXACT 79/79): read the ROM TextReloc table before trusting a `lui/addiu +N` arg decode -- a different symIdx = a different global (distinct abs-0 alias), not a literal; then frame-home order = decl order, one reused pointer local for two `&=` clears, and a trailing `if (a0) {}` keeps s0 on arg0 instead of being recoloured to a late spill (agent-g 2026-10-15)](#textreloc-symidx-distinct-global-dead-if-keeps-s0-83cc) -- _`lui aN,0; addiu aN,aN,0x70` with a symbol different from the neighbouring state loads was decoded as a literal 0x70._
 - [70FC (game_libs, 83.9 -> EXACT 138/138): compare value in v1 instead of v0 right after a call whose result is unused = the callee is VOID (an int-returning blank keeps v0 busy); t-ring shifted by one = `if (x == 0) { ...; x = 1; }` wrapper, not an early `return`; per-block `lui/addiu &G` re-materialization = distinct abs-0 aliases (agent-g 2026-10-15)](#void-alias-frees-v0-guard-wrap-t-ring-70fc) -- _a prior "hard cap, needs USO-reloc migration" note on this function was wrong; in-unit blank relocs bake the same words._
 - [12B4 (game_libs, 53.7 -> EXACT 46/46): a "caller-set $f0/$f4/$f6 float convention" cap whose predecessor `_pad.s` holds `lui/mtc1` + `lwc1` = the function's own FP-constant hoist above `addiu sp`; fold the pad into the .s (symbol moves up, expected/ re-baselined .text-identical), and read the float through a REAL `float` extern (an `*(float *)&D` cast swaps the f4/f6 pair) (agent-g 2026-10-15)](#fp-const-hoist-pad-fold-real-float-extern-12b4) -- _check every "caller-set float" cap note for a `_pad.s` predecessor first._
+- [A2B8 (game_libs tail, 0% -> EXACT 134/134): the loop-entry test appearing TWICE (`slti a1,2; beqzl` then `slti s0,2; beqz` + `li i,2` in the slot) = an explicit `if (idx < 2)` guard around `for (i = 2; i > idx; i--)`; a char[8] record copy = lwl/lwr; callee arg `(char *)a0 + idx * 8` vs `&a0[idx]` flips the t2/t5 colours (agent-g 2026-10-15)](#dup-loop-entry-test-explicit-guard-a2b8) -- _count the loop-entry compares before writing the loop._
 - [33228 (post, 99.94 -> EXACT 35/35): the "genuine cap" 16-byte phantom top-pad (frame -48 vs -64, colouring already byte-perfect) = a plain NON-volatile `char pad[16];` declared FIRST, before the spilled locals; declared after them it is elided (agent-c 2026-10-15)](#unreferenced-array-first-decl-frame-pad-33228) -- _a never-referenced array grows the frame without becoming a uopt candidate; position in the decl list decides whether it survives. Retry on every "frame-pad cap" whose colouring is already exact._
 - [26B40 (post, 99.74 -> EXACT 38/38): "ugen destination-coalesce cap" (`lui a0; addiu a0,a0` vs target `lui t6; addiu a0,t6`) = call arg written as the RELOAD of the field just stored (`f(*(char**)(D+0x53C8), ...)` after `*(char**)(D+0x53C8) = D+0x53D0`), symmetric with the sibling calls; uopt store-forwards it and the %hi stays in the ring. Then drop BB-barrier hacks that burned a ring slot (agent-c 2026-10-15)](#store-forwarded-reload-arg-keeps-hi-in-ring-26b40) -- _when an address constant feeds both a store and a call arg, try spelling the arg as a reload of the stored field._
 - [2A7D8 (post, 98.37 -> EXACT 43/43): "call-return v0/v1 colouring" residual = flag byte written as a named `f` + `|0x40` / `&0x7F` masks; the source is a 2-bit MSB-first u8 BITFIELD pair `o->b6 = 1; o->b7 = 0;` (the bitfield's zero-emission `& 0xFF` burns the one missing ring slot). Second confirmed case of #single-bit-bitfield-set-extra-ring-temp-29000 (agent-c 2026-10-15)](#single-bit-bitfield-set-extra-ring-temp-29000) -- _any `lbu; ori; sb; andi; sb` flag-pair near-miss with a uniform +-1 ring shift: try the bitfield before the colouring._
@@ -14298,6 +14299,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [5DBB0 (post0b, 99.01 -> EXACT 141/141): Shoemake mtx->quat "add.s fs/ft operand pick + rowj/rowk web-rank swap + 5 spill homes" = commutative FP adds spelled with the operands REVERSED (IDO emits `a + b` as add.s d,b,a here) plus one named f32 local too many (agent-c 2026-10-15)](#commutative-fp-add-reversed-operands-spill-home-5dbb0) -- _when an `add.s`/`addu` pair or a CSE address web is swapped against the target, swap the source operands first; each named local holds a home, so reuse a dead f32 to slide cross-call spill homes._
 - [3FF44 (post0b, 98.29 -> EXACT 38/38): "(node,n) 2-web colour permutation, E6E8-class" = the callee takes the spilled pointer as its 2nd ARG (precolours a1) and returns void (pinned void alias lets the other web take v0 across the jal) (agent-c 2026-10-15)](#call-arg-precolour-void-alias-3ff44) -- _when two webs live across one call land in the wrong caller-saved regs and the target has one in a1/a2/a3, check whether it is also passed to that call; a v0 web across a call means the callee is void._
 - [44EDC (post0b, 98.29 -> EXACT 167/167): teardown driver "s-reg rotation + v0/v1 swap + lui a0 vs lui s0" = index arg0 directly in both counter loops, write the vtable-slot load first, and route the last call arg through the named s0 local (agent-c 2026-10-15)](#named-sreg-local-colours-lui-temp-44edc) -- _a `lui sN; lw aX,off(sN)` feeding a call = the load was assigned to a named sN variable first; a pointer cursor in the wrong s-reg = index the base by the counter instead._
+- [295BC (post, 98.15 -> EXACT 114/114): "t2 vs t3 on the else-arm `lb`" = a signed 1-bit bitfield read for the byte sign test, plus `<< 8 << 1` instead of `<< 7 << 1 << 1`; the .s carried two leading zero pad words (agent-c 2026-10-15)](#bitfield-sign-read-shift-chain-ring-295bc) -- _sign tests and shift chains each have a ring cost; a leading all-zero pair in the .s is the predecessor's pad (SUFFIX_BYTES_FORCE on it + expected/ symtab edit)._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -27174,6 +27176,8 @@ Layout-neutral (52-word wrap -> 52-word def, no clip change). The brace-line lay
 that splits the line regresses to the swap. Grep for the class: an NM wrap whose only residual is `sw ra` swapped
 with the first instruction of a struct copy / the first statement's temp.
 
+**Second instance (2026-10-15 agent-g): gl_func_0000C01C NM 52.3 -> EXACT 52/52** -- the old wrap hand-unrolled the 3-word copy loop and passed a1..a3 to the first call; `void f(void *a0, struct B60 *src) { struct B60 buf = *src; char b8[8];` + six blank calls matched (big struct declared first = sp+0x28). Gotcha: converting a wrap whose NM body was larger shrinks the NM .o, so the unit's `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` must drop by the same delta (tail 0x55b4 -> 0x5570) or `make non_matching_objects` fails with `.text 0x.. smaller than requested`.
+
 ## "0.0f in three FP regs" = two zero pseudos (literal vs cast class) + compound-assign tail (gl_func_0000D318 EXACT 64/64, 2026-09-11 agent-g) <a name="two-zero-pseudos-literal-vs-cast-compound-tail-d318"></a>
 
 Tail-unit NM wrap at 96.17 ("the target materializes 0.0f in THREE distinct FP regs; IDO CSEs mine into one fewer
@@ -28913,6 +28917,24 @@ Three residuals, three source facts:
    (#web-order-inversion-inline-the-first-chain-to-flip-v0v1-web-coloring-h2hproc-e04-12-2). CSE merges the two loads
    and the merged web gets the first colour.
 
+## Byte sign test as a signed 1-bit bitfield, and shift-chain length, move single ring slots (game_libs_func_000295BC 98.15 -> EXACT, 2026-10-15 agent-c) <a name="bitfield-sign-read-shift-chain-ring-295bc"></a>
+
+The only residual was the else arm's `lb tN,1(a0); bgezl tN` (target t2, build t3); everything after it matched.
+
+- `((BF *) arg0)->f80` with `typedef struct { unsigned b0:8; int f80:1; unsigned rest:23; } BF;` emits the same
+  `lb; bgezl` as `(s8) *(u8 *)(arg0 + 1) < 0` or `*(s8 *)(arg0 + 1) < 0` but takes one ring slot fewer. This
+  fixed the lb and moved every later temp one slot early (14 diffs).
+- The next test, `(FW(arg0, 0) << 7 << 1 << 1) < 0`, kept as a chain so the `lw v0,0(a0)` is shared
+  (`<< 9` alone breaks that). The `sll` temp landed at t5 with 3 links (`<< 7 << 1 << 1`), t6 with 2
+  (`<< 8 << 1`, the target: 0 diffs), t7 with 4 and t8 with 5 links. So the chain length is a ring knob, and
+  it is not monotonic: try 2, 3, 4 links.
+
+Boundary: the .s for this symbol began with two `0x00000000` words (ROM 0x295BC-0x295C3; the real entry
+is 0x295C4), so the exact C is 8 bytes short. A leading-nop PREFIX_BYTES is banned, so the words go on the
+predecessor as an all-zero pad: `SUFFIX_BYTES_FORCE := gl_func_00029494=0x00000000,0x00000000` (and the
+NON_MATCHING twin). expected/ metadata only: `scripts/elf-symtab-edit.py in.o out.o gl_func_00029494::0x130
+game_libs_func_000295BC:0xcbb4:0x1c8`, then check that `.text` and `objdump -r` are unchanged.
+
 ## TextReloc symIdx tells distinct globals apart; dead-if keeps s0 on arg0 (gl_func_000083CC 70.8 -> EXACT, 2026-10-15 agent-g) <a name="textreloc-symidx-distinct-global-dead-if-keeps-s0-83cc"></a>
 
 The game_libs .s words carry no relocations, so `lui a1,0; addiu a1,a1,0x70` reads like a literal or
@@ -28978,3 +29000,21 @@ abs-0 alias; TextReloc showed it was a different symbol, D_00C75C) gave the targ
 g -> f6 order. Frame 0x68 with buf at sp+0x58: an unreferenced `char pad[0x20]` declared AFTER `float buf[4]`
 (not elided here, unlike the scalar case in #unreferenced-array-first-decl-frame-pad-33228).
 
+
+
+## Duplicated loop-entry compare = explicit outer guard; byte-offset callee arg fixes a t-reg pair (gl_func_0000A2B8 0% -> EXACT, 2026-10-15 agent-g) <a name="dup-loop-entry-test-explicit-guard-a2b8"></a>
+
+Target (game_libs tail 0xA2B8, 0x218): `if (idx < 3) { shift a 3-entry table of 8-byte unaligned records up
+from idx; call blank(&tab[idx], min, sec, hundredths, arg3); }` -- the A1B0 ms split, IDO-unrolled-by-4 shift loop
+(`(2-idx)&3; negu` remainder prologue, lwl/lwr + swl/swr from a `struct { char b[8]; }` copy).
+
+1. The target tests `idx < 2` twice: `slti at,a1,2; beqzl at,after` (with the post-loop `lw` in the likely slot)
+   and then `slti at,s0,2; beqz at,after` with `addiu a3,zero,2` (the i-init) in the slot. A bare
+   `for (i = 2; i > idx; i--)` emits only the second test (-3 words). Writing the redundant
+   `if (idx < 2) { for (...) ... }` keeps both: IDO does not fold the guard into the loop's own
+   entry test when they are textually separate. Recognition: two adjacent compares of the same value
+   against the loop's start constant, the second carrying the induction init in its delay slot.
+2. After the loop the callee's first arg was `lw t2,40(sp)` (a0 reload) + `sll t5,s0,3; addu a0,t2,t5`.
+   `&a0[idx]` and `a0 + idx` (typed Entry8 *) both colour the pair the other way (t5 reload / t2 shift);
+   the byte-offset spelling `(char *)a0 + idx * 8` (and `<< 3`) gives the target colours. Same class as
+   the A1B0 / A4D0 siblings: address arithmetic spelling, not decl order, moves this t-pair.
