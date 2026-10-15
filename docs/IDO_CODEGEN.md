@@ -14331,6 +14331,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso 6CF0 (97.64 -> EXACT 102/102): a `volatile` reload used only to defeat CSE moves the param-web SPLIT point; an int-typed read (`(char *)a0[0x30/4]` vs the earlier `*(char **)`) also stays out of CSE and leaves the split alone; a dead `addiu v0,v0,K` after folded `K(v0)` reads = `p += K` placed BEFORE reads through p (agent-g 2026-10-15)](#type-split-cse-and-dead-bump-6cf0)
 - [game_uso FD04 (97.08 -> EXACT 50/50): a single-use `addiu aN,v1,K` + `lwc1 0x10(aN)` that refuses to fold = a base local spelled `(float *)(*(char **)(s0 + 0xB4) + K)` with the LOAD INLINE (a named `base2 + K` folds); the same spelling dropped the do-while(0) BB-split hacks and fixed a store-order 'scheduler tie' (agent-g 2026-10-15)](#inline-load-base-plus-k-no-fold-fd04)
 - [game_uso is C++ compiled by IDO 7.1 NCC (edg front end), not cfe: the `addi`/`at` 2-word compare loop + 1/0 flag is a pointer-to-member-function `pmf != 0` test, the bgez / vptr-offset-40 block is `(this->*pmf)()`; NCC compiles the C++ body of game_uso D204 instruction-identical (0x214), cfe can't (2026-10-15 agent-g)](#game-uso-is-cplusplus-ncc-pmf-compare-d204) -- _Tell: `or t7,v1; addi t8,v1,8; lw at,0(t7); lw t9,0(t6); addi t7,4; addi t6,4; bnel at,t9; li t8,1; bnel t7,t8; lw at,0(t7); b; li t8,0`. NCC also orders mul.s operand loads differently from cfe on plain C (game_uso 7448's "reversed mul operands" lever is a cfe-side compensation)._
+- [`sltu tB,zero,tM; beqzl tB` (a flag test materialized as 0/1 before the branch) + a RELOAD of the same flag word for the next test = `((p->f & 0x100) != 0) == 0 || (((unsigned *)p)->f & 0x200)`; the pointer into a dead param takes that arg reg (game_uso F060 91.18 -> 99.64, F13C 78.85 -> 99.57, 2026-10-15 agent-g)](#materialized-bool-flag-test-sltu-beqzl-f060) -- _`!(x & 0x100)` / `(x & 0x100) == 0` branch directly on the andi (no sltu); the extra `!= 0 ... == 0` keeps it. The type-split cast defeats the load CSE._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29736,4 +29737,28 @@ compiles to 0x214 bytes, every instruction identical to the target, relocs ident
 **Wider implication.** NCC is a different front end for plain C too: compiling game_uso 7448's cfe NM body with NCC swaps the mul.s operand load order (the "textually reversed mul operands" lever in that wrap is a cfe-side compensation), and NCC's inlined member functions materialize `this` as `addiu rB,base,K` + `0x10(rB)` (the unfolded base+K shape that recurs across game_uso -- FD04, 7448). game_uso (and possibly other cfront-flavoured USOs, cf. the inlined-ctor 688F8 entry) was most likely written in C++. Functions at a "coloring cap" in game_uso are worth re-probing as C++ under NCC; 10694 has the same PMF block.
 
 **Landing needs infra (not done yet).** game_uso is one `game_uso.c` TU whose `.text` becomes Yay0 block 1. An NCC function must be its own TU: carve game_uso.c into [0,0xD208) / D204.cpp / [0xD41C,end) (or the NCC region) and concatenate the `.text` in the block recipe exactly like the mgrproc/timproc region splits (MATCHING_WORKFLOW Yay0 split), plus objdiff units, expected/ objects captured from INCLUDE_ASM-path builds (never self-refreshed from the C++ build -- circular-expected trap), and an asm-processor-free `.cpp.o` rule (no GLOBAL_ASM in the C++ TU). Verify with `make verify-blocks` + ROM cmp.
+
+## Materialized flag bool (`sltu tB,zero,tM; beqzl tB`) + flag-word reload = `((p->f & M) != 0) == 0 || ((unsigned *)p)->f & N`; dead-param pointer colouring (game_uso F060 91.18 -> 99.64, F13C 78.85 -> 99.57, 2026-10-15 agent-g) <a name="materialized-bool-flag-test-sltu-beqzl-f060"></a>
+
+Target (game_uso_func_0000F060 / 0000F13C, same block in both):
+
+```
+lw    v1,180(s0)          ; v = self->0xB4
+lw    a0,2048(v1)         ; p = v->0x800   (a1 in F13C)
+lw    t6,16(a0)
+andi  t7,t6,0x100
+sltu  t8,zero,t7          ; bool materialized
+beqzl t8,TEST938 ; lw t1,2360(v1)
+lw    t9,16(a0)           ; flag word RELOADED
+andi  t0,t9,0x200
+beqzl t0,ELSE ...
+TEST938: beqzl t1,ELSE ...
+```
+
+The old wraps wrote `((p[4] & 0x100) == 0 || (p[4] & 0x200) != 0) && v[0x938/4]` and got a direct `beqz t6` on the andi, one cached load, and a cap label ("beql-chain scheduling"). Two independent C facts give the target shape:
+
+1. `((p[4] & 0x100) != 0) == 0` -- the double comparison survives as `sltu` + `beqzl` on the 0/1 value (the `!` / `== 0` spellings fold to a branch on the andi result).
+2. The second test reads the flag through a different type, `((unsigned int *)p)[4] & 0x200`; the type split defeats uopt's load CSE so the target's reload appears (same mechanism as #type-split-cse-and-dead-bump-6cf0).
+
+Colouring: target p sits in an arg register (a0 after a call in F060, a1 in F13C). Assigning p into a dead param (`a0 = (int *)v[0x800/4];` in F060; an unused second param `int *a1` in F13C) gives exactly that register (the 7ACC dead-param lever). Remaining 3-word residual in both: `v` colours v0 where the target has v1; under NCC an edg-inlined member function with `this = v` produces v1 because the inline's return temp holds v0 (cfe has no equivalent found yet).
 
