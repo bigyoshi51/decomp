@@ -14321,6 +14321,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [2BA38 (post, 92.6 -> EXACT 29/29): "stack-byte-spill idiom" = an `unsigned char` param that is a hidden 2nd arg of the first call: entry `sw a1,home; lbu a1,home+3` + `sw a1,0x18` in the jal delay (agent-c 2026-10-15)](#narrow-param-as-call-arg-entry-lbu-spill-2ba38) -- _entry narrow-through-home + own spill slot for a param the C never touches before the call = it is a call argument._
 - [gui 3B80 / 27A0 (NM 91.0 -> 96.2, 92.5 -> 96.5) + tail D288 probe: `volatile` PARAM instead of an `&param` escape keeps a param memory-resident without homing the later params; a dead-looking `move aN,aM` + `move v0,aM` pair after one load = that value is ALSO an extra call arg (CSE temp copied to the named var and to the arg reg); a held register in a2 across a jal = 3rd arg = the PRE-store value of a re-read pointer (agent-g 2026-10-15)](#volatile-param-and-cse-arg-copies-3b80) -- _also: re-read loop-invariant loads at the loop top when the target re-loads them in the loop-test delay slot; it can re-colour a whole s-web._
 - [game_uso FC34 (97.96 -> EXACT 52/52): a "single-use base+K that refuses to fold" (`addiu a3,v1,K` hoisted above a branch, then `lwc1 0x10(a3)`) held in an ARG register across a jal = an extra call argument; after a by-value Pair2 (a1/a2) the next word is a3 -- call through a prototyped zero-address alias with the extra param (agent-g 2026-10-15)](#extra-arg-after-pair2-a3-base-fc34) -- _also D288 negative: splitting a value's web at a call (v1 before / reload into a3 after) is not reached by copies, re-reads, block memory locals or arg-order changes._
+- [game_uso E91C (98.98 -> EXACT 118/118): a `move a2,v1` copy of a CSE'd mask into its arg register = the arg is a no-op-CAST copy `(unsigned)(w & 0x20)` of the value the `!= 0` test uses; a uniform "global renumber" can be a named word local that should be inlined at every use, plus one int local REUSED for later short-lived values to pull them into a1 (agent-g 2026-10-15)](#noop-cast-arg-copy-and-inline-word-e91c)
+- [game_uso D458 (98.61 -> EXACT 90/90): `subu a1,s0,s0; addiu a1,a1,K` = a same-base POINTER DIFFERENCE `(char *)p + A - ((char *)p + B)` (IDO folds A-B but not p-p; `x-x` / `x*0` fold to li); a "HI16-only unpaired reloc cap" is just `(char *)&sym + off` with the offset baked into the addiu (agent-g 2026-10-15)](#pointer-difference-self-subu-d458)
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29426,3 +29428,45 @@ after its own delay slot.
   `sw a1,44` / `lw a1,44` around every call. `register`, decl order, and assigning it inside the call
   arg were all inert.
 
+
+
+## A `move aN,vM` copy of a CSE'd value into an arg register = a no-op cast on the arg (game_uso_func_0000E91C 98.98 -> EXACT, 2026-10-15 agent-g) <a name="noop-cast-arg-copy-and-inline-word-e91c"></a>
+
+Target head: `lw t6,0xB4(a0); lw v0,0xA58(t6); andi v1,v0,0x20; sltu a1,zero,v1; beqz a1; andi a1,v0,0x40;
+sltu a1,zero,a1; jal EAF4; or a2,v1`. The same five-word idiom shows up at the EAF4 call in E5C8. The old wrap
+called the 16-word residual a global register-renumber cap. It was three source facts:
+
+1. **Inline the loaded word at every use.** A named `int v0 = o->0xA58` (with `o` named too) coloured
+   o=v1 and pushed mask and cond into a2/a3. Writing `*(int *)(*(char **)(a0 + 0xB4) + 0xA58)` at all three
+   uses lets CSE build one temp chain: t6 base, v0 word, v1 mask. Inlining only `o` had scored worse in the
+   old notes because the word was still a named local.
+2. **`or a2,v1` = the arg is a separate value from the test's temp.** `f(a0, cond, w & 0x20)` (and `&&`,
+   named `mask`, `(unsigned)` on a named mask, unsigned word) all coalesce the mask into a2 with no copy.
+   `(unsigned)(w & 0x20)` on the inlined expression gives a distinct value, so IDO computes the mask once in
+   v1 for the `!= 0` test and copies it into a2 in the jal delay slot. `(unsigned char)` / `(short)` casts
+   emit extra masking.
+3. **Reuse one int local for the later short-lived values.** The target holds the 0x800 flag pointer and
+   the 0x12C switch word in a1. As fresh expressions or a fresh local they went to v0. Assigning both to
+   `cond`, the variable already used for the a1 argument, pulls them into a1. Compare
+   `#same-name-web-reuse-plus-dead-if-param-332b4`.
+
+Removing the named word dropped the frame by 8 (homed Pair2 at 0x30 instead of 0x38). One unused `int`
+above `cond` and one below `homed` restore 0x48 / 0x38. Other placements leave homed at 0x34 or 0x3C.
+
+
+## `subu rD,rS,rS` + `addiu rD,rD,K` = a same-base pointer difference (game_uso_func_0000D458 98.61 -> EXACT, 2026-10-15 agent-g) <a name="pointer-difference-self-subu-d458"></a>
+
+The 2026-06-23 notes called D458 impossible from C, for two reasons. Both were wrong:
+
+1. **`subu a1,s0,s0; addiu a1,a1,124` as the size argument.** `x - x` and `x * 0` fold to `li a1,124`. A
+   pointer difference of two addresses off the same base does not fold:
+   `f((char *)p + 0xBC, (char *)p + 0x138 - ((char *)p + 0xBC))` folds 0x138 - 0xBC into the addiu but
+   keeps `p - p` as a `subu`. It is a `bzero(&p->a, (char *)&p->end - (char *)&p->a)`-style size. This also
+   accounts for the extra word (90 vs 89).
+2. **"HI16-only, zero LO16, offset baked in the addiu" is not a reloc cap.** `*(Pair2 *)((char *)&game_uso_D_807FF3A8 + 0xDB8)`
+   with the symbol pinned at 0 emits `lui t6,0; addiu t6,t6,0xDB8`, the same bytes. The build's LO16 relocs
+   do not count against the report (name-blind) or the raw `.text` byte check, which is the same as FC34's
+   pair args.
+
+The frame went from 0x40 to 0x48 with `s32 pad[2]` declared above `sp30[4]`. A single `int` above it pushed
+sp30 down by 4 and did not change the frame.
