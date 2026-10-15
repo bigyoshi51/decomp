@@ -14319,6 +14319,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [2BAAC (post, 84.9 -> EXACT 43/43): u8 param passed on to a call stays in a1 only if the callee is PROTOTYPED with an `unsigned char` param (K&R / int prototype copy op into s0 and grow the frame); `beqz zero` arms all landing on the set-bit block = shared fall-through tail with an early `return` in the clear arm; u8 bitfield store burns one ring slot vs `|= 8` (agent-c 2026-10-15)](#uchar-prototype-keeps-param-in-a1-2baac) -- _scanner false positive: `andi a1,a1` + home store, then `or v0,a1` copy for the tests._
 - [6280C (post0b, 56.7 -> EXACT 56/56): three webs rotated across a3/a2/v1 (scanner "a3 &0xffff" was a plain local) = a spilled `sw aN` before a jal with nothing setting aN is an EXTRA assert argument; passing `lo` pins it to a2 (agent-c 2026-10-15); 2nd instance 4D3E4 78.1 -> EXACT + `call-shape-scan.py --spill` flags the pattern](#spilled-arg-reg-is-extra-assert-arg-6280c) -- _rotation, not a coloring cap._
 - [2FB74 (post, 97.0 -> EXACT 612/612): one local reused by several switch cases is ONE web set; splitting the case-39 use into its own local undid a v/c/b rotation (a2/v1/a3 -> a3/a2/v1) that the --spill scanner had pinned on an extra arg; a named test local after an intervening store became a v0 global web (inline the test); `p = &global` inside the inner arm keeps `lui/addiu` unfolded (agent-c 2026-10-15); reverse lever 5B3E0 (post0b, 77.7 -> EXACT): reusing a loop cursor and a u32 header local for later pointers fixed v0/v1 and the spill slot](#per-case-local-split-rotation-2fb74) -- _split or merge locals before adding call args._
+- [Int-returning blank callee defines $v0 at the call, so a local live across it cannot colour v0: use a VOID blank alias; read order decides store-forward vs reload (gl_func_00037BEC post0b 67.5 -> EXACT, agent-c 2026-10-15)](#void-alias-frees-v0-across-call-37bec) -- _target spills a local around a call and reloads it into v0, build uses v1: retype that call void._
 - [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
@@ -14333,6 +14334,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso FD04 (97.08 -> EXACT 50/50): a single-use `addiu aN,v1,K` + `lwc1 0x10(aN)` that refuses to fold = a base local spelled `(float *)(*(char **)(s0 + 0xB4) + K)` with the LOAD INLINE (a named `base2 + K` folds); the same spelling dropped the do-while(0) BB-split hacks and fixed a store-order 'scheduler tie' (agent-g 2026-10-15)](#inline-load-base-plus-k-no-fold-fd04)
 - [game_uso is C++ compiled by IDO 7.1 NCC (edg front end), not cfe: the `addi`/`at` 2-word compare loop + 1/0 flag is a pointer-to-member-function `pmf != 0` test, the bgez / vptr-offset-40 block is `(this->*pmf)()`; NCC compiles the C++ body of game_uso D204 instruction-identical (0x214), cfe can't (2026-10-15 agent-g)](#game-uso-is-cplusplus-ncc-pmf-compare-d204) -- _Tell: `or t7,v1; addi t8,v1,8; lw at,0(t7); lw t9,0(t6); addi t7,4; addi t6,4; bnel at,t9; li t8,1; bnel t7,t8; lw at,0(t7); b; li t8,0`. NCC also orders mul.s operand loads differently from cfe on plain C (game_uso 7448's "reversed mul operands" lever is a cfe-side compensation)._
 - [`sltu tB,zero,tM; beqzl tB` (a flag test materialized as 0/1 before the branch) + a RELOAD of the same flag word for the next test = `((p->f & 0x100) != 0) == 0 || (((unsigned *)p)->f & 0x200)`; the pointer into a dead param takes that arg reg (game_uso F060 91.18 -> 99.64, F13C 78.85 -> 99.57, 2026-10-15 agent-g)](#materialized-bool-flag-test-sltu-beqzl-f060) -- _`!(x & 0x100)` / `(x & 0x100) == 0` branch directly on the andi (no sltu); the extra `!= 0 ... == 0` keeps it. The type-split cast defeats the load CSE._
+- [game_uso under NCC: an inlined member that returns a child pointer (`self->0xB4->child()`) colours the 0xB4 pointer v1 (edg return temp holds v0) -- F060 99.64 + F13C 99.57 -> EXACT; plus NCC address/inline-accessor facts from B274 / 7448 (2026-10-15 agent-g)](#ncc-inline-member-child-v1-f060) -- _`(char *)(unsigned)&sym` is a no-op under edg (no s-reg caching); `int s1 = (int)&sym` caches it; `int d = (int)&sym + K` keeps `lui/addiu sym+K` + small offsets; inline `get()` returns via f0, `float &r()` stays in the expression ring; a load-expression `this` stays unfolded, a named-local `this` folds._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29800,3 +29802,80 @@ local moved the spill slot to 28. Giving the u32 header and the prev pointer one
 register (v0 when that variable outranked n, v1 once n was folded into p), so here IDO coloured per variable, not per
 web. The call-shape-scan `SPILL #0 a0` hit was the heap param's home store, and the first call is `(heap, blk)`.
 `h + 1 + size` (not `size + h + 1` or `h + size + 1`) gave the target's `addu t3,v1,t2` operand order.
+
+## game_uso under NCC: inlined member returning a child pointer = the target's v1 colouring (F060 / F13C -> EXACT), and other edg facts from B274 / 7448 (2026-10-15 agent-g) <a name="ncc-inline-member-child-v1-f060"></a>
+
+**F060 and F13C (99.64 / 99.57 under cfe -> EXACT under NCC).** Both
+open with the same block: `v = self->0xB4; p = v->0x800; if ((!(p->0x10 & 0x100)
+|| (p->0x10 & 0x200)) && v->0x938) ...`. The target keeps `v` in **v1**. Written
+inline, `v` colours v0 under both cfe and NCC (the cfe residual of
+[#materialized-bool-flag-test-sltu-beqzl-f060](#materialized-bool-flag-test-sltu-beqzl-f060)).
+The original C++ read the child through an inline member:
+
+```cpp
+struct V { int *child() { return AT(int *, this, 0x800); } };
+...
+a0 = AT(V *, s0, 0xB4)->child();
+if ((((a0[4] & 0x100) != 0) == 0 || (((unsigned *)a0)[4] & 0x200))
+    && I(AT(V *, s0, 0xB4), 0x938) != 0) { F360(s0); return; }
+```
+
+edg's inline return temp takes v0, so the 0xB4 pointer goes to v1. Both
+functions matched on the first NCC compile with the same lines, and all relocs
+match. The PMF arguments are passed as `AT(PM, &sym, off)` by value (10694
+recipe). Landed as `.cpp` donors:
+[MATCHING_WORKFLOW #game-uso-ncc-cplusplus-donor-recipe](MATCHING_WORKFLOW.md#game-uso-ncc-cplusplus-donor-recipe).
+**Lesson:** in game_uso, a v0-vs-v1 (or a-reg) colouring residual on a pointer
+that is dereferenced once is worth re-trying with that dereference moved into an
+inline member.
+
+**How edg (NCC) treats addresses, found on B274 (cap ~88.5, same as cfe):**
+- `(char *)(unsigned)&sym`, the cfe lever that keeps an address in an s-reg,
+  is a no-op under edg: the cast disappears and every use rematerializes
+  `lui/addiu`. `int s1 = (int)&sym;` (an integer-typed local, cast back at each
+  use) does keep it in s1. The same goes for `(char *)(int)`, `(long long)`, a
+  reference, `register`, and an inline `gp()`: all of them fold.
+- `char *d = &sym + 0xA0;` followed by `d->0x30` folds to `sym+0xD0`. The
+  target's `lui v0,%hi(sym+0xA0); addiu v0,v0,%lo(sym+0xA0); swc1 0x30(v0)`
+  comes from `int d = (int)&sym + 0xA0;`. An inline member on the sub-object
+  and a do-while(0) both still fold.
+- The C++ virtual call `(*(V **)(s0 + 0xC4))->m2()`, with
+  `struct V { char pad[40]; virtual void m0(); virtual void m1(); virtual void m2(); }`,
+  emits the target's `lw v0,40(v1); lw t9,28(v0); lh t5,24(v0); jalr t9; addu a0,t5,v1`
+  exactly. B274's remaining gap is the frame (80 vs 64; the 16 bytes come
+  from the double CSE in the `*= 1.0 - (x - K) / K2` block) and prologue
+  scheduling. NCC did not move the score.
+
+**Inline accessors and base+K folding, found on 7448 (98.06 cfe -> 98.89 NCC, 29/36 words, length-exact, not landed):**
+- Natural C++ (`P &PP(b,o)`, with `struct P { char pad[0x10]; float v; float get(); float &r(); void set(float); }`)
+  reproduces 7448's whole `addiu rB,table,K` + `0x10(rB)` structure without
+  any of the cfe `if (1) { t += K; }` anti-fold hacks. The condition is that
+  the `this` must be a **load expression** (`PP(TAB(a0), 0x758).get()` with
+  `TAB(a) = *(char **)(a + 0x30)`). A named-local `this` (`char *t = TAB(a0)`)
+  folds to full offsets, which is the same rule as FD04 under cfe.
+- An inline `get()` returns through an f0 temp. An inline `float &r()`, used
+  as an rvalue or as an lvalue (`PP(..).r() = x * y`), keeps the value in the
+  expression ring (f4/f6/f8/f10/f16/f18), as the target does. A `set(x)`
+  `this` colours v0, while a `r() = ...` `this` colours a1.
+- The residual is 7 words of register choice: the target colours the hoisted
+  `a0+0x35C` base a3, block-3 base a1 and the final 4C8/498 bases a2/a1, and
+  NCC gives a2/v0/v0/a1. The variants tried are r/get/set/copy/mul members in
+  each statement (about 50 combinations).
+
+
+## Int-returning blank callee blocks a v0 colour across the call; use a void alias (gl_func_00037BEC 67.5 -> EXACT, 2026-10-15 agent-c) <a name="void-alias-frees-v0-across-call-37bec"></a>
+Target (construct-and-enlist helper): `lw v0,16(t7); addiu a0,v0,16; jal 0; sw v0,28(sp); lw a1,24(sp); lw v0,28(sp)`. The
+local `lst` is spilled around the third call and comes back in **v0**. The build put it in v1 every time.
+- Cause: the callee was the shared `extern int gl_func_00000000();`. A call to an int-returning function DEFINES $v0, so
+  uopt treats v0 as clobbered at that call even when the result is thrown away. A web that lives across the call cannot
+  take v0. Declaring the callee `void` (a new blank alias, `extern void gl_func_00000000_37bec(void *, void *);`, pinned to
+  0 in `undefined_syms_auto.txt`) frees v0, and the web takes it. This changes no instruction except the colour.
+- Tell: a local saved and restored around a jal whose return value is never used, and target restores it into v0.
+  Check which blank the call goes through before blaming the allocator.
+- Second lever in the same fn: `p->10 = call2(); p->0C = 0; if (p->38) { n = p->10; lst = p->3C->10; ... }` forwards the
+  stored v0 into n (`or a1,v0,zero`). The target reloads (`lw a1,16(a2)`). Writing `lst = ...;` BEFORE `n = p->10;`
+  gives the reload with no other change. (`volatile` on the 0xC store also gives the reload, but it is not needed.)
+  Things that did NOT stop the forward: `if (1) {}` around the read or the store, int/char* type split, struct-typed
+  field, array-index spelling, a merged local carrying the call2 result.
+- Both levers are needed together: with the int blank, `lst` first still forwards (v0 stays busy, so n copies it).
+

@@ -12290,3 +12290,8 @@ and the F060/F13C v0-vs-v1 inline-return colouring). B274 and B750 are the
 remaining unmatched game_uso functions with a `jalr` (possible virtual
 calls). 10694 matched on the first NCC compile, and its old "mfc1-from-C cap"
 turned out to be just a missing float prototype for the import.
+F060 and F13C were the next two to land this way: the cfe v0-vs-v1 residual
+went away once the 0x800 child was read through an inline member
+(IDO_CODEGEN #ncc-inline-member-child-v1-f060). The same entry covers edg's
+address rules (the `(unsigned)` cast is a no-op, so use an `int` local) and
+the inline-accessor facts from B274 and 7448. Neither of those two landed.
