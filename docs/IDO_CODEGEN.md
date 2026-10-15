@@ -14313,10 +14313,14 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [3E2B0 (post0b, 96.2 -> EXACT 59/59): "hardcoded-jal cap + 8-byte spill-slot-allocator frame diff" = hA is the result of the call BEFORE `H(&hA)` (sw v0 in the delay slot), H is void, and a register-only `char *g = &D` local cost a frame-top slot (agent-c 2026-10-15)](#register-only-pointer-local-shifts-frame-slots-3e2b0) -- _all spill slots 4 low with the right frame size? delete a register-only local (e.g. `g = &D`) and spell the address inline._
 - [28E94 (post, 93.1 -> EXACT 78/78): a `addiu v0,a0,K` base kept after a jal = a pointer local named BEFORE the call (uopt rematerializes it, never folds); `lbu;ori 1;sb;ori 8;sb` with two skipped temp names = BITFIELD sets; extra 3rd call arg (agent-c 2026-10-15)](#remat-base-local-and-bitfield-temp-skips-28e94) -- _a folded `sb x,K+n(a0)` where target has `addiu v0,a0,K; sb x,n(v0)` after a call: move the `p = obj + K` up above the call._
 - [290C8 (post, 90.5 -> EXACT 62/62): "original-a0 spill, permuter-class" = the second call result is assigned back INTO the a0 param (one s0 holds a0 then v0); the scanner's extra a2 at both sites was the spilled a0 copy, not an arg; `p = a0 + K` assigned inside the first call's arg list + key in a block local moves the copy/addiu after the t6/t7 stores (agent-c 2026-10-15)](#param-reassigned-from-call-result-290c8) -- _target `or s0,a0` early, later `or s0,v0` in a beqz delay slot, and no a0 spill: reassign the param._
+- [2A014 (post, 75.9 -> EXACT 26/26): entry `sw a1,home; andi a1,a1,0xff` = an `unsigned char` param narrowed IN PLACE (a1 not passed on); a ring that starts at t7 after it = folded `(unsigned short)v` cast on the table byte; scanner "missing a1" was the entry narrowing, the calls take only the pass-through a0 (agent-c 2026-10-15)](#uchar-param-inplace-narrow-ushort-burn-2a014) -- _`andi a1,a1` (not `andi t6,a1`) plus a home store means the param itself is u8; `a1 & 0xFF` in the index drops the home store._
+- [1EE78 (post, 83.5 -> EXACT 42/42): K&R `u16` param narrowed IN PLACE (`sw a3,home; andi a3,a3,0xffff; bnez a3`) only under `if (!a3)` -- `a3 == 0`, `a3 <= 0`, casts and masks all narrow into t0/v1; plus Gfx-pair `dl++` post-increments and one-line pair statements (agent-c 2026-10-15)](#knr-u16-not-test-inplace-narrow-1ee78) -- _the scanner's "missing a3" at the call was the entry narrowing, not an argument._
+- [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
 - [4DB50 (post0b, 92.9 -> EXACT 46/46): "unfused beq/beq/b not reachable from switch/if/goto" = 38830 inverted-last-test goto chain + one block local for the arg shared by two arms; plus a 3rd call arg (`lw a2` of the pre-increment count) (agent-c 2026-10-15)](#inverted-last-test-plus-shared-arg-local-4db50) -- _neither-successor-adjacent if: IDO branches on the C condition to the goto target and `b`s to the fallthrough label, so write the test the way the asm branches._
 - [2BA38 (post, 92.6 -> EXACT 29/29): "stack-byte-spill idiom" = an `unsigned char` param that is a hidden 2nd arg of the first call: entry `sw a1,home; lbu a1,home+3` + `sw a1,0x18` in the jal delay (agent-c 2026-10-15)](#narrow-param-as-call-arg-entry-lbu-spill-2ba38) -- _entry narrow-through-home + own spill slot for a param the C never touches before the call = it is a call argument._
 - [gui 3B80 / 27A0 (NM 91.0 -> 96.2, 92.5 -> 96.5) + tail D288 probe: `volatile` PARAM instead of an `&param` escape keeps a param memory-resident without homing the later params; a dead-looking `move aN,aM` + `move v0,aM` pair after one load = that value is ALSO an extra call arg (CSE temp copied to the named var and to the arg reg); a held register in a2 across a jal = 3rd arg = the PRE-store value of a re-read pointer (agent-g 2026-10-15)](#volatile-param-and-cse-arg-copies-3b80) -- _also: re-read loop-invariant loads at the loop top when the target re-loads them in the loop-test delay slot; it can re-colour a whole s-web._
+- [game_uso FC34 (97.96 -> EXACT 52/52): a "single-use base+K that refuses to fold" (`addiu a3,v1,K` hoisted above a branch, then `lwc1 0x10(a3)`) held in an ARG register across a jal = an extra call argument; after a by-value Pair2 (a1/a2) the next word is a3 -- call through a prototyped zero-address alias with the extra param (agent-g 2026-10-15)](#extra-arg-after-pair2-a3-base-fc34) -- _also D288 negative: splitting a value's web at a call (v1 before / reload into a3 after) is not reached by copies, re-reads, block memory locals or arg-order changes._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29339,3 +29343,86 @@ Also from 3B80 and 27A0: when the target re-loads a loop-invariant field in the 
 slot (`lw s2,4(s5)` under `beqz`), write the re-read at the loop top (`s2 = a0[1];`). Holding it in one variable
 had coloured width into s7 and shifted four other s-webs. When a last-iteration arm ends in `subu s0,s0,s1`
 shared with the main arm, look for a `tile = s0;` (`or s1,s0`) at the top of that arm.
+
+## u8 param narrowed in place + folded ushort cast ring burn (gl_func_0002A014 75.9 -> EXACT, 2026-10-15 agent-c) <a name="uchar-param-inplace-narrow-ushort-burn-2a014"></a>
+
+Target head: `addiu sp; sw a1,28(sp); andi a1,a1,0xff; lui v0,0; addu v0,v0,a1; lbu v0,-176(v0)`, then the
+two tests in `andi t7,v0,3` / `andi t8,v0,0x80` (t6 never appears). Both jals have nop delay slots.
+
+1. **`sw a1,home; andi a1,a1,0xff` = the param is `unsigned char`** and nothing else re-narrows it. Spellings
+   that change it: index `a1 & 0xFF` (int OR u8 param) -> `andi t6,a1,0xff` with NO home store; passing a1
+   to the calls -> the narrowed copy moves to a2 and each jal delay gets `or a1,a2`. The call-shape scanner
+   reported "missing a1" here only because the entry block sets a1; the calls take just the untouched a0
+   (`f(a0)`), so declare the callees with no prototype and pass a0.
+2. **Ring starting at t7** with no visible t6 user: wrap the table byte in a folded narrowing cast at the
+   first test, `if (((unsigned short)v & 3) == 1)` with `int v` (equivalently `(v & 0xFFFF) & 3`). Inert
+   (ring stays at t6): `unsigned short v` / `short v` locals, `& 0xFF`, `(unsigned char)`, `(int)` on the
+   load or the index, duplicated table reads, `switch`, separate `t = v & 3`, u16 return / u16 `v1`.
+3. Baked `lui 0; lbu -176(v0)` with no expected reloc: `(D_2A014_table - 0xB0)[a1]` against the existing
+   `D_2A014_table = 0` pin; baked jals 0x3F010/0x3F024 via new `gl_ref_` pins.
+
+## K&R u16 param narrowed in place only under `if (!a3)` (gl_func_0001EE78 83.5 -> EXACT, 2026-10-15 agent-c) <a name="knr-u16-not-test-inplace-narrow-1ee78"></a>
+
+Target head: `sw a3,44(sp); andi a3,a3,0xffff; ... bnez a3`, later a use-site `andi t5,a3,0xffff`
+in the emit arm, temp ring starting at t7. Old wrap (`if (a3 == 0)`) narrowed into v1 and lost the
+v1 cursor of the second Gfx pair to it (83.5).
+
+1. **Test spelling picks the narrowing register.** With a K&R `u16 a3`: `if (!a3)` -> in place in a3
+   with the home store (what the target shows). `a3 == 0`, `a3 <= 0`, `a3 < 1`, `(int)a3`,
+   `(unsigned short)a3`, `(a3 & 0xFFFF) == 0` -> `andi v1/t0,a3,0xffff` and the test branches on that
+   temp. `if (a3)` with the arms swapped (or `a3 != 0`) also narrows in place, but lays the arms out
+   wrong. ANSI `unsigned short a3` behaves the same as K&R here. `int a3; a3 &= 0xFFFF;` narrows in
+   place but never stores the home.
+2. **Use-site re-mask:** write the later use as `(a3 & 0xFFFF)`. A bare `a3` gives `or t7,t6,a3`.
+3. **Ring at t7:** `(arg4 & 0xFFFF)` on the u16 stack arg (`lhu t7,50(sp)`) folds but burns t6
+   (#subsumed-mask-single-ring-slot-burn-2a55c-2a740-cracked-2026-07-03).
+4. **Scheduling:** type the cursor as an 8-byte `{int w0, w1;}` pair. Call arm
+   `gl_ref_00031BC8(dl++, 0x3C0)` puts the `addiu s0,s0,8` in the jal delay. A `char *` with
+   `q = dl; dl += 8;` puts it before the jal. The emit arm needs two DISTINCT cursors (`p = dl++` /
+   `r = dl++`; reusing `p` loses v1). Put each pair's three statements on ONE line. Split across
+   lines, the scheduler swaps the pair-1 `sw w1`/`sw w0` order and moves the pair-2 `or v1,s0` and
+   final `addiu s0` (same-line class).
+
+
+
+## An unfolded single-use base in an arg register = an extra call arg after a by-value pair (game_uso_func_0000FC34 97.96 -> EXACT, 2026-10-15 agent-g) <a name="extra-arg-after-pair2-a3-base-fc34"></a>
+
+Target: `addiu a3,v1,0x770` at the top of the body, above a flag test, then `lwc1 f4,0x10(a3)` inside the
+taken arm, and later `jal game_uso_func_0000D5BC` with a1/a2 holding a by-value `Pair2`. The build folded
+the read into `lwc1 f4,0x780(v1)`. The old wrap called this a single-use base+K fold and listed five probes
+that did not stop it (do-while(0), if(1), two-def increment, `register`, struct member). call-shape-scan
+showed `nm=jal/012 tgt=jal/0123` at that site: a3 is written before the jal. The base is the call's next
+argument after the two Pair2 words. The callee's C definition takes only `(char *, Pair2)`, so the call goes
+through a prototyped alias pinned to 0, `void game_uso_func_0000D5BC_a3(char *, Pair2, char *)`. With the extra
+use IDO computes the base once, above the branch, in a3, which gives 52/52.
+
+Rule: if a base+K value will not fold although it has one visible use, and it sits in an a-register that is
+still live at a jal, check the call site's a-register set before trying fold-blocking tricks. `objdiff-cli diff`
+scores the renamed jal reloc at 99.56. The report and the raw `.text` slice are both exact.
+
+D288 negative (tail, still NM): the target colours `child` v1 before the call, spills it, and reloads it into
+a3 after the call at its use, a split web. The build keeps one web in a3 with a save/restore around the call.
+The 3-arg call (`parent` as a3rd arg) is at 98.69 by diff. None of these split the web: a re-read `c2 =
+parent->4C` before the unlink store (child goes v1, but c2 gets its own home slot, the a0 copy is hoisted
+and the reload goes straight to a1), block-scope `&saved` or a `saved[1]` array (frame +16), `register`,
+decl swaps, `if (child) {}` after the call, a re-read of `child` itself, or testing `parent->4C` through a
+CSE temp (adds an `or` copy). Dropping `o` puts the reload in the delay slot as a3 (matching the target) but
+moves the self reload to t9.
+
+## Iterator-next `b next` vestige = if/else with a constant else arm (gl_func_00034890 82.4 -> 90.2 NM, 2026-10-15 agent-c) <a name="iter-next-else-arm-b-next-34890"></a>
+
+Target loop head/tail: `or a2,zero,zero; ...; beqz t5,X; sw t5,cur; lw t7,4(t5); sw t7,next;
+beqz zero,X; lw a2,0(t5); X: beqz a2,end`. The unconditional branch lands on the instruction right
+after its own delay slot.
+
+- Spelling: `nx = p->next; p->cur = nx; if (nx != 0) { p->next = nx->next; node = nx->data; } else { node = 0; }`.
+  The else arm's constant is speculated above the test, and the jump over the now-empty else arm stays.
+- The old `node = 0;` written before the `if` was moved by the scheduler above the loop's call (into
+  the jal delay). The node web then crossed the call and took s0 (prologue save, frame change). The
+  else form keeps it after the call, so no s-register.
+- Frame: declaring the alloc-cascade levels' `b` / `c` inside their own `if` blocks added two dead
+  homes (frame 48 -> 56, iterator at 48/52, `h` spill at 44, all as in the target).
+- Still open: `h` (alloc heap arg) stays memory-homed. The target colours it a1 with
+  `sw a1,44` / `lw a1,44` around every call. `register`, decl order, and assigning it inside the call
+  arg were all inert.
+
