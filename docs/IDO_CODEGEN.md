@@ -14322,6 +14322,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Int-returning blank callee defines $v0 at the call, so a local live across it cannot colour v0: use a VOID blank alias; read order decides store-forward vs reload (gl_func_00037BEC post0b 67.5 -> EXACT, agent-c 2026-10-15)](#void-alias-frees-v0-across-call-37bec) -- _target spills a local around a call and reloads it into v0, build uses v1: retype that call void._
 - [A spilled local RE-STORED to its own home before a later call (`sw v1,60(sp)` with no new def) = a BB boundary between the calls: `if (1) { ... }` around the later call (gl_func_0003E868 post0b 61.3 -> EXACT, agent-c 2026-10-15)](#bb-break-respill-3e868) -- _also: a jal-0 result that is never used means the object is the earlier call's result._
 - [Compare order 1,0,2 with bodies out of line in that order = goto chain (a switch sorts ascending AND gives its selector a frame slot); two struct stores whose registers are right but whose schedule is swapped = put them on ONE source line (gl_func_00035440 post0b 71.2 -> EXACT, agent-c 2026-10-15)](#same-line-store-pair-schedule-35440) -- _registers follow statement order, the as1 schedule of a home reload vs a lui/lw pair follows the line split._
+- [`addiu sN,sp,K` held in an s-reg and used only as a STORE base (`sw t1,0(s1)`) or LOAD source (`lw t8,0(s3)`) while other accesses of the same slot use plain sp offsets = 4-byte STRUCT copies (param or local typed `struct {int v;}`); plain ints fold every access to sp+K (gl_func_00035B1C post0b 66.3 -> 97.4, agent-c 2026-10-15)](#struct-copy-keeps-addr-sreg-35b1c)
 - [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
@@ -30026,3 +30027,17 @@ drop both named temps and write `if (FW(arg0,0x108) != 0) { FW(arg0,0x108) = (FW
 nop to 0x20C in the target, `beqzl`/`bc1fl` + lui-dup to 0x210 here). Inert so far: nested if,
 `!= 0`, operand swaps, goto/do-while(0)-break exits, an inline helper with early return. Under the
 1-commit-per-+3pp rule the 98.86 -> ~99 gain was not committed. Start from these edits.
+
+## A stack address kept in an s-reg for one access kind only = 4-byte struct copy (gl_func_00035B1C 66.3 -> 97.4, 2026-10-15 agent-c) <a name="struct-copy-keeps-addr-sreg-35b1c"></a>
+
+Target (post0b list-append constructor): `addiu s1,sp,60` before a loop, then in the loop `lw t1,4(s0); sw t1,0(s1)`
+followed by `lw t2,60(sp)` for the compare; `addiu s3,sp,88` (a2's home, also passed as `&a2`) rematerialized after
+each loop and read once as `lw t8,0(s3)` for the final `*p = a2`. With `int` locals / `int *tp = &tmp` every access
+folds to `sw t1,60(sp)` / `lw t8,88(sp)` and no s-reg holds the address.
+
+Typing the per-node temp and the a2 parameter as `typedef struct { int v; } W;` gives the target: the struct
+assignments (`tmp = *(W *)(s0 + 4);`, `*p = a2;`) are block copies that take their address from a register, while
+the field compare `tmp.v == a2.v` uses plain sp-offset loads. A 4-byte struct parameter is still passed in a2 and
+homed at entry (`sw a2,88(sp)`). Related: the int a3 the target re-reads from its home (`lw t8,92(sp)`) instead of
+keeping in an s-reg was reproduced by reading it through a pointer (`int *a3p = &a3; ... = *a3p;`).
+
