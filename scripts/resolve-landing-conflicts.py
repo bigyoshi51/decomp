@@ -34,8 +34,10 @@ def resolve_makefile(ours,theirs):
         res=ours[:]; 
         if add: res[-1]=res[-1].rstrip('\n')+' '+' '.join(add)+'\n'
         return res
-    if any(l.startswith('C_FILES   := $(filter-out') for l in ours):
-        o=ours[0]; t=theirs[0]
+    # the main filter-out line; spacing after C_FILES varies between branches
+    cf=lambda ls: next((l for l in ls if re.match(r'C_FILES\s*:= \$\(filter-out .*,\$\(shell',l)),None)
+    if cf(ours) and cf(theirs):
+        o=cf(ours); t=cf(theirs)
         oh,osh=o.split(',$(shell',1); th,_=t.split(',$(shell',1)
         otoks=oh.split(); ttoks=th.split()
         add=[x for x in ttoks if x not in otoks]
