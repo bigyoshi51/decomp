@@ -14258,6 +14258,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [3430: identical float literals merge (`step = 0.1f` x4 -> one hoisted callee-saved FP reg); a variable referenced in a block containing a call goes to an s-reg even when dead across it; `for (i = 0; i != N; i++)` = `li at,4N; bne`; field-form counters (no local) = target t-temp colouring (gl_func_00003430 NM 77.93 -> 95.79 -> 97.52, 2026-10-15 agent-g)](#literal-merge-call-block-sreg-3430) -- _also: read the switch table from the ROM before trusting an old case->arm mapping (arms 1<->3, 2<->4 were swapped)._
 - [Same expression emitted twice (once via `multu` by a held constant, once as a shift chain) with one shared store block = `(a == 0 && (x = X) == 0) || (x = X, b == 0)`; extra 4th call arg only at the first calls = leftover a3, not an arg (game_libs B94 66.7 -> 94.8, 2026-10-15 agent-g run 62)](#comma-or-duplicate-expression-b94)
 - [Free-slot scan (3B1C 71.4 -> EXACT, 3C0C 72.0 -> EXACT, 2026-10-15 agent-g run 61): a `for (i = 0; i != 8; i++)` index over a typed `slots[8]` makes the 32 byte bound a compiler IV constant that does NOT CSE with a stored source `32`; testing `o->slots[i]->f` inline and assigning the slot local INSIDE the if keeps the scan load in a0 + `or s0,a0` copy at the found point](#free-slot-scan-iv-bound-inline-test-3b1c) -- _also 3DB8 EXACT run 62: no slot local at all = reload-per-store via `o->slots[i]->f` (v1 spilled across calls); `q = (s32 *)(chain + 0x14); *q += a;` (ONE expression) = `lw 20(v0); addiu v0,v0,20; sw 0(v0)`; seven-store tail order is load-bearing (only one order schedules like the target)._
+- [Memory-resident list iterator = a two-pointer ARRAY `GlNode *it[2]` (a local struct, even pointer-walked, is promoted to registers); advance spelled `((it[0] = it[1], it[1] != 0) ? (it[1] = it[1]->next, it[0]->data) : 0)` -- the cur-test spelling picks v1 not t3 for the loop-bottom node; struct-by-value arg with a frame copy = assign the MEMBER (`key.v = ...`); CSE'd call arg lands in the FIRST arg reg only when the expression is spelled at every site (gl_func_000029F8 bare -> EXACT, 2026-10-15 agent-g run 63)](#array-iterator-struct-key-29f8)
 - [697C4: a float load hoisted INTO the loop-guarded preheader with its `lui at` ABOVE the guard = a .rodata float LITERAL, not a D-variable; `p = &a[i].y; *p = *p + x` materialises the element pointer (folded lh, addiu, sh 0); `if (f) { amp = f; half = f / 2; }` gives the copy + pre-guard half (gl_func_000697C4 NM 62.85 -> 92.35; + `if (1)` around a late store group un-rotates named FP results: gl_func_00065148 99.55 -> EXACT, 2026-10-14 agent-g)](#float-literal-preheader-hoist-elem-ptr-697c4) -- _Tell: `lui at,0` before `beqzl count`, `lwc1 fN,%lo(at)` after it; variables/pad-structs only hoist the address._
 - [68044 (post1b, NM 75.93 -> EXACT): octant atan2 = PARAMS OVERWRITTEN in place (`arg1 = -arg1`; neg.s f20,f20) + `s16 v` result (per-arm sll/sra); final `(f32)v / 32768.0f * K` gives mul.s fd,quot,K only when K is a NAMED pad-struct extern (`D_68044_2210.v`), not an inline `*(f32 *)((char *)&D + 0x2210)` deref (2026-10-14 agent-g)](#octant-atan2-param-overwrite-named-const-68044) -- _In-unit callee with a BAKED jal = gl_ref_<section addr> alias, not a direct call._
 - [65148 (post1b, NM 75.76 -> ~60/66): a 3x4 affine transform with row results in f14/f16/f18 held to the end = NAMED row results with all three stores after the last row, plus the 4F0C8 reversed right-assoc row spelling; an unnamed (CSE'd) input component trims one named word so the call-crossing temp spill lands on the target slot (2026-10-14 agent-g)](#named-row-results-late-stores-65148) -- _Residual: accumulators rotate f16/f18/f14 vs f14/f16/f18._
@@ -14287,6 +14288,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [33228 (post, 99.94 -> EXACT 35/35): the "genuine cap" 16-byte phantom top-pad (frame -48 vs -64, colouring already byte-perfect) = a plain NON-volatile `char pad[16];` declared FIRST, before the spilled locals; declared after them it is elided (agent-c 2026-10-15)](#unreferenced-array-first-decl-frame-pad-33228) -- _a never-referenced array grows the frame without becoming a uopt candidate; position in the decl list decides whether it survives. Retry on every "frame-pad cap" whose colouring is already exact._
 - [26B40 (post, 99.74 -> EXACT 38/38): "ugen destination-coalesce cap" (`lui a0; addiu a0,a0` vs target `lui t6; addiu a0,t6`) = call arg written as the RELOAD of the field just stored (`f(*(char**)(D+0x53C8), ...)` after `*(char**)(D+0x53C8) = D+0x53D0`), symmetric with the sibling calls; uopt store-forwards it and the %hi stays in the ring. Then drop BB-barrier hacks that burned a ring slot (agent-c 2026-10-15)](#store-forwarded-reload-arg-keeps-hi-in-ring-26b40) -- _when an address constant feeds both a store and a call arg, try spelling the arg as a reload of the stored field._
 - [2A7D8 (post, 98.37 -> EXACT 43/43): "call-return v0/v1 colouring" residual = flag byte written as a named `f` + `|0x40` / `&0x7F` masks; the source is a 2-bit MSB-first u8 BITFIELD pair `o->b6 = 1; o->b7 = 0;` (the bitfield's zero-emission `& 0xFF` burns the one missing ring slot). Second confirmed case of #single-bit-bitfield-set-extra-ring-temp-29000 (agent-c 2026-10-15)](#single-bit-bitfield-set-extra-ring-temp-29000) -- _any `lbu; ori; sb; andi; sb` flag-pair near-miss with a uniform +-1 ring shift: try the bitfield before the colouring._
+- [52144 (post0b, 99.40 -> EXACT 45/45): the "switch-case sort cap" (IDO emits a switch's compare chain ascending; target chain is in source order 0x120/0x110/0x308..0x608/0x304) = a NESTED-`!=` ladder with goto arms whose labels are written in the target's body order (agent-c 2026-10-15)](#nested-ne-goto-ladder-source-order-chain-52144) -- _nested `!=` gives a `beq key,K,arm` per test in SOURCE order; arm bodies are laid out in TEXTUAL order, so put the labels where you want the bodies. Retry on every "case sort" / "chain order" cap._
+- [42F4C (post0b, 99.39 -> EXACT 99/99): "genuine temp-ring cap" on six `trunc.w.s; mfc1 tN; sb` byte stores (target ring stride 3 from t8, build stride 2 from t7) = a FOLDED `& 0xFF` on each truncated int, `(s8)((s32)x & 0xFF)` (agent-c 2026-10-15)](#folded-byte-mask-burns-ring-slot-42f4c) -- _a mask the byte store makes redundant is dropped but still burns one ugen ring slot, zero insns. Count missing slots per site and add that many foldable masks._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -28765,3 +28768,65 @@ Second step: once the shape was right the ring was shifted +1 (t7/t8/t9) -- the 
 chained `D[0x53BA] = (D[0x53B9] = 0)` byte stores each burned a ring slot. Three plain `D[0x53B8] = 0; D[0x53B9] = 0;
 D[0x53BA] = 0;` statements (or the one-line chain `a = b = c = 0`) give t6/t7/t8 exactly. Lesson: after fixing the
 structural decode, strip the hacks that were compensating for the wrong decode -- they now overshoot.
+
+## Array-typed list iterator, member-assigned by-value key, spelled-twice call args (gl_func_000029F8 bare -> EXACT, 2026-10-15 agent-g run 63) <a name="array-iterator-struct-key-29f8"></a>
+
+Target shape: `sw t0,176(sp); beqz t0; sw t0,172(sp); lw t2,4(t0); sw t2,176(sp); lw v0,0(t0)` before the loop, the same advance at the bottom with t3/t4, and `lw t4,172(sp); lw v0,0(t4)` re-reading `cur->data` at the loop top -- an iterator `{cur, next}` that lives in the FRAME.
+
+- **A local `struct {Node *cur, *next;}` is promoted to registers by IDO -O2**, even when every access goes through `GlIter *ip = &it` or a `(void)&it`. Declaring it as an ARRAY `GlNode *it[2]` keeps both words in memory with exactly the target's store-forwarding (within a block) and the loop-top reload (across the back edge).
+- The advance must test the NEXT slot after the copy and step through it: `((it[0] = it[1], it[1] != 0) ? (it[1] = it[1]->next, it[0]->data) : 0)`. The semantically identical `it[0] != 0 ? (it[1] = it[0]->next, ...)` matches everywhere except the loop-bottom node register (v1 instead of t3); `(it[0] = it[1]) ? ...` and `!= 0 ?` with mixed slots fall apart (42-54 of 103).
+- 4-byte struct passed by value with a frame copy (`lw a1,-0x3334(lui 1); sw a1,212(sp); sw a1,4(sp)`): `key.v = *(s32 *)(D + 0xCCCC); f(x, key);`. Struct-assigning the key (`key = *(Key *)(D + off)`) materializes the address (`addiu t8`) and copies through it; passing `*(Key *)(D + off)` directly drops the frame copy.
+- `f(D, X, Y, X, Y, c)` with X/Y variables put X in a3 and copied it to a1; spelling the full sum at both sites (`a + b + x, ..., a + b + x, ...`) lets CSE merge them and the result lands in a1 with `or a3,a1`. The summand order is reversed relative to the load order (`FW(0x74) + FW(0x44) + x` loads 0x44 first).
+- Frame/slot positions came from unreferenced `char pad[N]` arrays between the declared locals (see #unreferenced-array-first-decl-frame-pad-33228); char-array sizes round in 8-byte steps, so sweep the pad sizes in a loop rather than by hand.
+- `q * scale` and `scale * q` both emitted `mul.s fd, q, scale`; `q * (t = scale)` gives the target's `mul.s fd, scale, q` (#feedback-ido-fp-commutative-operand-order-assignment-lever).
+
+
+## Nested-`!=` goto ladder emits a SOURCE-ORDER beq chain with bodies in label order (gl_func_00052144 99.40 -> EXACT, 2026-10-15 agent-c) <a name="nested-ne-goto-ladder-source-order-chain-52144"></a>
+
+Shape: a float-returning state dispatcher whose target asm is a `beq key,K,arm` chain in a NON-ascending order (0x120, 0x110, 0x308, 0x408, 0x508, 0x608, 0x304), four `li $f0; b epilogue` arms in that same order, then a default call block reached by a `b` after the last test. A plain `switch` emits the same shape but always sorts the compares ascending (0x110 first, 10 word diffs); an `==`-else chain inverts to bne + inline arms; a flat goto ladder keeps the order but IDO folds the last `beq; b def` pair into `bne` + a duplicated arm.
+
+What matches (45/45, first try once the shape was known):
+
+```c
+if (state != 0x120) {
+    if (state != 0x110) {
+        if (state != 0x308 && state != 0x408 && state != 0x508 && state != 0x608) {
+            if (state != 0x304) {
+                goto def;
+            }
+            goto half;
+        }
+        goto one;
+    }
+    goto two;
+}
+return 4.0f;
+two:  return 2.0f;
+one:  return 1.0f;
+half: return 0.5f;
+def:  call(...); return 0.0f;
+```
+
+- Every `!=` test of the nest becomes `beq key,K,<else-target>` in source order; `&&` of `!=` gives one beq per term to the shared arm.
+- The arm bodies are laid out in TEXTUAL order. With `return K;` as the else-arms of the nest they come out innermost-first (0.5, 1.0, 2.0, 4.0: reversed). Turning every arm into a `goto` and writing the labels after the outermost fall-through puts them in whatever order you write them.
+- The innermost `if (... != last) goto def;` plus `goto half;` keeps the `beq last,half` + `b def` pair that the flat goto ladder loses.
+
+Lesson: when a switch's only residual is compare ORDER, the source was not a switch. See also MATCHING_WORKFLOW's dispatcher-form table ("nested-`!=` -> full beq-to-body chain in source order").
+
+
+## A folded `& 0xFF` before a byte store burns one ugen ring slot with zero instructions (game_libs_func_00042F4C 99.39 -> EXACT, 2026-10-15 agent-c) <a name="folded-byte-mask-burns-ring-slot-42f4c"></a>
+
+Shape: a leaf quantiser with six `t = v * 128.0f; *(s8 *)(o + k) = (s8)(s32)(t < 127.0f ? t : 127.0f);` sites. Schedule, FP registers and instruction count were all exact; only the int temp of each `trunc.w.s; mfc1 tN; nop; sb tN` differed: target t8, t1, t4, t7, t0, t3 (one slot skipped before every site), build t7, t9, t1, t3, t5, t7. The old wrap had probed named/block/register temps, ghost `+0`/`|0`/`>>0` ops, `(u8)`, address casts, loops and pointer walks and called it a genuine ring cap.
+
+EXACT: `*(s8 *)(o + k) = (s8)((s32)(t < f127 ? t : f127) & 0xFF);` at every site. The `& 0xFF` is redundant under the byte store, so no `andi` is emitted, but the mask expression is still numbered in the ring before the store's operand. One mask = one skipped slot per site, which also moves the first site from t7 to t8.
+
+Probe results for the same site (ring of the six mfc1s):
+- `(s8)(s32)x` -> t7 t9 t1 t3 t5 t7 (stride 2, the cap)
+- `(s8)((s32)x & 0xFF)` -> t8 t1 t4 t7 t0 t3 (stride 3, EXACT)
+- `(s8)(s16)(s32)x` -> t9 t3 t7 ... (stride 4: each extra narrowing cast burns a slot too)
+- `(u8)(s32)x`, `(s32)x | 0`, `(s32)(f32)x` -> unchanged (folded before numbering)
+- `(s8)(u32)x` -> a real unsigned-convert sequence (much larger)
+- 8-bit bitfield stores -> the ternary is evaluated twice, worse
+
+Rule: when a byte/halfword store's temps sit N ring slots past the natural numbering with no other diff, add N redundant masks or narrowing casts on the stored value (`& 0xFF`, `(s16)`), then count the stride. Sibling of #single-bit-bitfield-set-extra-ring-temp-29000 and #bitfield-low24-read-shift-first-5b5d8 (also slot-burning folds).
+- Also run 63, gl_func_0000237C (83.8 -> EXACT): get-or-create ctor where the NM wrap had m2c's `var_s0 = arg0` + `temp_v0` locals. Reassigning the PARAM in the `||` fallback (`(arg0 != 0) || (arg0 = alloc(0x2FC), arg0 != 0)`) moves `or s0,a0` above `sw ra` like the target (with the separate local it sits in the bnez delay slot); the remaining schedule diff (arg1 reload + `lui a1` below the swc1 run) was statement order: store `+0x1C0 = arg1` BEFORE the four zero-float stores. The same arg0-as-self spelling took the TWO-level twin gl_func_000001CC (83.0 -> EXACT): with a separate `self` local the frame is 0x40 (one more named home) and `or s0,a0` sits in the bnez delay slot; with arg0 reassigned the frame is the target's 0x38, and declaring the sub pointer BEFORE `f32 d255 = 255.0f` moves its spill from +0x30 to +0x34. The THREE-level twins 05EC/0400 (sub + sub2 locals) still come out 0x40 with arg0-as-self: one unused slot sits between the named homes and the two CSE temps (`s0+0x10C`/`s0+0x124`), and no decl order, block-scoped decls, named temps, typed members, or comma literals removed it (05EC/0400 stay ~94-97). Comma literals `(0, 250.0f) / (0, 255.0f)` do keep the division at run time at -O2 with no d255 local.
