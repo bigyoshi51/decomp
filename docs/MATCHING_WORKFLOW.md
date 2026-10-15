@@ -12,6 +12,7 @@
 
 _76 entries. Auto-generated from per-memo notes; content may be rough on first pass — light editing welcome._
 
+- [game_uso NCC (C++) donor recipe: game_uso is C++ -- compile a function with IDO 7.1 NCC from a `.cpp` donor and REPLACE_FUNC_BODY-splice it into game_uso.c.o; no Yay0 / objdiff / expected/ change (D204 85.8 + 10694 71.5 -> EXACT, 2026-10-15 agent-g)](#game-uso-ncc-cplusplus-donor-recipe) — _generic `build/src/%.cpp.o` NCC rule, all symbols `extern "C"`, placeholder body in the host, `+=` per function. Tell: pointer-to-member compare (`addi` + `lw at` 2-word loop), PMF passed by value (a1/a2 + home slots)._
 - [Mnemonic-histogram diff triages giant NM bodies in one pass — swc1-deficit + trunc.w.s-surplus = s32-cast float stores; sw-zero at vtable offset = blanked-reloc decoded as 0; check frame size before chasing sp offsets (90CC, agent-f 2026-08-22)](#mnemonic-histogram-giant-fn-triage)
 - [USO expected-side reloc injection (spimdisasm-migration phase 1) is score-NEGATIVE: objdiff 3.7 already fully credits blind literal-0 vs reloc-to-blank; C234/55A0/6808 residuals are structural, NOT reloc rendering (bootup_uso 526-site prototype, agent-f 2026-08-23)](#uso-expected-reloc-injection-negative)
 - [NM-body GROWTH in a clipped unit shifts tail symbols past NON_MATCHING_TEXT_CLIP_KEEP_ALIGN — sentinel false-drops (62F08 100->20) until the Makefile clip is advanced to the tail's new end (54E78 pass, 2026-08-22)](#nm-clip-advance-on-body-growth) — _clip = last real fn's end in the NM object; recompute as st_value+st_size of the tail symbol after `make non_matching_objects` prints the resize warnings; sentinels re-probe 100 after. Baseline-vs-edit stash test distinguishes this from a real regression._
@@ -12180,3 +12181,112 @@ f(0, msg, v, 0);`, which gives `or v0,s0; lw a2,0(v0); addiu s0,4`. With `*q` in
 before the lw. (2) for a read before a `break`, use `q = arg1; arg1 = q + 1; flag = *q;` on one line, so the lw goes before
 the `b` and the addiu into its delay slot. `q = arg1; arg1 += 1;` with `flag = *q;` on the next line put the lw in the
 delay slot. Neither fix needs the donor, so in-unit percentages can use them too.
+
+## game_uso NCC (C++) sub-unit / donor recipe (D204 85.8 -> EXACT, 10694 71.5 -> EXACT, 2026-10-15 agent-g) <a name="game-uso-ncc-cplusplus-donor-recipe"></a>
+
+game_uso was written in C++ and compiled by IDO 7.1's own C++ driver `NCC`
+(edg front end), which is in-tree at `tools/ido-static-recomp/build/7.1/out/NCC`
+(+ `edgcpfe`). It runs unmodified with the game flags. Codegen that only edg
+produces (pointer-to-member-function compare/call, PMF passed by value, and
+probably the inlined-member `addiu rB,base,K` + `0x10(rB)` shapes) cannot be
+written in cfe C. Why it is NCC: [IDO_CODEGEN #game-uso-is-cplusplus-ncc-pmf-compare-d204](IDO_CODEGEN.md#game-uso-is-cplusplus-ncc-pmf-compare-d204).
+Using the game's own compiler front end is the same kind of thing as the IDO
+5.3 donors. It is not a toolchain patch.
+
+**Route: REPLACE_FUNC_BODY donor splice. The Yay0 binary-slice carve is not needed.**
+The splice keeps game_uso as one unit, so the Yay0 block rule, objdiff.json,
+`expected/` and tenshoe.ld all stay as they are. `scripts/replace-function-body.py`
+swaps the donor's bytes into the host `.o` (both trees), shifts later symbols
+and relocs, and imports the donor's relocs (renaming extern symbols into the
+host symtab). objdiff then scores the spliced function in the existing
+`src/game_uso/game_uso` unit against the existing INCLUDE_ASM-built expected
+object, so expected/ is never touched and the circular-expected trap cannot
+happen. A binary-slice carve (PATTERNS #feedback-yay0-uso-blocks-file-split-recipe)
+would also need a new objdiff unit, a captured expected/ object and a slice
+step in the 0xC0F0-drop block rule, all for the same bytes.
+
+**Makefile (all below `all:` so the default goal is unchanged):**
+
+```makefile
+# Tools section
+NCC      := $(IDO_DIR)/NCC
+
+NCC_CFLAGS := -G 0 -non_shared -Wab,-r4300_mul
+build/src/%.cpp.o: src/%.cpp
+	@mkdir -p $(dir $@)
+	$(NCC) -c $(NCC_CFLAGS) $(OPT_FLAGS) $(MIPSISET) -o $@ $<
+GAMEUSO_D204_DONOR := build/src/game_uso/game_uso_ncc_D204.cpp.o
+build/src/game_uso/game_uso.c.o build/non_matching/src/game_uso/game_uso.c.o: REPLACE_FUNC_BODY := game_uso_func_0000D204=$(GAMEUSO_D204_DONOR)
+build/src/game_uso/game_uso.c.o build/non_matching/src/game_uso/game_uso.c.o: $(GAMEUSO_D204_DONOR)
+# next function: REPLACE_FUNC_BODY += ... and another prerequisite line
+```
+
+- Leave `-Xcpluscomm` (a cfe flag) out of the NCC flags. NCC is invoked with
+  no asm-processor, because a donor has no GLOBAL_ASM.
+- `C_FILES` is `find -name '*.c'`, so `.cpp` donors are never linked and need no
+  `filter-out` entry (unlike the `.c` donors).
+- The explicit prerequisite line makes the host rebuild when the `.cpp`
+  changes. Without it, the recipe's `$(MAKE) $$donor` only builds the donor.
+  `$<` stays `src/game_uso/game_uso.c` because extra prerequisites are
+  appended after the pattern's.
+- game_uso had no REPLACE_FUNC_BODY before this. The first spec uses `:=` and
+  every later one uses `+=`. Don't add a second `:=`.
+
+**Donor `.cpp` (`src/game_uso/game_uso_ncc_<OFF>.cpp`):**
+- Wrap every extern in `extern "C" { ... }` and define the function as
+  `extern "C" void game_uso_func_XXXX(...)`. That keeps the names unmangled, so
+  the splice finds the function symbol and the imported relocs carry the real
+  callee and data names (`game_uso_func_0000ECE8`, `game_uso_D_807FF3B8`,
+  `D_00000000`, ...). The donor's callee names must equal the expected
+  object's reloc names (for example `game_uso_func_0000E91C`, not the host's
+  `_1arg` alias).
+- Don't include `common.h`. Declare what you use (`extern char sym;` plus
+  `#define I(b,o) (*(int *)((char *)(b) + (o)))`-style accessors).
+- PMF layout: `struct A { char pad[40]; virtual void m(); }; typedef void (A::*PM)();`.
+  The `40` puts the vptr at +0x28, which is the fallback offset in the
+  dispatch. Compare against the extern null PMF the USO ships
+  (`*(PM *)(&game_uso_D_807FF3B8 + 0xDC8)`), not literal `0`. With literal `0`,
+  edg emits its own `.data` null object.
+- Warning 3255 ("pointer points outside of underlying object") on `&sym + K`
+  is harmless. `-woff 3255` silences it.
+
+**Host `game_uso.c`:** replace the whole `#ifdef NON_MATCHING / #else
+INCLUDE_ASM / #endif` with a decode comment plus a placeholder body
+(`void f(int *a0) { volatile int *ret = a0; }`, which compiles to 8 bytes). The
+splice reports `0x8->0x214` and grows `.text`. Remove INCLUDE_ASM completely:
+the land script refuses any leftover, and an INCLUDE_ASM path would also drag
+in `.s` alias labels (D204's `alabel game_uso_func_0000D210`) that make the
+splice abort with "lies inside replaced body". Check that nothing references
+an alias label before you drop it.
+
+**Verify (each one was required):**
+1. Standalone first: `NCC -c -O2 -mips2 -32 -G 0 -non_shared -Wab,-r4300_mul`.
+   Then compare the objcopy'd raw `.text` of the donor with the slice of
+   `expected/src/game_uso/game_uso.c.o` at the function's offset. They must
+   be byte-equal. The USO ships HI16/LO16/26 fields unrelocated with in-place
+   addends, and a REL `.o` carries the same in-place addends, so for these
+   functions the raw bytes match and the block needs no reloc bake.
+   (objdump of expected shows no LO16 relocs because the INCLUDE_ASM lo
+   halves are raw `.word`s. objdiff credits them anyway: D204 and 10694 both
+   score 100.)
+2. Build `make` + `cmp` ROM, then `make verify-blocks`
+   (`game_uso_block1_yay0.bin len 0x11b30`).
+3. Run `make non_matching_objects` + `refresh-report.sh`. The function should
+   reach 100 with 0 exacts lost. Spliced `.text` ends 4 bytes shorter than
+   before (no 16-realign). The block rule's tail assert tolerates that.
+4. Rebuild from a clean state: `rm build/src/game_uso/*.o
+   build/non_matching/src/game_uso/*.o build/assets/game_uso_block1_yay0.bin*`
+   and run it again.
+
+**Landing hazards:** this adds `NCC` + `NCC_CFLAGS` + the `%.cpp.o` pattern
+rule, plus new `.cpp` files. Nothing changes in tenshoe.ld, objdiff.json,
+undefined_syms or expected/. Purge `build/src/game_uso/` and
+`build/non_matching/src/game_uso/` on the landing tree.
+
+**Where else it applies:** the PMF-compare tell (`addi` opcode plus `lw at,`
+as data) appears in only these two game_uso functions. Other game_uso
+coloring caps are worth probing under NCC (cf. 7448's reversed mul operands,
+and the F060/F13C v0-vs-v1 inline-return colouring). B274 and B750 are the
+remaining unmatched game_uso functions with a `jalr` (possible virtual
+calls). 10694 matched on the first NCC compile, and its old "mfc1-from-C cap"
+turned out to be just a missing float prototype for the import.

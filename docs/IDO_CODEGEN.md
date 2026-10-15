@@ -14318,6 +14318,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [2AA30 (post, 82.5 -> EXACT 65/65): a store sitting in a `bltz` (non-likely) delay slot runs on BOTH paths, so the C does the store BEFORE the test (`o->h8--; if (o->b29) return;`); that is also why `addiu t7,v1,-1` fills the earlier `bnez` slot. Same fn: post-call `or a1,v0,zero` before a `-1` test = the result is the NEXT call's a1 (agent-c 2026-10-15)](#store-in-nonlikely-delay-slot-runs-first-2aa30) -- _decrement after the latch test sinks the `addiu` and leaves a nop._
 - [2BAAC (post, 84.9 -> EXACT 43/43): u8 param passed on to a call stays in a1 only if the callee is PROTOTYPED with an `unsigned char` param (K&R / int prototype copy op into s0 and grow the frame); `beqz zero` arms all landing on the set-bit block = shared fall-through tail with an early `return` in the clear arm; u8 bitfield store burns one ring slot vs `|= 8` (agent-c 2026-10-15)](#uchar-prototype-keeps-param-in-a1-2baac) -- _scanner false positive: `andi a1,a1` + home store, then `or v0,a1` copy for the tests._
 - [6280C (post0b, 56.7 -> EXACT 56/56): three webs rotated across a3/a2/v1 (scanner "a3 &0xffff" was a plain local) = a spilled `sw aN` before a jal with nothing setting aN is an EXTRA assert argument; passing `lo` pins it to a2 (agent-c 2026-10-15); 2nd instance 4D3E4 78.1 -> EXACT + `call-shape-scan.py --spill` flags the pattern](#spilled-arg-reg-is-extra-assert-arg-6280c) -- _rotation, not a coloring cap._
+- [2FB74 (post, 97.0 -> EXACT 612/612): one local reused by several switch cases is ONE web set; splitting the case-39 use into its own local undid a v/c/b rotation (a2/v1/a3 -> a3/a2/v1) that the --spill scanner had pinned on an extra arg; a named test local after an intervening store became a v0 global web (inline the test); `p = &global` inside the inner arm keeps `lui/addiu` unfolded (agent-c 2026-10-15)](#per-case-local-split-rotation-2fb74) -- _try web splits before adding call args._
 - [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
@@ -29736,7 +29737,7 @@ compiles to 0x214 bytes, every instruction identical to the target, relocs ident
 
 **Wider implication.** NCC is a different front end for plain C too: compiling game_uso 7448's cfe NM body with NCC swaps the mul.s operand load order (the "textually reversed mul operands" lever in that wrap is a cfe-side compensation), and NCC's inlined member functions materialize `this` as `addiu rB,base,K` + `0x10(rB)` (the unfolded base+K shape that recurs across game_uso -- FD04, 7448). game_uso (and possibly other cfront-flavoured USOs, cf. the inlined-ctor 688F8 entry) was most likely written in C++. Functions at a "coloring cap" in game_uso are worth re-probing as C++ under NCC; 10694 has the same PMF block.
 
-**Landing needs infra (not done yet).** game_uso is one `game_uso.c` TU whose `.text` becomes Yay0 block 1. An NCC function must be its own TU: carve game_uso.c into [0,0xD208) / D204.cpp / [0xD41C,end) (or the NCC region) and concatenate the `.text` in the block recipe exactly like the mgrproc/timproc region splits (MATCHING_WORKFLOW Yay0 split), plus objdiff units, expected/ objects captured from INCLUDE_ASM-path builds (never self-refreshed from the C++ build -- circular-expected trap), and an asm-processor-free `.cpp.o` rule (no GLOBAL_ASM in the C++ TU). Verify with `make verify-blocks` + ROM cmp.
+**LANDED (2026-10-15 agent-g):** D204 and 10694 are EXACT via an NCC `.cpp` donor + REPLACE_FUNC_BODY splice into game_uso.c.o. No Yay0 carve, objdiff unit or expected/ change was needed. Recipe: [MATCHING_WORKFLOW #game-uso-ncc-cplusplus-donor-recipe](MATCHING_WORKFLOW.md#game-uso-ncc-cplusplus-donor-recipe).
 
 ## Materialized flag bool (`sltu tB,zero,tM; beqzl tB`) + flag-word reload = `((p->f & M) != 0) == 0 || ((unsigned *)p)->f & N`; dead-param pointer colouring (game_uso F060 91.18 -> 99.64, F13C 78.85 -> 99.57, 2026-10-15 agent-g) <a name="materialized-bool-flag-test-sltu-beqzl-f060"></a>
 
@@ -29761,4 +29762,31 @@ The old wraps wrote `((p[4] & 0x100) == 0 || (p[4] & 0x200) != 0) && v[0x938/4]`
 2. The second test reads the flag through a different type, `((unsigned int *)p)[4] & 0x200`; the type split defeats uopt's load CSE so the target's reload appears (same mechanism as #type-split-cse-and-dead-bump-6cf0).
 
 Colouring: target p sits in an arg register (a0 after a call in F060, a1 in F13C). Assigning p into a dead param (`a0 = (int *)v[0x800/4];` in F060; an unused second param `int *a1` in F13C) gives exactly that register (the 7ACC dead-param lever). Remaining 3-word residual in both: `v` colours v0 where the target has v1; under NCC an edg-inlined member function with `this = v` produces v1 because the inline's return temp holds v0 (cfe has no equivalent found yet).
+
+## A local shared by several switch cases rotates arg-register colours; split the case's own use (gl_func_0002FB74 97.0 -> EXACT, 2026-10-15 agent-c) <a name="per-case-local-split-rotation-2fb74"></a>
+
+Target (post, 0x990, two jumptables, no s-regs): v (param a1) copied to a3, the ladder counter c in a2 (init in the
+prologue delay), a level local in v1. The 97.0 wrap had v a2 / c v1 / level a3, everywhere. `call-shape-scan.py --spill`
+flagged the c spill at a 2-arg call (a2 saved, unset), but c is a known 0 on that path, so passing it as a third arg
+emitted `or a2,zero,zero`; passing it at a later call made c a2 and pushed v to its stack home. Neither was the fix.
+
+The fix was a web split: the wrap used one `b` for four unrelated case-local values (case 2's 0/1 bank, case 36's
+gate word and toggle, case 39's level, case 512's 0/1). Giving case 39 its own local restored all three colours
+(diff 244 -> 136 lines, standalone). Then, one at a time:
+
+| change | diff lines |
+|---|---|
+| `case 258: case 2:` share one arm (beql into the arm with `c = 28` in the delay; #beql-into-arm-shared-case-labels-2f934) | 130 |
+| case 39's `n = gN` read into the `cmd` web (v0) after `b3 = 0;`; level steps `b3++; ... b3++;` (gives `or v1,t1` then `addiu v1,t1,1`, i.e. a copy of the constant-1 register plus 1, not a folded 2) | 154 -> |
+| case 34: `gH = 0; if (gG != 4)` inline. A named `n = gG;` before the store was a global web in v0; the target loads into t6 | 52 |
+| case 36 toggle through `b` (`b = tgl; sel = b + 186; b ^= 1; tglw = b;`) | 48 |
+| the `(0x1010300, 0)` call is `addiu a1,zero,0` = 0.0f to the `(int, float)` blank alias | 46 |
+| case 17: `p = &chan;` moved INSIDE the `gD == 0` arm. One level up, IDO folded the address into `lbu a0,3(a0)`. Inside, it stays `lui v0; addiu v0,v0,0` (scheduled above the `bnez`, which loses its likely form), as the target has | 38 = relocs only |
+
+Declaration order changed nothing here, and variable names do not matter (IDO renames by web). When several webs
+rotate together, look for a local that the wrap reuses across unrelated cases before adding call arguments. The
+`--spill` hit was real (c is spilled there), but it was not an extra argument.
+
+Landing: 29CCC / 31334 donor recipe, two tables at `_rodata` +0 / +0x54 under one pin (0x1750); baked counter /
+toggle words at 0x1C908 / 0x1C90C as per-site pinned names; baked jals 0x423A4 / 0x44B70 as `gl_ref_` pins.
 
