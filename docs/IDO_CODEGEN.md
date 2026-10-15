@@ -14317,7 +14317,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [1EE78 (post, 83.5 -> EXACT 42/42): K&R `u16` param narrowed IN PLACE (`sw a3,home; andi a3,a3,0xffff; bnez a3`) only under `if (!a3)` -- `a3 == 0`, `a3 <= 0`, casts and masks all narrow into t0/v1; plus Gfx-pair `dl++` post-increments and one-line pair statements (agent-c 2026-10-15)](#knr-u16-not-test-inplace-narrow-1ee78) -- _the scanner's "missing a3" at the call was the entry narrowing, not an argument._
 - [2AA30 (post, 82.5 -> EXACT 65/65): a store sitting in a `bltz` (non-likely) delay slot runs on BOTH paths, so the C does the store BEFORE the test (`o->h8--; if (o->b29) return;`); that is also why `addiu t7,v1,-1` fills the earlier `bnez` slot. Same fn: post-call `or a1,v0,zero` before a `-1` test = the result is the NEXT call's a1 (agent-c 2026-10-15)](#store-in-nonlikely-delay-slot-runs-first-2aa30) -- _decrement after the latch test sinks the `addiu` and leaves a nop._
 - [2BAAC (post, 84.9 -> EXACT 43/43): u8 param passed on to a call stays in a1 only if the callee is PROTOTYPED with an `unsigned char` param (K&R / int prototype copy op into s0 and grow the frame); `beqz zero` arms all landing on the set-bit block = shared fall-through tail with an early `return` in the clear arm; u8 bitfield store burns one ring slot vs `|= 8` (agent-c 2026-10-15)](#uchar-prototype-keeps-param-in-a1-2baac) -- _scanner false positive: `andi a1,a1` + home store, then `or v0,a1` copy for the tests._
-- [6280C (post0b, 56.7 -> EXACT 56/56): three webs rotated across a3/a2/v1 (scanner "a3 &0xffff" was a plain local) = a spilled `sw aN` before a jal with nothing setting aN is an EXTRA assert argument; passing `lo` pins it to a2 (agent-c 2026-10-15)](#spilled-arg-reg-is-extra-assert-arg-6280c) -- _rotation, not a coloring cap._
+- [6280C (post0b, 56.7 -> EXACT 56/56): three webs rotated across a3/a2/v1 (scanner "a3 &0xffff" was a plain local) = a spilled `sw aN` before a jal with nothing setting aN is an EXTRA assert argument; passing `lo` pins it to a2 (agent-c 2026-10-15); 2nd instance 4D3E4 78.1 -> EXACT + `call-shape-scan.py --spill` flags the pattern](#spilled-arg-reg-is-extra-assert-arg-6280c) -- _rotation, not a coloring cap._
 - [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
@@ -14330,6 +14330,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso 7ACC (98.96 -> EXACT 84/84): a value in an ARG register (`lw a1,..`/`lw a2,..`) where the build has a ugen temp (t3/t9) = a REUSED named local or a DEAD PARAM reassigned (each web keeps the var's colour); taking a1/a2 that way pushes a long-lived call result from a2 to t0 and renumbers the tail temps; decl order fixes its call-spill slot. Also 7448 natural-form probe (agent-g 2026-10-15)](#reused-local-webs-and-dead-param-colour-7acc) -- _tell: the target's temps skip one t-register (t2.. where build has t1..) and the result is copied `or t0,v0,zero` instead of `or a2,v0,zero`._
 - [game_uso 6CF0 (97.64 -> EXACT 102/102): a `volatile` reload used only to defeat CSE moves the param-web SPLIT point; an int-typed read (`(char *)a0[0x30/4]` vs the earlier `*(char **)`) also stays out of CSE and leaves the split alone; a dead `addiu v0,v0,K` after folded `K(v0)` reads = `p += K` placed BEFORE reads through p (agent-g 2026-10-15)](#type-split-cse-and-dead-bump-6cf0)
 - [game_uso FD04 (97.08 -> EXACT 50/50): a single-use `addiu aN,v1,K` + `lwc1 0x10(aN)` that refuses to fold = a base local spelled `(float *)(*(char **)(s0 + 0xB4) + K)` with the LOAD INLINE (a named `base2 + K` folds); the same spelling dropped the do-while(0) BB-split hacks and fixed a store-order 'scheduler tie' (agent-g 2026-10-15)](#inline-load-base-plus-k-no-fold-fd04)
+- [game_uso is C++ compiled by IDO 7.1 NCC (edg front end), not cfe: the `addi`/`at` 2-word compare loop + 1/0 flag is a pointer-to-member-function `pmf != 0` test, the bgez / vptr-offset-40 block is `(this->*pmf)()`; NCC compiles the C++ body of game_uso D204 instruction-identical (0x214), cfe can't (2026-10-15 agent-g)](#game-uso-is-cplusplus-ncc-pmf-compare-d204) -- _Tell: `or t7,v1; addi t8,v1,8; lw at,0(t7); lw t9,0(t6); addi t7,4; addi t6,4; bnel at,t9; li t8,1; bnel t7,t8; lw at,0(t7); b; li t8,0`. NCC also orders mul.s operand loads differently from cfe on plain C (game_uso 7448's "reversed mul operands" lever is a cfe-side compensation)._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29573,6 +29574,15 @@ here was not a param narrowing (no home store).
 
 
 
+
+**Second instance + scanner flag (gl_func_0004D3E4, post0b, 78.1 -> EXACT 33/33, 2026-10-15 agent-c).** The target
+stores the unset a1 (`sw a1,28(sp)` before the jal, reload after it), so the assert takes the head pointer as its
+middle argument: `cb(msg, head, node)`. The entry `move a2,a0` is the third argument, not a copy for later use.
+`call-shape-scan.py --spill` now prints `SPILL <fn> ... #k aN` for target call sites that store an unset $aN to
+the stack when the NM site does not. Site #0 hits are often only K&R entry homes, so check the window before
+adding an argument. The other fix here was operand order: a named `nxt = node->0x54` local turned `bnel t7,v0`
+into `bnel v0,t7`, and writing both 0x54 reads inline fixed it.
+
 ## Reused local webs + dead-param reassignment colour arg registers; a call result pushed a2 -> t0 (game_uso_func_00007ACC 98.96 -> EXACT, 2026-10-15 agent-g) <a name="reused-local-webs-and-dead-param-colour-7acc"></a>
 
 Target (0x150, frame 0x38, one jal to an in-unit 4-arg callee whose result `r` lives to the end and is spilled
@@ -29644,3 +29654,86 @@ followed by a single small-offset access `0x10(rB)`, where folding would be lega
 assigned to a local directly from the load expression. Check this before calling it a fold cap (FC34's
 a3 = +0x770 turned out to be an extra call arg instead; tell the two apart by whether rB is still live
 at a jal).
+
+## game_uso is C++ compiled by IDO 7.1 NCC (edg) -- PMF compare/call is NCC-only; D204 instruction-identical under NCC (2026-10-15 agent-g) <a name="game-uso-is-cplusplus-ncc-pmf-compare-d204"></a>
+
+**Tell.** A loop that IDO's C front end never produces:
+
+```
+addiu v1,a3,200          ; &obj->pmf (8 bytes: short d, short i, int f)
+lui   t6,%hi(nullpmf); addiu t6,t6,%lo(nullpmf)
+or    t7,v1,zero
+addi  t8,v1,8            ; signed addi, not addiu
+lw    at,0(t7)           ; `at` used as a data register
+lw t9,0(t6); addi t7,t7,4; addi t6,t6,4
+bnel  at,t9,FOUND ; addiu t8,zero,1
+bnel  t7,t8,LOOP  ; lw at,0(t7)
+beqz  zero,FOUND  ; addiu t8,zero,0
+addiu t8,zero,1
+FOUND: beqzl t8,skip ...
+lh i,202(a3); lh d,200(a3); bgez i,virt; addu a0,d,a3     ; this' = this + d
+  (i<0) fn = f
+  virt: off = f ? f : (d ? 0 : 40); vtbl = *(this'+off); e = vtbl + i*8; a0 = this' + e->d; fn = e->f
+jalr fn
+```
+
+This is the edg-lowered `if (this->pmf != 0) (this->*pmf)();` with a cfront-layout pointer-to-member-function (`{short delta; short index; union {fnptr; short vptr_off}}`), compared memberwise against a static null PMF, and the vptr at offset 40 (0x28) of the target class (that is where the `40` fallback comes from: a class whose first virtual-declaring base has 40 bytes of data before the vptr). cfe rejects struct `==` ("Unacceptable operand of == or !="), and no C spelling makes ugen allocate `at` or emit `addi` -- every C NM body capped here (D204 was 81.14 with a hand-written do/while scan).
+
+**The compiler is in-tree.** `tools/ido-static-recomp/build/7.1/out/NCC` (+ `edgcpfe`) is IDO 7.1's own C++ driver and runs with the same flags: `NCC -c -O2 -mips2 -32 -G 0 -non_shared -Wab,-r4300_mul`. A C++ body of game_uso_func_0000D204:
+
+```cpp
+extern "C" {
+extern char import_80020098;
+extern char game_uso_D_807FF68C;
+extern char game_uso_D_807FF3B8;
+extern char D_00000000;
+void game_uso_func_07C0C0(int, char *, int);
+void game_uso_func_0000D9CC(void *);
+void game_uso_func_0000ECE8(void *);
+void game_uso_func_076E78(int, int);
+void game_uso_func_0775F8(void *);
+}
+struct A { char pad[40]; virtual void m(); };
+typedef void (A::*PM)();
+struct H : A { char pad2[200-44]; PM pm; };
+#define I(b,o) (*(int *)((char *)(b) + (o)))
+#define F(b,o) (*(float *)((char *)(b) + (o)))
+extern "C" void game_uso_func_0000D204(H *a0) {
+    H *a3 = a0;
+    if (I(&import_80020098, 0x64) == 0) {
+        float th = F(&D_00000000, 0x1F4);
+        if (F(I(a0, 0xB4), 0xBC) < th) {
+            I(a0, 0x120) = 0;
+        }
+        if (F(I(a0, 0xB4), 0xBC) < th) goto clear_bits;
+        if (I(a3, 0x120) == 0) goto set_bits;
+    clear_bits:
+        { int *child = (int *)(I(&import_80020098, 0x138) + 0xB4); *child &= ~3; }
+        goto bits_done;
+    set_bits:
+        { int *child = (int *)(I(&import_80020098, 0x138) + 0xB4); *child |= 3; }
+    bits_done:;
+    }
+    {
+        int v0 = I(a3, 0xB4);
+        if (I(v0, 0x938) == 0 && F(v0, 0x9D0) < 700.0f && F(v0, 0x31C) < -100.0f) {
+            game_uso_func_07C0C0(I(v0, 0x800), &game_uso_D_807FF68C + 4252, 1);
+        }
+    }
+    if (I(a3, 0x114) != 0) game_uso_func_0000D9CC(a3);
+    if (a3->pm != *(PM *)(&game_uso_D_807FF3B8 + 0xDC8)) (a3->*(a3->pm))();
+    game_uso_func_0000ECE8(a3);
+    if (I(a3, 0x74) != 0) {
+        game_uso_func_076E78(I(a3, 0x58), I(a3, 0x74));
+        if (I(a3, 0x104) != I(a3, 0x74)) I(a3, 0x104) = I(a3, 0x74);
+    }
+    game_uso_func_0775F8(a3);
+}
+```
+
+compiles to 0x214 bytes, every instruction identical to the target, relocs identical (comparing against the extern null PMF instead of literal `0` makes edg reference `game_uso_D_807FF3B8+0xDC8` instead of emitting its own `.data` null object). Note the operand order: NCC wants `0x104 != 0x74` where cfe wanted `0x74 != 0x104` for the same `beq a1,t9`. (The block above is the complete, verified file.)
+
+**Wider implication.** NCC is a different front end for plain C too: compiling game_uso 7448's cfe NM body with NCC swaps the mul.s operand load order (the "textually reversed mul operands" lever in that wrap is a cfe-side compensation), and NCC's inlined member functions materialize `this` as `addiu rB,base,K` + `0x10(rB)` (the unfolded base+K shape that recurs across game_uso -- FD04, 7448). game_uso (and possibly other cfront-flavoured USOs, cf. the inlined-ctor 688F8 entry) was most likely written in C++. Functions at a "coloring cap" in game_uso are worth re-probing as C++ under NCC; 10694 has the same PMF block.
+
+**Landing needs infra (not done yet).** game_uso is one `game_uso.c` TU whose `.text` becomes Yay0 block 1. An NCC function must be its own TU: carve game_uso.c into [0,0xD208) / D204.cpp / [0xD41C,end) (or the NCC region) and concatenate the `.text` in the block recipe exactly like the mgrproc/timproc region splits (MATCHING_WORKFLOW Yay0 split), plus objdiff units, expected/ objects captured from INCLUDE_ASM-path builds (never self-refreshed from the C++ build -- circular-expected trap), and an asm-processor-free `.cpp.o` rule (no GLOBAL_ASM in the C++ TU). Verify with `make verify-blocks` + ROM cmp.
+

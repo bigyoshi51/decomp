@@ -16,6 +16,9 @@ compares:
 It prints functions whose call count matches but some site differs (the
 "call-arity" lever class), plus call-count mismatches as a separate tag.
 Reloc-blind: only mnemonics and register operands are compared.
+--spill adds SPILL lines: target call sites where an $aN is stored to the
+stack but never written since the previous call (and the NM site does not
+do the same) -- the 6280C "saved arg reg = extra argument" tell.
 """
 import json, re, subprocess, sys, argparse
 
@@ -62,14 +65,34 @@ def dest(mn, ops):
     return ops[0]
 
 
-def sites(ins):
+def spilled_unset(ins, lo, hi):
+    """$aN stored to the stack in ins[lo:hi] (incl. the jal delay slot) and
+    never written in that window: the 6280C tell -- an arg register saved
+    around a call but not set for it is usually an extra argument."""
+    out = set()
+    wr = set()
+    for mn, ops in ins[lo:hi]:
+        if mn == 'sw' and len(ops) == 2 and ops[0] in AREGS and ops[1].endswith('(sp)') \
+                and ops[0] not in wr:
+            out.add(ops[0])
+        d = dest(mn, ops)
+        if d:
+            wr.add(d)
+    return out
+
+
+def sites(ins, spill=None):
     res = []
     written = set()
+    start = 0
     i = 0
     while i < len(ins):
         mn, ops = ins[i]
         d = dest(mn, ops)
         if mn in ('jal', 'jalr'):
+            if spill is not None:
+                spill.append(spilled_unset(ins, start, i + 2))
+            start = i + 2
             if i + 1 < len(ins):
                 dd = dest(*ins[i + 1])
                 if dd:
@@ -98,6 +121,8 @@ def main():
     ap.add_argument('funcs', nargs='*')
     ap.add_argument('--report', default='report.json')
     ap.add_argument('--max-size', type=int, default=100000)
+    ap.add_argument('--spill', action='store_true',
+                    help='also flag target call sites that save an unset $aN to the stack (6280C extra-arg tell)')
     a = ap.parse_args()
     nm = 'build/non_matching/src/%s.c.o' % a.unit
     ex = 'expected/src/%s.c.o' % a.unit
@@ -115,8 +140,20 @@ def main():
     for fn in want:
         if fn not in sn or fn not in se:
             continue
-        a_ = sites(disasm(nm, *sn[fn])); b_ = sites(disasm(ex, *se[fn]))
+        spn, spe = [], []
+        a_ = sites(disasm(nm, *sn[fn]), spn); b_ = sites(disasm(ex, *se[fn]), spe)
         tag = '%s %d %.1f' % (fn, se[fn][1], pct.get(fn, -1))
+        if a.spill:
+            # target sites whose arg reg is spilled-but-unset where the NM site
+            # does not spill it (or whose NM site does not exist)
+            sd = []
+            for k, ts in enumerate(spe):
+                ns = spn[k] if k < len(spn) else set()
+                extra = sorted(ts - ns)
+                if extra and not (set(extra) & set(b_[k][1])):
+                    sd.append('#%d %s' % (k, ''.join(extra)))
+            if sd:
+                print('SPILL  %s  %s' % (tag, '; '.join(sd)))
         if len(a_) != len(b_):
             print('COUNT  %s  nm=%d tgt=%d' % (tag, len(a_), len(b_)))
             continue

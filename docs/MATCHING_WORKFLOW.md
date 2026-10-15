@@ -25,6 +25,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Resolved-jal m2c overlay pipeline: full-body redecode of big raw-.word USO NM fns (8FC8 41.5→65.8, B624 20.7→62.6, 2026-07-23)](#resolved-jal-m2c-overlay-pipeline) — _disasm expected-.o (NOT default search: build/non_matching hits first!), overlay .s jal/lui symbols by insn index, %lo every consumer of every lui (multi-consumer + dual-lui-branch-join + bc1fl-label-space gotchas), fabricate .text-invisible jtbl entries, m2c --valid-syntax, char*-only locals, reuse sibling-block decls. Hand-paraphrase 'FP-schedule cap / fuzzy=None' verdicts do NOT transfer to the m2c emission — re-test them._
 - [Donor-spliced switch jumptables ARE landable: rename donor-local .rodata reloc to <func>_rodata + pin baked %lo in undefined_syms_auto (6DD14 __osDevMgrMain 46.2->100, 2026-07-30)](#donor-splice-switch-jumptable-rodata-rename) — _30AF4 "external jumptable permanent cap" holds only for in-unit compiles; for REPLACE_FUNC_BODY donors the table already ships in the USO data segment. Also: 74 entries -> 75._
 - [Two jumptables in one donor share ONE renamed `<func>_rodata` pin (the second table's offset rides as the %lo addend); extract-uso-jumptable.py can start its dump one entry late (gl_func_00031334 87.5 -> EXACT, 2026-10-15 agent-c)](#two-jumptables-one-donor-31334) -- _check the dump's first roff against the target's `lw tN,LO(at)`; if it is LO+4, entry 0 is missing._
+- [Old "external USO jumptable = structural cap" NM wraps in post0b are donor-splice landable; the extractor's roff is a FILE offset (= imm + 4), so the dump starts AT entry 0 and drops the LAST entry; a float literal after the table rides the same `<func>_rodata` pin (gl_func_00052CD4 77.0 -> EXACT; 3AC5C 97.48 -> EXACT: name a stream word used as a call arg, same-line `q = p; p = q + 1; x = *q;` before a break, 2026-10-15 agent-c)](#post0b-jumptable-donor-52cd4) -- _verify with a known word: RoData file offset imm+4 holds the literal the `lwc1 LO(at)` reads._
 - [GOTCHA: disasm-func.py can return a wrong/stale body — expected/<unit>.c.o is the only ground truth (B154 2026-07-23)](#disasm-func-stale-vs-expected-obj) — _script gave a 123-insn frame-176 shape diffing ~identical to the NM build while objdiff said 58%; real target in expected/.o was 133-insn frame-168 at a different address._
 
 - [`make setup` must never run a FULL `splat split` — a re-split emits 41 of undefined_syms_auto.txt's 3395 lines and mips-linux-gnu-ld SEGFAULTS (1080, new-machine bring-up 2026-09-05)](#make-setup-modes-bin-only) — _asm/, tenshoe.ld, include_asm.h and the auto-sym files are curated source of truth here, not regenerable splat output. Fix: `--modes bin` + `create_undefined_{syms,funcs}_auto: False`. Also: 75 entries -> 76._
@@ -12143,3 +12144,39 @@ param only became a table once every in-range label (-1..9) was written, most of
 `addiu a1,zero,0` is a 0.0f float arg (prototyped `(int, float, int)` blank alias), which is the 3rd arg the
 call-shape-scan flagged.
 
+## post0b external-jumptable NM wraps are donor-splice landable; extractor roff = file offset, dump drops the LAST entry (gl_func_00052CD4 77.0 -> EXACT, 2026-10-15 agent-c) <a name="post0b-jumptable-donor-52cd4"></a>
+
+gl_func_00052CD4 (post0b, 0x468) carried a 2026-06-22 "STRUCTURAL CAP -- NOT C-MATCHABLE (external USO jumptable at
+&D_0+0x1BE4)" verdict. That is the in-unit verdict only: the 29CCC / 44B78 donor splice (IDO 7.1 -O2 donor unit +
+`REPLACE_FUNC_BODY +=` + `<func>_rodata` pin) lands it, 282/282 words, ROM byte-identical. Retest every such wrap.
+
+Reading the table: `extract-uso-jumptable.py --module 0xD9FE28 --shim 0x1466C` printed 36 entries at roff 0x1BE8 for a
+`lw t6,0x1BE4(at)` / `sltiu at,op,37` switch. roff is a bootup.uso RoData FILE offset, which is the code's immediate + 4
+(the 10000.0f that `lwc1 f8,0x1C78(at)` reads sits at file offset 0x1C7C). So the dump starts AT case 0 and the
+missing entry is the LAST one (case 36, read by hand at file offset 0x1C78: raw 0x6755C). Arm offset in the function =
+raw word - shim - vaddr (here raw - 0x67340), equivalently the dump's target - shim - vaddr - 8. (The 31334 section
+above read the same symptom as "starts one entry late"; anchor on a known word before trusting either reading.)
+
+The float literal behind the table needs nothing extra: the donor's .rodata holds the 37-word table at +0 and the
+literal at +0x94, both relocs get renamed to `gl_func_00052CD4_rodata`, and the one pin (0x1BE4) links both
+(0x1BE4, 0x1C78). Baked `lui 2; addiu 0xFD4` message addresses are pinned data refs (`gl_ref_00020FD4_52CD4`).
+
+Codegen notes: every stream read needs the post-inc temp idiom `q = cur; cur += 1; x = *q;`
+(docs/IDO_CODEGEN.md#relocfree-external-jumptable-switch-3ac5c); `op = *p & 0xFFFF` as a plain s32 local lands in a3 on
+its own (a u16 local gives lhu, a u16 param adds a2/a3 home stores). A flag RMW through a `base+0x34` pointer kept the
+`addiu v0,s1,52` only inside `if (1) { }`; the two-arm cases kept it naturally. Stack-homed flags at 52/48/40 depended on
+the full decl list: deleting one unused local moved every slot by 4.
+
+Landing (post0b): new donor in C_FILES filter-out, `GAMELIBS_52CD4_DONOR :=` + its own `REPLACE_FUNC_BODY +=` line after
+the post0b `:=` line, placeholder body in post0b.c, pins appended to undefined_syms_auto.txt, then rebuild the NM object
+and move `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` (62F08 nm offset + 0x50: 0x2e17c -> 0x2e218).
+
+**Second instance, same day: gl_func_0003AC5C (post0b, 0x1FC) 97.48 -> EXACT.** Table at `lw t6,0x1A90(at)`, read by
+hand from RoData file offset 0x1A94 (5 entries; arm = raw - 0x1466C - 0x3AC5C): case 0 = the six-float arm, 1 = float
+0x38, 2 = int 0x30, 3 = call, 4 = skip + flag, so the arms in address order are cases 2, 1, 0, 3, 4. The last 4
+"pure scheduling" words in agent-g's body (docs/IDO_CODEGEN.md#relocfree-external-jumptable-switch-3ac5c) came out of
+the post-inc temp idiom: (1) a stream word used as a CALL ARG needs a named local, `q = arg1; arg1 = q + 1; v = *q;
+f(0, msg, v, 0);`, which gives `or v0,s0; lw a2,0(v0); addiu s0,4`. With `*q` inline in the call, the addiu schedules
+before the lw. (2) for a read before a `break`, use `q = arg1; arg1 = q + 1; flag = *q;` on one line, so the lw goes before
+the `b` and the addiu into its delay slot. `q = arg1; arg1 += 1;` with `flag = *q;` on the next line put the lw in the
+delay slot. Neither fix needs the donor, so in-unit percentages can use them too.
