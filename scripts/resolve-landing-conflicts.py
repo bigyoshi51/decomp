@@ -77,14 +77,42 @@ for path in sys.argv[1:]:
         elif path=='undefined_syms_auto.txt': out+=resolve_syms(o,t)
         else: print('!! cannot resolve',path); sys.exit(2)
     if path=='Makefile':
-        # post-pass: a unit's clip / REPLACE_FUNC_BODY := line must exist once; keep the LAST
+        # post-pass: a unit's clip / REPLACE_FUNC_BODY := line must exist once.
+        # clip: keep the LAST (re-probed later). REPLACE :=: keep the FIRST position
+        # (later += lines on the same unit must stay after it) and union the tokens.
         def key(l):
             m=re.match(r'^(.*?:\s*[A-Z_]+\s*[:+]?=)', l); return m.group(1) if m else None
         idx={}
         for i,l in enumerate(out):
             k=key(l)
             if k and ('CLIP_KEEP_ALIGN' in k or 'REPLACE_FUNC_BODY :=' in k): idx.setdefault(k,[]).append(i)
-        kill=set(i for v in idx.values() if len(v)>1 for i in v[:-1])
-        if kill: print('dropped duplicate assignment lines:', len(kill))
+        kill=set()
+        for k,v in idx.items():
+            if len(v)<2: continue
+            if 'CLIP_KEEP_ALIGN' in k: kill.update(v[:-1]); continue
+            toks=[]
+            for i in v:
+                for t in out[i][len(k):].split():
+                    if t not in toks: toks.append(t)
+            out[v[0]]=k+' '+' '.join(toks)+'\n'; kill.update(v[1:])
+        if kill: print('merged/dropped duplicate assignment lines:', len(kill))
         out=[l for i,l in enumerate(out) if i not in kill]
+        # := expands at parse time: a token naming a donor variable defined further
+        # down would expand empty, so move it to its own += line after that definition.
+        defs={}
+        for i,l in enumerate(out):
+            m=re.match(r'^([A-Z0-9_]+)\s*:=',l)
+            if m: defs.setdefault(m.group(1),i)
+        moves=[]
+        for i,l in enumerate(out):
+            k=key(l)
+            if not (k and 'REPLACE_FUNC_BODY :=' in k): continue
+            keep=[]
+            for t in l[len(k):].split():
+                m=re.search(r'\$\(([A-Z0-9_]+)\)',t)
+                if m and defs.get(m.group(1),-1)>i: moves.append((defs[m.group(1)],k.replace(':=','+=')+' '+t+'\n'))
+                else: keep.append(t)
+            out[i]=k+' '+' '.join(keep)+'\n'
+        for d,line in sorted(moves,reverse=True):
+            out.insert(d+1,line); print('moved forward-referenced token to +=:',line.split()[-1])
     open(path,'w').write(''.join(out)); print('resolved',path)
