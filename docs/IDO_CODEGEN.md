@@ -14315,6 +14315,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [290C8 (post, 90.5 -> EXACT 62/62): "original-a0 spill, permuter-class" = the second call result is assigned back INTO the a0 param (one s0 holds a0 then v0); the scanner's extra a2 at both sites was the spilled a0 copy, not an arg; `p = a0 + K` assigned inside the first call's arg list + key in a block local moves the copy/addiu after the t6/t7 stores (agent-c 2026-10-15)](#param-reassigned-from-call-result-290c8) -- _target `or s0,a0` early, later `or s0,v0` in a beqz delay slot, and no a0 spill: reassign the param._
 - [2A014 (post, 75.9 -> EXACT 26/26): entry `sw a1,home; andi a1,a1,0xff` = an `unsigned char` param narrowed IN PLACE (a1 not passed on); a ring that starts at t7 after it = folded `(unsigned short)v` cast on the table byte; scanner "missing a1" was the entry narrowing, the calls take only the pass-through a0 (agent-c 2026-10-15)](#uchar-param-inplace-narrow-ushort-burn-2a014) -- _`andi a1,a1` (not `andi t6,a1`) plus a home store means the param itself is u8; `a1 & 0xFF` in the index drops the home store._
 - [1EE78 (post, 83.5 -> EXACT 42/42): K&R `u16` param narrowed IN PLACE (`sw a3,home; andi a3,a3,0xffff; bnez a3`) only under `if (!a3)` -- `a3 == 0`, `a3 <= 0`, casts and masks all narrow into t0/v1; plus Gfx-pair `dl++` post-increments and one-line pair statements (agent-c 2026-10-15)](#knr-u16-not-test-inplace-narrow-1ee78) -- _the scanner's "missing a3" at the call was the entry narrowing, not an argument._
+- [2AA30 (post, 82.5 -> EXACT 65/65): a store sitting in a `bltz` (non-likely) delay slot runs on BOTH paths, so the C does the store BEFORE the test (`o->h8--; if (o->b29) return;`); that is also why `addiu t7,v1,-1` fills the earlier `bnez` slot. Same fn: post-call `or a1,v0,zero` before a `-1` test = the result is the NEXT call's a1 (agent-c 2026-10-15)](#store-in-nonlikely-delay-slot-runs-first-2aa30) -- _decrement after the latch test sinks the `addiu` and leaves a nop._
+- [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
 - [4DB50 (post0b, 92.9 -> EXACT 46/46): "unfused beq/beq/b not reachable from switch/if/goto" = 38830 inverted-last-test goto chain + one block local for the arg shared by two arms; plus a 3rd call arg (`lw a2` of the pre-increment count) (agent-c 2026-10-15)](#inverted-last-test-plus-shared-arg-local-4db50) -- _neither-successor-adjacent if: IDO branches on the C condition to the goto target and `b`s to the fallthrough label, so write the test the way the asm branches._
@@ -29470,3 +29472,65 @@ The 2026-06-23 notes called D458 impossible from C, for two reasons. Both were w
 
 The frame went from 0x40 to 0x48 with `s32 pad[2]` declared above `sp30[4]`. A single `int` above it pushed
 sp30 down by 4 and did not change the frame.
+
+## Store in a non-likely delay slot runs first (gl_func_0002AA30 82.5 -> EXACT, 2026-10-15 agent-c) <a name="store-in-nonlikely-delay-slot-runs-first-2aa30"></a>
+
+Target fragment (o->0 is a bitfield word, h8/hA shorts):
+
+    lh   v1,8(a0)
+    sll  t9,v0,2          ; b29 of the cached o->0
+    slti at,v1,2
+    bnez at,run
+    addiu t7,v1,-1        ; h8 - 1 in the bnez slot
+    bltz t9,ret
+    sh   t7,8(a0)         ; store in a NON-likely slot -> runs on both paths
+    lh   t0,10(a0)
+    lh   t1,8(a0)
+
+The `sh` in a plain `bltz` delay slot is executed whether or not the branch is
+taken, so the source decrements before it tests the latch:
+
+    if (o->h8 >= 2) {
+        o->h8--;
+        if (o->b29) return;
+        if (o->hA < o->h8) return;
+        cb(); o->b29 = 1; return;
+    }
+
+With the decrement written after the latch test (`if (o->b29) return;
+o->h8 = c - 1;`), IDO sinks the `addiu` below the `bltz`, the `bnez` slot gets
+a nop, and the reload order flips to `lh 8; lh 10`. None of the other shapes
+tried changed anything: a `d = c - 1` local before the if, int or short `c`,
+nested/inverted ifs, goto. Once the store moved up, the `t7`/`t9`
+numbering and the `lh 10; lh 8` order both matched.
+
+Same function: after a call, `or a1,v0,zero` followed by an `addiu at,-1; beq`
+test on v0 means the result goes on as the NEXT call's a1. Here the 3f22c call
+is `f(o, r)`, not `f(o)`. The call-shape scan flagged that site, and it was a
+real missing arg. The bitfield word explains the
+mixed tests: b31 `srl 31; beqzl`, b29 `sll 2; bltz` (and `sll 2; srl 31;
+bnel at==1` for `!= 1`), plus `lbu/ori 0x20/sb` for `o->b29 = 1`.
+
+## Store-then-test child attach; guard covering only a bracket (gl_func_0004DA40 76.9 -> EXACT, 2026-10-15 agent-c) <a name="store-then-test-child-attach-4da40"></a>
+
+    lw   v0,4(s0)
+    addiu a1,s0,4         ; 2nd arg of the next call, hoisted above the test
+    beqz v0,ret0
+    sw   v0,12(s0)        ; store in the delay slot -> store happens first
+    jal  cb
+    or   a0,v0,zero
+
+= `if ((self->C = self->4) != 0) { cb(self->C, &self->4); ... }`. A local
+`v0 = self->4; if (v0 == 0) return 0; self->C = v0;` puts the value straight
+into a0 and moves the store after the test.
+
+The `return 0` block (`or v0,zero,zero` after a `b` over it) is reached only
+from that first test. The later `if (child->0x70 != 0)` therefore guards just
+the save-global / cb / restore bracket, and the rest of the tail runs
+unconditionally. The scanner flagged a1 "missing" at three more sites. Those
+were the reloaded child pointer happening to colour a1 (class (a)), not real
+args. In gl_func_000337AC (post) the scanner's flags WERE real args. The first
+cb takes `flags` as a 3rd arg (`or a2,s1,zero`; flags then lives in s1 and is
+never homed). The 7-arg call's 4th arg is the otherwise unused param `b`
+(`lw a3,64(sp)`), not `c`.
+

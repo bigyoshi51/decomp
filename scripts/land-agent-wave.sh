@@ -52,6 +52,13 @@ sys.exit(0 if ok else 1)" "$fn"; then
   fi
   if ! git cherry-pick -X union "$h" >"$S/regen-pick.log" 2>&1; then
     bad=$(git diff --name-only --diff-filter=U | grep -v '^expected/.*\.o$')
+    # append-only text conflicts: let the resolver union them, then re-check
+    for t in $bad; do
+      case "$t" in Makefile|undefined_syms_auto.txt)
+        python3 "$SELF_DIR/resolve-landing-conflicts.py" "$t" >/dev/null && ! grep -q '^<<<<<<<' "$t" && git add "$t" && echo "   (auto-resolved $t)";;
+      esac
+    done
+    bad=$(git diff --name-only --diff-filter=U | grep -v '^expected/.*\.o$')
     if [ -n "$bad" ]; then echo "!! non-.o conflict picking $h:"; echo "$bad"; git status --porcelain | grep '^UU'; exit 2; fi
     for o in $(git diff --name-only --diff-filter=U); do regen_unit "$o" || exit 3; done
     git -c core.editor=true cherry-pick --continue >/dev/null 2>&1 || { echo "!! continue failed"; git status --porcelain | head; exit 4; }
