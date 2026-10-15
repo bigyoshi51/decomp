@@ -14316,6 +14316,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
 - [4DB50 (post0b, 92.9 -> EXACT 46/46): "unfused beq/beq/b not reachable from switch/if/goto" = 38830 inverted-last-test goto chain + one block local for the arg shared by two arms; plus a 3rd call arg (`lw a2` of the pre-increment count) (agent-c 2026-10-15)](#inverted-last-test-plus-shared-arg-local-4db50) -- _neither-successor-adjacent if: IDO branches on the C condition to the goto target and `b`s to the fallthrough label, so write the test the way the asm branches._
 - [2BA38 (post, 92.6 -> EXACT 29/29): "stack-byte-spill idiom" = an `unsigned char` param that is a hidden 2nd arg of the first call: entry `sw a1,home; lbu a1,home+3` + `sw a1,0x18` in the jal delay (agent-c 2026-10-15)](#narrow-param-as-call-arg-entry-lbu-spill-2ba38) -- _entry narrow-through-home + own spill slot for a param the C never touches before the call = it is a call argument._
+- [gui 3B80 / 27A0 (NM 91.0 -> 96.2, 92.5 -> 96.5) + tail D288 probe: `volatile` PARAM instead of an `&param` escape keeps a param memory-resident without homing the later params; a dead-looking `move aN,aM` + `move v0,aM` pair after one load = that value is ALSO an extra call arg (CSE temp copied to the named var and to the arg reg); a held register in a2 across a jal = 3rd arg = the PRE-store value of a re-read pointer (agent-g 2026-10-15)](#volatile-param-and-cse-arg-copies-3b80) -- _also: re-read loop-invariant loads at the loop top when the target re-loads them in the loop-test delay slot; it can re-colour a whole s-web._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29302,3 +29303,39 @@ one); the code after the beql target only looked like a separate block because c
 Rule: when a beql target is not the start of a block in the arm layout, and the delay slot holds a copy of the
 instruction just before the target, the branch enters that arm. The case label belongs to that arm.
 
+
+
+## `volatile` param vs `&param` escape; dead-looking copy pairs = an extra call arg (gui 3B80 91.0 -> 96.2, 27A0 92.5 -> 96.5 NM; tail D288 probe, 2026-10-15 agent-g) <a name="volatile-param-and-cse-arg-copies-3b80"></a>
+
+Three source facts found with `scripts/call-shape-scan.py` on gui_uso (the scanner runs as-is on `gui_uso/gui_uso`):
+
+1. **Memory-resident param without homing the tail params.** 3B80 keeps its x cursor `a1` in its home
+   slot (`lw t1,124(sp); addu; sw t1,124(sp)` per iteration, `lw a1,124(sp)` at each call). The old wrap got
+   that with a dead `if (0) { f(&a1); }` escape, but the escape also stored a3 to its home (`sw a3,140`)
+   and pushed the cursor (reassigned a3) into a0. Declaring the parameter `volatile int a1` gives the same
+   load/add/store shape, no `sw a3`, and frees the a-reg the cursor wanted (+4pp with the other fixes).
+   Use it when the target homes exactly one param and reloads it around every use.
+2. **Frame size from declaration order (no pad).** 3B80 was +8 (128 vs 120) with no visible extra slot.
+   IDO gives every declared local a frame word top-down in declaration order, and keeps the frame down to
+   the lowest slot used (see `#loop-promoted-constant-web-absorbs-outside-mul-258c0`). The target has the
+   uninitialised-junk read at frame-4 (116) and the `frow` spill at 92, so exactly five plain locals must be
+   declared between them; moving two declarations after `frow` gave 120 with no codegen change. The same
+   move fixed 2BB0's frame (120 -> 112, `field58` sixth) but did not move its score.
+3. **`move aN,aT` + `move v0,aT` after one load = the loaded value is also a call argument.** 27A0 loads
+   `info = a0[4]` into a3, then copies it to v0 (used later as `info`) and to a1 (overwritten on the other
+   path, so it looks dead). The a1 copy feeds the next jal: `a1 = a0[4]; tile = f(budget / h, a1);` makes the
+   load a CSE temp copied to both the named var and the arg register, reproducing both copies. Passing a named
+   pointer local instead puts that local in an s-reg (IDO allocates the whole variable once any use reaches
+   the jal's block). In 27A0 the temp then took t0 instead of a3, which shifted the t-registers and cost 1pp
+   by objdiff, so the wrap keeps the old form. The source shape is still the right one.
+4. **A register still holding a pre-store pointer at a jal is the 3rd argument.** tail D288 holds
+   `parent = self->0x44` in a2 from the first load to the jal, while arg 2 is computed from a
+   reload of `self->0x44` (after the `parent->0x4C = next` store, which may alias). `f(child, *(char **)self[0x44/4] + 0xB4, parent)`
+   with `parent` a named local declared after `child`, which keeps child's spill at 0x1C, cuts the residual from 12 words to 4. What
+   remains is child coloured a3 throughout, where the target uses v1 before the call and reloads into a3 after it. Copies, `&saved`
+   and dropping `o` do not split the web. Not committed, since only an EXACT would clear the +3pp bar.
+
+Also from 3B80 and 27A0: when the target re-loads a loop-invariant field in the loop-test branch delay
+slot (`lw s2,4(s5)` under `beqz`), write the re-read at the loop top (`s2 = a0[1];`). Holding it in one variable
+had coloured width into s7 and shifted four other s-webs. When a last-iteration arm ends in `subu s0,s0,s1`
+shared with the main arm, look for a `tile = s0;` (`or s1,s0`) at the top of that arm.
