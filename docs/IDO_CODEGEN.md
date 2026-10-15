@@ -14308,6 +14308,9 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [3D8A8 (post0b, 94.0 -> EXACT 27/27): "coloring-order cap (ret $a2 vs $v1, v1 $v1-piece + `or a1,v1` delay copy)" = a 3rd call arg (ret) plus testing the member directly and naming v1 INSIDE the if (agent-c 2026-10-15)](#extra-call-arg-and-test-member-before-naming-3d8a8) -- _a value copied into aN before a jal is an argument; a `bNez vN` + `or a1,vN` delay copy means the tested value was not yet the local._
 - [62E10 (post0b, 85.7 -> EXACT 28/28): "as1 scheduling tie, `li at,0x17` vs `lui a0,%hi(str)`" = an assert spelled `if (!(tag == K)) fail(...)`, not `if (tag != K)` (agent-c 2026-10-15)](#assert-not-eq-spelling-schedules-at-late-62e10) -- _when the compare constant's `li at` is scheduled one slot off against hoisted call args, try the `!(a == b)` spelling._
 - [35FD4 (post0b, 91.2 -> EXACT 30/30): "fn-ptr cast for a float-prototyped blank call emits `lui t9; jalr`" = declare a pinned prototyped alias of the blank instead (agent-c 2026-10-15)](#float-prototype-blank-alias-direct-jal-35fd4) -- _a prototyped `extern` alias pinned to 0 gives single-precision float args AND a direct jal._
+- [3E2B0 (post0b, 96.2 -> EXACT 59/59): "hardcoded-jal cap + 8-byte spill-slot-allocator frame diff" = hA is the result of the call BEFORE `H(&hA)` (sw v0 in the delay slot), H is void, and a register-only `char *g = &D` local cost a frame-top slot (agent-c 2026-10-15)](#register-only-pointer-local-shifts-frame-slots-3e2b0) -- _all spill slots 4 low with the right frame size? delete a register-only local (e.g. `g = &D`) and spell the address inline._
+- [4DB50 (post0b, 92.9 -> EXACT 46/46): "unfused beq/beq/b not reachable from switch/if/goto" = 38830 inverted-last-test goto chain + one block local for the arg shared by two arms; plus a 3rd call arg (`lw a2` of the pre-increment count) (agent-c 2026-10-15)](#inverted-last-test-plus-shared-arg-local-4db50) -- _neither-successor-adjacent if: IDO branches on the C condition to the goto target and `b`s to the fallthrough label, so write the test the way the asm branches._
+- [2BA38 (post, 92.6 -> EXACT 29/29): "stack-byte-spill idiom" = an `unsigned char` param that is a hidden 2nd arg of the first call: entry `sw a1,home; lbu a1,home+3` + `sw a1,0x18` in the jal delay (agent-c 2026-10-15)](#narrow-param-as-call-arg-entry-lbu-spill-2ba38) -- _entry narrow-through-home + own spill slot for a param the C never touches before the call = it is a call argument._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29134,6 +29137,48 @@ Rule: a one-slot swap between a compare constant (`li at`) and hoisted arg setup
 A cross-module call with single-precision float args (`lui a3,0x4120` = 10.0f as raw bits, `swc1 $f4,16(sp)` = 400.0f) cannot go through the file's K&R `gl_func_00000000()`, which promotes floats to double. Casting the blank to a prototyped function pointer gets the float args right but emits an indirect call (`lui t9,0; addiu t9,t9,0; jalr t9`, +2 words). Declare `extern int gl_func_00000000_35fd4f(char *, char *, int, float, float, int);` and pin `gl_func_00000000_35fd4f = 0x00000000;` at the end of `undefined_syms_auto.txt`. The call becomes a direct `jal` with the same arg setup. This is the prototype version of the `*_v` void-alias convention (`#call-arg-precolour-void-alias-3ff44`).
 
 <a id="gfxring-cached-builder-per-packet-reread-16a4"></a>
+## A register-only pointer local (`char *g = &D`) still shifts every stack slot down 4 (gl_func_0003E2B0 96.2 -> EXACT, 2026-10-15 agent-c) <a name="register-only-pointer-local-shifts-frame-slots-3e2b0"></a>
+
+Target (59w, frame 0x40): three address-taken ints at sp+0x30/0x34/0x38 (`hB`, `hA`, `term`), loop-invariant `&D` hoisted to s1,
+`&hA`/`&hB` hoisted to s2/s3. The wrap had a function-scope `char *g = (char *)&D_00000000;` used as the first call arg; it lives
+in s1 and is never spilled, yet with it every slot came out 4 LOWER (0x2C/0x30/0x34, frame still 0x40). Deleting `g` and writing
+`&D_00000000` inline at each call moved all three slots to the target offsets with no other codegen change (s1 hoist unchanged).
+Declaration-order and pad experiments could not reproduce it: any extra slot (`char pad[4]` first, volatile pad, `double`) grows
+the frame to 0x48; reordering only permutes the three slots within 0x2C..0x34.
+
+Also in this function (scanner-found, see `scripts/call-shape-scan.py`): the first `gl_func_00000000(g,1,0)` result was
+assigned to the value of the NEXT call `H(&hA)` in the old wrap; the target stores v0 to hA in that call's delay slot, so
+`hA = gl(...); H(&hA);`. Declaring the three baked-jal helpers `void` (pinned `gl_ref_<addr>` aliases) freed v0 for the vtable
+pointer (`lw v0,40(s0)` vs `v1`).
+
+Rule: when the colouring is exact but every stack slot is off by one word at the right frame size, look for a register-only
+named local (base pointer, cached global address) and inline it before trying pads.
+
+## Neither successor adjacent: IDO branches to the `goto` target of the C test; share the arms' common arg via one local (gl_func_0004DB50 92.9 -> EXACT, 2026-10-15 agent-c) <a name="inverted-last-test-plus-shared-arg-local-4db50"></a>
+
+Target dispatch: `beq sel,4,c4 (lui a1); beq sel,3,c3 (lui a1); b dflt (lui a0,2)`, arms laid out c4, c3, dflt, with ONE
+`lw a0,28(sp)` (arg1 home) hoisted above the tests and serving both c4 and c3. The old wrap logged this as "not reachable from
+switch/if/goto" after trying `if (sel == 3) goto c3; goto dflt;` -- which IDO emits as `bne sel,3,dflt; b c3`: when neither
+successor follows the test, the conditional branch goes to the C `goto` target and the unconditional `b` to the other one.
+`if (sel != 3) goto dflt; goto c3;` gives `beq c3; b dflt` (the 38830 rule applied to a non-terminal chain). That alone left
+the c3 beq's delay slot holding an `lw a0,28(sp)` reload; reading arg1 once into a block-scope `int a = ia1;` used by both
+the c4 and c3 calls makes the hoisted load common and moves `lui a1` into the delay slot: 0 diffs.
+
+Same function: the first call's `lw a2,40(a0)` (count loaded straight into a2, then `addiu t7,a2,1; sw`) was a third call
+arg, `n = p[10]; p[10] = n + 1; cb(a1, a2, n);` -- see [3D8A8](#extra-call-arg-and-test-member-before-naming-3d8a8).
+`scripts/call-shape-scan.py` flagged it (`nm=jal/01 tgt=jal/012`).
+
+## Entry `sw a1,home; lbu a1,home+3` + a delay-slot spill = a narrow param passed to the first call (gl_func_0002BA38 92.6 -> EXACT, 2026-10-15 agent-c) <a name="narrow-param-as-call-arg-entry-lbu-spill-2ba38"></a>
+
+Target (29w, frame 0x20): `sw a1,0x24(sp); lbu a1,0x27(sp)` at entry, `lbu a0,7(a0); jal; sw a1,0x18(sp)`, then
+`lw a1,0x18` and `addiu a0,a1,2; andi v0,a0,0xff` at the return. The old wrap (`int a1`, one-arg call, permuter debris)
+scored 92.6 with frame 0x18: every spelling with a1 unused before the call (ANSI or K&R `unsigned char a1`, `int a1` +
+`(unsigned char)` cast, a `b = (u8)a1` local) rematerialises the narrow value from the home (`lbu v0,0x1F(sp)` at the end)
+and never gives it its own slot. Passing a1 as the call's SECOND argument narrows it at entry (it is needed in a1 for the
+jal), and since it is live across the call it is spilled to a fresh temp slot -- the target. `a1 += 2; return a1;` on the
+ANSI `unsigned char` param gives the `addiu a0 / andi v0` tail (K&R `unsigned char a1;` is equally exact).
+`scripts/call-shape-scan.py` flags this class as `nm=jal/0 tgt=jal/01`.
+
 ## GfxRing DL builder that caches the builder pointer and re-reads it per packet (gui_uso_func_000016A4 / 0000055C 78 -> 98, gui_func_00002DE0 72 -> 77.5; 2026-10-15 agent-g)
 
 Shape: `b = (*(D+0x254))->0x158` is stored to a cache (a module GLOBAL in 16A4 -- gui.uso
