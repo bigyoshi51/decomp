@@ -14288,6 +14288,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [0400 (game_libs, 97.17 -> EXACT 93/93): "one extra stack slot" (frame 0x40 vs 0x38) on a get-or-create ctor with a runtime `x / 255.0f` colour normalize = the named `f32 d255` divisor itself (every named local gets a home, even a const-propagated one). Store the raw colour, then `field /= 255.0f` in place: uopt forwards the constants but never folds a float divide (agent-g 2026-10-15)](#store-forwarded-float-div-no-divisor-home-0400) -- _if the target frame has no unused slot, the divisor was not a named local._
 - [83CC (game_libs, 70.8 -> EXACT 79/79): read the ROM TextReloc table before trusting a `lui/addiu +N` arg decode -- a different symIdx = a different global (distinct abs-0 alias), not a literal; then frame-home order = decl order, one reused pointer local for two `&=` clears, and a trailing `if (a0) {}` keeps s0 on arg0 instead of being recoloured to a late spill (agent-g 2026-10-15)](#textreloc-symidx-distinct-global-dead-if-keeps-s0-83cc) -- _`lui aN,0; addiu aN,aN,0x70` with a symbol different from the neighbouring state loads was decoded as a literal 0x70._
 - [70FC (game_libs, 83.9 -> EXACT 138/138): compare value in v1 instead of v0 right after a call whose result is unused = the callee is VOID (an int-returning blank keeps v0 busy); t-ring shifted by one = `if (x == 0) { ...; x = 1; }` wrapper, not an early `return`; per-block `lui/addiu &G` re-materialization = distinct abs-0 aliases (agent-g 2026-10-15)](#void-alias-frees-v0-guard-wrap-t-ring-70fc) -- _a prior "hard cap, needs USO-reloc migration" note on this function was wrong; in-unit blank relocs bake the same words._
+- [12B4 (game_libs, 53.7 -> EXACT 46/46): a "caller-set $f0/$f4/$f6 float convention" cap whose predecessor `_pad.s` holds `lui/mtc1` + `lwc1` = the function's own FP-constant hoist above `addiu sp`; fold the pad into the .s (symbol moves up, expected/ re-baselined .text-identical), and read the float through a REAL `float` extern (an `*(float *)&D` cast swaps the f4/f6 pair) (agent-g 2026-10-15)](#fp-const-hoist-pad-fold-real-float-extern-12b4) -- _check every "caller-set float" cap note for a `_pad.s` predecessor first._
 - [33228 (post, 99.94 -> EXACT 35/35): the "genuine cap" 16-byte phantom top-pad (frame -48 vs -64, colouring already byte-perfect) = a plain NON-volatile `char pad[16];` declared FIRST, before the spilled locals; declared after them it is elided (agent-c 2026-10-15)](#unreferenced-array-first-decl-frame-pad-33228) -- _a never-referenced array grows the frame without becoming a uopt candidate; position in the decl list decides whether it survives. Retry on every "frame-pad cap" whose colouring is already exact._
 - [26B40 (post, 99.74 -> EXACT 38/38): "ugen destination-coalesce cap" (`lui a0; addiu a0,a0` vs target `lui t6; addiu a0,t6`) = call arg written as the RELOAD of the field just stored (`f(*(char**)(D+0x53C8), ...)` after `*(char**)(D+0x53C8) = D+0x53D0`), symmetric with the sibling calls; uopt store-forwards it and the %hi stays in the ring. Then drop BB-barrier hacks that burned a ring slot (agent-c 2026-10-15)](#store-forwarded-reload-arg-keeps-hi-in-ring-26b40) -- _when an address constant feeds both a store and a call arg, try spelling the arg as a reload of the stored field._
 - [2A7D8 (post, 98.37 -> EXACT 43/43): "call-return v0/v1 colouring" residual = flag byte written as a named `f` + `|0x40` / `&0x7F` masks; the source is a 2-bit MSB-first u8 BITFIELD pair `o->b6 = 1; o->b7 = 0;` (the bitfield's zero-emission `& 0xFF` burns the one missing ring slot). Second confirmed case of #single-bit-bitfield-set-extra-ring-temp-29000 (agent-c 2026-10-15)](#single-bit-bitfield-set-extra-ring-temp-29000) -- _any `lbu; ori; sb; andi; sb` flag-pair near-miss with a uniform +-1 ring shift: try the bitfield before the colouring._
@@ -14296,6 +14297,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [273B8 (post, 97.17 -> EXACT 99/99): the "+5 temp-ring rotation, uoptlist-ceiling" 14-case switch = five 1-bit BITFIELD inserts (byte-1 change flags in cases 1-4 + the byte-0 bit-4 insert in case 8), one burned ring slot each; landed as a jumptable donor (agent-c 2026-10-15)](#bitfield-flags-five-ring-slots-273b8) -- _count the skipped slots per case and map each to a `|= K` / mask-insert on a byte; every one became a 1-bit bitfield._
 - [5DBB0 (post0b, 99.01 -> EXACT 141/141): Shoemake mtx->quat "add.s fs/ft operand pick + rowj/rowk web-rank swap + 5 spill homes" = commutative FP adds spelled with the operands REVERSED (IDO emits `a + b` as add.s d,b,a here) plus one named f32 local too many (agent-c 2026-10-15)](#commutative-fp-add-reversed-operands-spill-home-5dbb0) -- _when an `add.s`/`addu` pair or a CSE address web is swapped against the target, swap the source operands first; each named local holds a home, so reuse a dead f32 to slide cross-call spill homes._
 - [3FF44 (post0b, 98.29 -> EXACT 38/38): "(node,n) 2-web colour permutation, E6E8-class" = the callee takes the spilled pointer as its 2nd ARG (precolours a1) and returns void (pinned void alias lets the other web take v0 across the jal) (agent-c 2026-10-15)](#call-arg-precolour-void-alias-3ff44) -- _when two webs live across one call land in the wrong caller-saved regs and the target has one in a1/a2/a3, check whether it is also passed to that call; a v0 web across a call means the callee is void._
+- [44EDC (post0b, 98.29 -> EXACT 167/167): teardown driver "s-reg rotation + v0/v1 swap + lui a0 vs lui s0" = index arg0 directly in both counter loops, write the vtable-slot load first, and route the last call arg through the named s0 local (agent-c 2026-10-15)](#named-sreg-local-colours-lui-temp-44edc) -- _a `lui sN; lw aX,off(sN)` feeding a call = the load was assigned to a named sN variable first; a pointer cursor in the wrong s-reg = index the base by the counter instead._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -28892,6 +28894,25 @@ Two facts in the target asm give the source: `node` is in **a1** at the call, i.
 
 Rule: for a caller-saved colour residual around a call, (1) a web in a1/a2/a3 at the jal is probably an argument to that call even if the old decode passed fewer args; (2) a web held in v0 across a jal means a void callee (dead-$v0 exclusion: the same mechanism as the `*_v` void aliases used for B0A8 and h2hproc 1360).
 
+## A lone `lui sN` feeding a call arg = a named sN local; counter-indexed arrays give the target's loop s-regs (gl_func_00044EDC 98.29 -> EXACT, 2026-10-15 agent-c) <a name="named-sreg-local-colours-lui-temp-44edc"></a>
+
+Three residuals, three source facts:
+
+1. **`lui s0,0; lw a0,0x1C(s0); jal`** where the build had `lui a0,0; lw a0,0x1C(a0)`. Nothing needs the
+   address in a callee-saved register, so the s0 comes from the source: the loaded value was assigned to a
+   named local (`obj`) that is s0 everywhere else in the function, then passed: `obj = *(char **)(&D + 0x1C);
+   f(obj, 0x68, 1);`. Copy propagation sends the loaded value straight to a0, but the lui temp keeps the
+   variable's colour. Pointing a local at the base (`obj = &D; f(FW(obj, 0x1C))`) or merging the global
+   with another alias did not do it.
+2. **Loop s-regs rotated** (target n=s1, k=s0, cursor=s2 with `or s2,s3,zero` in the beqz delay slot; build
+   had a pointer cursor `p = arg0; p += 4` and got s2/s1/s0). Write the element as `((s32 *) arg0)[k + 0x97]`
+   (0x25C / 4) with `k = 0;` before the `if (n != 0)`. IDO strength-reduces the index into its own cursor,
+   which lands in the target's register. The second loop got the same rewrite (`[k2 + 0x66]`).
+3. **e/w swapped (v0/v1)** in `e = tbl[k]; w = *e; w->fn(w->disp + e)`: write the vtable load first with
+   the element load inline, `w = *(char **) tbl[k]; e = tbl[k];`
+   (#web-order-inversion-inline-the-first-chain-to-flip-v0v1-web-coloring-h2hproc-e04-12-2). CSE merges the two loads
+   and the merged web gets the first colour.
+
 ## TextReloc symIdx tells distinct globals apart; dead-if keeps s0 on arg0 (gl_func_000083CC 70.8 -> EXACT, 2026-10-15 agent-g) <a name="textreloc-symidx-distinct-global-dead-if-keeps-s0-83cc"></a>
 
 The game_libs .s words carry no relocations, so `lui a1,0; addiu a1,a1,0x70` reads like a literal or
@@ -28931,4 +28952,29 @@ Three independent residuals on a 138-insn dispatcher, all colouring-only once th
   materialization above the branch). Three symbols were enough for five sites here. The TextReloc table
   shows all five as the same import (sym 272) - the aliasing is a build-side stand-in, the ROM words are
   identical.
+
+## "Caller-set float" cap = FP-constant hoist in the predecessor pad; real `float` extern fixes the f4/f6 pair (gl_func_000012B4 53.7 -> EXACT, 2026-10-15 agent-g) <a name="fp-const-hoist-pad-fold-real-float-extern-12b4"></a>
+
+gl_func_000012B4 read `$f0/$f4/$f6` without setting them and was filed as the intra-USO caller-set float
+convention cap. The six words in `gl_func_0000127C_pad.s` right before it were `lui at,0x3F80; mtc1 at,f0;
+lui at,0x437F; mtc1 at,f4; lui at,0; lwc1 f6,0(at)`: 1.0f, 255.0f and a global float, which IDO -O2 schedules
+ABOVE `addiu sp` (see the stolen-prologue FP-const note above). Plain C (`buf[i] = 1.0f`, `(int)(255.0f * g)`)
+emits all six words first.
+
+Landing as an in-unit exact needs a boundary fix, not a splice:
+1. Prepend the pad words to the function's own `.s` (keep the symbol name; `nonmatching` size += 0x18),
+   drop the `#pragma GLOBAL_ASM(<pred>_pad.s)` line, `git rm` the pad file.
+2. Re-baseline expected/ for the unit from a stripped (all-INCLUDE_ASM) copy:
+   `strip_decomp_in_file()` from `scripts/refresh-expected-baseline.py` on game_libs.c, then
+   `make RUN_CC_CHECK=0 EXPECTED_BASELINE=1 REPLACE_FUNC_BODY= build/src/game_libs/game_libs.c.o`, restore
+   the source. Check `.text`/`.data`/`.rodata` byte-identical to the old expected and `nm` differing only in
+   the moved symbol before installing. Do this while the function is still INCLUDE_ASM, otherwise the
+   baseline is circular.
+3. Put the C on the build path.
+
+FP register order: `(int)(255.0f * *(float *)&D_00000000)` loaded the global into f4 and 255.0f into f6, in
+every operand order, with or without locals. Declaring the global as a real `extern float g;` (its own
+abs-0 alias; TextReloc showed it was a different symbol, D_00C75C) gave the target's 255.0f -> f4,
+g -> f6 order. Frame 0x68 with buf at sp+0x58: an unreferenced `char pad[0x20]` declared AFTER `float buf[4]`
+(not elided here, unlike the scalar case in #unreferenced-array-first-decl-frame-pad-33228).
 
