@@ -12101,6 +12101,9 @@ jumptable function, dump its tables and nearby rodata words.
   `-2.0f - r * 2` (int 2 keeps `mul.s`), and the `lw 20(v0); addiu v0,v0,20; sw 0(v0)` counter is ONE pointer expression
   `q = (s32 *)(chain + 0x14); *q += a1;` (a named intermediate for `chain`, or `((s32 *)g)[5] += a1`, folds 0x14 into the sw).
   The old in-unit wrap's 72% was mostly K&R-cast calls; prototyped blank aliases ((obj,f32,f32) and f32-returning) fixed them.
+- gl_func_000025A8 (bare INCLUDE_ASM -> EXACT 166/166, agent-g run 62): 6-entry table at RoData +0xC9C (cases 2..7,
+  arms in source order); a first-compile donor match, the cheapest kind of uncovered-bytes win in game_libs.c -- bare
+  switch-on-mode setters with a `lw tN,0xC..(at)` table load go straight to a donor.
 - **Landing a base-unit (game_libs.c) jumptable / float-literal function:** an in-unit compile can never bake the
   `%lo(.rodata)` word, so land it as an IDO 7.1 -O2 REPLACE_FUNC_BODY donor (`src/game_libs/game_libs_o2_<addr>.c`,
   added to the `C_FILES` filter-out list, `GAMELIBS_<addr>_DONOR` + `REPLACE_FUNC_BODY +=` on both game_libs.c.o
