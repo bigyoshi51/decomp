@@ -14336,6 +14336,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso is C++ compiled by IDO 7.1 NCC (edg front end), not cfe: the `addi`/`at` 2-word compare loop + 1/0 flag is a pointer-to-member-function `pmf != 0` test, the bgez / vptr-offset-40 block is `(this->*pmf)()`; NCC compiles the C++ body of game_uso D204 instruction-identical (0x214), cfe can't (2026-10-15 agent-g)](#game-uso-is-cplusplus-ncc-pmf-compare-d204) -- _Tell: `or t7,v1; addi t8,v1,8; lw at,0(t7); lw t9,0(t6); addi t7,4; addi t6,4; bnel at,t9; li t8,1; bnel t7,t8; lw at,0(t7); b; li t8,0`. NCC also orders mul.s operand loads differently from cfe on plain C (game_uso 7448's "reversed mul operands" lever is a cfe-side compensation)._
 - [`sltu tB,zero,tM; beqzl tB` (a flag test materialized as 0/1 before the branch) + a RELOAD of the same flag word for the next test = `((p->f & 0x100) != 0) == 0 || (((unsigned *)p)->f & 0x200)`; the pointer into a dead param takes that arg reg (game_uso F060 91.18 -> 99.64, F13C 78.85 -> 99.57, 2026-10-15 agent-g)](#materialized-bool-flag-test-sltu-beqzl-f060) -- _`!(x & 0x100)` / `(x & 0x100) == 0` branch directly on the andi (no sltu); the extra `!= 0 ... == 0` keeps it. The type-split cast defeats the load CSE._
 - [game_uso under NCC: an inlined member that returns a child pointer (`self->0xB4->child()`) colours the 0xB4 pointer v1 (edg return temp holds v0) -- F060 99.64 + F13C 99.57 -> EXACT; plus NCC address/inline-accessor facts from B274 / 7448 (2026-10-15 agent-g)](#ncc-inline-member-child-v1-f060) -- _`(char *)(unsigned)&sym` is a no-op under edg (no s-reg caching); `int s1 = (int)&sym` caches it; `int d = (int)&sym + K` keeps `lui/addiu sym+K` + small offsets; inline `get()` returns via f0, `float &r()` stays in the expression ring; a load-expression `this` stays unfolded, a named-local `this` folds._
+- [game_uso under NCC: a stack float param reassigned in place (`if (!(f & 8)) arg4 = 1.0f;`) and a class temporary whose ctor forwards to an inline `set()` fix frame size and FP colouring -- B750 72.8 -> EXACT (2026-10-15 agent-g)](#ncc-ctor-forwarding-inline-set-frame-b750) -- _Tell: the same `lwc1 fN,104(sp)` of a stack arg on two paths into one register; frame larger than your C by 8 with the temp object 4 higher. edg gives every named local and every live inline-argument temp its own 4-byte stack slot even when it lives in a register, so the count of locals and nested inline params sets the frame._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29863,6 +29864,42 @@ inline member.
   NCC gives a2/v0/v0/a1. The variants tried are r/get/set/copy/mul members in
   each statement (about 50 combinations).
 
+
+## game_uso under NCC: reassign the float param in place; a class temporary whose ctor forwards to an inline set() (B750 72.8 -> EXACT, 2026-10-15 agent-g) <a name="ncc-ctor-forwarding-inline-set-frame-b750"></a>
+
+game_uso_func_0000B750 (0x134) has a C++ virtual call at the end (`lw v0,40(s0); lw t9,28(v0); lh t1,24(v0); jalr t9; addu a0,t1,s0`
+= `((V *)s0)->m2()` with three virtuals, as on B274). Three facts took it from 72.8 (cfe) to byte-identical under NCC:
+
+1. **The scale factor is the parameter itself.** Target: `lwc1 f16,104(sp)` inside the `flags & 4` arm (for `arg4 * 400`) and again in the
+   delay slot of the `flags & 8` test, then `mtc1 1.0,f16` on the other path. Writing `k = (flags & 8) ? arg4 : 1.0f` or
+   `k = arg4; if (!(flags & 8)) k = 1.0f;` loads arg4 into a temp for the multiply and gives k another register. `if (!(flags & 8)) arg4 = 1.0f;`
+   (then `* arg4` everywhere) re-loads the stack param from its home into its own register on each path, which is the target pattern, and
+   removes one local slot.
+2. **edg gives locals and inline-argument temps stack slots.** Under NCC every named local adds 4 bytes to the frame even when it
+   lives in a register (two unused locals made the frame 8 bigger), and inlined calls' argument temps take slots below the
+   locals. The target had frame 88 with the temporary at sp+64 and only two locals above it (f0, v). Dropping the `flags` and `dst` locals
+   (`AT(int, a0, 0x1C)` re-read each time; `AT(float, (int)&sym + 0xA0, 0x30)` inline, which still emits `lui/addiu sym+0xA0`) fixed the
+   locals area. The frame below the temporary then depends on how many inline params are live together.
+3. **The 4-float temporary is `Q q(x, y, z, x10 * k)` where Q's constructor forwards to an inline `set()`:**
+   ```cpp
+   struct Q { float x, y, z, w;
+       void set(float a, float b, float c, float d) { x = a; y = b; z = c; w = d; }
+       Q(float a, float b, float c, float d) { set(a, b, c, d); } };
+   ```
+   The nested inline gives frame 88 / q at 64 and colours the values like the target: x f0, y f2, z f12, w f14 (the 0x10 load stays an
+   expression temp in f4). Results of the other shapes:
+
+| temporary shape | frame / &q | FP colours (y, z, w) | diff lines |
+|---|---|---|---|
+| `float buf[4]` + stores | 80, s-reg promotion of a0 | -- | 111 |
+| `Q(a,b,c,d)` direct ctor | 80 / 56 | f12 f14 f16 | 70 |
+| `Q(a,b,c,d,e)`, w = d * e in ctor | 88 / 64 | f12 f14, product in f4 | 64 |
+| derived `Q : B3(a,b,c)` | 80 / 56 | (adds instructions) | 121 |
+| ctor forwarding to inline `set(a,b,c,d)` | 88 / 64 | f2 f12 f14 | 0 (labels only) |
+
+A ctor parameter that is a constant or unused (default `= 0` / `= 1.0f`) is folded away and does not add a slot.
+**Lesson:** if an NCC candidate in game_uso has the right instructions but the frame is 8 or 16 too small and the stack object
+sits lower than in the target, add inline nesting (ctor -> set) or remove named locals before you touch the expressions.
 
 ## Int-returning blank callee blocks a v0 colour across the call; use a void alias (gl_func_00037BEC 67.5 -> EXACT, 2026-10-15 agent-c) <a name="void-alias-frees-v0-across-call-37bec"></a>
 Target (construct-and-enlist helper): `lw v0,16(t7); addiu a0,v0,16; jal 0; sw v0,28(sp); lw a1,24(sp); lw v0,28(sp)`. The

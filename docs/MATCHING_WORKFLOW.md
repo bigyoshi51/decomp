@@ -12295,3 +12295,15 @@ went away once the 0x800 child was read through an inline member
 (IDO_CODEGEN #ncc-inline-member-child-v1-f060). The same entry covers edg's
 address rules (the `(unsigned)` cast is a no-op, so use an `int` local) and
 the inline-accessor facts from B274 and 7448. Neither of those two landed.
+B750 (72.8 under cfe) landed the same way: the stack float param reassigned in place and a class temporary
+whose constructor forwards to an inline `set()` gave the target frame and FP colours
+(IDO_CODEGEN #ncc-ctor-forwarding-inline-set-frame-b750).
+10A0C (93.4 under cfe, documented as a "pure regalloc-renumber, not C-reachable" cap: every temp
+renumbered plus a late `or s0,a0`) matched on the FIRST NCC compile of the same logic, with the two
+PMFs passed by value. In game_uso, a temp-renumber residual is a reason to recompile under NCC before
+trying any cfe lever.
+10840 (87.67 under cfe) also matched on the first NCC compile once two misreadings in the old wrap were
+fixed: its `mfc1 a3,$f0` "cap" was DB78's float 4th parameter (same as F13C / 10694), and its "dead
+arg-prep, an -O2 hoist artifact" (`a1 = 0x20008; a2 = 0; a3 = 1` before the branch) was the else-arm
+call's argument list, hoisted above the branch. Before calling a pre-branch argument setup dead, check
+whether an arm's call uses those registers without setting them.
