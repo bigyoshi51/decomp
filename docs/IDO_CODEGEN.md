@@ -14312,6 +14312,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [35FD4 (post0b, 91.2 -> EXACT 30/30): "fn-ptr cast for a float-prototyped blank call emits `lui t9; jalr`" = declare a pinned prototyped alias of the blank instead (agent-c 2026-10-15)](#float-prototype-blank-alias-direct-jal-35fd4) -- _a prototyped `extern` alias pinned to 0 gives single-precision float args AND a direct jal._
 - [3E2B0 (post0b, 96.2 -> EXACT 59/59): "hardcoded-jal cap + 8-byte spill-slot-allocator frame diff" = hA is the result of the call BEFORE `H(&hA)` (sw v0 in the delay slot), H is void, and a register-only `char *g = &D` local cost a frame-top slot (agent-c 2026-10-15)](#register-only-pointer-local-shifts-frame-slots-3e2b0) -- _all spill slots 4 low with the right frame size? delete a register-only local (e.g. `g = &D`) and spell the address inline._
 - [28E94 (post, 93.1 -> EXACT 78/78): a `addiu v0,a0,K` base kept after a jal = a pointer local named BEFORE the call (uopt rematerializes it, never folds); `lbu;ori 1;sb;ori 8;sb` with two skipped temp names = BITFIELD sets; extra 3rd call arg (agent-c 2026-10-15)](#remat-base-local-and-bitfield-temp-skips-28e94) -- _a folded `sb x,K+n(a0)` where target has `addiu v0,a0,K; sb x,n(v0)` after a call: move the `p = obj + K` up above the call._
+- [290C8 (post, 90.5 -> EXACT 62/62): "original-a0 spill, permuter-class" = the second call result is assigned back INTO the a0 param (one s0 holds a0 then v0); the scanner's extra a2 at both sites was the spilled a0 copy, not an arg; `p = a0 + K` assigned inside the first call's arg list + key in a block local moves the copy/addiu after the t6/t7 stores (agent-c 2026-10-15)](#param-reassigned-from-call-result-290c8) -- _target `or s0,a0` early, later `or s0,v0` in a beqz delay slot, and no a0 spill: reassign the param._
+- [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
 - [4DB50 (post0b, 92.9 -> EXACT 46/46): "unfused beq/beq/b not reachable from switch/if/goto" = 38830 inverted-last-test goto chain + one block local for the arg shared by two arms; plus a 3rd call arg (`lw a2` of the pre-increment count) (agent-c 2026-10-15)](#inverted-last-test-plus-shared-arg-local-4db50) -- _neither-successor-adjacent if: IDO branches on the C condition to the goto target and `b`s to the fallthrough label, so write the test the way the asm branches._
 - [2BA38 (post, 92.6 -> EXACT 29/29): "stack-byte-spill idiom" = an `unsigned char` param that is a hidden 2nd arg of the first call: entry `sw a1,home; lbu a1,home+3` + `sw a1,0x18` in the jal delay (agent-c 2026-10-15)](#narrow-param-as-call-arg-entry-lbu-spill-2ba38) -- _entry narrow-through-home + own spill slot for a param the C never touches before the call = it is a call argument._
 
@@ -29271,4 +29273,32 @@ the commutative add of a variable and a load. The same function's `x += tbl[k]` 
 - A `0xBB000001/0x80008000` pair whose lui/ori/lw order is off: one source line
   (`#feedback-one-line-stores-fix-schedule-order`). `if ((unsigned)(i = 0) < f(a3))` moves the
   `move s8,zero` after the a3 arg copy.
+
+## Param reassigned from a call result: one s-reg holds a0 then v0 (gl_func_000290C8 90.5 -> EXACT, 2026-10-15 agent-c) <a name="param-reassigned-from-call-result-290c8"></a>
+
+Target (62w, frame 0x38): `or s0,a0` at entry, `addiu a0,s0,48` for the second lookup, then `or s0,v0` unconditionally in the
+following `beqz v0` delay slot; `a0 + 0x20` lives in a stack slot (stored in the first jal's delay slot) for a later call. The
+wrap used a separate `s0 = a0` local reassigned only under `if (v0)`, so IDO kept the original a0 in a2 and spilled it to its
+home slot (+8 frame, an extra `or a2,a0`). call-shape-scan read that a2 as a third call arg at both sites (`nm=jal/012
+tgt=jal/01`); it was the spilled a0 copy, not an argument. The fix is `a0 = lookup(a0 + 0x30, k);`, reassigning the param
+itself, with `p20` holding `a0 + 0x20` for the later call. Slot and schedule details: `char *v1; int pad;` declared first puts
+the v1 spill at sp+0x34 and makes the frame 0x38. Writing `p20 = a0 + 0x20` inside the first call's argument list, with the
+key read into a block-scope `int k` just before, moves `or s0,a0; addiu a0,a0,32` after the `sw t7/t6` constant stores and
+puts `sw a0,36(sp)` in the jal delay slot. Assigning `p20` at the top, or as its own statement, hoists the addiu above the
+prologue stores.
+
+Rule: when a target holds a param in an s-reg and later overwrites that same s-reg with a call result (no copy, no spill),
+assign the result to the param.
+
+## A beql into the middle of a case arm means the labels share the arm (gl_func_0002F934 84.5 -> EXACT, 2026-10-15 agent-c) <a name="beql-into-arm-shared-case-labels-2f934"></a>
+
+Target dispatch: `beqz a0,c0; li at,1; beq a0,at,c1 (delay: move a1,zero); li at,2; beql a0,at,c1+4 (delay: lui a0,0x600);
+b end`. The c1 arm starts `lui a0,0x600; jal; ori a0,a0,0x700`. The beql jumps to c1's `jal`, one word in, because the
+delay slot already did the `lui`. The `move a1,zero` in the case-1 test's delay slot runs for mode 2 as well. So modes 1
+and 2 run the same three calls. The old wrap read the arm after the beql as a separate `case 2:` with one call (the last
+one); the code after the beql target only looked like a separate block because c1's second call immediately follows it.
+`case 1: case 2:` over one body is 40/40.
+
+Rule: when a beql target is not the start of a block in the arm layout, and the delay slot holds a copy of the
+instruction just before the target, the branch enters that arm. The case label belongs to that arm.
 

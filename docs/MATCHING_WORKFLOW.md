@@ -24,6 +24,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [objcopy --redefine-sym on a donor .o mangles local section symbols -> imported relocs degrade to *ABS* and ship unbaked; use rename-elf-symbol.py (74554/_Litob, 2026-08-22)](#objcopy-redefine-sym-donor-abs-reloc) — _ROM-cmp-only failure class: .o word-diff looks fine (fields are reloc-class), the link ships them unresolved._
 - [Resolved-jal m2c overlay pipeline: full-body redecode of big raw-.word USO NM fns (8FC8 41.5→65.8, B624 20.7→62.6, 2026-07-23)](#resolved-jal-m2c-overlay-pipeline) — _disasm expected-.o (NOT default search: build/non_matching hits first!), overlay .s jal/lui symbols by insn index, %lo every consumer of every lui (multi-consumer + dual-lui-branch-join + bc1fl-label-space gotchas), fabricate .text-invisible jtbl entries, m2c --valid-syntax, char*-only locals, reuse sibling-block decls. Hand-paraphrase 'FP-schedule cap / fuzzy=None' verdicts do NOT transfer to the m2c emission — re-test them._
 - [Donor-spliced switch jumptables ARE landable: rename donor-local .rodata reloc to <func>_rodata + pin baked %lo in undefined_syms_auto (6DD14 __osDevMgrMain 46.2->100, 2026-07-30)](#donor-splice-switch-jumptable-rodata-rename) — _30AF4 "external jumptable permanent cap" holds only for in-unit compiles; for REPLACE_FUNC_BODY donors the table already ships in the USO data segment. Also: 74 entries -> 75._
+- [Two jumptables in one donor share ONE renamed `<func>_rodata` pin (the second table's offset rides as the %lo addend); extract-uso-jumptable.py can start its dump one entry late (gl_func_00031334 87.5 -> EXACT, 2026-10-15 agent-c)](#two-jumptables-one-donor-31334) -- _check the dump's first roff against the target's `lw tN,LO(at)`; if it is LO+4, entry 0 is missing._
 - [GOTCHA: disasm-func.py can return a wrong/stale body — expected/<unit>.c.o is the only ground truth (B154 2026-07-23)](#disasm-func-stale-vs-expected-obj) — _script gave a 123-insn frame-176 shape diffing ~identical to the NM build while objdiff said 58%; real target in expected/.o was 133-insn frame-168 at a different address._
 
 - [`make setup` must never run a FULL `splat split` — a re-split emits 41 of undefined_syms_auto.txt's 3395 lines and mips-linux-gnu-ld SEGFAULTS (1080, new-machine bring-up 2026-09-05)](#make-setup-modes-bin-only) — _asm/, tenshoe.ld, include_asm.h and the auto-sym files are curated source of truth here, not regenerable splat output. Fix: `--modes bin` + `create_undefined_{syms,funcs}_auto: False`. Also: 75 entries -> 76._
@@ -12121,4 +12122,24 @@ jumptable function, dump its tables and nearby rodata words.
   the build differs only at the reloc-offset words (objdiff 100, ROM cmp byte-identical). The four 2B94 literals
   landed in the donor's .rodata at +0..+0xC in first-use order, matching the USO's 0xCB8..0xCC4 - check the donor's
   `.rodata` order against the target immediates before pinning one base.
+
+## Two jumptables in one donor share one renamed rodata pin; the extractor can start one entry late (gl_func_00031334 87.5 -> EXACT, 2026-10-15 agent-c) <a name="two-jumptables-one-donor-31334"></a>
+
+gl_func_00031334 has two switches whose tables sit back to back in game_libs rodata (`lw t8,6400(at)` = +0x1900, 15
+entries; `lw t6,6460(at)` = +0x193C, 11 entries). The donor's two tables also come out contiguous in its local .rodata
+(+0 and +0x3C), and replace-function-body.py renames every reloc against that section symbol to the same
+`gl_func_00031334_rodata`. MIPS REL keeps the addend in the instruction, so pinning that one symbol to 0x1900 links both
+%lo words correctly (0x1900 and 0x193C). The `.text` slice then differs from expected only in those two LO16 words
+(0x0000 / 0x003C vs 0x1900 / 0x193C), which is the accepted renamed-rodata class. ROM byte-identical.
+
+`extract-uso-jumptable.py --module 0xD9FE28 --shim 0x1466C --vaddr 0x31334 --size 0x1EC` reported one 25-entry
+table at roff 6404. The code reads 6400, so entry 0 was missing (it is not relocated in the shipped data), and every
+target needed `- shim - vaddr - 8` to land on an arm. Anchor the decode on known arm offsets (the first-table default
+must hit the post-switch block) before mapping case labels.
+
+Decode notes for the same function: `addiu t8,t7,1; sltiu at,t8,15` on a loaded word is `switch (word)` with cases
+-1..13, not `switch (word + 1)`. Empty `case -1:` / `case 13:` labels fix the range. The second switch on a reloaded
+param only became a table once every in-range label (-1..9) was written, most of them empty. The (0xFF, 0, 0) call with
+`addiu a1,zero,0` is a 0.0f float arg (prototyped `(int, float, int)` blank alias), which is the 3rd arg the
+call-shape-scan flagged.
 
