@@ -14284,6 +14284,9 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [52674 (post0b, 88.22 -> EXACT 23/23): "-O1 lower-opt cap" for unfolded `ori K1; ori K2; ori K3` = one `v |= K;` statement per constant at -O2 (only a single-expression OR chain folds); the local then takes v0 and an empty `if (1) {}` returns v0 to the preceding base (2026-10-14 agent-c)](#separate-or-statements-unfolded-52674)
 - [5E138 (post0b, 89.73 -> EXACT 22/22): rolled 4x4 transpose loop (row ptr += 16, col ptr += 4, end rematerialised from sp, jal arg recomputed in delay) = plain NESTED `for i { for j { dst[i][j] = src[j][i]; } }` -- inner fully unrolled, outer strength-reduced; a single pointer loop shares the dst base in a1, a single index loop fully unrolls (2026-10-14 agent-c)](#nested-loop-inner-unroll-outer-sr-5e138)
 - [42374 (post0b, 58.32 -> EXACT 25/25): "const-fold + bnel cost-model cap" on a rolled 4-store ushort fill = IDO x4 unroll of a plain nested `for x { for y g[y][x] = K; }` over a `ushort[320]` grid; the inner `for` header and body must share ONE line or the offset-0 store sinks into the bne delay (2026-10-14 agent-c)](#same-line-inner-unrolled-loop-42374) -- _Tell: inner counter steps by 4 with N stores at row-stride offsets + pointer bump in the bne delay; outer counter pre-scaled by the element size. Also 5FFD0 (73.5 -> EXACT): `return 0;` on its own line after `if (g) return f(..);` orders `or a1,a3` before `or v0,zero`; param overwrite instead of a copy local fixes the frame. Also 57194+571E4 (boundary): a "tail-merge to a shared epilogue past this fn's end" + a successor with an "unfilled jr-delay" = the else arm split off by splat (bgezl into successor+4 with its first word in the likely slot); merged EXACT 34/34 on the first compile. Also 453D8+45418 (boundary, bc1fl into successor+4): u16 local + `int` return of `r & 0xFFFF` splits the compare/assign andi pair Also 610F4+6110C (boundary, itoa): `q = p; p++; if (1) { *q = c; }` old-value stores + a 3-line sign block place the negu._
+- [33228 (post, 99.94 -> EXACT 35/35): the "genuine cap" 16-byte phantom top-pad (frame -48 vs -64, colouring already byte-perfect) = a plain NON-volatile `char pad[16];` declared FIRST, before the spilled locals; declared after them it is elided (agent-c 2026-10-15)](#unreferenced-array-first-decl-frame-pad-33228) -- _a never-referenced array grows the frame without becoming a uopt candidate; position in the decl list decides whether it survives. Retry on every "frame-pad cap" whose colouring is already exact._
+- [26B40 (post, 99.74 -> EXACT 38/38): "ugen destination-coalesce cap" (`lui a0; addiu a0,a0` vs target `lui t6; addiu a0,t6`) = call arg written as the RELOAD of the field just stored (`f(*(char**)(D+0x53C8), ...)` after `*(char**)(D+0x53C8) = D+0x53D0`), symmetric with the sibling calls; uopt store-forwards it and the %hi stays in the ring. Then drop BB-barrier hacks that burned a ring slot (agent-c 2026-10-15)](#store-forwarded-reload-arg-keeps-hi-in-ring-26b40) -- _when an address constant feeds both a store and a call arg, try spelling the arg as a reload of the stored field._
+- [2A7D8 (post, 98.37 -> EXACT 43/43): "call-return v0/v1 colouring" residual = flag byte written as a named `f` + `|0x40` / `&0x7F` masks; the source is a 2-bit MSB-first u8 BITFIELD pair `o->b6 = 1; o->b7 = 0;` (the bitfield's zero-emission `& 0xFF` burns the one missing ring slot). Second confirmed case of #single-bit-bitfield-set-extra-ring-temp-29000 (agent-c 2026-10-15)](#single-bit-bitfield-set-extra-ring-temp-29000) -- _any `lbu; ori; sb; andi; sb` flag-pair near-miss with a uniform +-1 ring shift: try the bitfield before the colouring._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -28724,3 +28727,41 @@ Same function: the target's `a3` still held `rem` at the first sprintf-style cal
 4th argument: passing `rem` to the first two calls keeps it live into both call blocks and
 uopt puts it in `s1` (88.2 vs 94.8). Check for a leftover arg register before adding a parameter.
 
+
+
+## Unreferenced `char pad[N]` declared FIRST grows the frame without touching the colouring; declared after the spilled locals it is elided (gl_func_00033228 99.94 -> EXACT, 2026-10-15 agent-c) <a name="unreferenced-array-first-decl-frame-pad-33228"></a>
+
+`gl_func_00033228` (game_libs_post, 35w, three `jal 0` calls, `n`/`lst` spilled at sp+0x2C/0x28) sat at 99.94 for months with a
+"GENUINE CAP" verdict: colouring byte-perfect, only the frame differed (`addiu sp,-48` vs target `-64`, 16 unused bytes at
+sp+0x30..0x3F above the spills). The old sweep tried `volatile char pad[16]` and block-scope temps, all elided or cascading.
+The untried spelling: a plain `char pad[16];` as the FIRST declaration in the function, before `char *n; char *lst;`.
+
+| decl list (standalone word diff vs target) | diffs |
+|---|---|
+| `char *n; char *lst;` | 2 (frame imm) |
+| `char pad[16]; char *n; char *lst;` | **0** |
+| `volatile int pad[4]; char *n; char *lst;` | 0 |
+| `volatile int p1, p2, p3, p4; char *n; char *lst;` | 0 |
+| `char *n; char *lst; char pad[16];` / `volatile char pad[16]` / `volatile int pad[4]` after | 2 (elided) |
+| `volatile int p1; n; lst; volatile int p2;` (split) | 6 |
+
+Rule: IDO lays the frame out top-down in declaration order, and a never-referenced local declared BEFORE the spilled
+candidates gets its slot reserved at the top; declared after them it is dropped. It never becomes a uopt candidate, so the
+existing colouring is unchanged. This complements the 88B4 limit-case in `#feedback-ido-split-pad-for-buf-offset` (pad elided
+in a spill-free leaf): with cross-call spills present, decl position is what decides. Prefer the non-volatile array (no
+volatile semantics needed). Re-try every "frame-size pad" cap whose colouring is already exact with the pad declared first.
+
+
+## A call arg spelled as the RELOAD of a just-stored field keeps the address's %hi in the ugen ring (game_libs_func_00026B40 99.74 -> EXACT, 2026-10-15 agent-c) <a name="store-forwarded-reload-arg-keeps-hi-in-ring-26b40"></a>
+
+Target (38w): three `D[0x53C8/CC/C4] = &D + K` pointer stores, then three calls whose arg0 is that pointer. The asm
+materialises the first constant as `lui t6; addiu a0,t6,0x53D0` (hi in the t6/t7/t8 ring, result in the call-arg reg),
+while calls 2/3 reload `lw a0,0x53CC(v0)` / `lw a0,0x53C4(v0)`. The old wrap passed the ADDRESS to call 1 directly
+(`f(&D + 0x53D0, ...)`), which IDO emits destination-direct (`lui a0; addiu a0,a0`), and was labelled an ugen-internal
+cap. The real source is symmetric: `f(*(char **)(D + 0x53C8), ...)` for all three calls. For call 1 no call separates
+store and load, so uopt forwards the stored value (no `lw`), and the shared candidate keeps ring-temp hi + a0 lo.
+
+Second step: once the shape was right the ring was shifted +1 (t7/t8/t9) -- the old wrap's `if (1) { } { }` barrier and
+chained `D[0x53BA] = (D[0x53B9] = 0)` byte stores each burned a ring slot. Three plain `D[0x53B8] = 0; D[0x53B9] = 0;
+D[0x53BA] = 0;` statements (or the one-line chain `a = b = c = 0`) give t6/t7/t8 exactly. Lesson: after fixing the
+structural decode, strip the hacks that were compensating for the wrong decode -- they now overshoot.
