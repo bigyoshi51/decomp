@@ -14300,6 +14300,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [3FF44 (post0b, 98.29 -> EXACT 38/38): "(node,n) 2-web colour permutation, E6E8-class" = the callee takes the spilled pointer as its 2nd ARG (precolours a1) and returns void (pinned void alias lets the other web take v0 across the jal) (agent-c 2026-10-15)](#call-arg-precolour-void-alias-3ff44) -- _when two webs live across one call land in the wrong caller-saved regs and the target has one in a1/a2/a3, check whether it is also passed to that call; a v0 web across a call means the callee is void._
 - [44EDC (post0b, 98.29 -> EXACT 167/167): teardown driver "s-reg rotation + v0/v1 swap + lui a0 vs lui s0" = index arg0 directly in both counter loops, write the vtable-slot load first, and route the last call arg through the named s0 local (agent-c 2026-10-15)](#named-sreg-local-colours-lui-temp-44edc) -- _a `lui sN; lw aX,off(sN)` feeding a call = the load was assigned to a named sN variable first; a pointer cursor in the wrong s-reg = index the base by the counter instead._
 - [295BC (post, 98.15 -> EXACT 114/114): "t2 vs t3 on the else-arm `lb`" = a signed 1-bit bitfield read for the byte sign test, plus `<< 8 << 1` instead of `<< 7 << 1 << 1`; the .s carried two leading zero pad words (agent-c 2026-10-15)](#bitfield-sign-read-shift-chain-ring-295bc) -- _sign tests and shift chains each have a ring cost; a leading all-zero pair in the .s is the predecessor's pad (SUFFIX_BYTES_FORCE on it + expected/ symtab edit)._
+- [38830 (post0b, 84.6 -> EXACT 77/77): "switch-lowering order cap" on a goto dispatch chain = the last test is `if (tag != 2) return; goto L2;` (agent-c 2026-10-15)](#goto-chain-last-test-inverted-keeps-arm-last-38830) -- _target ends the compare chain with `beql last; b epilogue` and the last arm placed at the end? Invert the last test so IDO does not pull that arm up as the fall-through._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -28934,6 +28935,16 @@ is 0x295C4), so the exact C is 8 bytes short. A leading-nop PREFIX_BYTES is bann
 predecessor as an all-zero pad: `SUFFIX_BYTES_FORCE := gl_func_00029494=0x00000000,0x00000000` (and the
 NON_MATCHING twin). expected/ metadata only: `scripts/elf-symtab-edit.py in.o out.o gl_func_00029494::0x130
 game_libs_func_000295BC:0xcbb4:0x1c8`, then check that `.text` and `objdump -r` are unchanged.
+
+## Goto dispatch chain: write the LAST test inverted to keep its arm at the end (gl_func_00038830 84.6 -> EXACT, 2026-10-15 agent-c) <a name="goto-chain-last-test-inverted-keeps-arm-last-38830"></a>
+
+Target: `beq tag,12,L12; beq 13,L13; beq 14,L14; beql tag,2,L2 (delay = L2's first load); b epilogue`, then
+the arms in source order, L2 last. A C `switch` sorts the cases (tests 2 first), so the old wrap used a goto
+chain, but `if (tag == 2) goto L2; return;` makes IDO move the L2 block up as the fall-through
+(`bnel tag,2,epilogue`): 38 word diffs, logged as a switch-lowering cap.
+
+`if (tag != 2) return; goto L2;` keeps L2 at the end and gives the target's `beql`/`b` pair: 0 diffs. Write
+every earlier test as `== k goto`, only the last one inverted.
 
 ## TextReloc symIdx tells distinct globals apart; dead-if keeps s0 on arg0 (gl_func_000083CC 70.8 -> EXACT, 2026-10-15 agent-g) <a name="textreloc-symidx-distinct-global-dead-if-keeps-s0-83cc"></a>
 

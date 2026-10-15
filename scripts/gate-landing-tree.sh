@@ -8,6 +8,13 @@ WT="${LAND_WT:-$SELF_DIR/../projects/1080-agent-d}"
 LOG="${LAND_SCRATCH:-${TMPDIR:-/tmp}}/gate-landing"
 cd "$WT" || exit 1
 echo "== HEAD: $(git log --oneline -1)"
+# a union-merged stale agent branch can re-add old target-specific := values next to main's
+# (TRUNCATE_TEXT / clip lines); make silently takes the last one, so refuse to gate on duplicates
+dupkeys() { grep -E '^[^#[:space:]][^=]*: [A-Z_]+ :=' | sed -E 's/ :=.*//' | sort | uniq -d; }
+dups=$(comm -23 <(dupkeys < Makefile) <(git show origin/main:Makefile | dupkeys))   # only NEW duplicates
+if [ -n "$dups" ]; then echo "!! duplicate target-specific := assignments in Makefile (stale merge?):"; echo "$dups"; exit 5; fi
+chg=$(git diff origin/main -- Makefile | grep -E '^[-+][^-+].*(CLIP_KEEP_ALIGN|TRUNCATE_TEXT) :=' | cut -c1-160)
+[ -n "$chg" ] && { echo "   ?? clip/TRUNCATE values changed vs origin/main — confirm each is intended:"; echo "$chg" | sed 's/^/      /'; }
 echo "== gate: make"; make RUN_CC_CHECK=0 -j8 >"$LOG-make.log" 2>&1; echo "   make exit=$?"
 if cmp tenshoe.z64 baserom.z64; then echo "   ROM: BYTE-IDENTICAL"; else echo "   ROM: !! MISMATCH"; exit 3; fi
 echo "== gate: non_matching_objects"
