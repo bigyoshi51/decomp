@@ -14254,6 +14254,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [D548 (tail, NM 79.6 -> EXACT 86/86): `addiu t1,a1,K; sw t1,F(s0); or a1,t1` after a `slti`/`beqz` on the same field = the bump is written ON THE FIELD and the call arg re-reads it (`if (o->F < N) o->F += K; g(.., o->F, ..)`) -- uopt forwards into a1 on both paths; every local spelling drops the move or colours the sum v0. An FP quotient reloaded from a spill after a call = the SAME `g / 255.0f` written again (CSE across the call), not a named local -- a named quotient costs a frame word (2026-10-14 agent-g)](#field-forward-bump-cse-quotient-d548) -- _Plus: reuse numerator names (b = 250 then b = 255.0 double then b = 0.0) to keep the name count = target frame._
 - [D0D0 (tail, NM 78.59 -> 89.49): `sw a1,4(sp)` before each of 3 jals = 4-byte struct key passed by value (`k.v = <int at D+0xD680>`; reload via hoisted &k); OPEN: target re-loads the key per iteration (`lui t9,1; lw t9,-0x2980(t9)`) but every spelling gets its address promoted into s5/s7 (+s8 save) (2026-10-14 agent-g)](#struct-key-byvalue-address-promotion-d0d0) -- _negative list inside._
 - [64388: stack-frame map = DECL ORDER (every declared scalar owns a home slot, even register-allocated ones); struct copy through a carrier `t = d; e = t;`; `if (1) {}` around a 3-component block sets x/y/z FP colouring; base reuse avoids a new slot (gl_func_00064388 NM 79.13 -> 97.30, 2026-10-14 agent-g)](#decl-order-frame-map-carrier-copy-64388) -- _read the target's slot gaps as scalar counts between structs (probe: not universal, see 690A8 caveat)._
+- [2B94: `sw 0/4/8/12(aN)` through the hoisted `&local` call-arg reg = a STRUCT ASSIGNMENT (`q = obj->quad;`), not stores; `a + b + c` reassociates to `(c + a) + b` (write the last-loaded term first); `&D+K` lwc1 next to the function's other rodata = float literals (gl_func_00002B94 NM 82.99 -> 99.50, 2026-10-15 agent-g)](#struct-assign-through-arg-reg-reassoc-2b94) -- _also: unused decls take frame slots in this fn (pad decls rebuild the slot map); inline FP field reads instead of named temps fixed f0/f2 colouring; if/else full triples give the redundant constant re-set in both arms._
+- [3430: identical float literals merge (`step = 0.1f` x4 -> one hoisted callee-saved FP reg); a variable referenced in a block containing a call goes to an s-reg even when dead across it; `for (i = 0; i != N; i++)` = `li at,4N; bne` (gl_func_00003430 NM 77.93 -> 95.79, 2026-10-15 agent-g)](#literal-merge-call-block-sreg-3430) -- _also: read the switch table from the ROM before trusting an old case->arm mapping (arms 1<->3, 2<->4 were swapped)._
 - [697C4: a float load hoisted INTO the loop-guarded preheader with its `lui at` ABOVE the guard = a .rodata float LITERAL, not a D-variable; `p = &a[i].y; *p = *p + x` materialises the element pointer (folded lh, addiu, sh 0); `if (f) { amp = f; half = f / 2; }` gives the copy + pre-guard half (gl_func_000697C4 NM 62.85 -> 92.35; + `if (1)` around a late store group un-rotates named FP results: gl_func_00065148 99.55 -> EXACT, 2026-10-14 agent-g)](#float-literal-preheader-hoist-elem-ptr-697c4) -- _Tell: `lui at,0` before `beqzl count`, `lwc1 fN,%lo(at)` after it; variables/pad-structs only hoist the address._
 - [68044 (post1b, NM 75.93 -> EXACT): octant atan2 = PARAMS OVERWRITTEN in place (`arg1 = -arg1`; neg.s f20,f20) + `s16 v` result (per-arm sll/sra); final `(f32)v / 32768.0f * K` gives mul.s fd,quot,K only when K is a NAMED pad-struct extern (`D_68044_2210.v`), not an inline `*(f32 *)((char *)&D + 0x2210)` deref (2026-10-14 agent-g)](#octant-atan2-param-overwrite-named-const-68044) -- _In-unit callee with a BAKED jal = gl_ref_<section addr> alias, not a direct call._
 - [65148 (post1b, NM 75.76 -> ~60/66): a 3x4 affine transform with row results in f14/f16/f18 held to the end = NAMED row results with all three stores after the last row, plus the 4F0C8 reversed right-assoc row spelling; an unnamed (CSE'd) input component trims one named word so the call-crossing temp spill lands on the target slot (2026-10-14 agent-g)](#named-row-results-late-stores-65148) -- _Residual: accumulators rotate f16/f18/f14 vs f14/f16/f18._
@@ -28529,4 +28531,50 @@ reproduces the target's `or t0,zero,zero` spilled across both calls with loop 2'
   last row, but the accumulators rotated (build r0 f16 / r1 f18 / r2 f14; target f14/f16/f18). Wrapping ONLY the three
   late stores in `if (1) { ... }` fixed the colouring; wrapping the row defs (or defs + stores) is worse. Try the
   `if (1)` block on the store group first whenever named FP results rotate by one register.
+
+## 2B94: struct assignment through the hoisted call-arg register; IDO's `a + b + c` reassociation; literal and triple spellings (gl_func_00002B94 NM 82.99 -> 99.50, 2026-10-15 agent-g) <a name="struct-assign-through-arg-reg-reassoc-2b94"></a>
+
+- **`addiu a2,sp,168` early, then `lw t2,404(s0); sw t2,0(a2); lw t1,408(s0); sw t1,4(a2); ...`** (t2/t1 alternating)
+  before a call that takes `&local` = `local = obj->quad;` (a 16-byte struct ASSIGNMENT, then `f(..., &local, ...)`).
+  IDO's block copy addresses the destination through the already-materialized argument register. Four scalar
+  stores, a held pointer, or a loop all fold back to `sw N(sp)`; the old wrap called this unreachable.
+- **Reassociation:** IDO -O2 rewrote `p->a + p->b + p->c` (left-assoc) as `(c + a) + b`: loads issue c, a, b and
+  the first addu pairs c with a. To get the target's `(a + b) + c` with loads a, b, c, write `p->b + p->c + p->a`.
+  With a fourth constant term (`+ x` where x folds to -19) the same holds for the first three. Same lever for a
+  two-term sum feeding a store: `e[6] + e[0]` gave the target's `addu t3,t1(e0),t2(e6)`.
+- **`lui at,0; lwc1 fN,0xCB8(at)`** with consecutive offsets in a game_libs function = `.rodata` float literals
+  (here k/255 colour fractions, 0x3F48C8C9 = `0.78431374f`); read them from bootup.uso section 7 at imm + 4
+  (see docs/MATCHING_WORKFLOW.md#game-libs-rodata-literals-and-tables-76f0).
+- A `255.0f * G` multiply where G was spelled `*(f32 *)&D_00000000` came out `mul.s f, G, 255` with G loaded first;
+  a separate `extern f32` for G gives the target `255` first. Shared `D_00000000` bases CSE across the function and
+  change operand order.
+- **Full if/else triples:** target sets `s1 = A; t0 = -19; v0 = 2` before the branch and `s1 = B; t0 = -19; v0 = -16`
+  in the taken arm (the -19 repeated). That is `if (c) { s = B; x = -19; y = -16; } else { s = A; x = -19; y = 2; }`;
+  defaults-then-override const-propagates the repeated -19 away.
+- **FP temps:** named `f12 = p->1E4; f2 = p->1EC; d = (f32)i - (f32)j;` coloured d=f2 / 1EC=f0; reading the fields
+  inline in each of the four expressions (and inlining `d`) gave the target d=f0 / 1EC=f2 / f12 / f14.
+- **Frame:** in this function unused declarations DO take slots (removing three dead decls shrank the frame by 8),
+  so the target map (spB8 184, spA8 168, four ints 152..164, gap 148, x 144, y 140, gap 132..139, f32[4] at 116,
+  40 bytes below) is rebuilt with dummy `s32` decls in the gaps plus a 10-word pad array.
+Open: the reloaded `obj->0x1F0` head value colours a0 in the target (pointer v0, s16 v1); 18 spellings gave t0/v1/v0
+or v1/v0/t0. Passing the held value to the next call does give a0, but then the target's reload disappears.
+
+## 3430: float-literal merging, call-block s-reg promotion, `!=` loop bounds (gl_func_00003430 NM 77.93 -> 95.79, 2026-10-15 agent-g) <a name="literal-merge-call-block-sreg-3430"></a>
+
+- **Identical float literals merge.** The target reloads `step` into caller-saved `$f2` from four separate `.rodata`
+  words (0xCC8/0xCEC/0xCF0/0xCF4, all 0x3DCCCCCD) after each call. Writing `step = 0.1f;` at all four sites lets uopt
+  see a single constant value: it hoists one `lwc1` before the loop into `$f24` (callee-saved, extra sdc1/ldc1) and drops
+  the per-case reloads. Different literal values (`0.2f`) or forms (`1.0f / 10.0f`, `0.1`, `(float)0.1`) stay separate
+  but still land in a callee-saved register; separate `extern f32` loads reproduce the target's `$f2` reloads. For an
+  NM wrap use the externs; an exact would need the literal pool rebuilt at the right offsets anyway.
+- **A variable referenced in a basic block that contains a call is treated as crossing it.** One `s32 t` reused for
+  case 7's counter (passed as the call's a2) and for the post-call `x->74 + 16` went to `$s0`, dragging every case's `t`
+  with it. A separate variable for the counter (colours a2 via the call-argument precolour) put `t` back in v1.
+- **`for (i = 0; i != 8; i++)`** with a 4-byte stride emits the target's `addiu s3,s3,4; li at,32; bne s3,at` (and the
+  parallel `addiu s4,s4,4` cursor). `i < 8` emits `slti/bnez`. A second loop with no calls needs its OWN index variable;
+  reusing the first loop's `i` keeps the web in s-regs.
+- **`lui a1,1; addiu a1,a1,-0x3318`** for an address argument = `(char *)&D_00000000 + 0xCCE8` (the REL addend sits in
+  the instruction pair); a dedicated extern symbol leaves `lui 0 / addiu 0`.
+- Float `x = x + y` came out with y loaded first; writing `y + x` gave the target's load order (same reversal as the
+  integer sums in #struct-assign-through-arg-reg-reassoc-2b94).
 

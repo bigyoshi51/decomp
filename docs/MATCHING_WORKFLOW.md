@@ -272,6 +272,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Lone 1-word pad INCLUDE_ASM emits 2 words (+4 shift): fold stray nops into a neighbor's .s tail; caller-set-$t6 'cap' = stolen-prologue misread (3rd instance); sub-55 libultra identity grep kit; 27784=osAiSetNextBuffer via per-site-extern %hi-CSE-kill (277E0 = its tail, 4th caller-set retraction); refresh-expected-baseline.py: no flags + run AFTER .s merges; non-hw 5.3-fingerprint sweep: 71384=osPfsInitPak (pfs sibling family = blank jals in 70xxx-71xxx); pfs vein RESOLVED 2026-07-30: 71384/71624/717CC landed 5.3 -O1 donors, 71304/71144 = game code (size-coincidence trap)](#one-word-pad-include-asm-emits-two-words)
 - [post0b clip re-probe must be SPLICE-AWARE: probe the post-replace-body .o (make prints true .text size), not a standalone compile (4C5E4, 2026-08-22 agent-g)](#clip-reprobe-splice-aware) — _Donor splices grow .text before the clip; standalone probe truncated sentinel 62F08 to 30%._
 - [Pinned-jal decode audit: jal-vs-call-count scanner, 4 FP classes (alias-externs, macros, loop rotation, jalr), one genuine find 71E0 63.1->84.5 via (u32)dst>0U alloc-fallback restore; sweep CLOSED (agent-h 2026-08-22)](#pinned-jal-decode-audit)
+- [game_libs base-unit `lui at,0; lwc1 fN,0xE2C(at)` next to a jumptable offset = a FLOAT LITERAL in the USO .rodata, not `&D+0xE2C` global; read the switch tables AND literals from section 7 before trusting an old decode (76F0 88.80->92.47, agent-g 2026-10-15)](#game-libs-rodata-literals-and-tables-76f0) — _RoData file offset = lw/lwc1 imm + 4; three &D+0 float sites that each re-materialize `lui/addiu v0` = three distinct globals; case->arm mapping from the table fixed a mis-assigned switch1/switch2 arm._
 
 
 ---
@@ -12061,4 +12062,30 @@ relocs imported). 78/78 words on the first compile; expected/ needed no refresh
 (raw slice equal at the same st_value). Lesson: in a libultra island, any
 down-band wrap whose asm homes every arg and reloads the base per field is a
 library function at the island's own -O1, not an -O2 grind target.
+
+## game_libs base-unit rodata: float literals and switch tables read straight from section 7 (76F0, agent-g 2026-10-15) <a name="game-libs-rodata-literals-and-tables-76f0"></a>
+
+An old decode of gl_func_000076F0 spelled five `lui at,0; lwc1 $fN,0xE2C..0xE3C(at)` loads as
+`*(f32 *)((char *)&D_00000000 + 0xE2C)` "globals". Those offsets sit between the function's
+own jumptables (`lw tN,0xE04/0xE1C/0xE40(at)`), and that is the tell: they are the function's
+FLOAT LITERALS (IDO puts non-`lui`-able float constants in .rodata next to the switch tables).
+Read them from bootup.uso section 7 (RoData) at **file offset = immediate + 4**:
+
+```
+python3 - <<'PY'   # walk() from scripts/extract-uso-jumptable.py, module 0xD9FE28
+secs = walk(rom, 0xD9FE28); base, size = secs[7]
+word = u32(rom, base + imm + 4)          # 0x3DCCCCCD = 0.1f, 0x3D4CCCCD = 0.05f, ...
+PY
+```
+
+Writing them as literals (`D += 0.1f;`) reproduces the shared `$f2` literal hoist and the
+lwc1 layout. Same pass: the `&D+0` float read in three regions, each re-materializing
+`lui v0,0; addiu v0,v0,0`, is three DISTINCT globals (one extern per region; a single
+symbol CSEs into one base). And the jumptable CONTENTS (same section, same +4 rule,
+`extract-uso-jumptable.py --shim 0x1466C`, case offset = value - (function's table base);
+for 76F0 value - 0x1BD5C) showed the old wrap had a switch1 arm hung off switch2 as a
+`goto`, and the 0x12+0x10 / lone-0x12 arms of switch2 swapped. The extractor drops the
+LAST entry of some tables (unrelocated word); read the raw words for those. Net
+88.80 -> 92.47 with no colouring work. Before grinding colouring on any game_libs
+jumptable function, dump its tables and nearby rodata words.
 
