@@ -14321,6 +14321,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [2FB74 (post, 97.0 -> EXACT 612/612): one local reused by several switch cases is ONE web set; splitting the case-39 use into its own local undid a v/c/b rotation (a2/v1/a3 -> a3/a2/v1) that the --spill scanner had pinned on an extra arg; a named test local after an intervening store became a v0 global web (inline the test); `p = &global` inside the inner arm keeps `lui/addiu` unfolded (agent-c 2026-10-15); reverse lever 5B3E0 (post0b, 77.7 -> EXACT): reusing a loop cursor and a u32 header local for later pointers fixed v0/v1 and the spill slot](#per-case-local-split-rotation-2fb74) -- _split or merge locals before adding call args._
 - [Int-returning blank callee defines $v0 at the call, so a local live across it cannot colour v0: use a VOID blank alias; read order decides store-forward vs reload (gl_func_00037BEC post0b 67.5 -> EXACT, agent-c 2026-10-15)](#void-alias-frees-v0-across-call-37bec) -- _target spills a local around a call and reloads it into v0, build uses v1: retype that call void._
 - [A spilled local RE-STORED to its own home before a later call (`sw v1,60(sp)` with no new def) = a BB boundary between the calls: `if (1) { ... }` around the later call (gl_func_0003E868 post0b 61.3 -> EXACT, agent-c 2026-10-15)](#bb-break-respill-3e868) -- _also: a jal-0 result that is never used means the object is the earlier call's result._
+- [Compare order 1,0,2 with bodies out of line in that order = goto chain (a switch sorts ascending AND gives its selector a frame slot); two struct stores whose registers are right but whose schedule is swapped = put them on ONE source line (gl_func_00035440 post0b 71.2 -> EXACT, agent-c 2026-10-15)](#same-line-store-pair-schedule-35440) -- _registers follow statement order, the as1 schedule of a home reload vs a lui/lw pair follows the line split._
 - [4DA40 (post0b, 76.9 -> EXACT 62/62) + 337AC (post, 76.4 -> EXACT 53/53): `lw v0; beqz v0; sw v0,off(s0)` + `or a0,v0` in the next jal slot = store-then-test `if ((self->C = self->4) != 0)`; a guard that only covers a save/cb/restore bracket while the tail runs unconditionally; scanner a1 flags that were real args (337AC: flags as a 3rd arg, unused param b as a 4th) vs coincidental colouring (4DA40) (agent-c 2026-10-15)](#store-then-test-child-attach-4da40) -- _a single `return 0` block reached only from the first test means the later guards do not return._
 - [34890 (post0b, 82.4 -> NM 90.2): `li node,0` hoisted above a `beqz nx` + a `b next` that jumps to the very next instruction = iterator-next written `if (nx) {...; node = nx->data;} else { node = 0; }` (emptied else arm); block-scoped cascade locals add dead homes for the frame (agent-c 2026-10-15)](#iter-next-else-arm-b-next-34890) -- _`node = 0;` before the if hoists across the loop call and costs an s0._
 - [2F934 (post, 84.5 -> EXACT 40/40): a `beql a0,K` whose target is the middle of another case arm (its `jal`, with the arm's first `lui` copied into the delay slot) = the two case labels SHARE that arm (`case 1: case 2:`), not a separate one-call case (agent-c 2026-10-15)](#beql-into-arm-shared-case-labels-2f934) -- _resolve every beql target to an absolute word before writing the case arms._
@@ -14337,6 +14338,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [`sltu tB,zero,tM; beqzl tB` (a flag test materialized as 0/1 before the branch) + a RELOAD of the same flag word for the next test = `((p->f & 0x100) != 0) == 0 || (((unsigned *)p)->f & 0x200)`; the pointer into a dead param takes that arg reg (game_uso F060 91.18 -> 99.64, F13C 78.85 -> 99.57, 2026-10-15 agent-g)](#materialized-bool-flag-test-sltu-beqzl-f060) -- _`!(x & 0x100)` / `(x & 0x100) == 0` branch directly on the andi (no sltu); the extra `!= 0 ... == 0` keeps it. The type-split cast defeats the load CSE._
 - [game_uso under NCC: an inlined member that returns a child pointer (`self->0xB4->child()`) colours the 0xB4 pointer v1 (edg return temp holds v0) -- F060 99.64 + F13C 99.57 -> EXACT; plus NCC address/inline-accessor facts from B274 / 7448 (2026-10-15 agent-g)](#ncc-inline-member-child-v1-f060) -- _`(char *)(unsigned)&sym` is a no-op under edg (no s-reg caching); `int s1 = (int)&sym` caches it; `int d = (int)&sym + K` keeps `lui/addiu sym+K` + small offsets; inline `get()` returns via f0, `float &r()` stays in the expression ring; a load-expression `this` stays unfolded, a named-local `this` folds._
 - [game_uso under NCC: a stack float param reassigned in place (`if (!(f & 8)) arg4 = 1.0f;`) and a class temporary whose ctor forwards to an inline `set()` fix frame size and FP colouring -- B750 72.8 -> EXACT (2026-10-15 agent-g)](#ncc-ctor-forwarding-inline-set-frame-b750) -- _Tell: the same `lwc1 fN,104(sp)` of a stack arg on two paths into one register; frame larger than your C by 8 with the temp object 4 higher. edg gives every named local and every live inline-argument temp its own 4-byte stack slot even when it lives in a register, so the count of locals and nested inline params sets the frame._
+- [game_uso under NCC: a named copy local (`prev = F0; F4 = prev; ...`) colours v0 and renumbers every later temp; writing the move through the members (`F4 = F0; F0 = 0; if (F8 == F4) ..; F8 = F4;`) gives the target's t0/t1 expression temps; NCC is NOT a universal lever (B4B8 sentinel loop is NCC-immune) -- F6D4 95.4 + E35C 95.3 -> EXACT (2026-10-15 agent-g)](#ncc-no-named-copy-local-f6d4) -- _Tell: target values in the ugen temp ring (t8, t9, then t0, t1) right after a call, where your build has a v0 local; a 2-copy `bne; or v0,t0 / or v0,t0` join is what a pure member re-read leaves, not a ternary._
+- [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -29931,3 +29934,95 @@ next `jalr`, with no new value in between. The build stored once and only reload
 - Frame layout came from unreferenced arrays in declaration order: `char *obj; char pad1[4]; int stk[2]; char pad2[0x14];` put obj
   at 0x3C, a dead word at 0x38, stk at 0x30 (see #unreferenced-array-first-decl-frame-pad-33228).
 
+## game_uso under NCC: no named copy local; member re-reads give the expression-temp colouring (F6D4 95.4 -> EXACT, 2026-10-15 agent-g) <a name="ncc-no-named-copy-local-f6d4"></a>
+
+game_uso_func_0000F6D4 (E35C sibling) under cfe capped at 95.4 with three residual clusters: a
+commutative `addu` in the ceil-div block, the `prev` value in v0 (target t0 plus two `or v0,t0`), and a
+uniform +1 temp renumber over the whole tail. Under NCC (same logic first) the addu came out base-first
+(`addu t5,v0,t4`), so cluster A was cfe-only. The other two came from the source shape:
+
+- The target has no named `prev`. Its t0 / t1 after the B8518 call are the next temps in the ugen ring
+  (t8, t9, t0, t1), which a named local never gets: a named local colours v0 and moves every later
+  temp down by one. The exact body writes the move through the members:
+  `I(s0,0x100) = I(s0,0x100) + 1; P(s0,0xF4) = P(s0,0xF0); P(s0,0xF0) = 0; if (P(s0,0xF8) == P(s0,0xF4)) I(s0,0x100) = 0; P(s0,0xF8) = P(s0,0xF4);`.
+  uopt forwards the F4 store into both the compare and the final store; the join is then
+  `bne t0,t1; or v0,t0` + `sw zero; or v0,t0` + `sw v0,248`, which is the shape the old wrap called a
+  "pure-copy web no C spelling reaches".
+- Statement order matters: the counter increment has to come first (its `lw t8,256(s0)` is what fills
+  the two preceding arms' delay slots).
+- `F8 == F4` gives `bne t0,t1`; `F4 == F8` swaps the operands (the last differing word).
+- The sibling game_uso_func_0000E35C (cfe 95.3, the same body inside `if (self->0xF0)` with a `return 1/0`)
+  matched on the first NCC compile with this recipe (130/130 words). Its old "unpaired HI16 is unreachable"
+  cap was a reloc-listing difference only: the raw words, the ROM and objdiff all agree.
+- Probes that got the 2-copy shape but kept a named local (`nx = prev; if (..) { ..; nx = F4; } F8 = nx;`,
+  `(prev != F8) ? F4 : (c = 0, prev)`) all kept the v0 colouring. Inline helpers returning prev fold away.
+
+NCC is not a universal lever. game_uso_func_0000B4B8 (9-neighbour sentinel count, cfe 86.87) scored
+86.4-87.1 under NCC across 40+ variants (decl-order sweep, pointer/index/counter loop forms, inline
+helpers, source-level peel, unsigned/short counters). Every one has the count in t2 and the loop counter
+in v0, where the target has count in v0, counter in t0 and an unexplained idle t1. Its residual is a
+uopt colouring-priority difference that both front ends share, not an edg/cfe difference. The shape
+facts NCC did confirm: `idx = (y + p->dy) * w + x + p->dx` (mult-first), `for (i = 0, p = tbl; ..; i++, p++)`
+(counter before the peeled iteration, pointer re-materialized after it), and one `&&` condition, which
+gives the peeled copy non-likely branches.
+
+## Goto-chain dispatch order + one-line store pair for the as1 schedule (gl_func_00035440 71.2 -> EXACT, 2026-10-15 agent-c) <a name="same-line-store-pair-schedule-35440"></a>
+
+Target (post0b, 0x160, frame 0x70): dispatch on `o->4` comparing 1, then 0, then 2, with the three bodies
+out of line after a `b end`, in the order 1, 0, 2.
+
+1. **Not a switch.** A `switch` with cases written 1, 0, 2 emits the compares ascending (0, 1, 2) and gives
+   the selector a hidden frame slot at the bottom of the frame (frame grew 0x70 -> 0x78 at the target's
+   local total). A goto chain `if (k == 1) goto L1; if (k == 0) goto L0; if (k != 2) goto end; goto L2;`
+   gives the target order. The last test needs the inverted skip + goto, or it folds into `bne` with the
+   body inline (#feedback-ido-split-last-eq-test-to-suppress-bnel).
+2. **Frame.** With the named `k` declared right after `r`, the slots are r 0x6C (also r's cross-call spill
+   home), k 0x68, then the case block's 44-byte message struct, buf[24], tmp. Without `k`, or with a switch,
+   a compiler slot appears and the frame is 8 bytes too big.
+3. **One-line store pair.** In the block after `cb(buf, &tmp, 1)`, the target loads the global counter
+   first (`lui t4; lw t4`) and then reloads a1 from its home (`lw t3,116(sp)`), stores the counter, and puts
+   the a1 store in the jal delay slot. t3 < t4 means `s.a1 = a1` comes BEFORE `s.cfg = G` in the source
+   (registers follow statement order; all 120 orders of the five stores were tried). On separate lines
+   as1 issues the a1 reload between the lui and the lw, and the counter store goes in the delay slot.
+   `s.a1 = a1; s.cfg = G;` on one line gives the target schedule, all else unchanged. A standalone
+   reduction showed the same flip from the line break alone. Same lever as the as1 tie-break entry for
+   func_00005F34 (search "COLLAPSING statements onto a SINGLE source line"); here the tell was "registers
+   right, schedule of a load pair swapped". The permuter (158k iterations) did not find it.
+
+## game_uso under NCC: C48C is a cfront out-of-line constructor; D9CC's NCC residual (2026-10-15 agent-g, both still NON_MATCHING) <a name="game-uso-c48c-cfront-ctor-d9cc-ncc"></a>
+
+**C48C (0xD78, cfe 99.74).** The cfe wrap emulates each of the 32 stages with a manual
+`obj = s1 + K; if (s1 == -K) obj = alloc(0x18)`. That shape is what edg (IDO 7.1 NCC, cfront ABI) emits
+for an *inlined constructor of a member subobject*: `if (this == 0) this = T::operator new(sizeof(T))`
+with `this = &list->m_k`. The likely original is `Obj::Obj(int a1, int a2) : Super(a1) { b4 = a2; D458(this); }`
+with a `List` member at +0x13C (its own `this == 0 -> alloc(0x308)`), whose base `Hdr` (8 bytes,
+`alloc(8)`) and 32 members (`FParam`/`IParam`, 0x18 each) are built in List's mem-initializer list.
+What reproduces under NCC (scratch probes, standalone compile):
+- A class-scope `static void *operator new(unsigned n) { return game_uso_func_055750(n); }` in each class
+  gives the `jal 055750` with the member size. Do not put it in an empty base: edg gives an empty base
+  4 bytes (no EBO), so every size and offset grows by 4.
+- The per-stage `lw G; sw G,slot; lw 0(&slot); sw 0(s2)` then `lw a2,0(s2)` is the by-value `Name`
+  argument: a temporary built by `Name(int)` from the global, copied into the INLINE ctor's by-value
+  parameter. That parameter has one shared slot (s2) for every expansion. A named `t = u` local
+  (cfe-style) puts t at the top of the frame, not at sp+44.
+- Floats that IDO loads from .rodata (`lui at; lwc1 0x1EC(at)`, named game_uso_D_807FF820 in the
+  expected relocs) cannot be literals in a donor, because the reloc would point into the donor's
+  .rodata. A `const float &` ctor parameter bound to the existing alias extern keeps the load late,
+  inside the `if`. Literal floats/ints substituted into the inline stay late on their own.
+Still open: (1) `Obj::Obj` is a mangled symbol (`__ct__3ObjFiT1`). REPLACE_FUNC_BODY matches by name,
+so it would need a donor-side `objcopy --redefine-sym` (or a donor-symbol option in the splice
+script), and Super's out-of-line ctor would need the same rename to `import_0010D33C`. An inline
+Super adds its own `this == 0` alloc(0x2C). (2) Frame 208 vs 200: the temps go ascending from sp+72
+with the shared param slot at 52, where the target has temps descending from 192 and the param at 44.
+The extern "C" free-function emulation (stage inlines) reached 779/862 words with only the sp offsets
+wrong.
+
+**D9CC (0x830, cfe 98.86).** Porting the cfe body to a donor gives 496/524. Three edits take it to 520/524:
+the three `FF(arg0,0x11C) * FF(v1,0xA1C..A24)` products written `FF(v1,..) * FF(arg0,0x11C)` (NCC
+orders mul.s operands the other way from cfe). The three volatile-load compares written
+`FF(arg0, 0x304) * vol` (the volatile still has to stay). The (f) "andi/or coalesced into a1" cap:
+drop both named temps and write `if (FW(arg0,0x108) != 0) { FW(arg0,0x108) = (FW(arg0,0x108) & 0xFFFF) | 0x60000; call(arg0, FW(arg0,0x108), ..); }`
+(member re-read, same lesson as F6D4). The last 4 words are the two head gates (`beqz t8` / `bc1f` +
+nop to 0x20C in the target, `beqzl`/`bc1fl` + lui-dup to 0x210 here). Inert so far: nested if,
+`!= 0`, operand swaps, goto/do-while(0)-break exits, an inline helper with early return. Under the
+1-commit-per-+3pp rule the 98.86 -> ~99 gain was not committed. Start from these edits.

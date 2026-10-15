@@ -12307,3 +12307,8 @@ fixed: its `mfc1 a3,$f0` "cap" was DB78's float 4th parameter (same as F13C / 10
 arg-prep, an -O2 hoist artifact" (`a1 = 0x20008; a2 = 0; a3 = 1` before the branch) was the else-arm
 call's argument list, hoisted above the branch. Before calling a pre-branch argument setup dead, check
 whether an arm's call uses those registers without setting them.
+F6D4 (95.4 under cfe) needed one source change beyond the NCC recompile: the target has no named `prev`
+local. Its prev values are expression temps (the F0 -> F4 move is written through the members and F8
+compares and stores a re-read of F4). See IDO_CODEGEN #ncc-no-named-copy-local-f6d4, which also records
+B4B8 as NCC-immune (both front ends give the same colouring there).
+E35C (95.3, F6D4's sibling) matched on the first NCC compile with the same no-named-local body.
