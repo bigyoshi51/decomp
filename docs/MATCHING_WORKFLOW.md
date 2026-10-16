@@ -12384,6 +12384,18 @@ resolves to 0. More traps:
   `NON_MATCHING_` mirror. The NM object then shrinks by 4 (C 0x90 + pad block 8 became
   C 0x90 + 4), EBC8 0x5560 -> 0x555c, so the tail clip is 0x558c.
 
+Run 89 (agent-g, 2026-10-16) landed tail D9E4 and C5B0, mgrproc 1F30 and game_uso 0940. Notes:
+
+- **mgrproc 1F30**: the four ldc1 diffs were already covered by `D_dbl_5E0/5E8/5F8/600` pins;
+  `bake-data-relocs.py` writes the offsets into the block, so the decompressed block range is
+  word-identical to the ROM. Check `undefined_syms_auto.txt` before adding a pin.
+- **game_uso 0940** (three C `switch`es): the 3 differing words are the jumptable `%lo`
+  immediates. IDO's local `.rodata` tables sit at offsets 0x0/0x1C/0x34 of the unit, the ROM's at
+  0x4/0x20/0x38 of the module rodata (`game_uso_D_807FF924`...). No symbol pin reaches a
+  `.rodata` section reloc. This is the LO16 class `verify-yay0-blocks.py` accepts (game_uso
+  lo16 count 3 -> 6) and that the landed exacts ECEC / EDD4 / 1189C already carry. Their
+  immediates shift too when 0940's tables are inserted ahead of them; they stay in the class.
+
 <a id="bootup-uso-jumptable-donor-2da4"></a>
 ## bootup_uso jumptable donor splice: keep the in-unit body full size (func_00002DA4 76.4 -> EXACT, 2026-10-16 agent-c)
 
