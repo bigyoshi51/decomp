@@ -14352,7 +14352,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso under NCC: a "bnez on a stack address + alloc(0xC), stores through v1" block is edg's cfront-style constructor protocol for a DERIVED class (`struct XZ : Vec3 { XZ(const Vec3 &v) : Vec3(v.x, 0, v.z) {} };`); an inline base-class `operator new` forwarding to the import fixes the reloc name; PRE needs no named pointer; tail named locals buy frame slack (6A30 93.2 -> EXACT, 2026-10-15 agent-g)](#ncc-derived-ctor-protocol-6a30) -- _Tell: `addiu a3,sp,K; or v1,a3; bnez a3; jal new(12); beqz v0; or v1,v0`. A body-assigned derived ctor folds the stores onto &pt._
 - [game_uso under NCC: edg binding temps are ALWAYS laid out "first-evaluated lowest" (no expression shape flips it); "first-appearing higher" in the target = NAMED Vec3 locals assigned inside the expression through the IMPLICIT operator= (`Vec3 d, e; if ((d = a - w).lenSq() < (e = b - w).lenSq())`); an inline `set()` returning `Vec3 &` adds 8 bytes of frame per class-temp stage (6FA8 105 -> 123/127 -> EXACT: `void set` + a named `const Vec3 &u = *this` in the first stage's inline only, since a `Vec3 &set` return temp lands at the frame bottom; 1DDC 241 -> 249/382 with the slot swap fixed via a by-value `assign()` member; 2026-10-16 agent-g)](#ncc-temp-order-named-assign-6fa8) -- _named locals follow declaration order; binding temps never do. Probe with `-g3` .mdebug + the addiu-sp slot list._
 - [A "permanent CSE cap" on a raw-word USO wrap can be its PLACEHOLDER symbols: give each reloc its real name and keep an un-reloc'd `lui at` on a separate symbol (timproc_uso_b5_func_000079A4 98.32 -> EXACT); FP commutative operand order and the `ldc1 K(at)` displacement follow the expression shape (1DB0 6 -> 3 diffs, 2026-10-16 agent-g)](#placeholder-symbol-cse-cap-79a4) -- _Read `objdump -dr expected/...` for each HI16/26 name before calling a shared-base CSE a cap. Write `scr + i * 4` as `((int *)(scr + K))[i]` when the addu operands come out reversed._
-- [A "[sw spill][move sN,v0]" vs "[move][sw]" pair swap before a call is NOT an allocator cap: assign the register copy inside the call's argument list, `f(slot, node = r)` (timproc_uso_b5_func_00000478 97.89 -> EXACT); param-as-self + drop the named copy fixes the entry `or s0,a0` schedule (18B4 98.72 -> EXACT, 2026-10-16 agent-g)](#assign-in-call-arg-spill-before-copy-0478) -- _a copy written as its own statement is emitted before the earlier statement's home store._
+- [game_libs placeholder sweep: count `lui` per fn, target vs NM build; MORE target luis = one placeholder standing in for several symbols. gl_func_00044DE4 90.4, gl_func_00034458 86.2 and gl_func_00034240 87.4 -> EXACT via distinct base-0 externs; `&D_00000000 + K` folds a pre-test load where a zero-offset pinned symbol does not + carry-form keys + volatile first self store + `((char **)(self + K))[i]` loop + named v0 local (2026-10-16 agent-c)](#lui-count-placeholder-sweep-44de4) -- _`*(int*)0 = v` gives `sw v,0(zero)`; two scalar base-0 externs give one `lui at` each, as in the target._
+- [A "[sw spill][move sN,v0]" vs "[move][sw]" pair swap before a call is NOT an allocator cap: assign the register copy inside the call's argument list, `f(slot, node = r)` (timproc_uso_b5_func_00000478 97.89 -> EXACT); param-as-self + drop the named copy fixes the entry `or s0,a0` schedule (18B4 98.72 -> EXACT, 2026-10-16 agent-g); constant-multiply spelling + right-subtree-first operand swaps + `x | (k = K)` for an s-reg-resident big constant (0778 97.48 -> EXACT)](#assign-in-call-arg-spill-before-copy-0478) -- _a copy written as its own statement is emitted before the earlier statement's home store._
 - [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -30418,11 +30419,28 @@ v0, the reloaded param in v1, the 0x28 stride in a0, with ring temps t6..t9. Thr
 2. `((Ent *)((char *)p + 0x90))[p[0x7C / 4]].fn` with `typedef struct { void (*fn)(void); char pad[0x24]; }
    Ent;` gives the target's base-first `addu t8,v0,t7`. The plain `p + idx * 0x28 + 0x90` gives
    `addu t8,t7,v0`. (A `char[0x28]` typedef did NOT flip it in arcproc 1170, so the struct with a typed
-   member is what counts.) The arcproc 1170 / 27BC "commute-order cap" siblings are worth a retry.
+   member is what counts.) CONFIRMED on arcproc_uso_func_00001170 (99.38 -> EXACT, 2026-10-16): even
+   with a MULTU-scaled stride (`li v1,40` CSE'd across both uses, `multu t6,v1; mflo t7`), the
+   struct form `((Ent *)((char *)p + 0x90))[p[0x7C / 4]].fn` gives `addu t8,v0,t7` with NO named
+   stride; seven flat spellings (array-of-char subscript, (int) base, +0x90 placement, comma) all
+   stay mul-first. The old "multu-scaled addu stays mul-first in ugen" verdict was wrong.
 3. The preceding call's return is dead, but the callee was declared `extern int f();`, so v0 stayed
    reserved and every colour shifted by one (v1/a0/a1). Declaring it `extern void f();` (every caller in
    the TU ignored the return) frees v0, the same effect as the 27BC void-alias lever, but with the real
    reloc name kept.
+
+**0778 (same file, 605-word flat bulk registration, labelled "ugen coloring + as1 tie cap" at 97.48).**
+76 calls `f(&tbl + K, packed_id)` with ids built from `n = arg0->0x50` and a global `g`. The 127-word
+residual was all spelling, three rules:
+1. Constant multiplies: `n*3`, `n*9`, `g*12` give IDO's in-place expansion (`sll t9,t8,2; subu t9,t9,t8`,
+   `addu at,a1,zero; sll; addu`). The wrap's `n*4 - n` / `(g*4-g)*4` gave fresh temps and was 2 words short.
+2. For `A | B` / `A + B` with two non-trivial subtrees, the build evaluated the RIGHT subtree first
+   (it got the lowest ring temps and became the rs). Where the build's first-loaded value was the
+   wrong one, swapping the C operands fixed every temp in that call (82 words over three groups).
+3. A big constant held in a callee-saved register across calls 2-4 (`lui s1,7` CSE) stayed the rt of
+   the `or` in every spelling (`0x70000 | x`, `x | (7<<16)`, a named `k`, `k << 16`, unsigned). The
+   commutative assignment lever pins it as rs: `x | (k = 0x70000)` -> `or a1,s1,t8`
+   (`(k = 0x70000) | x` does NOT). See [the assignment lever](#feedback-ido-fp-commutative-operand-order-assignment-lever).
 
 <a id="vec3-sub-mul-fp-candidates-bb-boundary-37938"></a>
 ### Single-use Vec3 arithmetic in the FP candidate pool needs BB boundaries (gl_func_00037938, NM 93.7)
@@ -30471,4 +30489,57 @@ into the parameter itself (`t = sin(t * theta) / sinom; if (flip) t = -t;`) give
 and spill exactly. Same pass: m2c's 19 named temps -> 11 real names gave the 0x48 frame (named-local
 count governs frame size), and q1[0] / q2[0] must be NAMED locals re-read after the calls so they colour
 f16/f18 -- inline (unnamed) they become one CSE temp spilled to its own home.
+
+<a id="lui-count-placeholder-sweep-44de4"></a>
+## game_libs placeholder sweep by `lui` count; gl_func_00044DE4 90.4 -> EXACT (2026-10-16 agent-c)
+
+game_libs `expected/` objects are raw `.word` dumps, so `objdump -r` shows almost no relocs and the
+[#placeholder-symbol-cse-cap-79a4](#placeholder-symbol-cse-cap-79a4) check cannot be read off the reloc
+table. Use the `lui` count instead: for every 85-99.9% wrap, count `lui` in `expected/` vs
+`build/non_matching/` per function. If the target has MORE, the C merges several symbols (or writes
+literal addresses). The 2026-10-16 scan of post/post0b found 34240 (7 vs 3), 34458 (4/3), 437C0 (20/19),
+44DE4 (5/3) and 53C04 (6/4, same insn count).
+
+gl_func_00044DE4 (62 words, teardown/reset). The m2c wrap had `*(int*)0 = 0x1FEB4; *(int*)0 = x;`, which
+gives `lui t6,1; ori` and `sw t6,0(zero)`. The target has `lui t6,2; addiu t6,-332; lui at,0; sw t6,0(at)`
+and a second `lui at,0; sw t8,0(at)`. Five levers took it to exact:
+1. Two DISTINCT scalar base-0 externs (`D_44DE4_tag`, `D_44DE4_val`, pinned to 0) give one `lui at` per
+   store. Sharing one symbol would CSE the base, see [#shared-at-absolute-store-cap-66a50](#shared-at-absolute-store-cap-66a50).
+   Address constants are `(char *)&D_00000000 + 0x1FEB4` (the `lui 2; addiu -X` carry form). The
+   callee is the blank `gl_func_00000000` because the target jal words are baked `jal 0`.
+2. The early self uses read `a0` in the build and `s2` in the target. `volatile` on the FIRST self store
+   (`*(volatile int *)(self + 0x244) = 0;`) fixes it ([#volatile-first-store-pins-param-sreg-copy-66c74](#volatile-first-store-pins-param-sreg-copy-66c74)).
+3. Handler-table reads written as `((int *)(FW(self,0x240) + 0x198))[FW(self,0x204)]` give the target
+   `lw idx` before `lw base` and `addu base,idx*4`.
+4. Target loop: `or s1,zero,zero; blez; or s0,s2,zero` (counter s1, cursor init in the delay slot). Any
+   hand-written cursor (`p = self; ... p += 4`) gives the cursor whichever of s0/s1 matches its
+   assignment order, and that same order puts it either before the branch or in the delay slot, never the
+   target's combination. No cursor at all, `for (i = 0; i < n; i++) e = ((char **)(self + 0x148))[i];`,
+   lets IDO strength-reduce its own cursor and gives exactly the target shape.
+5. `q = FW(self, 0x22C); FW(q, 0xC) = 0;` (named) loads into `v0` instead of a ring temp, and the later
+   `lh t8` becomes the target's `lh t7`.
+
+**Second instance, gl_func_00034458 (86.2 -> EXACT, 60 words).** The wrap read the list head and the
+vtable record through the same `&D_00000000 + 0`, so IDO CSE'd one base. The target loads the head into
+`s0` at entry and hoists the record address into `s4` (`lui s4,0; addiu s4,0`): 4 luis vs 3. Two distinct
+base-0 externs (`D_34458_head`, `D_34458_obj`) plus carry-form template addresses gave every word except
+the out-param homes (+8). `volatile int pad;` declared first, then `int outB, outA;`, puts them at the
+target's sp+0x50/0x54. Side effect to expect: the NEXT function's objdiff % can drop slightly when the
+wrap's NM size changes, because the old NM object counted a trailing alignment nop in its symbol size
+(34548 75.1 -> 73.8 with identical code words).
+
+**Third instance, gl_func_00034240 (post, 87.4 -> EXACT, 104 words): 7 target luis vs 3.** One
+`&D_00000000` stood in for five symbols. Split into distinct base-0 externs: the record pointer `D_34240_G`
+(address hoisted to s4), two cb args `D_34240_X` / `D_34240_Y` (fresh `lui a0; addiu a0` each), and the
+poll arg `D_34240_P`. Use ONE symbol for P in both poll loops: the target rematerializes `lui s3; addiu s3`
+per loop in the same register, and two symbols moved the second web to s2. **Folding fact:** the config
+table read as `(char *)&D_00000000 + 0x1E21C` makes IDO fold the loop pre-test into `lui t0,2; lw t0,-7652(t0)`.
+This did not change with a multi-def `if (1)`, a volatile pre-test, a while/goto loop, an index form, or an
+int-cast address. A ZERO-OFFSET symbol pinned at the real address (`extern char D_0001E21C;` with
+`D_0001E21C = 0x0001E21C;`) keeps the target's `lui s2; addiu s2; lw t0,0(s2)`. In the `.o` only that
+HI16/LO16 pair differs from `expected/` (the pinned-symbol class, as gl_ref_* / D_0001B710). The ROM is identical.
+Other levers in this function: drop the unused param (`(void)a2` homed a0); declare `d[0x80]` and
+`saved34` before the named pointers (each registerized named local takes a ghost home); write
+`gl_func_00000000(dp = d, -1)`; and put an empty `if (D_34240_G) {}` right after the first store. Without
+that empty `if`, `addiu s1,sp,64` schedules up next to `sw s1`.
 
