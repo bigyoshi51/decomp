@@ -27,6 +27,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Donor-spliced switch jumptables ARE landable: rename donor-local .rodata reloc to <func>_rodata + pin baked %lo in undefined_syms_auto (6DD14 __osDevMgrMain 46.2->100, 2026-07-30)](#donor-splice-switch-jumptable-rodata-rename) — _30AF4 "external jumptable permanent cap" holds only for in-unit compiles; for REPLACE_FUNC_BODY donors the table already ships in the USO data segment. Also: 74 entries -> 75._
 - [Two jumptables in one donor share ONE renamed `<func>_rodata` pin (the second table's offset rides as the %lo addend); extract-uso-jumptable.py can start its dump one entry late (gl_func_00031334 87.5 -> EXACT, 2026-10-15 agent-c)](#two-jumptables-one-donor-31334) -- _check the dump's first roff against the target's `lw tN,LO(at)`; if it is LO+4, entry 0 is missing._
 - [Old "external USO jumptable = structural cap" NM wraps in post0b are donor-splice landable; the extractor's roff is a FILE offset (= imm + 4), so the dump starts AT entry 0 and drops the LAST entry; a float literal after the table rides the same `<func>_rodata` pin (gl_func_00052CD4 77.0 -> EXACT; 3AC5C 97.48 -> EXACT: name a stream word used as a call arg, same-line `q = p; p = q + 1; x = *q;` before a break, 2026-10-15 agent-c)](#post0b-jumptable-donor-52cd4) -- _verify with a known word: RoData file offset imm+4 holds the literal the `lwc1 LO(at)` reads._
+- [bootup_uso jumptable donor splice (func_00002DA4 76.4 -> EXACT): the in-unit body must keep the exact .text size, because a short placeholder shifts the section-relative `%lo(.L...)` addends of later INCLUDE_ASM functions; replace-function-body.py now also splices a byte-identical in-unit body when it carries a `.rodata` reloc; the old NM case map was one entry late (2026-10-16 agent-c)](#bootup-uso-jumptable-donor-2da4) -- _Dump the RoData words around `imm` yourself: entry 0 is at file offset imm+4, and extract-uso-jumptable.py dropped the LAST entry here too._
 - [GOTCHA: disasm-func.py can return a wrong/stale body — expected/<unit>.c.o is the only ground truth (B154 2026-07-23)](#disasm-func-stale-vs-expected-obj) — _script gave a 123-insn frame-176 shape diffing ~identical to the NM build while objdiff said 58%; real target in expected/.o was 133-insn frame-168 at a different address._
 
 - [`make setup` must never run a FULL `splat split` — a re-split emits 41 of undefined_syms_auto.txt's 3395 lines and mips-linux-gnu-ld SEGFAULTS (1080, new-machine bring-up 2026-09-05)](#make-setup-modes-bin-only) — _asm/, tenshoe.ld, include_asm.h and the auto-sym files are curated source of truth here, not regenerable splat output. Fix: `--modes bin` + `create_undefined_{syms,funcs}_auto: False`. Also: 75 entries -> 76._
@@ -67,6 +68,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Fixing PLACEHOLDER-callee NM bodies: zip the body's source-order call sequence against the .s R_MIPS_26 jal sequence](#placeholder-callee-jal-zip-2026-06-21) — _A body scaffolded with `gl_func_00000000(...)` at every site: IDO preserves source call order, so the Nth source-order placeholder maps to the Nth `jal` (address order) in the resolved .s. Zip + cross-check arg shapes; trust head+unique-callee tail runs, leave ambiguous middle. Add forward decls (correct return types) before the fn in its NM block. 591C 57.51%→58.21% decode progress (not a land). CAVEAT: deeper raw-m2c grafts (8CD8/B3C) DROP all calls because m2c aborts on a `jr` jumptable whose base is a runtime-data D_807FFxxx module global — needs emu-jumptable infra, not a symbol swap. disasm-func.py: pass `--obj expected/...` for a TARGET draft (default searches build/non_matching first = the broken body)._
 - [Reloc PER-SYMBOL COUNT diagnoses CSE-collapse; call-seq-zip-by-POSITION maps placeholders](#reloc-per-symbol-count-diagnoses-cse-collapse-vs-distinct-symbol-call-seq-zip-by-position-maps-placeholders-2026-06-21) — _Compare per-symbol reloc COUNT (not just set) vs expected/.o: target referencing a base symbol N× while your build has 2 (1 HI16+1 LO16) = IDO CSE-collapsed `&SYM+off` into one reused reg vs target's fresh lui/addiu per site (C48C target = D_807FF568 x16 + D_807FF5B0 x16, NOT 35 distinct externs — a prior agent had it backwards). Histogram disambiguates "one base re-materialized" from "many distinct symbols". To map a `_f`/placeholder call, zip built-vs-expected call relocs BY ORDINAL POSITION; first `<<<` divergence pins the symbol AND surfaces missing/mis-ordered calls. scripts/verify-fn.py masks HI16/LO16/CALL26 immediate bits for a clean non-reloc-word-diff + reloc-seq verdict._
 - [The PLAIN-C variant of the placeholder-callee lever LANDS exactly — and byte_verify alone is a FALSE-POSITIVE gate (use reloc-symbol-set match)](#placeholder-callee-jal-zip-2026-06-21) — _Plain-C (ROM-path, non-INCLUDE_ASM, non-NM) fns calling `gl_func_00000000`/`&D_00000000` are byte-100% (stubs all `=0`) but reloc-WRONG: the USO load-time reloc table resolves the placeholder names to wrong addresses. Swap names→resolved `.s` symbols = exact LAND (gets an episode). Gate on reloc-symbol-set match vs `.s` (scripts/fam-verify.py), NOT land-script byte_verify (reloc-blind). PREREQUISITE: the module's `.s` must carry resolved `-> SYM` annotations — `grep -l '\->' asm/nonmatchings/<mod>/<mod>/*.s | wc -l`; mgrproc_uso=48/66 (landed 14), eddproc=0/16, arcproc=0/61 (nothing to reconstruct). Gotchas: prototyped 0-arg callee → forward the wrapper's param (NOT `((int(*)())g)()` which emits jalr); dup extern with different type errors; ROM stays byte-identical pre/post-swap so `make` is not the gate. 2026-06-21 agent-e._
+- [Yay0-block units (game_uso, mgrproc, timproc b1/b3/b5, map4 b2): an in-unit `jal` to a C-defined function is NOT a landing blocker -- the block is cut from the UNLINKED `.o`, so it stays `jal 0` like the ROM (game_uso F360 landed, agent-g 2026-10-16)](#yay0-block-unlinked-in-unit-jal-f360) -- _An objdiff-100 NM wrap marked "not landable: intra-USO jal would link to the real local symbol" can simply be unwrapped; gate with `make verify-blocks` (the ROM itself is built from `assets/*_block_N.bin`, so `cmp` cannot see a Yay0 unit). Also: if the wrap uses a `_thr`-style typed alias of a base-0 global that has no other user in the TU, type the global itself Same for wraps held back only as "callees are USO placeholder aliases" (timproc_b3 2A44, timproc_b5 8468 landed the same day): landed Yay0-unit exacts already use `gl_func_00000000` / `&D_00000000+K`._
 - [A NONZERO baked `jal 0x0C00NNNN` is NOT a structural cap — map it to `gl_ref_<target>` (call-side), and never call the REAL fn at that addr](#feedback-nonzero-baked-jal-gl-ref-callside-2026-06-22) — _Raw-.word USO `.s` files ship `jal` immediates UNRELOCATED (bake-data-relocs.py: R_MIPS_26 left raw, fixed at load time). A nonzero `jal 0x0C00E89A` decodes via nearest-symbol to e.g. `game_libs_func_X+0xNNNN` and lands MID-function (on an FPU insn, not an entry) — looks like a structural cap, ISN'T. Reproduce it exactly the same way data refs use `gl_ref_X`: add `gl_ref_0003A268 = 0x0003A268;` to undefined_syms and call `gl_ref_0003A268(...)` — the C call emits `jal 0`+R_MIPS_26, ld bakes the absolute → `jal 0x0C00E89A`. PITFALL: do NOT call the real function whose name the disassembler guessed (e.g. gl_func_0001CA10@0x1CA10) for a `jal 0` site — that bakes `jal 0x0C007284`, the WRONG immediate; `jal 0` (the placeholder) must map to `gl_func_00000000` (=0). Same gl_ref mechanism as the matched gl_func_0000408C. Took gl_func_00025C54 46.25→76.7% (residual = s8-vs-spill coloring). 2026-06-22 agent-d._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [A forward branch PAST a function's end is NOT always a tail-merge cap — if the target epilogue is UNSHARED, merge it back for a clean match](#feedback-branch-past-end-unshared-epilogue-merge) — _When a function's `b`/`beqz`/etc. targets an address ≥ its own end (a split-off epilogue), count how many functions branch there. If only ONE (unshared) AND the epilogue is bare-INCLUDE_ASM with a real body (NOT an already-decompiled `void f(void){}` that might be `jal`'d), it's a splat MIS-SPLIT, not an -O1 tail-merge cap: merge the epilogue back and the whole function matches under -O2. Scan: base=first `/* addr */`; for each branch insn at index i (signed off), target=base+(i+1+off)*4; count callers per target across all `.s`; mergeable iff count==1 and target==parent_end. Merge manually: grow parent `.s` size, append child `.word`s before `endlabel`, `rm` child `.s` + its INCLUDE_ASM, write parent C, `refresh-expected-baseline.py`. Verified 2026-05-23 byte-exact: game_libs_func_00060FFC (+00061018, flag set/clear, 13/13) & 0001FDF4 (+0001FE34, arena alloc, merged—needs branch-likely grind). SHARED epilogues (≥2 callers) ARE genuine tail-merge caps (need -O1 split). ~13 clean candidates remain._
@@ -12312,3 +12314,61 @@ local. Its prev values are expression temps (the F0 -> F4 move is written throug
 compares and stores a re-read of F4). See IDO_CODEGEN #ncc-no-named-copy-local-f6d4, which also records
 B4B8 as NCC-immune (both front ends give the same colouring there).
 E35C (95.3, F6D4's sibling) matched on the first NCC compile with the same no-named-local body.
+
+<a id="yay0-block-unlinked-in-unit-jal-f360"></a>
+## Yay0-block units: in-unit jal to a C function does not block landing (game_uso_func_0000F360)
+
+`game_uso_func_0000F360` sat as an objdiff-100 NM wrap since 2026-07-15 with the note "not landable:
+`jal game_uso_func_0001001C` is baked as `jal 0` in the ROM but compiled C would link to the real local
+symbol". That reasoning applies to units the linker places directly in the ROM. It does not apply to
+the Yay0 code blocks (`game_uso_block1`, `mgrproc_uso_block1`, `timproc_uso_block1/3/5`,
+`map4_data_uso_block2`): their Makefile rules `objcopy --only-section=.text` the UNLINKED `.c.o` and
+compress that, so every R_MIPS_26 field stays 0 and the block has `jal 0` exactly like the ROM.
+(`mgrproc_uso_block1` additionally runs `bake-data-relocs.py` for data relocs.)
+
+Gate for these units is `make verify-blocks`, plus a direct compare of the decompressed
+`assets/<seg>_block_N.bin` against `build/assets/<seg>_block1_yay0.text.bin` over the function range.
+`cmp tenshoe.z64 baserom.z64` is NOT a gate for them: the ROM links `build/assets/*_block_N.bin.o`
+from the ROM-extracted assets, so it stays byte-identical whatever the C does.
+
+F360 also showed objdiff `diff` at 99.88 (HI16 to `D` vs `D+0x240` naming) while `report generate`
+scores it 100.0; the raw `.text` slice equals expected/.
+
+Second class, same fix: NM wraps whose comment says "objdiff-100, stays NM: callees/data are USO
+placeholders". `timproc_uso_b3_func_00002A44` and `timproc_uso_b5_func_00008468` had 0 raw-slice
+diffs and landed by deleting the wrap. To find more: list NM wraps in the Yay0 units whose
+`build/non_matching` `.text` slice equals expected/ word for word (report.json's 100.0 alone is not
+enough; `report generate` relaxes reloc diffs that `objdiff-cli diff` counts).
+
+<a id="bootup-uso-jumptable-donor-2da4"></a>
+## bootup_uso jumptable donor splice: keep the in-unit body full size (func_00002DA4 76.4 -> EXACT, 2026-10-16 agent-c)
+
+The post0b/game_libs `<func>_rodata` donor recipe ([#post0b-jumptable-donor-52cd4](#post0b-jumptable-donor-52cd4))
+also works for bootup_uso.c.o (`REPLACE_FUNC_BODY += func_00002DA4=$(BOOTUP_2DA4_DONOR)`,
+`func_00002DA4_rodata = 0x4F4`, donor added to the `C_FILES` filter-out list). Two traps:
+
+1. **A small placeholder body breaks later functions.** With the post0b-style 6-word placeholder the
+   splice grew the function 0x18 -> 0x1EC and the ROM differed in six LO16 halfwords, all in later
+   INCLUDE_ASM functions, each 0x1D4 low. Those are `%lo(.Lxxxx)` references to .text labels:
+   REL relocs against the `.text` section symbol keep their addend in the instruction, and
+   replace-function-body.py shifts reloc offsets but does not rebase those addends. post0b has no such
+   references after its placeholders, so the shortcut never showed there. Fix: compile the REAL C in-unit
+   too (the same body as the donor), so the size does not change and the splice only swaps relocs. The
+   in-unit `.rodata` table is dropped by tenshoe.ld's `/DISCARD/ : { *(*) }`.
+2. **A byte-identical in-unit body was skipped.** The script used to return early ("already matches
+   donor") when the bytes were equal, which left the in-unit `.text -> .rodata` reloc in place, and the link
+   failed with "defined in discarded section `.rodata'". The script now skips only when the range also has no
+   reloc against a non-`.text` local section symbol (`has_foreign_section_relocs`). Re-runs on other
+   donors behave as before (full build + non_matching_objects unchanged).
+
+**Case map.** File offset 0x4F4 of the bootup_uso RoData (module 0xD9FE28, section 7) holds 0x3D23D70A
+(0.04f) and the table starts at 0x4F8 = imm + 4: `2F10 2E98 2ED4 2EAC 2EE8 2EFC 2F74 2F74 2F38 2F4C 2F60 2EC0`
+for cases 1..12. extract-uso-jumptable.py listed 11 entries and dropped the last one (0x2EC0). The
+2026-07-10 NM decode assumed the first entry was missing and shifted every case by one.
+
+**Codegen levers in the body** (123 words, all in the donor's header comment): distinct base-0 globals for
+the store `D = create()` and the immediate re-read (one symbol forwards v0, but the target re-loads with
+`lui a1; lw a1,0(a1)`), and for the config load vs store (one symbol CSEs the lui). A void blank alias
+for unused-result calls lets the named config value colour v0 (with the int blank it took v1). Case 1 uses
+`a1 = obj; if (1) { a1 += 0x18; } *(int *)a1 |= 4`, reusing the existing `a1` variable, to get
+`lw t0,24(a1); addiu a1,a1,24; sw t1,0(a1)`.
