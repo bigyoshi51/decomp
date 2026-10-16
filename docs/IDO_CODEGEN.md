@@ -30605,6 +30605,20 @@ pinned at 0x538/0x53C/0x540 each get their own `lui at; lwc1`. The Vec4 destinat
 by 4 bytes. bootup_uso `func_00002DA4` (12 vs 7, a jumptable donor splice): see
 docs/MATCHING_WORKFLOW.md#bootup-uso-jumptable-donor-2da4. A store `G = f()` followed at once by a read of
 `G` needs two symbols, because one symbol forwards v0.
+bootup_uso `func_000087A4` (86.3 -> EXACT, 11 vs 9): the documented "three bare `lui r,0`, two hoisted
+above the bnez" cap is three base-0 externs (read, OR-store, +4/+0 store pair). Which luis IDO hoists
+above the branch depends on block shape: with no marker it hoisted the store pair's `lui v0; addiu v0`;
+an empty `if (1) {}` right after `W = R | 8;` gave the target `lui t8; lui at; bnez; lui v0` (delay slot).
+The same function's "K&R float arg promotes to double" cap is a prototyped alias of the blank
+(`void f(char *, char *, int, float, float)`): the 4th float rides in a3 as bits, the 5th is `swc1 ,0x10(sp)`.
+Frame: every extra named pointer local took a ghost home; inlining the `desc` local and declaring
+`int kind; int pad[5];` put kind at the target sp+0x44 with frame 0x50.
+bootup_uso `func_00002F90` (75.4 -> EXACT, 13 vs 9): the "func_000003F8 float-pool base held in a2"
+cap is the 34E8 case again (scalar f32 globals pinned at 0x524/0x528/0x52C). The wrap also passed a
+literal `0` where three registration calls take one base-0 object (held in s0), and dropped the a1 arg of a
+link call. Register roles came from two reused pointer variables: one for every `s1->0x90/0x94` reload
+plus the RMW bases and the link block (a2), one for the third child, the node and the alloc (s0). A void
+blank alias for the unused-result calls moved the last named int from v1 to v0, as in 2DA4.
 Scan tool: `scripts/call-shape-scan.py UNIT --lui` lists functions whose target has more luis (it also
 prints insn counts, nm/tgt).
 

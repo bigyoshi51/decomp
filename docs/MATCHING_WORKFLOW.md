@@ -12370,16 +12370,19 @@ resolves to 0. More traps:
   per-site blank alias (`gl_func_00062F64_652D8`, `_695F4`).
 - **Wrap-only placeholder names are not defined anywhere.** `D_X` (68B04) and `D_sym_695F4` link
   only because the NM object never reaches the linker. Check the `.s` words (lui 0 / addiu 0), then
-  rename or pin the name to 0 at the end of `undefined_syms_auto.txt`. Still open: tail D9E4's
-  `gl_func_00000000_d9e4b` has no pin either.
+  rename or pin the name to 0 at the end of `undefined_syms_auto.txt`. Tail D9E4's
+  `gl_func_00000000_d9e4b` got its pin in run 89 and D9E4 landed.
 - **Stale cap comments.** CB9C's comment said "operand ~22 %, two stacked caps", but its NM body
   was word-identical to the target. Trust the raw slice and the no-alias disassembly, not the
   comment.
-- **`_pad.s` after an INCLUDE_ASM (tail C5B0).** The `#pragma GLOBAL_ASM(..._pad.s)` sits OUTSIDE
-  the `#ifdef`, and the C body emits its own trailing delay nop (0x90 vs the 0x8c symbol). If you
-  unwrap it and keep the pad, the default build grows by 4 bytes and the ROM shifts. Move the pad
-  into the `#else` branch, or drop it. The NM object then shrinks by 4 (EBC8 0x5560 -> 0x555c), so
-  set the tail `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` to EBC8 offset + 0x30.
+- **`_pad.s` after an INCLUDE_ASM (tail C5B0), corrected in run 89.** The ROM has C5B0's 0x8c
+  symbol (ending at `jr ra`), then the delay nop, then one alignment nop: 0x94 bytes to C644.
+  The C body is 0x90 (it owns the delay nop). A 1-word `_pad.s` GLOBAL_ASM block takes 8 bytes,
+  not 4 (asm-processor's dummy function is at least `jr ra; nop`), so keeping it shifts the unit
+  +4 and dropping it shifts it -4. Both break `cmp`. The fix is the documented one: delete the
+  `_pad.s` and add `SUFFIX_BYTES_FORCE := gl_func_0000C5B0=0x00000000` plus the
+  `NON_MATCHING_` mirror. The NM object then shrinks by 4 (C 0x90 + pad block 8 became
+  C 0x90 + 4), EBC8 0x5560 -> 0x555c, so the tail clip is 0x558c.
 
 <a id="bootup-uso-jumptable-donor-2da4"></a>
 ## bootup_uso jumptable donor splice: keep the in-unit body full size (func_00002DA4 76.4 -> EXACT, 2026-10-16 agent-c)
@@ -12406,6 +12409,13 @@ also works for bootup_uso.c.o (`REPLACE_FUNC_BODY += func_00002DA4=$(BOOTUP_2DA4
 (0.04f) and the table starts at 0x4F8 = imm + 4: `2F10 2E98 2ED4 2EAC 2EE8 2EFC 2F74 2F74 2F38 2F4C 2F60 2EC0`
 for cases 1..12. extract-uso-jumptable.py listed 11 entries and dropped the last one (0x2EC0). The
 2026-07-10 NM decode assumed the first entry was missing and shifted every case by one.
+**Script fixed (2026-10-16, agent-c):** each RoData reloc's offset field names the word BEFORE the patched
+word (relocs at 0x4F4..0x520 patch 0x4F8..0x524; 0x4F4 is the float 0.04f), and text-section table words
+are already project vaddrs, so the old `symval + word` added +8 (`func_000008`). The fixed script reads
+`off + 4` and reports the raw word (`--add-symval` keeps the old sum); it now prints all 12 2DA4 entries.
+Only other bootup jumptable: func_00006808 (imm 0x5B4, table 0x5B8, 13 entries: case 0..12 ->
+6B9C 6BCC 6BD8 6BE4 6C24 6AE0 6B04 6954 6A48 6A64 6A90 6AB8 6C60). Its NM wrap labels the bodies in address
+order 0..12, so true case = 7,8,9,10,11,5,6,0,1,2,3,4,12 for NM labels 0..12 (code bytes unchanged).
 
 **Codegen levers in the body** (123 words, all in the donor's header comment): distinct base-0 globals for
 the store `D = create()` and the immediate re-read (one symbol forwards v0, but the target re-loads with
