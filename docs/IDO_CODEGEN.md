@@ -199,6 +199,12 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass â€
 - [HOISTED shift-merge phantom = IN-PLACE `or a2,a3,zero; sll a2,a2,4` + K&R param HOMING flip: an invariant record index spelled INSIDE the loop as `((short *)&D)[y * 8 + j]` (no pa/pb locals, no `p = d`) makes uopt hoist y*8 as its own candidate, keeps y unmodified (web copied to $a3) and leaves d homed with its reload in the branch delay slot; any pa/pb-local form gives `sll a2,a3,4` with the `lw v0` sunk, any `y <<= 4` form keeps y in $a2 and moves d to $a3 (game_libs 20ED0 82.6 -> 75/75 EXACT, 2026-09-06 agent-g)](#hoisted-shift-merge-inplace-sll-param-homing-20ed0) â€” _Tell: loop body already exact, preheader shows `or aN,aM,zero; sll aN,aN,4` (a VARIABLE register shifted in place, not a $tN temp) and a param reloaded from its home into the loop pointer in a delay slot. Twin base tables that are reloc-blind zeros need DISTINCT base-0 aliases in undefined_syms_auto.txt or &D CSE merges the lui/addiu pairs. A 0C000000 jal whose oracle symval is an in-module export stays a `gl_func_00000000` placeholder call; a call that passes fewer args than the callee takes leaves the extra arg register untouched (here `$a1 = x`)._
 - [16-float matrix spill homes: DECL order sets the slot ladder (column-wise decls = target gaps), assignment order sets the load schedule (reversed per run), and pointer locals declared BEFORE the floats cost +8 frame (gl_func_0005BE20 99.42 -> EXACT, 2026-10-16 agent-g)](#float-matrix-decl-vs-assign-order-5be20)
 - [Prologue `move sN,aK` placement = PARAM vs LOCAL COPY: a reassigned/looped param gets its move inside the save sequence, a `x = param` copy gets it after the saves or in the bnez delay; pick per-variable (gl_func_00062368 95.09 / gl_func_00061A0C 96.15 -> EXACT, 2026-10-16 agent-g)](#prologue-move-param-vs-copy-62368)
+- [Single-bit flag tests: signed `(v << N) < 0` uses ONE sll temp; the unsigned `((unsigned)v << N) >> 31` spelling burns a second temp per test and shifts the whole $t ring (game_libs_func_0005703C 96.6 -> EXACT, 2026-10-16 agent-g)](#signed-shift-bit-test-one-temp-5703c)
+- [Unsorted compare chain (`beq K2; beq K0; beq K1; b default`, NOT ascending) = `if (v == K2) goto A;` ahead of a 2+-case goto `switch`; a switch always tests ascending and a 1-case switch / if-goto chain inverts to `bne default; b case` (gl_func_00054AEC 89.8 -> EXACT; one-case second stage = the INVERTED test `if (v != K) goto D; goto L;` -> `beql K`, gl_func_00052994 86.9 -> EXACT, 2026-10-16 agent-g)](#unsorted-dispatch-if-goto-plus-switch-54aec)
+- [Flag word re-loaded into a FRESH $t before EVERY test (no call between) + beql preloads = pointer-to-VOLATILE flag object; a call with `jal; nop` and a0 still = the entry param = a K&R call with NO argument (gl_func_00060DC4 89.0 -> EXACT, 2026-10-16 agent-g)](#volatile-flag-object-fresh-t-60dc4)
+- [In-loop `sll row,3` that every flat spelling hoists = 2-D array indexing `((u16 (*)[4])p)[row][i + 1]` (IXA escapes LICM); `beq cmp,flag` operand order = `if ((x >= lo) ^ flag)` (`!=` always emits `beq flag,cmp`); chained `m[2] = m[3] = K` for reversed li/sh pairs (gl_func_00052BBC 86.5 -> EXACT, 2026-10-16 agent-g)](#ixa-defeats-licm-xor-test-beq-order-52bbc)
+- [Empty spill slot below the spills = dead `char pad[4]` declared FIRST, combined with the spill-order decl permutation; neither alone works (bootup func_00007C74 99.83 -> EXACT); held-pointer struct copy + sp-direct member reads = a Vec3 STRUCT assignment, with dead struct pads for the frame (gl_func_00040CAC 93.09 -> EXACT) (2026-10-16 agent-c)](#dead-pad-first-plus-spill-decl-order-7c74)
+- [Two commutative adds of the same pair with OPPOSITE addu operand orders = two non-CSE'd spellings: pointer add `(int)(off + base)` keeps written order, int add `(int)base + off` comes out base-first (gl_func_00028A68 95.61 -> 99.76, 2026-10-16 agent-c)](#addu-operand-order-pointer-vs-int-add-28a68)
 
 ## Quick reference by sub-topic
 
@@ -30820,5 +30826,126 @@ gl_func_000628EC (NM 89.5 -> 98.63): the same param reassign fixed the prologue 
 home (grow the volatile pad by 8 to keep the frame). Moving a plain store ahead of a `|=` RMW in C fixed
 the t-ring. The only residual is the 0.0/1.0 FP constant pair landing in f2/f0 instead of f0/f2, and
 literal spellings, named locals and while(0) boosts do not change it.
-gl_func_00041148 (post0b, agent-c range) has the same note ("same cap as gl_func_00062368") and has
-not been retried yet.
+gl_func_00041148 (post0b, 96.03 -> EXACT, 2026-10-16 agent-c): the deferred `move s1,a0` in a
+debug allocator (`unsigned int s1 = arg0; if (arg1) s1 += arg1;`). Renaming the param to `s1` and
+deleting the copy put the move first in the prologue; nothing else changed.
+
+<a id="dead-pad-first-plus-spill-decl-order-7c74"></a>
+## Empty slot under the spill slots: dead `char pad[4]` first AND spill-order decls (bootup func_00007C74 -> EXACT, 2026-10-16 agent-c)
+
+Target frame 0x28 with ra 0x14, an EMPTY 0x18, `ret` spilled at 0x1C, `link` at 0x20. The build had
+frame 0x20 with link at 0x18 (6 offset diffs). Earlier notes called it IDO's spill-slot reuse policy and
+probed the two levers SEPARATELY:
+- a dead pad alone (`volatile int`, `char pad[4]`, any position) with `char *ret; int *link;` puts
+  ret or link at the wrong slot;
+- link-before-ret decl order alone keeps frame 0x20 (`link 0x1C, ret 0x18`).
+
+Together, `char pad[4]; int *link; char *ret;` (pad FIRST, then the spill whose slot should be HIGHER)
+gives the exact layout: the dead aggregate takes the lowest slot (0x18) and the spills stack above it
+in reverse decl order. `volatile int pad;` in the first position also works. Rule: when a dense
+scalar frame has one empty word BELOW the spill slots, try every decl permutation WITH a dead pad first,
+not just the pad on its own.
+
+**Same session, gl_func_00040CAC (post0b, 93.09 -> EXACT).** The old note said the target "copies the Vec3
+through a held pointer but reads it back sp-direct; my C does the reverse". That is what a STRUCT
+assignment compiles to: `d = *(V3 *)(src + 0xEC);` gives `addiu t6,sp,64; lw t9,0xEC(t7); sw t9,0(t6)...`
+and the later `d.x` reads are `lwc1 $f6,64(sp)`. Hand-copying three ints into an `int buf[3]` gives the
+opposite form. With struct locals at function level, slots are taken top-down in decl order (first
+declared = highest address). The 0x50 frame (d at 0x40, v at 0x1C) needs `int pad0; V3 d; V3 pad1[2]; V3 v;`.
+**Negative, bootup func_00007204:** a 4-byte struct passed by value (`S a2`, homed at 0x38 and copied to a
+local struct) plus a decl permutation reproduces the whole 0x30 frame. objdiff still scores it 86.97,
+BELOW the old 90.15, because the delay-slot store and the a1/a2 node colour stay wrong. Not committed.
+**Not committed either, gl_func_0003E0F0 (post0b, 90.52 -> 93.40, short of the +3 bar):** the v1 block is a
+nested alloc-fallback cascade (`if (p != 0 || (p = alloc(4)) != 0) { q = p; if (q != 0 || (q = alloc(4)) != 0) *q = 0; }`,
+where the q copy is the `or a0,v1` in the bnez delay). Function-level `char pad[20]; f32 vec3[3];` gives the
+0x50 frame. The missing word: the target returns a separate copy of s0 that lives in a0 and is spilled
+in the last jal's delay (`sw a0,0x4C(sp)` / `lw v0,0x4C(sp)`). Every spelling tried was copy-propagated back
+into s0: `ret = s0`, `f(ret = s0, ..)`, `char *ret[1]` (stores s0 BEFORE the call), and reassigning the
+param.
+
+<a id="addu-operand-order-pointer-vs-int-add-28a68"></a>
+## Opposite `addu` operand orders for the same pair: pointer add vs int add (gl_func_00028A68, 2026-10-16 agent-c)
+
+Target loop body: `lw v0,base; addu t7,s0,v0; addu t8,v0,s0; sw t7,8(t8)` (record self-pointer
+`rec->w8 = rec`). Writing `rec` once (or `base + off` twice) gives a single CSE'd `addu`. Writing it as
+two different spellings keeps two adds, and the spelling picks the operand order:
+- pointer add with a register-resident local, `(int)(off + base)`, keeps the written order (`s0,v0`);
+- int add, `(int)base + off` or `off + (int)base`, always comes out base-first (`v0,s0`).
+So the value is `(int)(off + base)` and the address is `*(int *)((int)base + off + 8)`.
+
+Limit: when the base is an inline reload (`off + *(char **)(G + 0x2CFC)`), the load is evaluated
+first in every spelling we tried (`off + X`, `X + off`, `&X[off]`, int casts, struct-array `&recs[i]`),
+so the order is `t1,s0`. Reloading into a reassigned named local gives `s0,v0` but colours it v0 instead
+of the ring temp t1. That word is the 28A68 residual (99.76).
+
+<a id="signed-shift-bit-test-one-temp-5703c"></a>
+## Single-bit tests: signed shift = one temp, unsigned shift-pair = two (game_libs_func_0005703C -> EXACT, 2026-10-16 agent-g)
+
+A geometry-mode decoder tests six bits of one word with `sll tN,v1,K; bgez tN`. The old wrap wrote
+each test as `((unsigned int)v1 << K) >> 31`. IDO folds that to the same `sll; bgez`, but the
+folded `srl` still burns a temp number, so the build used every OTHER $t register (t9, t8, t0, t2,
+t4, t6) where the target counts up one at a time (t6, t8, t7, t9, t0, t1, t2). Writing the tests as
+`(v1 << K) < 0` fixed the whole ring. This is the same "count the skipped $tN" tell as
+#one-bit-bitfield-test-dead-srl-phantom-25bfc, in the other direction: no gaps means no phantom.
+The same function's second display-list append needed its own record-pointer local (`arr2`) to
+land in a3 instead of reusing a2.
+
+<a id="unsorted-dispatch-if-goto-plus-switch-54aec"></a>
+## Unsorted beq dispatch chain = `if (v == K) goto` + a goto switch (gl_func_00054AEC -> EXACT, 2026-10-16 agent-g)
+
+The target tests 0x72 first, then 0x68 and 0x69, as a chain of `beq` (argument moves in the delay
+slots) followed by `b default`, and the bodies come after the chain in R/H/I/default order. Facts
+from the probes (IDO 7.1 and 5.3 behave the same):
+
+- A `switch` always emits its compares in ascending case order, whatever order the cases are written
+  in, and the last compare is inverted into a `bnel` that falls into its body.
+- An `if / else if` chain inverts every test into `bne` with the body falling through.
+- A plain goto chain (`if (v == K) goto L;` three times, then `goto D;`) inverts the LAST test into
+  `bne D; b L`. A one-case switch does the same.
+- A switch with two or more goto cases and no fallthrough body emits `beq; beq; b default`.
+
+So: `if (v == 0x72) goto R; switch (v) { case 0x68: goto H; case 0x69: goto I; } goto D;` with
+the labelled bodies written in the target's order. Two switches (`switch (v) { case 0x72: goto R; }`
+then the 2-case one with `default: goto D`) emit the same code. The bounded table read in case 'i'
+reuses the switch variable `v` so it lands in v0, where a fresh temp took t2.
+The same layout with a ONE-case second stage (gl_func_00052994, `beq 12 -> C; beql 1 -> ONE; b D`,
+86.9 -> EXACT): the goto chain, a nested `if (v != 12)`, a one-case switch, and a duplicate `case 12`
+all give `bne D; b ONE`. Writing the second test INVERTED gives the target's beq/beql:
+`if (v == 12) goto C; if (v != 1) goto D; goto ONE;`. IDO inverts the inverted test back, and as1
+fills the likely delay with ONE's first load. 52994 also needed the `if (1) { q = (int *)((char *)q
++ 0x18); }` base materialization from #game-uso-w4-lever-trio-2026-07-03 in both RMW arms (target
+`addiu v0,a0,24; lw 0(v0)` where the build folded to `24(a0)`), and the dispatch variable reused
+for the two loaded values (`(v0 = obj[1]) != 0`, `(v0 = obj[0x13]) != 8`) so they land in v0.
+
+<a id="volatile-flag-object-fresh-t-60dc4"></a>
+## Flag tests re-loaded every time = pointer to volatile (gl_func_00060DC4 -> EXACT, 2026-10-16 agent-g)
+
+A cascade `if (f->flags & 4) call(); if (f->flags & 8) call(); ...` where the target re-loads
+`lw tN,16(v0)` into a NEW $t before every test, including tests with no call in between, and fills
+the `beqzl` delay slots with the next test's load. The build kept the word in $v1 and tested it
+with successive `andi`s. Declaring the flag object `volatile int *v0` (re-assigned from
+`self->0x34` after each call as before) gives every load, the fresh temps, and the likely-branch
+preloads. The function's first call was `jal; nop` with no argument setup and a0 still holding the
+entry `self` (copied to s1). An explicit `self` argument emits `or a0,s1`, so the call is
+`func()` with no arguments: K&R, and the callee just reads a0.
+
+<a id="ixa-defeats-licm-xor-test-beq-order-52bbc"></a>
+## 2-D array index keeps `row * 8` in the loop; `^ flag` flips the beq operands (gl_func_00052BBC -> EXACT, 2026-10-16 agent-g)
+
+A leaf scans three u16 vertex indices of two directory rows per iteration. The old wrap was called a
+"LICM-placement + eviction-order cap". Every flat spelling of `p68 + row * 8 + t0 + 2` (multi-def,
+self-assign, `+= 0`, phantom `t0 * 0`, an array-IXA typedef, IDO 5.3) had `row1 * 8` / `row2 * 8`
+hoisted to the preheader. The target recomputes them in the loop. Three changes fixed it:
+
+1. Index the directory as a real 2-D array with the loop counter as the inner subscript:
+   `((unsigned short (*)[4])a0[0x68 / 4])[row1][i + 1]`, with `i` running 0..2 (strength-reduced
+   to the target's `t0 += 2`). The IXA keeps the `sll` in the loop, and the row2 -> s0 eviction
+   follows from that. The index local has to be `int` (as `unsigned short` it took a3 and a second
+   s-reg).
+2. `v1 = -1; m[2] = m[3] = 0x7530;`: the target's `li t6; li t7; ...; sh t7,lo; sh t6,hi`. Two
+   separate statements on one line give the same result, the same-line form of
+   #same-line-registration-schedule-23e4.
+3. The tests: `(m[0] >= m[2]) != flagX` always emits `beq a3,t4` (flag first) in either operand
+   order, and `==`/else and `&&` spellings do too. Writing the condition as `(m[0] >= m[2]) ^ flagX`
+   (or `- flagX`) emits `beq t4,a3` with the compare result first, and that fixes the later $t ring.
+
