@@ -14325,6 +14325,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [Vec3 squared length `lwc1 f0/f2/f14` + `add.s f12,f8,f10` into a (float) callee = read x,y,z into named float locals first (inline `a0[i]*a0[i]` loads f2/f14/f0 and adds f10+f8); call through a prototyped `float (float)` blank alias (gl_func_0005BD80 post0b 77.2 -> EXACT, agent-c 2026-10-16)](#vec3-sqlen-named-temps-5bd80)
 - [Matrix x Vec3 in place (`lwc1 f2/f12/f14` for v, row-0 sum in f0, swc1 v[0] before v[1]) = NO named x/y/z (inline v[i] CSE temps colour f2/f12/f14; named locals take f0 first), each row spelled reversed `m2*v2 + (m1*v1 + v0*m0)`; store order must be settled in-tree (standalone swaps the swc1 pair) (game_libs_func_0005C8CC post0b INCLUDE_ASM ~34% -> EXACT, agent-c 2026-10-16)](#mtx-vec3-inline-cse-reversed-rows-5c8cc) -- _the opposite of 5BD80: there named temps were right; probe both._
 - [Entry `sw a0,home; lw t6,home` (param homed then reloaded ONCE into a temp, frame grows by 8) in a leaf-ish K&R printf call = address-taken param read through `float **pp = &a0; (*pp)[i]` (reads CSE into t6); `volatile` a0 + named local colours v0, plain volatile reloads per use (gl_func_00051714 post0b 73.5 -> EXACT; gl_func_000602A8 80.0 -> EXACT, + int-literal `/ 1024` keeps div.s, agent-c 2026-10-16)](#addr-taken-param-home-reload-t6-51714)
+- [Single-use Vec3 sub/mul results in the FP CANDIDATE pool (`sub.s f0/f2/f12`, `mul.s f2/f12/f14`) = named float temps + a `do {} while (0)` BB boundary before their stores, a `Vec3 *pd = &d` pointer store for memory-operand subs, and a SECOND boundary after the stores so they do not interfere with the next block's `k` (gl_func_00037938 post0b 82.4 -> NM 93.7, agent-c 2026-10-16)](#vec3-sub-mul-fp-candidates-bb-boundary-37938) -- _without the boundary uopt forward-substitutes each single-use expression (ring f4..f18); scalar homes at decl position replace pad bytes._
+- [Two skipped ugen ring slots in a `{cur,next}` iterator entry block appear only when the head pointer's BASE is a register variable (param a0 / coloured local), not a temp reload (gl_func_00041EDC post0b 80.2 -> NM 97.6 on the 39EE4 kit; residual, agent-c 2026-10-16)](#iterator-entry-ring-skips-register-base-41edc) -- _diagnostic: count the skipped tN after the head load; no spelling gave both a t6 home reload and the skips._
 - [A param kept in a caller-saved copy (`or a3,a0`) and spilled to its OWN incoming home around calls (no s-reg) = uopt SPLIT it: add BBs (`if (1) {}` between calls) until the s-reg no longer pays; FP colour order + extra spill words came from a `s2 = s` pointer copy; jumptable range check keeps `sll` in its delay only when the default block is shared (gl_func_000396FC post0b 59.2 -> NM 98.7, agent-c 2026-10-15)](#param-split-spill-home-396fc) -- _NCC (edg) reproduces the split for free but lowers every switch to a beq chain, so a jumptable function is cfe C._
 - [Compare order 1,0,2 with bodies out of line in that order = goto chain (a switch sorts ascending AND gives its selector a frame slot); two struct stores whose registers are right but whose schedule is swapped = put them on ONE source line (gl_func_00035440 post0b 71.2 -> EXACT, agent-c 2026-10-15)](#same-line-store-pair-schedule-35440) -- _registers follow statement order, the as1 schedule of a home reload vs a lui/lw pair follows the line split._
 - [`addiu sN,sp,K` held in an s-reg and used only as a STORE base (`sw t1,0(s1)`) or LOAD source (`lw t8,0(s3)`) while other accesses of the same slot use plain sp offsets = 4-byte STRUCT copies (param or local typed `struct {int v;}`); plain ints fold every access to sp+K (gl_func_00035B1C post0b 66.3 -> 97.4, agent-c 2026-10-15)](#struct-copy-keeps-addr-sreg-35b1c)
@@ -14347,7 +14349,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso under NCC: a named copy local (`prev = F0; F4 = prev; ...`) colours v0 and renumbers every later temp; writing the move through the members (`F4 = F0; F0 = 0; if (F8 == F4) ..; F8 = F4;`) gives the target's t0/t1 expression temps; NCC is NOT a universal lever (B4B8 sentinel loop is NCC-immune) -- F6D4 95.4 + E35C 95.3 -> EXACT (2026-10-15 agent-g)](#ncc-no-named-copy-local-f6d4) -- _Tell: target values in the ugen temp ring (t8, t9, then t0, t1) right after a call, where your build has a v0 local; a 2-copy `bne; or v0,t0 / or v0,t0` join is what a pure member re-read leaves, not a ternary._
 - [game_uso under NCC: 1DDC homing is a Vec3 value class (by-value `operator=`, ctor forwarding to `set`, `set(const Vec3 &)` for plain copies, a 4-byte `Ptr` class for the output pointer, `getPos` returning `Vec3 &`); all 382 instructions identical, only the frame layout left (2026-10-15 agent-g)](#ncc-vec3-class-shape-1ddc) -- _The cfe wrap's Tri3i word-copy hops are edg return / by-value temps. Read edg's slot assignment by name from `-g3` `.mdebug` local symbols. Residual: two swapped binding temps plus 3x8 bytes of horizontal-pass temps._
 - [game_uso under NCC: a "bnez on a stack address + alloc(0xC), stores through v1" block is edg's cfront-style constructor protocol for a DERIVED class (`struct XZ : Vec3 { XZ(const Vec3 &v) : Vec3(v.x, 0, v.z) {} };`); an inline base-class `operator new` forwarding to the import fixes the reloc name; PRE needs no named pointer; tail named locals buy frame slack (6A30 93.2 -> EXACT, 2026-10-15 agent-g)](#ncc-derived-ctor-protocol-6a30) -- _Tell: `addiu a3,sp,K; or v1,a3; bnez a3; jal new(12); beqz v0; or v1,v0`. A body-assigned derived ctor folds the stores onto &pt._
-- [game_uso under NCC: edg binding temps are ALWAYS laid out "first-evaluated lowest" (no expression shape flips it); "first-appearing higher" in the target = NAMED Vec3 locals assigned inside the expression through the IMPLICIT operator= (`Vec3 d, e; if ((d = a - w).lenSq() < (e = b - w).lenSq())`); an inline `set()` returning `Vec3 &` adds 8 bytes of frame per class-temp stage (6FA8 105 -> 123/127 words, 1DDC 241 -> 249/382 with the slot swap fixed via a by-value `assign()` member; 2026-10-16 agent-g)](#ncc-temp-order-named-assign-6fa8) -- _named locals follow declaration order; binding temps never do. Probe with `-g3` .mdebug + the addiu-sp slot list._
+- [game_uso under NCC: edg binding temps are ALWAYS laid out "first-evaluated lowest" (no expression shape flips it); "first-appearing higher" in the target = NAMED Vec3 locals assigned inside the expression through the IMPLICIT operator= (`Vec3 d, e; if ((d = a - w).lenSq() < (e = b - w).lenSq())`); an inline `set()` returning `Vec3 &` adds 8 bytes of frame per class-temp stage (6FA8 105 -> 123/127 -> EXACT: `void set` + a named `const Vec3 &u = *this` in the first stage's inline only, since a `Vec3 &set` return temp lands at the frame bottom; 1DDC 241 -> 249/382 with the slot swap fixed via a by-value `assign()` member; 2026-10-16 agent-g)](#ncc-temp-order-named-assign-6fa8) -- _named locals follow declaration order; binding temps never do. Probe with `-g3` .mdebug + the addiu-sp slot list._
+- [A "permanent CSE cap" on a raw-word USO wrap can be its PLACEHOLDER symbols: give each reloc its real name and keep an un-reloc'd `lui at` on a separate symbol (timproc_uso_b5_func_000079A4 98.32 -> EXACT); FP commutative operand order and the `ldc1 K(at)` displacement follow the expression shape (1DB0 6 -> 3 diffs, 2026-10-16 agent-g)](#placeholder-symbol-cse-cap-79a4) -- _Read `objdump -dr expected/...` for each HI16/26 name before calling a shared-base CSE a cap. Write `scr + i * 4` as `((int *)(scr + K))[i]` when the addu operands come out reversed._
 - [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -30267,11 +30270,19 @@ Inline ctor shape matters too: a body that assigns the members directly (no `set
 per stage but changes FP colouring.
 
 **Residuals (not landed):**
-- 6FA8 (`/home/danjs/decomp-drafts/best_6FA8_r80.cpp`): an extra 4-byte named slot above d is still
-  needed (written as `Obj *c = b;` in the inner block, which is artificial). The only remaining
-  difference is r2 (the second `operator-`'s inline local) at sp+56 vs 52. In the first stage a 4-byte
-  compiler slot sits between the return slot and r. In the second stage it sits below r. Not yet found:
-  what reorders it.
+- 6FA8: **SOLVED, EXACT (2026-10-16 agent-g, `src/game_uso/game_uso_ncc_6FA8.cpp`).** The
+  `Vec3 &set()` trick was the wrong lever here. Its return temp lives in the ctor inline's nested
+  block, and nested inline blocks are laid out at the BOTTOM of the frame. That is the 4-byte slot that
+  ended up below r2 (r2 at 56 vs 52). Fix: `void set`, then add the 8 bytes between the stages
+  instead. A named local inside the FIRST stage's inline only (`Vec3 to(const Vec3 &v) const
+  { const Vec3 &u = *this; return Vec3(u.x - v.x, ...); }`, used as `(d = a->pos.to(w))`) lands
+  between ret2 and r1. The same local in BOTH stages adds 8 at the bottom instead (wrong). The
+  second stage's inline shape does not matter: a 6x6 grid of stage-1 x stage-2 bodies showed the
+  layout depends only on stage 1. The named 4-byte slot above d is `Vec3 &w = s0->w->pos;`,
+  used by the first subtraction only (an unused `Obj *c;` gets no slot, and float named locals get
+  none either). **General tool:** to move 4/8 bytes of edg temps between stages, put a named local in
+  one stage's inline body, and keep inline-ctor return temps (`Vec3 &set`) out when they would land at
+  the bottom.
 - 1DDC (`/home/danjs/decomp-drafts/best_1DDC_r80.cpp`, mn 382/382, frame 376 vs 384): the top-of-block
   pair is the 023D4 binding temp and the final `a0->vel -= diff * sel` source. **Swap fixed:** declare a
   named `Vec3 t2;` FIRST in the else block and write `a0->vel -= (t2 = diff * sel);` with the implicit
@@ -30326,4 +30337,84 @@ home/reload, `&D_00000000 + K` for the `lui/addiu` string (not a literal address
 Generalises: any "param stored to its home at entry and immediately reloaded into a t-reg" with no
 call in between is a `&param` escape (cf. the volatile-param lever in
 [3B80](#volatile-param-and-cse-arg-copies-3b80), which keeps the param memory-resident per use).
+
+<a id="placeholder-symbol-cse-cap-79a4"></a>
+## Placeholder symbols can fake a CSE cap: real reloc names + a separate symbol for the un-reloc'd `lui at` (timproc_uso_b5_func_000079A4 98.32 -> EXACT, 2026-10-16 agent-g)
+
+The wrap had been labelled a "permanent 98.32% cap": IDO CSE'd the fade-step load base one instruction
+shorter than the target. The wrap read three things through `&D_00000000`: the 0x34 mode gate, the
+0x1D0 fade step, and the 0xA4 slot table. Because they were one symbol, IDO built one shared `a2` base.
+The target's `expected/` reloc table (`mips-linux-gnu-objdump -dr`) has `import_80020098` for the gate
+(the `a2` base, also passed to 011E00), `import_8002013C` for the slot table, and NO reloc on the fade
+step's `lui at; lwc1 f4,0x1D0(at)`. Fix: gate = `*(int *)(&import_80020098 + 0x34)`, table =
+`((int *)(&import_8002013C + 0xA4))[slot]`, and keep the fade step on `&D_00000000 + 0x1D0`, a
+DIFFERENT symbol from the gate, so it is not CSE'd. The raw bytes are the same, because the lo16 is
+baked either way. The tail was the exact sibling `timproc_uso_b5_func_000080F4`'s call sequence, copied
+as written. The 2026-05-28 note "splitting one base shatters the shared CSE web" was measured with
+every other reference still on the placeholder. Once the other references carry their real names,
+only the fade step needs to stay separate.
+
+Last word: `slot = *(int *)(scr + 0x3E0 + idx * 4)` / `FW(scr + idx * 4, 0x3E0)` emit
+`addu t4,t3,s0`. The array form `((int *)(scr + 0x3E0))[idx]` gives the target's `addu t4,s0,t3`.
+
+**Second instance, timproc_uso_b5_func_0000283C (98.68 -> EXACT, 206 words).** The residual was two
+schedule tells, not colouring:
+1. `or s1,a0,zero` at entry, right after `sw s1`, with `sw a3,home` in the `bnez a0` delay slot. The build
+   instead put the `or` in the delay slot. The alloc-or-reuse self pointer is the PARAM itself
+   (`if (arg0 != 0 || (arg0 = alloc(0x20)) != 0) ... return arg0;`). A `var_s1 = arg0;` copy makes the
+   move part of the if's block, so the scheduler drops it into the delay slot. Dropping the named copy
+   also removes its frame slot. An unused `volatile s32 pad;` in its declaration position puts the slot
+   back (an unused plain `s32 *spare;` works too).
+2. Four `0.0f` stores to `p+0xDC` came out in the target order +8, +0, +4, +C only when all four
+   statements were on ONE source line (`+0xC`, `+8`, `+4`, `+0` order). None of the 24 orders on separate
+   lines matched. This is the as1 same-line lever ([#same-line-store-pair-schedule-35440](#same-line-store-pair-schedule-35440)).
+De-aliasing to real names also exposed a CSE hazard. The target relocs the second child's vtable store
+to the same `import_80086288` as the first. In C, the same symbol gets CSE'd across three calls (a spill
+plus 8 bytes of frame). So that one site keeps a different zero symbol (`D_00000000_a`), and only its
+reloc name differs from the target.
+
+**FP corollary (timproc_uso_b5_func_00001DB0, NM, 6 -> 3 diffs, not landed):** two reloc'd doubles at
+`D_807FF0D8 + 0xB8` and `D_807FF0E0 + 0xC0` (unpaired HI16, lo baked). `extern char D_807FF0D8,
+D_807FF0E0;` with `*(f64 *)(&D_807FF0D8 + 0xB8)` gives the target's `ldc1 f16,184(at)` / `192(at)`
+displacements (separate f64 externs give 0). The operand order of `mul.d` / `add.d` is NOT fixed: it
+follows the whole expression's shape. `B * x + C` emits `mul.d (B, x)` and `add.d (C, prod)` as in the
+target, `C + B * x` reverses both, and `x * B + C` reverses only the mul. The next statement's
+`41.0f + 5.0f * f54` ignores its own operand order completely (all 16 combinations tested), but its
+`mtc1`/`lwc1` f-register pick changes with the PREVIOUS statement's shape. Still open: `mul.s` and
+`add.s` operand order in that statement (draft `/home/danjs/decomp-drafts/b5_1DB0_ldc1fix_3diff.c.txt`).
+
+<a id="vec3-sub-mul-fp-candidates-bb-boundary-37938"></a>
+### Single-use Vec3 arithmetic in the FP candidate pool needs BB boundaries (gl_func_00037938, NM 93.7)
+
+Target: `sub.s f0 / f2 / f12` for `d = b - a` and `mul.s f2 / f12 / f14` for `sc = c2 * k` (k in f0),
+each result stored once into a Vec3 local that is then struct-copied. Writing the results straight into
+the struct (`d.x = b.x - a.x`) or into named floats with the store right after both give ring temps
+(f4..f18): uopt forward-substitutes a single-use named float into its only use. What works:
+
+```c
+dx = b.x - a.x; dy = b.y - a.y; dz = b.z - a.z;
+do {} while (0);                 /* BB boundary: dx..dz now cross blocks -> candidates */
+pd->x = dx; pd->y = dy; pd->z = dz;   /* Vec3 *pd = &d; a plain d.x store still lets uopt
+                                        re-derive b.x - a.x from the (unchanged) memory operands */
+do {} while (0);                 /* second boundary: without it dx..dz share a block with k
+                                    (per-BB interference) and take f2/f12/f14 instead of f0/f2/f12 */
+```
+
+The mul needs only the first boundary (its operand `k` is already a candidate). The named floats and `pd`
+each get a home at their DECL POSITION, so they replace bytes of any pad arrays that were standing in for
+the target's frame holes (#scalar-homes-are-the-holes-3cbb4). Related: a 3-member copy written on ONE
+line in x,y,z order gives the descending f18/f16/f10 ring the target used for `arg.z..x = c4.z..x`.
+
+<a id="iterator-entry-ring-skips-register-base-41edc"></a>
+### Iterator entry-block ring skips track a register-variable base (gl_func_00041EDC, NM 97.6)
+
+The exact 39EE4 walker (`next = head[0]; cur = next; node = cur ? (next = cur[1], cur[0]) : 0;`) burns
+two ugen ring slots in its entry block (head t6, skip t7, cur[1] t8, skip t9, body cur t0). In
+probes the skips appear only when the head load's base is a REGISTER variable: param a0, a value
+returned in v0, or a coloured local (`s = self` -> v0). A base that is a temp (a call-spilled param
+reloaded `lw t6,home`, `*sp` through `&self`, a global load) gives a dense ring with no skips. 41EDC's
+target has the `lw t6,home` reload AND the skips (plus the entry result in v1), and no spelling got
+both: separate entry var, comma-condition while, for/if/goto entries, pointer-form and typed iterator
+structs, casts, volatile/register self, while(0) anchors in every order, and if(0) demotion were all
+byte-identical. When a sibling's ring is +1/+2 everywhere after the head load, this is the class.
 
