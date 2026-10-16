@@ -21,6 +21,10 @@ if [ $rc -ne 0 ]; then echo "   !! make failed -- ROM is stale; see $LOG-make.lo
 if cmp tenshoe.z64 baserom.z64; then echo "   ROM: BYTE-IDENTICAL"; else echo "   ROM: !! MISMATCH"; exit 3; fi
 echo "== gate: non_matching_objects"
 make non_matching_objects RUN_CC_CHECK=0 -j8 >"$LOG-nm.log" 2>&1 || make non_matching_objects RUN_CC_CHECK=0 -j8 >"$LOG-nm.log" 2>&1; echo "   nm exit=$?"
+# post0b NM clip must equal game_libs_func_00062F08's NM offset + 0x50 (two agents often move it from different bases)
+want=$(mips-linux-gnu-nm build/non_matching/src/game_libs/game_libs_post0b.c.o 2>/dev/null | awk '$3=="game_libs_func_00062F08"{printf "0x%x", strtonum("0x"$1)+0x50}')
+have=$(grep -o 'game_libs_post0b.c.o: NON_MATCHING_TEXT_CLIP_KEEP_ALIGN := 0x[0-9a-fA-F]*' Makefile | sed 's/.*:= //')
+if [ -n "$want" ] && [ "$((want))" != "$((have))" ]; then echo "   !! post0b NM clip stale: Makefile $have, probe wants $want"; exit 6; fi
 echo "== gate: refresh-report"; bash scripts/refresh-report.sh >"$LOG-report.log" 2>&1; echo "   refresh exit=$?"
 git show origin/main:report.json > "$LOG-base-report.json"
 python3 - "$LOG-base-report.json" report.json <<'PY'
