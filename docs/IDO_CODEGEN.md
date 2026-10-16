@@ -197,6 +197,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass â€
 - [Loop-invariant STORE hoisted by uopt + RMW double store + store-then-test: a ring dequeue whose 96.9% wrap had every temp promoted to a candidate ($v1/$a1 for the entry value and rd+1) is a plain `while (r->wr != r->rd) { r->f4c = 0; r->out = r->buf[r->rd]; r->rd++; r->rd &= 0xF; if (r->out) {...} }` -- the invariant store is hoisted ABOVE the loop by uopt, the inverted loop's pre-test load is the shared $v0 web, `r->rd++` keeps BOTH stores (a local `r->rd = rd + 1` is DSE'd), and the two forwarded reloads are the $t1/$t3 phantoms (game_libs 3183C 23/23 EXACT, 2026-09-06 agent-g)](#while-hoisted-invariant-store-rmw-double-store-3183c) -- _Tell: a `sw zero,X(a0)` between the entry `beq` and the loop head with NO source-level statement there ("cleared before the loop"), temps promoted to $v1/$a1 in every local-variable spelling, and skipped temp numbers around a double `sw` to the same field. `if (1) {}` / `volatile` DSE-defeats promote the value; the RMW form does not. `r->wr != r->rd` operand order gives `beq v0,t6` / `bnel v0,t5`._
 - [Base pointer held in ONE $s-reg for EVERY access (direct field stores/loads AND address arithmetic, base-first `addu s3,s5,t3`) = the base is an ARRAY-element address `extern St D_arr[]; g = &D_arr[0]` -- `(St*)&D_00000000` folds every direct access to `lui at,%hi(D); sb %lo(at)` and commutes the addu; per-ACCESS zero aliases with the inline addend for a far byte (+0x1B5DC) incl. the RMW load/store as two symbols; s-reg constants are emitted in the block that DEFINES the base; every declared local homes a frame word; `u8 sel` = the `or v1,v0` copy (gl_func_00026D64 88.1->97.1, 2026-09-06 agent-g)](#extern-struct-array-base-keeps-sreg-opaque-26d64) -- _Tell: build folds exit-path stores / an in-loop `lh` to `lui at` forms while the target uses the held $s5, and `addu vN,tI,s5` (index first) vs target `addu sN,s5,tI`. Function-typed symbol `(St*)proc` also keeps the base opaque but drags the loop-invariant `li s6/s7` into the entry block. Open: uopt sinks the `sll` of a pre-test index when the cursor RMW immediately follows the exit test (as1 then hoists the store's `lui at` into the head); RMW two statements later keeps the sll but moves the store._
 - [HOISTED shift-merge phantom = IN-PLACE `or a2,a3,zero; sll a2,a2,4` + K&R param HOMING flip: an invariant record index spelled INSIDE the loop as `((short *)&D)[y * 8 + j]` (no pa/pb locals, no `p = d`) makes uopt hoist y*8 as its own candidate, keeps y unmodified (web copied to $a3) and leaves d homed with its reload in the branch delay slot; any pa/pb-local form gives `sll a2,a3,4` with the `lw v0` sunk, any `y <<= 4` form keeps y in $a2 and moves d to $a3 (game_libs 20ED0 82.6 -> 75/75 EXACT, 2026-09-06 agent-g)](#hoisted-shift-merge-inplace-sll-param-homing-20ed0) â€” _Tell: loop body already exact, preheader shows `or aN,aM,zero; sll aN,aN,4` (a VARIABLE register shifted in place, not a $tN temp) and a param reloaded from its home into the loop pointer in a delay slot. Twin base tables that are reloc-blind zeros need DISTINCT base-0 aliases in undefined_syms_auto.txt or &D CSE merges the lui/addiu pairs. A 0C000000 jal whose oracle symval is an in-module export stays a `gl_func_00000000` placeholder call; a call that passes fewer args than the callee takes leaves the extra arg register untouched (here `$a1 = x`)._
+- [16-float matrix spill homes: DECL order sets the slot ladder (column-wise decls = target gaps), assignment order sets the load schedule (reversed per run), and pointer locals declared BEFORE the floats cost +8 frame (gl_func_0005BE20 99.42 -> EXACT, 2026-10-16 agent-g)](#float-matrix-decl-vs-assign-order-5be20)
+- [Prologue `move sN,aK` placement = PARAM vs LOCAL COPY: a reassigned/looped param gets its move inside the save sequence, a `x = param` copy gets it after the saves or in the bnez delay; pick per-variable (gl_func_00062368 95.09 / gl_func_00061A0C 96.15 -> EXACT, 2026-10-16 agent-g)](#prologue-move-param-vs-copy-62368)
 
 ## Quick reference by sub-topic
 
@@ -30763,3 +30765,60 @@ Leave the constant inline. Making `ty = 0.0f` a temp scores the same.
   ignores sp offsets). Writing the temps in STORE order (79.99) beat x-then-z order (79.96). 591C, the
   same family, has not been tried yet.
 
+
+
+<a id="float-matrix-decl-vs-assign-order-5be20"></a>
+## 16-float matrix spill homes: decl order vs assignment order vs pointer-decl position (gl_func_0005BE20 99.42 -> EXACT, 2026-10-16 agent-g)
+
+gl_func_0005BE20 (4x4 adjugate, 16 calls to a 9-float 3x3 det helper) loads all 16 matrix elements
+once into float locals. Six are colored into $f20-$f30; ten spill. The old NM matched every
+instruction except the swc1/lwc1 stack offsets and the frame (-160 vs -168). Three separate knobs fixed it:
+
+1. **Slot ladder = declaration order.** Each float local gets a home in decl order from the top of the
+   frame down, and a local colored to a register still uses up its home. So the gaps in the target's
+   ladder belong to the register-colored elements. Here the target's homes walk the matrix COLUMN-wise:
+   `float m0, m4, m8, m12; float m1, m5, m9, m13; ...` (m0 @0xA4, m4 @0xA0, m8 @0x9C, m12 = gap
+   0x98, m1 = gap 0x94, m5 @0x90 ...). Keep the decls separate from the assignments
+   (see #frame-slot-topdown-decl-solver-40070). Using initializers in transposed order also
+   reorders the loads and the coloring.
+2. **Load schedule = assignment order, reversed within each run.** `m4=M[4]; m5; m6; m7;` loads
+   M7,M6,M5. `m4; m7; m6; m5;` loads M5,M6,M7. The target's M5,M7,M6 needs `m4; m6; m7; m5;`.
+   Changing the load order did not move any slot.
+3. **Pointer locals declared before the floats add 8 frame bytes.** `float *M = arg0, *O = arg1;`
+   declared first gave -176 with every slot already right. Declaring the two pointers AFTER the 16
+   floats gives -168. Both pointers stay in a0/s0, but their decl position still sizes the frame.
+
+Before declaring an FP-heavy spill-offset diff an allocator cap, map each slot to its variable and
+read the gaps as register-colored locals in decl order. Here the old note said "spill-slot numbering
+over the all-live set, not source-controllable".
+
+<a id="prologue-move-param-vs-copy-62368"></a>
+## Prologue `move sN,aK` placement: parameter vs local copy (gl_func_00062368 / gl_func_00061A0C -> EXACT, 2026-10-16 agent-g)
+
+Both functions had the right instructions in the wrong order. A `move sN,aK` sat at the wrong point among
+the prologue's `sw sX` saves, and the old notes called it a "prologue save-scheduling cap". It was
+not a cap. Where the move lands depends on how the C names the value:
+
+- The PARAMETER is itself the live variable (reassigned, or used as the loop counter): IDO puts the
+  move early, inside the save sequence.
+- A local initialized from the parameter (`int *s2 = a0;`): IDO puts the move after the saves, or
+  in the first branch's delay slot.
+
+62368 (get-or-alloc array init): the target has `move s2,a0` right after `move s0,a1`. Dropping
+`s2 = a0` and reassigning the param (`if (s2 == 0) s2 = alloc(8)`) made it exact. The if form and
+the `&&` form both work. 61A0C (hex dump): the target puts `move s4,a2` early and `move s1,a1` after
+the saves. Making ONLY the count a parameter (`unsigned int s4` as the param, with `char *s1 = a1;`
+kept as a copy) made it exact. Reassigning both params moved `move s1,a1` too early (9 diffs).
+
+So for each mismatched move, try the parameter spelling and the copy spelling separately.
+gl_func_00062E80 (constructor, 80.6 -> EXACT) needed the same param fix plus one decode fix: a field
+store sitting in the final `jal`'s delay slot runs BEFORE the call, so write it before the call in C.
+gl_func_00060D40 (75.5 -> EXACT) is the same constructor shape. An alloc-fail `return 0` adds
+`b` + `move v0,zero` (+3 insns); `goto end` to the shared `return s0` removes them. Also the
+field-store order in C has to match the target's store order.
+gl_func_000628EC (NM 89.5 -> 98.63): the same param reassign fixed the prologue and dropped the copy's
+home (grow the volatile pad by 8 to keep the frame). Moving a plain store ahead of a `|=` RMW in C fixed
+the t-ring. The only residual is the 0.0/1.0 FP constant pair landing in f2/f0 instead of f0/f2, and
+literal spellings, named locals and while(0) boosts do not change it.
+gl_func_00041148 (post0b, agent-c range) has the same note ("same cap as gl_func_00062368") and has
+not been retried yet.

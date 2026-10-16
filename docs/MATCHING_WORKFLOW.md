@@ -281,6 +281,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [post0b clip re-probe must be SPLICE-AWARE: probe the post-replace-body .o (make prints true .text size), not a standalone compile (4C5E4, 2026-08-22 agent-g)](#clip-reprobe-splice-aware) — _Donor splices grow .text before the clip; standalone probe truncated sentinel 62F08 to 30%._
 - [Pinned-jal decode audit: jal-vs-call-count scanner, 4 FP classes (alias-externs, macros, loop rotation, jalr), one genuine find 71E0 63.1->84.5 via (u32)dst>0U alloc-fallback restore; sweep CLOSED (agent-h 2026-08-22)](#pinned-jal-decode-audit)
 - [game_libs base-unit `lui at,0; lwc1 fN,0xE2C(at)` next to a jumptable offset = a FLOAT LITERAL in the USO .rodata, not `&D+0xE2C` global; read the switch tables AND literals from section 7 before trusting an old decode (76F0 88.80->92.47; 7344 77.5->EXACT, 2B94 EXACT via `<fn>_rodata` donor pin, agent-g 2026-10-15)](#game-libs-rodata-literals-and-tables-76f0) — _RoData file offset = lw/lwc1 imm + 4; three &D+0 float sites that each re-materialize `lui/addiu v0` = three distinct globals; case->arm mapping from the table fixed a mis-assigned switch1/switch2 arm._
+- [Run 97 (agent-c 2026-10-16): baked in-unit jal alias in post0b 55C34, 551E0 zero-suffix pad, timproc b1 block-equal via pinned-jal bake, NM levers for 4C300 / 1E08 / CFA0](#run-97-agent-c) -- _per-site blank args (lui/addiu 0) need distinct names; a for loop (not do-while) changes IDO loop-invariant hoisting; a volatile scalar reproduces sw/lw-around-every-test; unused scalars still consume frame slots, so declaration order sets the whole layout._
 
 
 ---
@@ -12737,3 +12738,58 @@ map4 b2 at `jal=0 lo16=0`, which means each decompressed block equals the ROM
 block. Only timproc b1 (agent-c) is left. It gets the same recipe: static
 callees, then `ld -r` of `b1_o0_0` + `b1`, with the `D_arg_b1_1130` 0-pin.
 
+
+<a id="run-97-agent-c"></a>
+## Run 97 (agent-c, 2026-10-16)
+
+- **post0b 55C34, baked in-unit jal to a non-function address.** Three
+  `game_libs_func_00062F08` calls carry the ROM word `0x0C01A988` (jal 0x6A620,
+  which falls inside the handwritten 6A5F0 block). The run-96 recipe still
+  works: call `game_libs_func_00062F08_55C34`, pinned to `0x0006A620`. The 18
+  jal-0 sites to the in-TU `gl_func_00034458` need the blank alias
+  `gl_func_00034458_55C34 = 0`.
+- **post0b 551E0, the C5B0 recipe in post0b.** Remove the 1-word `_pad.s`
+  GLOBAL_ASM block and add `gl_func_000551E0=0x00000000` to both
+  `SUFFIX_BYTES_FORCE` lines. The default build is unchanged (C 0x80 + 4).
+  In the NM build, 55264 moves -4, but the NM `gl_func_00061478` body gains
+  2 stray zero words (+8, the same asm-processor block-count artifact as
+  4DD0C), so the net clip change was +4 (0x2e308 -> 0x2e30c). Always
+  re-probe the clip; don't infer it from the pad arithmetic.
+- **timproc b1 block-equal (lo16 26 -> 0, jal 8 -> 0) without `ld -r`.**
+  The b1 rule bakes both regions, and every Data/BSS pin was already
+  correct. `D_arg_b1_1130` was set to 0 (double-spelling trap). Unpinned names
+  (`D_b1_1FE4_a/b/c`, `D_00000000_raw`, `timproc_uso_b1_func_000000B0_rodata`)
+  were pinned to 0. For the 8 in-unit jals (1E44/1E74/1EA4/1F64 -> 0x83C/
+  0x878/0x8B4/0x90C) the callers call `timproc_uso_b1_func_<T>_jal` aliases
+  pinned to the module-relative target. `bake-data-relocs.py` gained an
+  opt-in `--bake-jal-pinned` flag, which fills R_MIPS_26 fields only for
+  UNDEFINED, pinned symbols. Main's alternative is static callees + `ld -r`
+  (see #yay0-block-static-callee-ld-r-addend-rebase). Either way the
+  decompressed block equals the ROM.
+- **4C300 (78.96 -> 98.92).** (a) IDO hoisted the loop's constant
+  `&D+0x2015x` string addresses into s-regs instead of the six g-address
+  bases. Rewriting the `do { } while (i != 8)` as a `for` loop gave the
+  target's choice (g bases in s3..s8, strings rematerialised). (b) A value
+  in a2 at a call can be a PRE temp rather than an argument. Here the
+  target's `andi a2,a0,0x800` before the alloc call is the shared
+  `0x78 & 0x800` temp, and passing it as a 3rd argument forces it into an
+  s-reg. (c) A named local for one multiplicand (`bc`) moved its load into
+  a1, because uopt colours named locals while ugen round-robins t-temps.
+  (d) `v1 = 0; if (..) v1 += sz;` keeps `addu v1,v1,s0`, where `v1 = sz`
+  copy-propagates to `addu v1,s0,s0`. (e) `+= sz << 1` vs `+= sz * 2` changed
+  PRE of the shift.
+- **bootup 1E08 EXACT.** The "0" third argument of ten registration calls
+  was really a per-site lui/addiu-0 address. One shared name CSEs into s1,
+  so use ten distinct names pinned to 0. Reusing the parameter as the
+  get-or-create result gives the `or s0,a0 / bnez / sw ra (delay)` prologue,
+  as in the exact sibling 8F18.
+- **bootup CFA0 (62.96 -> 98.95), stack-layout levers.** A scalar the target
+  stores and reloads around every test (`sw v0,0x80` / `lw t4,0x80` in
+  branch-likely delays) is a `volatile` local. Unused scalar declarations
+  still take frame slots, so holes between arrays in the target (12 and 20
+  bytes) are 3 and 5 scalar declarations between the array declarations.
+  Block-scoped dispatch temps inside a macro also take slots, so make them
+  function-level. Folded `func_X + off` data refs become data names pinned
+  to the real address (`D_bu_254_ctx` = 0x254). objdiff then scores them
+  exact, and the function-symbol arithmetic no longer emits the extra
+  `addiu`.
