@@ -30283,6 +30283,22 @@ per stage but changes FP colouring.
   against target 164/176/148/96/84/60/72/48). `diff.set(0,1,0)`, `Vec3 diff; diff.set(...)`, `ref = vA0`
   and `Vec3 diff = Vec3(...)` did not fix it.
 
+**game_uso_func_0000591C (spine, 1093 words) under NCC (first port, 2026-10-16 agent-g; draft
+`/home/danjs/decomp-drafts/best_591C_r80.cpp`, mnemonics 1056/1093, frame 496 vs 464).** The head is
+6A30's (`Vec3 va = s0->w->pos; va += s0->w->vel * k;`, the same r / ret 348 / bind slots). The four
+"alloc-fallback" sites per chain are the XZ derived-ctor protocol: `XZ pa(helper->pos);` and a two-argument
+`XZ(const Vec3 &a, const Vec3 &b) : Vec3(a.x - b.x, 0.0f, a.z - b.z)` returned by value through an
+inline `flat()` (diff -> ret 348 -> named delta). Transform dispatch: the target copies the
+hidden-pointer return slot (348) into a PER-CASE temp (276 / 264), then into the shared by-value
+`operator=` parameter (252), then field by field into `tr`. That extra hop is
+`tr = (const Vec3 &)game_uso_func_00007C1C(...);` (a plain `tr = f()` skips it; `Vec3 r = f(); tr = r;`
+also gives the hop, with a different layout). The first nine function-level homes match the target
+(bind -12, va -24, out, helper, parent, obj, state, res, metric -52, tr -64), and `float yaw;` declared
+between tr and ow gives ow -72 / hit -76 / pt -88. Still open: a 4-byte name at -92 and at -104; `vsel`/`t0`
+belong right under the ret slot (-120/-124, before the operator* inline `r` at -136). Chain locals in
+the target run pa, pc, da, db (-224 .. -260) with the flat() temps below. The draft still has too
+many named floats (`lim`/`d2`/`q`/`dt` per chain); the target keeps ten scalar homes at -140 .. -176.
+
 <a id="addr-taken-param-home-reload-t6-51714"></a>
 ### Param homed then reloaded once into t6 = address-taken param read via pointer-to-param (gl_func_00051714, EXACT)
 
