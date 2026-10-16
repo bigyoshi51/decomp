@@ -282,6 +282,7 @@ explicit shared blocks (goto a common label), not regeneration.
 - [Pinned-jal decode audit: jal-vs-call-count scanner, 4 FP classes (alias-externs, macros, loop rotation, jalr), one genuine find 71E0 63.1->84.5 via (u32)dst>0U alloc-fallback restore; sweep CLOSED (agent-h 2026-08-22)](#pinned-jal-decode-audit)
 - [game_libs base-unit `lui at,0; lwc1 fN,0xE2C(at)` next to a jumptable offset = a FLOAT LITERAL in the USO .rodata, not `&D+0xE2C` global; read the switch tables AND literals from section 7 before trusting an old decode (76F0 88.80->92.47; 7344 77.5->EXACT, 2B94 EXACT via `<fn>_rodata` donor pin, agent-g 2026-10-15)](#game-libs-rodata-literals-and-tables-76f0) — _RoData file offset = lw/lwc1 imm + 4; three &D+0 float sites that each re-materialize `lui/addiu v0` = three distinct globals; case->arm mapping from the table fixed a mis-assigned switch1/switch2 arm._
 - [Run 97 (agent-c 2026-10-16): baked in-unit jal alias in post0b 55C34, 551E0 zero-suffix pad, timproc b1 block-equal via pinned-jal bake, NM levers for 4C300 / 1E08 / CFA0](#run-97-agent-c) -- _per-site blank args (lui/addiu 0) need distinct names; a for loop (not do-while) changes IDO loop-invariant hoisting; a volatile scalar reproduces sw/lw-around-every-test; unused scalars still consume frame slots, so declaration order sets the whole layout._
+- [Low-scoring big NM wraps: diff MNEMONIC-CLASS COUNTS target vs build before grinding regalloc. Extra cvt.d.s/sdc1 = K&R float args (use a prototyped blank alias), extra cvt.s.w/trunc = s32 read of an f32 field, jr mismatch = switch vs if-chain or a misread jump table. Five wraps +6..+75 points in one run; objdiff fuzzy ignores sp offsets but scores jal symbol names (2026-10-16 agent-c)](#decode-error-mnemonic-scan-c100)
 
 
 ---
@@ -12799,3 +12800,40 @@ callees, then `ld -r` of `b1_o0_0` + `b1`, with the `D_arg_b1_1130` 0-pin.
   to the real address (`D_bu_254_ctx` = 0x254). objdiff then scores them
   exact, and the function-symbol arithmetic no longer emits the extra
   `addiu`.
+
+<a id="decode-error-mnemonic-scan-c100"></a>
+## Decode-error scan for big NM wraps: mnemonic-class counts first (2026-10-16 agent-c)
+
+Many large wraps sitting at 20-70% are m2c transcription errors, not register-allocation caps.
+Before grinding one, disassemble the function in `expected/` and in `build/non_matching/`
+(`mips-linux-gnu-objdump -d -M no-aliases --disassemble=FN`) and compare the counts of a few
+mnemonic classes. Each mismatch class points at a specific C mistake:
+
+| count differs | usual cause | fix |
+|---|---|---|
+| `cvt.d.s` / `sdc1` surplus in the build | K&R call with a float arg (double-promoted, stored at 16(sp)) | prototyped blank alias, e.g. `extern void bu_b75c_mvf(char *, char *, f32, char *);`. A single float after a non-float first arg goes in an integer register (target `mfc1 a2` / `lw a2,off(..)`) |
+| `cvt.s.w` / `trunc.w.s` surplus | field read as `*(s32 *)` that is an f32 | retype the field. Also check `(f32)` casts m2c put on plain word copies |
+| `jr tN` in one side only | switch vs if-chain, or the jump table read wrong | unsorted beq chain = if-goto chain (IDO_CODEGEN #if1-keeps-goto-target-out-of-line-d900). Re-read tables with `scripts/extract-uso-jumptable.py FN --module 0xD9FE28 --vaddr V --size S --shim 0x1466C` for game_libs: m2c's case map for gl_func_0002E354 was shifted by one entry |
+| build far LONGER with a 4x repeated body | m2c transcribed IDO's own loop unroll | write the source loop. IDO peels and unrolls it again |
+| `cfc1` surplus in the TARGET (3 per conversion), `trunc.w.s` in the build | float -> unsigned conversion: `(u32)f` emits the cfc1/ctc1 rounding-mode sequence, `(int)f` emits trunc.w.s | `(u32)` cast (gl_func_0004A308 31.8 -> 76.9, together with `&D_00000000` instead of literal-0 first args: target lui/addiu) |
+| extra `or a1,a3,zero` before calls | m2c invented a second argument (a register that happened to hold self) | drop it |
+
+Results from one run: gl_func_0002E354 73.9 -> 80.5, func_0000B75C 69.2 -> 88.1 (nine calls are
+`(ptr, ptr, f32, self)`, and passing self as the 4th argument is also why the target keeps arg0 in
+a3), gl_func_00036F0C 38.6 -> 83.7, func_0000D900 57.1 -> 87.0, game_libs_func_0001F6A8 20.1 -> 95.6
+(the loop rewrite), gl_func_0004A308 31.8 -> 76.9.
+
+Scoring notes from the same run:
+
+- objdiff's fuzzy score did not move at all when a frame changed from 0xA0 to 0x98 (E354): stack
+  offsets and the frame size look effectively free. Collapse a frame for exactness, not for score.
+- jal relocation symbol NAMES are scored. A prototyped alias (`gl_E354_setf`) against the target's
+  `func_00000000` costs a little even when the bytes are identical. Accept it for the correct
+  calling convention.
+- A K&R `func_00000000(0x3F000000, 0x04010900, f)` with an extra leading literal is usually a decode
+  of a float passed in a1: the "literal" was a stale register value.
+- post0b NM shifts: the NM object's later functions move by the size delta, so the
+  `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` value has to be re-probed (62F08 NM offset + 0x50). A delta that
+  is not a multiple of the next aligned block's alignment also moves padding into the preceding
+  NM function's symbol. gl_func_0004D688 picked up 3 nops and scored 68.1 -> 66.2 with its code
+  unchanged.

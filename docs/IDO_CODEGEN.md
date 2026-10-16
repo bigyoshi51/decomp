@@ -210,6 +210,8 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass â€
 - [Two commutative adds of the same pair with OPPOSITE addu operand orders = two non-CSE'd spellings: pointer add `(int)(off + base)` keeps written order, int add `(int)base + off` comes out base-first (gl_func_00028A68 95.61 -> 99.76, 2026-10-16 agent-c)](#addu-operand-order-pointer-vs-int-add-28a68)
 - [Temp base lands in a LATER arg register (`lui a2; addiu a2,0; lw 368(a2); lw 372(a2)` where every spelling gives a0) = the base address is ALSO a hidden extra call argument: `gl(a0, min + K, pair)` (h2hproc_uso_func_00000A88 99.66 -> EXACT, 2026-10-16 agent-c)](#hidden-arg-register-base-a88)
 - [Oversized frame on a big m2c graft (0x2D8 vs 0x178) = too many DECLARED locals: every declared local takes a slot (rule in #loop-promoted-constant-web-absorbs-outside-mul-258c0), and a spilled named local uses ITS OWN slot, so collapse the m2c var_N families into the variable whose slot the target spills to, then fill the target's slot gaps in declaration order (bootup func_000090CC 94.23 -> 95.26 NM, 2026-10-16 agent-c)](#m2c-graft-frame-collapse-90cc)
+- [`if (v == K) goto L;` comes out INVERTED (`bne` + L's body inline) when L is one call-free basic block; an empty `if (1) {}` (or any call) inside L keeps the `beq` and the out-of-line body. Unsorted beq chains over sparse values with out-of-line bodies are a source-order if-goto chain, not a switch (bootup func_0000D900 57.1 -> 87.0, func_000090CC dispatch, 2026-10-16 agent-c)](#if1-keeps-goto-target-out-of-line-d900)
+- [A small constant used across a call (`li s0,2` before `bne a3,s0` / `beql s0,t7` / `sh s0,..`) is a uopt constant candidate; it only gets s0 when no named variable wants s0 there. A local reused for an unrelated value after the calls (m2c `var_t1` reuse) drags itself into s0 (func_000090CC, 2026-10-16 agent-c)](#const-candidate-vs-reused-local-90cc)
 
 ## Quick reference by sub-topic
 
@@ -14384,6 +14386,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [The comma-constant lever also fixes old "mtc1/lwc1 scheduler cap" notes: timproc_uso_b3_func_00001240 97.82 -> EXACT with `x * (0, 255.0f)` (target `mtc1 K,$f18; lwc1 x,$f4; mul.s d,$f18,$f4`); the form moved a spill home 4 bytes down, and shrinking an unused `char pad[32]` to `[28]` moved it back with the frame unchanged (2026-10-16 agent-g)](#comma-constant-const-first-mul-5d754) -- _If the const/load registers are swapped AND the mul operands are swapped, it is operand rank, not scheduling._
 - [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
 - [Extern-spelled rodata floats (`*(f32 *)((char *)&D_00000000 + 0x15C)` into a named `v`) perturb FP colouring: timproc_uso_b5_func_00004118's 0.5/1.0 f0/f2 swap over ~100 words vanished when the 0.45/0.036/0.1 loads became plain literals (170 -> 62 diff words, NM 98.34 -> 99.02; draft only); plus func_80000D2C's +8 frame = an IV temploc from the strcpy loop, 30 shapes tried (agent-g 2026-10-16)](#extern-float-spelling-perturbs-colouring-4118) -- _ROM RoData words show which loads are literals: 5 consecutive 0.1f entries = 5 materialization sites of one literal. Literals also put the jumptable at its own rodata offset._
+- [gl_func_000578B4 GBI loader (post0b): the target's dispatch `beq 0x120; 0x110; 0x408; 0x308; 0x304; 0x508` is SOURCE order (four `if (v == K) goto` + a 2-case goto switch fixes both ladders); `if (x < 0x7FF) t = x;` must be an if/else (`b` over the empty hoisted else); the `+` m2c wrote for the SetTile shiftt/shifts fields is `|` in the target but `|` lets uopt reassociate the chain (96.37 -> 96.39 only, NM drafts saved). timproc_uso_b5_func_00004118 negatives: case-0 arg0-in-v0 and block-1 0.5-before-1.0 resist 30 more shapes (agent-g 2026-10-16)](#gbi-loader-dispatch-order-578b4) -- _A block-scoped copy of a spilled param is copy-propagated away but still costs +8 frame._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -31176,3 +31179,94 @@ and a `dst` copy (both +8 more, the modified pointer gets an s-reg or home),
 struct-typed name field, `u8 *D_80012D60[]`, `register` on every var,
 block-scoped arrays/scalars, swapped if/else, and IDO 5.3 (-O2 0x98, -O1
 far off). Still open: a source shape whose IV temp shares a freed temploc.
+
+<a id="gbi-loader-dispatch-order-578b4"></a>
+## GBI texture loader dispatch order, MIN shape, and reassociated OR chains (gl_func_000578B4, agent-g 2026-10-16)
+
+**gl_func_000578B4 (post0b, 9676 B, NM 96.37).** The function is two copies of a
+gDPLoadTextureBlock/Tile-style builder (FD SetTextureImage, F5 SetTile, E6 LoadSync,
+F4/F3 LoadTile/LoadBlock, E7 PipeSync, F5 SetTile, F2 SetTileSize) selected by the
+format code at `arg1+0x24`. Findings:
+
+1. **Dispatch order.** Both target ladders test `0x120, 0x110, 0x408, 0x308, 0x304,
+   0x508`, which is the source order of the arms. A `switch` always tests in ascending
+   order (the build had `0x110, 0x120, 0x304, ...`). Per
+   [#unsorted-dispatch-if-goto-plus-switch-54aec](#unsorted-dispatch-if-goto-plus-switch-54aec):
+   `if (v == 0x120) goto A; if (v == 0x110) goto B; if (v == 0x408) goto C;
+   if (v == 0x308) goto D; switch (v) { case 0x304: goto E; case 0x508: goto F;
+   default: goto G; }` with the labelled arm bodies in that order. Both ladders then
+   match (the second ends `beql 0x508` with the arm's first word in the delay slot).
+   The fuzzy score barely moves (+0.02): the arm bodies already lined up.
+2. **MIN for the LoadBlock lrs.** The target has `beqz at,L; nop; b L; or t1,a0,zero`.
+   Both branches go to the same label, so this is an if/else whose else arm
+   (`t1 = 0x7FF`) was hoisted out. `if (x < 0x7FF) { t = x; }` with no else emits only
+   `beqz; nop; or`. A ternary or an explicit else reproduces the target, but t0/t1 then
+   swap in every arm (the pkt pointer has to take t0 and spill to its m2c `spF0` home
+   while the MAX result takes t0). Net 95.93, so the change was not kept.
+3. **SetTile word 1.** m2c wrote `(... | maskt) + (shiftt << 10)) | cms | masks) + shifts`.
+   The target uses `or` at every step, in field order. Writing `|` everywhere (or
+   `_SHIFTL` with u32 casts) lets uopt reassociate the chain and move `shifts` up front,
+   which costs about 3 points. `+` keeps the textual order with the wrong opcode. How the
+   original kept an all-`|` chain in source order is still unknown.
+4. The recurring arm residual is a t0/t1 swap: the target puts the call-crossing first
+   pkt in t1 and the next pkt in t0. The build does the reverse.
+
+Drafts: `/home/danjs/decomp-drafts/gl_func_000578B4_96.39_ifgoto_ladder.patch`,
+`..._95.93_ladder_min_ternary.patch`.
+
+**timproc_uso_b5_func_00004118 (99.02 draft), more negatives.** In case 0 the target
+loads `arg0` once into v0, so the arg0 split piece is coloured there. None of these
+changed that piece: a block-scoped `char *p = arg0`, `register` or `int *` copies,
+copies into existing pointer locals (temp_v0/spA8/temp_t0/sp74/sp28), an index temp
+read first, the D-store first, chained float stores, int zero stores, a label or
+`if (1)` around the call or body, and a `u32` index. Every copy is copy-propagated
+back to arg0. A new block-scoped local still costs +8 frame. Block 1 (0.5 materialized
+before 1.0, with 1.0 still in f0) did not respond to dead `0.5f`/`1.0f` stores
+(function top or just before the block), chaining either constant, moving the 0.5 or
+0.0 group, or `0.45f * 1.0f`. Spelling the block-1 1.0 as `1`/`1.0`/`(f32)1.0`
+detaches it from the shared 1.0 web, so the next stage loses its pre-`beqz` 1.0 load.
+Joining the arg-field stores on one line (0x3BC/0x41C/0x3C8/0x3B8) left the
+`sw a1,968` order unchanged.
+
+<a id="if1-keeps-goto-target-out-of-line-d900"></a>
+## `if (1) {}` in a goto target keeps the `beq`; sparse unsorted dispatch = source-order if-goto chain (bootup func_0000D900 57.1 -> 87.0 NM, 2026-10-16 agent-c)
+
+Probe (IDO 7.1 -O2): `if (v == 7) goto c7; if (v == 6) goto c6; <default>; goto end; c7: a[1] = 26;
+a[0] = 25; t = k | 1; goto end; c6: ...`. IDO emits `bne v,7 -> X; <c7 body inline>; b end; X: ...`,
+whatever the source order of the labelled blocks and whatever spelling of the test (switch with one
+case, `if (v != 7) goto n7; goto c7;`, `else if`). It inverts the test and pulls the target block
+inline whenever that block is a single call-free basic block. Two things stop it:
+
+- a call inside the target block (the block is then two BBs), or
+- an empty `if (1) {}` anywhere in the target block (`c7: if (1) {} a[1] = 26; ...`).
+
+Either way the test stays `beq v,7 -> c7` with the body out of line, in source order. In
+func_000090CC this gave the target's `beq t3,7; beq t3,6; <default inline>; c7; c6` dispatch (the
+earlier notes called it a switch-order cap). It is worth trying before concluding a compare chain
+is a switch.
+
+func_0000D900 is the bigger case. The target tests 20, 9, 6, 1000, 1001, 1003, 1002, 1004, 1005, 1006,
+1007 (unsorted, sparse) with every body out of line and default last. The m2c switch built a
+1000..1007 jump table instead (build `sltiu; jr t6`, target `jr` only for the return). Written as
+`if (v == 0x14) goto c14; ... if (v == 0x3EE) goto c3ED; if (v != 0x3EF) goto cdef; goto c3ED;`
+(last test inverted as in #unsorted-dispatch-if-goto-plus-switch-54aec), with `if (1) {}` in the two
+one-store bodies (`A54 = 4`, `A54 = 5`), the chain, the delay-slot constant loads and the body order
+all line up. The same pass fixed calls that take one argument where m2c had added `a1 = self`,
+replaced 0x8B38-style literals with data aliases of func_00008AEC / func_00008B44 + K, and
+replaced word-cast copies carrying an `(f32)` conversion with Vec3 struct copies (target
+base-register lw/sw pairs). Together these were +30 points.
+
+<a id="const-candidate-vs-reused-local-90cc"></a>
+## Constant candidate in s0 vs a reused local (bootup func_000090CC, 2026-10-16 agent-c)
+
+The target materializes `li s0,2` at the first use on each path (`bne a3,s0` for `arg1 == 2`, later
+`beql s0,t7` for `D->0x34 == 2` and `sh s0,0x88E(s2)`) and keeps it in s0 across a `jal`. That is a
+uopt constant candidate: three register-operand uses of the same constant, live across a call. The
+build kept every use as `li at,2` / `li t6,2` because a named local took s0 first. The m2c graft
+reused `var_t1` (the dispatch flag word, a short t-register value in the target) for
+`d44.f28 + 0x70` after the draw calls. One variable is one candidate, so the late call-crossing
+use pulled the whole web into s0. Splitting the late use into another declared-but-otherwise-unused
+local frees s0. The constant 2 then colours s0 exactly as in the target. arg1 still lost its
+register in that probe, so the split is not in the committed wrap, but the mechanism is general:
+when the target holds a small constant in an s-register, look for a local whose web is joined
+across calls by an unrelated later reuse.
