@@ -70,6 +70,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [The PLAIN-C variant of the placeholder-callee lever LANDS exactly — and byte_verify alone is a FALSE-POSITIVE gate (use reloc-symbol-set match)](#placeholder-callee-jal-zip-2026-06-21) — _Plain-C (ROM-path, non-INCLUDE_ASM, non-NM) fns calling `gl_func_00000000`/`&D_00000000` are byte-100% (stubs all `=0`) but reloc-WRONG: the USO load-time reloc table resolves the placeholder names to wrong addresses. Swap names→resolved `.s` symbols = exact LAND (gets an episode). Gate on reloc-symbol-set match vs `.s` (scripts/fam-verify.py), NOT land-script byte_verify (reloc-blind). PREREQUISITE: the module's `.s` must carry resolved `-> SYM` annotations — `grep -l '\->' asm/nonmatchings/<mod>/<mod>/*.s | wc -l`; mgrproc_uso=48/66 (landed 14), eddproc=0/16, arcproc=0/61 (nothing to reconstruct). Gotchas: prototyped 0-arg callee → forward the wrapper's param (NOT `((int(*)())g)()` which emits jalr); dup extern with different type errors; ROM stays byte-identical pre/post-swap so `make` is not the gate. 2026-06-21 agent-e._
 - [Yay0-block units (game_uso, mgrproc, timproc b1/b3/b5, map4 b2): an in-unit `jal` to a C-defined function is NOT a landing blocker -- the block is cut from the UNLINKED `.o`, so it stays `jal 0` like the ROM (game_uso F360 landed, agent-g 2026-10-16)](#yay0-block-unlinked-in-unit-jal-f360) -- _An objdiff-100 NM wrap marked "not landable: intra-USO jal would link to the real local symbol" can simply be unwrapped; gate with `make verify-blocks` (the ROM itself is built from `assets/*_block_N.bin`, so `cmp` cannot see a Yay0 unit). Also: if the wrap uses a `_thr`-style typed alias of a base-0 global that has no other user in the TU, type the global itself Same for wraps held back only as "callees are USO placeholder aliases" (timproc_b3 2A44, timproc_b5 8468 landed the same day): landed Yay0-unit exacts already use `gl_func_00000000` / `&D_00000000+K`._
 - [game_uso jumptable/literal `%lo` diffs are a .rodata LAYOUT gap, not a reloc class -- emit the INCLUDE_ASM fns' literals as `.late_rodata` in their .s files (0940/ECEC/EDD4/1189C block-equal; timproc b5 genproc RoData relayout 26->10, b3 has no layout diffs; agent-g 2026-10-16)](#game-uso-rodata-relayout-late-rodata) -- _ROM text %lo = offset into the unit's own RoData past its 4-byte marker word (game_uso_pre.bin +0x44 = offset 0). The built .o's .rodata only held C jtbls, so every C switch sat low. Copy each gap's ROM words into a `.late_rodata` block of an INCLUDE_ASM .s in text order; asm-processor reserves it with dummy floats in function order. Where no INCLUDE_ASM fn sits in a gap, a donor placeholder body or a real C literal emits it._
+- [timproc b3/b5 block-equal: bake Data/BSS `%lo` pins in the block rule, and make in-unit callees `static` so the jal field gets the section offset (b5 jal 8->0 lo16 10->0; b3 lo16 29->0; agent-g 2026-10-16)](#timproc-block-bake-data-pins-static-callee-jal) -- _Run bake-data-relocs.py in the block rule and pin each extern to its ROM Data/BSS offset. Use a 0 pin where the C already spells the offset, and rename shared-name import aliases. A static callee gets `R_MIPS_26 .text`+addend, which equals the ROM only when the TU starts at block offset 0._
 - [A NONZERO baked `jal 0x0C00NNNN` is NOT a structural cap — map it to `gl_ref_<target>` (call-side), and never call the REAL fn at that addr](#feedback-nonzero-baked-jal-gl-ref-callside-2026-06-22) — _Raw-.word USO `.s` files ship `jal` immediates UNRELOCATED (bake-data-relocs.py: R_MIPS_26 left raw, fixed at load time). A nonzero `jal 0x0C00E89A` decodes via nearest-symbol to e.g. `game_libs_func_X+0xNNNN` and lands MID-function (on an FPU insn, not an entry) — looks like a structural cap, ISN'T. Reproduce it exactly the same way data refs use `gl_ref_X`: add `gl_ref_0003A268 = 0x0003A268;` to undefined_syms and call `gl_ref_0003A268(...)` — the C call emits `jal 0`+R_MIPS_26, ld bakes the absolute → `jal 0x0C00E89A`. PITFALL: do NOT call the real function whose name the disassembler guessed (e.g. gl_func_0001CA10@0x1CA10) for a `jal 0` site — that bakes `jal 0x0C007284`, the WRONG immediate; `jal 0` (the placeholder) must map to `gl_func_00000000` (=0). Same gl_ref mechanism as the matched gl_func_0000408C. Took gl_func_00025C54 46.25→76.7% (residual = s8-vs-spill coloring). 2026-06-22 agent-d._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [A forward branch PAST a function's end is NOT always a tail-merge cap — if the target epilogue is UNSHARED, merge it back for a clean match](#feedback-branch-past-end-unshared-epilogue-merge) — _When a function's `b`/`beqz`/etc. targets an address ≥ its own end (a split-off epilogue), count how many functions branch there. If only ONE (unshared) AND the epilogue is bare-INCLUDE_ASM with a real body (NOT an already-decompiled `void f(void){}` that might be `jal`'d), it's a splat MIS-SPLIT, not an -O1 tail-merge cap: merge the epilogue back and the whole function matches under -O2. Scan: base=first `/* addr */`; for each branch insn at index i (signed off), target=base+(i+1+off)*4; count callers per target across all `.s`; mergeable iff count==1 and target==parent_end. Merge manually: grow parent `.s` size, append child `.word`s before `endlabel`, `rm` child `.s` + its INCLUDE_ASM, write parent C, `refresh-expected-baseline.py`. Verified 2026-05-23 byte-exact: game_libs_func_00060FFC (+00061018, flag set/clear, 13/13) & 0001FDF4 (+0001FE34, arena alloc, merged—needs branch-likely grind). SHARED epilogues (≥2 callers) ARE genuine tail-merge caps (need -O1 split). ~13 clean candidates remain._
@@ -12625,3 +12626,55 @@ below the RoData size.
   linked straight into the ROM. Their correctness is the ROM-exact gate, not
   verify-blocks.
 
+
+<a id="timproc-block-bake-data-pins-static-callee-jal"></a>
+## timproc b3/b5 block-equal: bake Data/BSS `%lo` pins + `static` in-unit callees fill the jal field (agent-g 2026-10-16)
+
+**Symptom.** After the .rodata relayout, verify-blocks still showed b5
+`jal=8 lo16=10` and b3 `jal=6 lo16=29`, all in exact C fns. bytematch.dev
+scores the functions exact (objdiff is reloc-aware), but the decompressed
+built block differs from the ROM block.
+
+**lo16 root cause.** The timproc block rules did `objcopy --only-section=.text`
+with NO bake step, so every HI16/LO16 field stayed at its in-place addend
+(usually 0). mgrproc's rule already runs `scripts/bake-data-relocs.py`, which
+writes `symbol value + in-place addend` into HI16/LO16 fields (R_MIPS_26 is
+left raw). The ROM `%lo` is the target's offset in the module's Data/BSS
+section (TextReloc kind 2 with a Data/BSS symIdx), so pinning the extern to
+that offset is legal data placement.
+1. Add the bake to both b3 regions and to b5 (with `undefined_syms_auto.txt`
+   as a prerequisite, so a pin change rebuilds the block).
+2. Pin each named extern to its ROM offset (b5: `timproc_uso_b5_D_807FEA20/4C/78/A4`
+   = 0x11B0/0x11DC/0x1208/0x1234, `D_b5_BDA0_table` 0x4C0, `D_b5_C208_table0/1`
+   0x340/0x400, `D_b5_C2C0_table` 0x538). Existing pins such as `D_b5_896C_2A0`
+   (0x2A0), `D_timb5_1C0`, `gl_ref_00000208/20C/40` and `D_b3_294C_g208` were
+   already correct and fixed 3A4C/896C/CCC8/21B0..2388/294C without changes.
+3. **Double-spelling trap.** Where the C already spells the offset
+   (`(char*)&D_b3_1240_f40 + 0x40`, `D_arg_b3_10E4[0x190/4]`), the pin must be
+   0, or the bake doubles it (0x80, 0x320). The 1240 comment had asked for the
+   0 pins since 2026-07-03.
+4. **Shared-name trap.** b3's 23E4 used `D_00000004`/`D_00000008` for import
+   sites (ROM field 0), but those names are pinned to 4/8 for linked units.
+   They were renamed to unit-private `D_b3_23E4_d1..d9` (= 0). Before you add a
+   bake, grep each HI16/LO16 symbol of the unit in undefined_syms.
+5. The bake hard-fails on any undefined symbol with no pin. It also skips any
+   pin line whose value has a trailing `/* */` comment (only `//` is
+   stripped), so put the comment on its own line. Missing names (`D_b5_0_a/b/c`,
+   `import_*_w`, `D_00000000_raw`, `timproc_uso_b3_func_000000B0_rodata`, ...)
+   were pinned to 0, the value they already had as raw addends.
+
+**jal root cause.** The ROM ships intra-module `jal`s pre-filled with the
+module-relative target (b5 AA5C/AA8C/AABC/AAF4 -> 0x330/0x36C/0x3A8/0x400;
+import jals are 0). A global callee gets `R_MIPS_26 <sym>` with field 0.
+Declaring the in-unit callees `static` makes IDO's as emit
+`R_MIPS_26 .text` with the section offset as the in-place addend. The
+callers' bytes, the callees' bytes and both objdiff scores stay unchanged. The
+b5 TU starts at block offset 0, so the field equals the ROM: **b5 jal 8 -> 0,
+fully block-equal**. For b3 this does not work, because the main TU starts at
+block 0xB0 (the -O0 region-0 .o comes first). A static callee would bake
+(0x854-0xB0)>>2, so b3's 205C/208C/20BC (6 jals) stay as they are. That needs
+a region-merge, not a pin.
+
+Result: b5 `jal 8->0, lo16 10->0` (block == ROM); b3 `lo16 29->0`, jal 6.
+b1 (agent-c) very likely takes the same recipe; its `D_arg_b1_1130` pin
+(0x190) needs the same 0-pin fix.
