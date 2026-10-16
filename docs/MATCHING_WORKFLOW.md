@@ -12384,6 +12384,24 @@ resolves to 0. More traps:
   `NON_MATCHING_` mirror. The NM object then shrinks by 4 (C 0x90 + pad block 8 became
   C 0x90 + 4), EBC8 0x5560 -> 0x555c, so the tail clip is 0x558c.
 
+Run 90 (agent-c, 2026-10-16): the queue in game_libs_post / post0b / bootup_uso / timproc_b1 had
+48 entries (enumerated with `gcc -E -P -I include -I src "-DINCLUDE_ASM(F,N)=@@IA N"`, which works because
+include_asm.h guards its empty definition with `#ifndef INCLUDE_ASM`). 41 of 48 NM slices already equalled
+expected/ word for word; the 7 that did not were bootup 3734, post 29B6C, post0b 3829C, 3D3C4, 3D68C, 55C34
+(1-3 words each, HI/LO immediates on pinned names, not yet checked). Six unwrapped EXACT (post0b 3C86C, 3EAE0,
+4CFD4, 5256C, 3D620; post 2F578). Notes:
+
+- **Do not compare the whole post0b/post `.text` against expected/.** expected/ for these units has
+  HI16/LO16 immediates filled in (13.6k words differ at baseline). Compare the function's slice from the
+  unlinked object; `cmp tenshoe.z64 baserom.z64` is the real gate for these directly linked units.
+- **`func_00000000` is also a real symbol at 0** (`nm build/tenshoe.elf`), like `gl_func_00000000`, so
+  wraps whose only reloc is a jal to it unwrap without an alias.
+- **game_libs_post.c had a stray `#endif`** after the gl_func_0001E134 wrap (line 1774). It was removed
+  in the 2F578 commit; `gcc -E` on the file is clean again.
+- Unwrapping a post0b body that already compiled in the NM build leaves the NM object unchanged, so the
+  `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` value stays 0x2e308 (62F08 at 0x2e2b8). Skip `gl_func_000551E0`
+  here: it is a sentinel with its own entry in that clip line.
+
 Run 89 (agent-g, 2026-10-16) landed tail D9E4 and C5B0, mgrproc 1F30 and game_uso 0940. Notes:
 
 - **mgrproc 1F30**: the four ldc1 diffs were already covered by `D_dbl_5E0/5E8/5F8/600` pins;
