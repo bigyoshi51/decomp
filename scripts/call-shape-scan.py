@@ -19,6 +19,11 @@ Reloc-blind: only mnemonics and register operands are compared.
 --spill adds SPILL lines: target call sites where an $aN is stored to the
 stack but never written since the previous call (and the NM site does not
 do the same) -- the 6280C "saved arg reg = extra argument" tell.
+--lui switches to the lui-count placeholder sweep (IDO_CODEGEN
+#lui-count-placeholder-sweep-44de4): prints LUI lines for functions whose
+target has MORE `lui` than the NM body (one placeholder standing in for
+several symbols), with insn counts (nm/tgt) for a size sanity check.
+--lui-all also prints functions with fewer/equal target luis.
 """
 import json, re, subprocess, sys, argparse
 
@@ -123,6 +128,9 @@ def main():
     ap.add_argument('--max-size', type=int, default=100000)
     ap.add_argument('--spill', action='store_true',
                     help='also flag target call sites that save an unset $aN to the stack (6280C extra-arg tell)')
+    ap.add_argument('--lui', action='store_true',
+                    help='lui-count sweep: flag fns whose target has more lui than the NM body')
+    ap.add_argument('--lui-all', action='store_true', help='with --lui, print every fn')
     a = ap.parse_args()
     nm = 'build/non_matching/src/%s.c.o' % a.unit
     ex = 'expected/src/%s.c.o' % a.unit
@@ -139,6 +147,20 @@ def main():
     sn, se = syms(nm), syms(ex)
     for fn in want:
         if fn not in sn or fn not in se:
+            continue
+        if a.lui:
+            di, dt = disasm(nm, *sn[fn]), disasm(ex, *se[fn])
+            # drop trailing nops (NM symbol size may count an alignment nop)
+            while di and di[-1][0] == 'nop':
+                di.pop()
+            while dt and dt[-1][0] == 'nop':
+                dt.pop()
+            ln = sum(1 for m, _ in di if m == 'lui')
+            lt = sum(1 for m, _ in dt if m == 'lui')
+            if lt > ln or a.lui_all:
+                print('LUI    %s %d %.1f  lui nm=%d tgt=%d  insns nm=%d tgt=%d%s' % (
+                    fn, se[fn][1], pct.get(fn, -1), ln, lt, len(di), len(dt),
+                    '  SAMESIZE' if len(di) == len(dt) else ''))
             continue
         spn, spe = [], []
         a_ = sites(disasm(nm, *sn[fn]), spn); b_ = sites(disasm(ex, *se[fn]), spe)

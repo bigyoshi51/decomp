@@ -14352,10 +14352,12 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso under NCC: a "bnez on a stack address + alloc(0xC), stores through v1" block is edg's cfront-style constructor protocol for a DERIVED class (`struct XZ : Vec3 { XZ(const Vec3 &v) : Vec3(v.x, 0, v.z) {} };`); an inline base-class `operator new` forwarding to the import fixes the reloc name; PRE needs no named pointer; tail named locals buy frame slack (6A30 93.2 -> EXACT, 2026-10-15 agent-g)](#ncc-derived-ctor-protocol-6a30) -- _Tell: `addiu a3,sp,K; or v1,a3; bnez a3; jal new(12); beqz v0; or v1,v0`. A body-assigned derived ctor folds the stores onto &pt._
 - [game_uso under NCC: edg binding temps are ALWAYS laid out "first-evaluated lowest" (no expression shape flips it); "first-appearing higher" in the target = NAMED Vec3 locals assigned inside the expression through the IMPLICIT operator= (`Vec3 d, e; if ((d = a - w).lenSq() < (e = b - w).lenSq())`); an inline `set()` returning `Vec3 &` adds 8 bytes of frame per class-temp stage (6FA8 105 -> 123/127 -> EXACT: `void set` + a named `const Vec3 &u = *this` in the first stage's inline only, since a `Vec3 &set` return temp lands at the frame bottom; 1DDC 241 -> 249/382 with the slot swap fixed via a by-value `assign()` member; 2026-10-16 agent-g)](#ncc-temp-order-named-assign-6fa8) -- _named locals follow declaration order; binding temps never do. Probe with `-g3` .mdebug + the addiu-sp slot list._
 - [A "permanent CSE cap" on a raw-word USO wrap can be its PLACEHOLDER symbols: give each reloc its real name and keep an un-reloc'd `lui at` on a separate symbol (timproc_uso_b5_func_000079A4 98.32 -> EXACT); FP commutative operand order and the `ldc1 K(at)` displacement follow the expression shape (1DB0 6 -> 3 diffs, 2026-10-16 agent-g)](#placeholder-symbol-cse-cap-79a4) -- _Read `objdump -dr expected/...` for each HI16/26 name before calling a shared-base CSE a cap. Write `scr + i * 4` as `((int *)(scr + K))[i]` when the addu operands come out reversed._
+- [IDO cfe folds `&local != 0`; `(u32)o != 0` keeps the stack-object alloc-or-reuse test; reuse the entry var for the arm selector; give a shared-base global table its own symbol even at equal lui count (gl_func_000437C0 89.47 -> 99.87 NM, 2026-10-16 agent-c)](#stack-ctor-u32-null-test-437c0) -- _Member tests `p = o + K; if (p != 0 || ...)` do not fold; no cast there._
 - [game_libs placeholder sweep: count `lui` per fn, target vs NM build; MORE target luis = one placeholder standing in for several symbols. gl_func_00044DE4 90.4, gl_func_00034458 86.2 and gl_func_00034240 87.4 and gl_func_00053C04 92.15 -> EXACT via distinct base-0 externs (53C04 also: second FP product written factor-swapped, dead `if (iN) {}` s-reg order, same-line `v=..; n=..;` as1 tie, 10+6 frame homes); `&D_00000000 + K` folds a pre-test load where a zero-offset pinned symbol does not + carry-form keys + volatile first self store + `((char **)(self + K))[i]` loop + named v0 local (2026-10-16 agent-c)](#lui-count-placeholder-sweep-44de4) -- _`*(int*)0 = v` gives `sw v,0(zero)`; two scalar base-0 externs give one `lui at` each, as in the target._
 - [A "[sw spill][move sN,v0]" vs "[move][sw]" pair swap before a call is NOT an allocator cap: assign the register copy inside the call's argument list, `f(slot, node = r)` (timproc_uso_b5_func_00000478 97.89 -> EXACT); param-as-self + drop the named copy fixes the entry `or s0,a0` schedule (18B4 98.72 -> EXACT, 2026-10-16 agent-g); constant-multiply spelling + right-subtree-first operand swaps + `x | (k = K)` for an s-reg-resident big constant (0778 97.48 -> EXACT)](#assign-in-call-arg-spill-before-copy-0478) -- _a copy written as its own statement is emitted before the earlier statement's home store._
 - [Whole-function temp ring 2 slots behind the target (t0 where target has t2, never t0/t1 except in one small block) = the target has two NAMED locals that uopt coloured into t0/t1, so ugen's ring skips them everywhere; name them, then order their colours with a dead entry init (timproc_uso_b5_func_00006394 97.12/98.50 -> EXACT, 2026-10-16 agent-g)](#named-locals-reserve-ring-regs-6394) -- _Count each t-reg's uses in the target: t-regs that appear only in one short block are candidates, not ring temps._
 - [Sibling port + split 0x17D7 symbol + same-line registration: timproc_uso_b3_func_000023E4 96.32 -> EXACT from the exact arcproc_uso_func_0000251C body; the last diff (gate base `addiu v0` scheduled after the `arg0+16` spill reload) needed the CALL, the `->0x14` test and the store on one line (2026-10-16 agent-g)](#same-line-registration-schedule-23e4) -- _Joining only the test + store, or the store + gate, did nothing. The permuter found the join (FORCE_SAMELINE) inside 7 minutes._
+- [`lui rX; addiu rX,rX,K; lw 0(rX)` with K in the ADDIU (and no LO16 in expected/) = a separate global at base+K, not `&base + K`: declare `extern int *sym_K;` and pin it to K in undefined_syms_auto.txt (Yay0 blocks bake it). mgrproc_uso_func_00000C14 90.6 -> EXACT, 2026-10-16 agent-g](#offset-in-addiu-separate-global-0c14) -- _`&base + K` folds K into every lw (form-b); the old `if (1) { pp += K; }` workaround got the offset right but split basic blocks and left as1 schedule swaps (`sw ra` between lui/addiu, a late reload)._
 - [The comma-constant lever also fixes old "mtc1/lwc1 scheduler cap" notes: timproc_uso_b3_func_00001240 97.82 -> EXACT with `x * (0, 255.0f)` (target `mtc1 K,$f18; lwc1 x,$f4; mul.s d,$f18,$f4`); the form moved a spill home 4 bytes down, and shrinking an unused `char pad[32]` to `[28]` moved it back with the frame unchanged (2026-10-16 agent-g)](#comma-constant-const-first-mul-5d754) -- _If the const/load registers are swapped AND the mul operands are swapped, it is operand rank, not scheduling._
 - [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
 
@@ -30589,8 +30591,38 @@ the whole function:
    Swapping the two statements instead renumbers the temps.
 7. Copy loop: `((Vec3 *)FW(arg0, 0x58))[*m]` gives a base-first `addu`, and a separate dst pointer (`n`, not
    `v`) gets the target's a0/v1 split.
+**Fifth instance, gl_func_0002DE24 (post, 76.07 -> EXACT, 30 words): 8 target luis vs 7.** Two global
+stores (`+0`, `+0xC`) and the last call's global arg shared `&D_00000000`, CSE'd into `lui v1; addiu v1`.
+Three base-0 externs fixed it. The entry `sw a0,24(sp); lbu t6,27(sp)` (and `lbu a0,27(sp)` after the
+first call) is an `unsigned char` parameter whose address is taken (`unsigned char *p = &a0; ... (void)p;`).
+A plain `unsigned char` parameter, prototyped or K&R, gives `andi a2,a0,0xff` and a 32-byte frame.
 Scan tool: `scripts/call-shape-scan.py UNIT --lui` lists functions whose target has more luis (it also
 prints insn counts, nm/tgt).
+
+<a id="stack-ctor-u32-null-test-437c0"></a>
+## IDO cfe folds `&local != 0`; `(u32)o != 0` keeps the stack-object alloc-or-reuse test (gl_func_000437C0 89.47 -> 99.87 NM, 2026-10-16 agent-c)
+
+Tell: `addiu a1,sp,K; bnez a1,L; nop; jal alloc; addiu a0,zero,SIZE; beqz v0,skip; or a1,v0,zero`. This is
+the constructor protocol run on a stack object (see [#ncc-derived-ctor-protocol-6a30](#ncc-derived-ctor-protocol-6a30)
+for the NCC version). In cfe C, `o = (char *)&obj; if (o != 0 || (o = alloc(0x60)) != 0)` folds the test
+and drops the alloc branch. `(o = &obj) != 0` and `&obj.f[0]` fold too. `if ((u32)o != 0 || (o = alloc(0x60)) != 0)`
+keeps the exact shape. The member tests (`p = o + 0x34; if (p != 0 || ...)` giving `addiu at,zero,-52; bne a1,at`)
+do not fold, so they need no cast. With a cast they lose two words.
+
+Other levers in the same function:
+- The arm-selector value `self->0x38` reuses the entry-check variable `st`. With a separate variable (or
+  inline reads), `st` and `ok` swap v0 and v1 at entry. A dead `if (st) {}`, `while (0)` anchors,
+  signature types, and an unnamed `ok` all failed to fix this.
+- Calls whose result is unused go through the void alias `gl_func_00000000_void`. After an int-returning
+  call, the next value goes to v1 instead of v0. This is the Index entry "Extern RETURN TYPE is a $v0-coloring
+  lever" (timproc_uso_b5 0058).
+- The 0x0/0x244/0x248 global table needs its own symbol. While it shared `D_00000000` with the 0x254
+  reloads, the hoisted base took v1 and the arg1 reload took v0 (target: the reverse). That is the same
+  placeholder-CSE effect as the lui-count sweep, even with an equal `lui` count.
+- Per-command display-list writes: `{ char *_g; x = self->0x68; _g = (char *)x->dl->n++; _g = x->dl->buf
+  + (s32)_g * 8; ... }`. Reusing `_g` for the index orders the `n` store before the base reload (target
+  `lw 12(v1)` twice) without adding a home. Each such block-local gets its own spill home (60..40).
+- Still open: the two member pointers colour v1, and the target colours them a2.
 
 <a id="named-locals-reserve-ring-regs-6394"></a>
 ### Temp ring offset across the whole function = two named locals coloured into t0/t1 (timproc_uso_b5_func_00006394 -> EXACT)
@@ -30653,3 +30685,34 @@ The gate then needed two more changes.
    the test did not help. A named `&D` local, array spellings, `if (1) {}` and a distinct base
    symbol had no effect. A 7-minute permuter run (import.py through the root `.venv` python,
    which has toml) found the join. See the as1 line-number tie-break entry above.
+
+**Second hit (titproc_uso_func_00001E9C 99.18 -> EXACT, 2026-10-16 agent-g).** A 2-word pair swap
+after a call (`addiu t6,%lo(import_00073B18)` vs the `lw v1,56(sp)` spill reload) had survived
+named temps, `if (1) {}`, goto labels and volatile-store probes and was filed as an "as1 pair-order
+cap". Putting the call and the next store on one line fixed it on the first build:
+`titproc_uso_func_04C678(fourth, D + 0x514); fourth[0x28 / 4] = (int)&import_00073B18;`.
+**Any 2-word adjacent swap right after a call that was filed as an as1 tie-break cap: try joining
+the call with the next statement on one line first.**
+
+<a id="offset-in-addiu-separate-global-0c14"></a>
+### Offset in the addiu, not the lw = a separate global at base+K (mgrproc_uso_func_00000C14 -> EXACT)
+
+**Symptom.** The target reads a global pointer with `lui v1,%hi; addiu v1,v1,0x30; lw a0,0(v1)`,
+with `v1` kept for several reloads. `*(int **)((char *)&import_80263D60 + 0x30)` gives
+`addiu v1,v1,0; lw a0,0x30(v1)` (K folded into each lw). The older wrap used
+`pp = &sym; if (1) { pp += 0xC; }` per region. That put 0x30 in the addiu, but the `if (1)` blocks
+moved `sw ra` between the lui and the addiu and delayed one state reload past two stores
+(4 words, filed as an "if(1) scheduling cap").
+
+**Fix.** The pointer is its own variable at base+0x30. Declare `extern int *import_80263D60_30;`,
+write natural C (`import_000A5A1C(import_80263D60_30); import_80263D60_30[0x504 / 4] = 0; ...`),
+and append `import_80263D60_30 = 0x00000030;` to `undefined_syms_auto.txt` (on its own line; put
+any comment on a separate line, because `bake-data-relocs.py` cannot parse a trailing `/* */` and
+fails with "no value for symbol"). IDO emits the same held-address shape with addiu immediate 0
+plus a LO16 reloc; the Yay0 block rule bakes 0x30 into it, so `make verify-blocks` matches the
+ROM. The raw `.o` slice differs from expected/ only in those addiu immediates (pinned-symbol
+exception class). The natural form also fixed the schedule: both as1 swaps disappeared.
+
+**Recognition.** expected/ has a HI16 for the import but no LO16, and the addiu immediate is a small
+non-zero K. The sibling `mgrproc_uso_func_00000B5C` (same state slot, 8-word residual) is the
+next candidate for the same fix.
