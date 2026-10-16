@@ -12340,6 +12340,25 @@ diffs and landed by deleting the wrap. To find more: list NM wraps in the Yay0 u
 `build/non_matching` `.text` slice equals expected/ word for word (report.json's 100.0 alone is not
 enough; `report generate` relaxes reloc diffs that `objdiff-cli diff` counts).
 
+Run 87 (agent-g, 2026-10-16) unwrapped five more this way (game_uso 102CC, timproc_b5 72D0,
+timproc_b3 2DF0, mgrproc 2EF0 and 13C8) plus one non-Yay0 game_libs wrap (post1b 66850). Traps:
+
+- **Implicit-int clash.** A wrap body that calls a function whose own definition is still
+  NM-wrapped gets an implicit `int` declaration in the default build. If a later prototype says
+  `void`, cfe errors with "redeclaration ... Incompatible function return type". Add the `void`
+  prototype just above the unwrapped body (b5 72D0 / `timproc_uso_b5_func_00006E08`).
+- **Macros and typedefs inside `#ifdef NON_MATCHING`.** struct-name-tick macros (`MGR_D_64` etc.)
+  are defined only in NM builds. Make the block unconditional when an unwrapped body uses one.
+- **mgrproc per-site alias externs** (`import_800200DC_b`, ...) need a `NAME = 0x...;` line in
+  `undefined_syms_auto.txt`, or `bake-data-relocs.py` stops with "no value for symbol". Pin each
+  alias to its base symbol's value, with the comment on its own line.
+- **Non-Yay0 game_libs units are linked into the ROM**, so an in-unit callee would bake its real
+  address into the `jal`. Call it through a blank alias (`gl_func_00062F64_66850 = 0`), give each
+  base-0 store target its own pinned name (`D_gl66850_h0..h5 = 0`) so every lui/addiu pair is kept,
+  then require `cmp tenshoe.z64 baserom.z64` to stay BYTE-IDENTICAL.
+- **cfe tolerated a stray unmatched `#endif`** in mgrproc_uso.c for months (`gcc -E` rejects it).
+  Run `gcc -E -P -I include -I src <file>` after any hand edit of the `#ifdef` structure.
+
 <a id="bootup-uso-jumptable-donor-2da4"></a>
 ## bootup_uso jumptable donor splice: keep the in-unit body full size (func_00002DA4 76.4 -> EXACT, 2026-10-16 agent-c)
 
