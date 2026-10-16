@@ -14352,8 +14352,11 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso under NCC: a "bnez on a stack address + alloc(0xC), stores through v1" block is edg's cfront-style constructor protocol for a DERIVED class (`struct XZ : Vec3 { XZ(const Vec3 &v) : Vec3(v.x, 0, v.z) {} };`); an inline base-class `operator new` forwarding to the import fixes the reloc name; PRE needs no named pointer; tail named locals buy frame slack (6A30 93.2 -> EXACT, 2026-10-15 agent-g)](#ncc-derived-ctor-protocol-6a30) -- _Tell: `addiu a3,sp,K; or v1,a3; bnez a3; jal new(12); beqz v0; or v1,v0`. A body-assigned derived ctor folds the stores onto &pt._
 - [game_uso under NCC: edg binding temps are ALWAYS laid out "first-evaluated lowest" (no expression shape flips it); "first-appearing higher" in the target = NAMED Vec3 locals assigned inside the expression through the IMPLICIT operator= (`Vec3 d, e; if ((d = a - w).lenSq() < (e = b - w).lenSq())`); an inline `set()` returning `Vec3 &` adds 8 bytes of frame per class-temp stage (6FA8 105 -> 123/127 -> EXACT: `void set` + a named `const Vec3 &u = *this` in the first stage's inline only, since a `Vec3 &set` return temp lands at the frame bottom; 1DDC 241 -> 249/382 with the slot swap fixed via a by-value `assign()` member; 2026-10-16 agent-g)](#ncc-temp-order-named-assign-6fa8) -- _named locals follow declaration order; binding temps never do. Probe with `-g3` .mdebug + the addiu-sp slot list._
 - [A "permanent CSE cap" on a raw-word USO wrap can be its PLACEHOLDER symbols: give each reloc its real name and keep an un-reloc'd `lui at` on a separate symbol (timproc_uso_b5_func_000079A4 98.32 -> EXACT); FP commutative operand order and the `ldc1 K(at)` displacement follow the expression shape (1DB0 6 -> 3 diffs, 2026-10-16 agent-g)](#placeholder-symbol-cse-cap-79a4) -- _Read `objdump -dr expected/...` for each HI16/26 name before calling a shared-base CSE a cap. Write `scr + i * 4` as `((int *)(scr + K))[i]` when the addu operands come out reversed._
-- [game_libs placeholder sweep: count `lui` per fn, target vs NM build; MORE target luis = one placeholder standing in for several symbols. gl_func_00044DE4 90.4, gl_func_00034458 86.2 and gl_func_00034240 87.4 -> EXACT via distinct base-0 externs; `&D_00000000 + K` folds a pre-test load where a zero-offset pinned symbol does not + carry-form keys + volatile first self store + `((char **)(self + K))[i]` loop + named v0 local (2026-10-16 agent-c)](#lui-count-placeholder-sweep-44de4) -- _`*(int*)0 = v` gives `sw v,0(zero)`; two scalar base-0 externs give one `lui at` each, as in the target._
+- [game_libs placeholder sweep: count `lui` per fn, target vs NM build; MORE target luis = one placeholder standing in for several symbols. gl_func_00044DE4 90.4, gl_func_00034458 86.2 and gl_func_00034240 87.4 and gl_func_00053C04 92.15 -> EXACT via distinct base-0 externs (53C04 also: second FP product written factor-swapped, dead `if (iN) {}` s-reg order, same-line `v=..; n=..;` as1 tie, 10+6 frame homes); `&D_00000000 + K` folds a pre-test load where a zero-offset pinned symbol does not + carry-form keys + volatile first self store + `((char **)(self + K))[i]` loop + named v0 local (2026-10-16 agent-c)](#lui-count-placeholder-sweep-44de4) -- _`*(int*)0 = v` gives `sw v,0(zero)`; two scalar base-0 externs give one `lui at` each, as in the target._
 - [A "[sw spill][move sN,v0]" vs "[move][sw]" pair swap before a call is NOT an allocator cap: assign the register copy inside the call's argument list, `f(slot, node = r)` (timproc_uso_b5_func_00000478 97.89 -> EXACT); param-as-self + drop the named copy fixes the entry `or s0,a0` schedule (18B4 98.72 -> EXACT, 2026-10-16 agent-g); constant-multiply spelling + right-subtree-first operand swaps + `x | (k = K)` for an s-reg-resident big constant (0778 97.48 -> EXACT)](#assign-in-call-arg-spill-before-copy-0478) -- _a copy written as its own statement is emitted before the earlier statement's home store._
+- [Whole-function temp ring 2 slots behind the target (t0 where target has t2, never t0/t1 except in one small block) = the target has two NAMED locals that uopt coloured into t0/t1, so ugen's ring skips them everywhere; name them, then order their colours with a dead entry init (timproc_uso_b5_func_00006394 97.12/98.50 -> EXACT, 2026-10-16 agent-g)](#named-locals-reserve-ring-regs-6394) -- _Count each t-reg's uses in the target: t-regs that appear only in one short block are candidates, not ring temps._
+- [Sibling port + split 0x17D7 symbol + same-line registration: timproc_uso_b3_func_000023E4 96.32 -> EXACT from the exact arcproc_uso_func_0000251C body; the last diff (gate base `addiu v0` scheduled after the `arg0+16` spill reload) needed the CALL, the `->0x14` test and the store on one line (2026-10-16 agent-g)](#same-line-registration-schedule-23e4) -- _Joining only the test + store, or the store + gate, did nothing. The permuter found the join (FORCE_SAMELINE) inside 7 minutes._
+- [The comma-constant lever also fixes old "mtc1/lwc1 scheduler cap" notes: timproc_uso_b3_func_00001240 97.82 -> EXACT with `x * (0, 255.0f)` (target `mtc1 K,$f18; lwc1 x,$f4; mul.s d,$f18,$f4`); the form moved a spill home 4 bytes down, and shrinking an unused `char pad[32]` to `[28]` moved it back with the frame unchanged (2026-10-16 agent-g)](#comma-constant-const-first-mul-5d754) -- _If the const/load registers are swapped AND the mul operands are swapped, it is operand rank, not scheduling._
 - [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -30557,3 +30560,96 @@ Other levers in this function: drop the unused param (`(void)a2` homed a0); decl
 `gl_func_00000000(dp = d, -1)`; and put an empty `if (D_34240_G) {}` right after the first store. Without
 that empty `if`, `addiu s1,sp,64` schedules up next to `sw s1`.
 
+**Fourth instance, gl_func_00053C04 (post0b, 92.15 -> EXACT, 336 words, same insn count): 6 target luis vs
+4.** The face->vertex table, the vertex count and the remap table shared one `&D_00000000`. Three base-0
+externs fixed it: `s16 D_53C04_tbl[]` (address hoisted to s6), a SCALAR `u32 D_53C04_n` (the target re-reads it
+with `lui a0; lw a0,0(a0)` before the loop and again in the loop, because the divide stores may alias it)
+and `u16 D_53C04_map[]`. The lui fix alone gave +0.3 points. The rest came from levers that each change
+the whole function:
+1. **Frame homes count named locals, including block-scoped ones.** The target had counts[] at sp+112 and
+   the struct carrier at sp+76. Getting there took exactly 10 scalars declared between the f32[3] arrays and
+   counts[], and 6 after it. Unused locals (`j1..j3` holding the index-call results) still take a home.
+   Reusing one named pointer for several loops (`v` for the zero loop, `n` for the copy loop) frees homes.
+   Each change also re-colours registers.
+2. **A named pointer cannot take `$a0` in the BB that sets up the next call's `$a0` argument.** Named
+   `p1..p3 = arg1 + iN * 6` coloured a3/v1/a1/a2. Inline `((s16 *)(arg1 + (u32)i1 * 6))[k]` temps get the
+   target's a2/v1/a0/a1.
+3. **FP cross product:** IDO evaluates the second product of `A*B - C*D` with its factors swapped. Write
+   it as `(b2-a2)*(c1-b1) ... - ((c1 - b1) * (b2 - a2))` to get the target's order. All 40 FP words matched
+   after this.
+4. **Dead `if (v) {}` sets the s-reg order** ([#dead-empty-if-priority-boost-placement-is-everything-a7b4-d418-cracked-2026-07-03](#dead-empty-if-priority-boost-placement-is-everything-a7b4-d418-cracked-2026-07-03)).
+   Target i2/i3/i1 = s3/s4/s5. `if (i2) {}` then `if (i3) {}`, placed after the third block's
+   `v = ...; n = ...;`, gave that order. As a side effect the three `&counts[iN]` addresses colour a1/a2 and
+   hoist next to the first block, as in the target. Put earlier in the loop body (right after the defs), the
+   same `if`s re-colour the whole loop wrongly.
+5. A loop-invariant zero inside the `if`: `if (n) { off = 0; do ... }` puts `lw n` before `or s0,zero,zero`
+   and `lui s6` (table) in the beqz delay slot. `off = 0;` before the `if` gives the opposite order.
+6. **as1 tie, blocks 2 and 3:** the target loads `lw 0x54` before `lw 0x58`. Writing `v = ...; n = ...;` on
+   ONE source line fixes it ([#same-line-store-pair-schedule-35440](#same-line-store-pair-schedule-35440)).
+   Swapping the two statements instead renumbers the temps.
+7. Copy loop: `((Vec3 *)FW(arg0, 0x58))[*m]` gives a base-first `addu`, and a separate dst pointer (`n`, not
+   `v`) gets the target's a0/v1 split.
+Scan tool: `scripts/call-shape-scan.py UNIT --lui` lists functions whose target has more luis (it also
+prints insn counts, nm/tgt).
+
+<a id="named-locals-reserve-ring-regs-6394"></a>
+### Temp ring offset across the whole function = two named locals coloured into t0/t1 (timproc_uso_b5_func_00006394 -> EXACT)
+
+**Symptom.** Size, schedule and frame exact; 60+ differing words, all register numbers, from one
+point onward the build's temps are a constant number of ring slots behind the target (build
+`lui t0 / addu t0,t0,t9 / lw t0,0(t0)` where the target has `t2`). Index, idx-temp, clamp and
+operand-order spellings were all invariant (98.50 draft).
+
+**Diagnosis.** Count uses of each t-reg in the target (`grep -o` over the no-alias disassembly).
+In 6394 `t0` and `t1` appeared only 4 times each, all in the two template blocks
+(`lw t1,16(a0); lh t0,32(t1); mtc1 t0,$f4`); every other temp skipped them. uopt-coloured
+candidates keep their register for the whole function, and ugen's ring
+(t6..t9,t0..t5) skips registers that candidates hold. So the target had two variables there:
+the template row pointer and the template width. The width is live across the `x / 2` rounding
+branch (`bgez`), so it spans more than one basic block.
+
+**Fix.**
+```c
+s32 tmpl_w; char *tmpl_row;
+tmpl_w = 0;                    /* dead entry init: makes tmpl_w the earlier variable */
+...
+tmpl_row = (char *)FW(tp, 0x10); tmpl_w = *(s16 *)(tmpl_row + 0x20);
+import_0024F34C(tp, (s32)(((w / 2) + 0xA0) - (tmpl_w * 0.25f)), sp44, 2);
+```
+Naming both took the function from 62 to 6 differing words (row t0 / width t1, swapped). Both
+live ranges are unconstrained, so they colour in first-occurrence (bitpos) order with the lowest
+free register (see the uopt regalloc algorithm entry). A dead `tmpl_w = 0;` at function entry
+emits nothing but makes tmpl_w occur first: width -> t0, row -> t1, exact. Declaration order, a
+`s16` type, statement order inside the block, an empty `if (tmpl_w) {}` and a dead `while (0)`
+were all wrong here (the last two added blocks and changed the frame).
+Merging the width into an existing later variable (`temp_v0_3`) also gave it t0, but moved that
+variable's later use from v0 to t0 (1 word off).
+
+**General rule.** If a t-reg appears only in one short block of the target and the build's ring is
+offset by the same count everywhere else, look for that many named locals in that block. Only one
+named local here shifts the ring by one slot, not two.
+
+<a id="same-line-registration-schedule-23e4"></a>
+### Alloc-cascade sibling port + same-line call/test/store join (timproc_uso_b3_func_000023E4 -> EXACT)
+
+The b3 ctor was a 96.32 wrap with "spill slots off by 4, entry delay fill, v0/a3 renumber"
+listed as caps. Its sibling `arcproc_uso_func_0000251C` was already exact. Copying that body's
+shape fixed all of those at once: the short-circuit alloc head, one `a3` web shared by
+level-2 / vtable / registration nodes, `if (1) {}` before the dispatch base, and the unused
+`volatile int pad`. Only b3's own statements were kept (0x60/0x64/0x68 stores, seven packed
+ids, the 0x17D7 gate, the 4-arg final call). **Check the exact siblings of a capped
+ctor before believing its cap list.**
+
+The gate then needed two more changes.
+1. The target reads D+388 and D+400 through a base CSE'd into `v0` (`lui v0; addiu v0,v0,0`).
+   The 0x17D7 word comes from a separate `lui t1; lw t1,0(t1)`. So the 0x17D7 global needs its own
+   extern. D+388, D+400 and the final call's D+400 must share one symbol: three uses keep the
+   CSE, and the use after the call is re-materialized (`lui a0`). With only two uses on that
+   symbol, uopt folded each into its own `lui`.
+2. A 2-word as1 reorder was left: the build had `lw a0,44(sp)` (reload of the spilled `arg0+16`)
+   before the base's `addiu v0`, and the target had the reverse. It needed
+   `gl_func_00000000(arg0 + 16, a3); if (*(int *)(a3 + 0x14) != 0) { ... } *(int *)(a3 + 0x14) = (int)arg0;`
+   on ONE line. Joining only the test + store, only the store + the gate, or only the call +
+   the test did not help. A named `&D` local, array spellings, `if (1) {}` and a distinct base
+   symbol had no effect. A 7-minute permuter run (import.py through the root `.venv` python,
+   which has toml) found the join. See the as1 line-number tie-break entry above.
