@@ -12359,6 +12359,28 @@ timproc_b3 2DF0, mgrproc 2EF0 and 13C8) plus one non-Yay0 game_libs wrap (post1b
 - **cfe tolerated a stray unmatched `#endif`** in mgrproc_uso.c for months (`gcc -E` rejects it).
   Run `gcc -E -P -I include -I src <file>` after any hand edit of the `#ifdef` structure.
 
+Run 88 (agent-g, 2026-10-16) unwrapped six more non-Yay0 game_libs wraps (post1b 63884, 652D8,
+68B04, 695F4; tail B0A8, CB9C). Enumerate the queue as: report.json 100.0, an `INCLUDE_ASM` still
+on the build path, and no `episodes/<fn>.json`. Then list each wrap's relocs from the
+`build/non_matching` object (`objdump -r -j .text`). A wrap is a one-commit unwrap when every reloc
+resolves to 0. More traps:
+
+- **`gl_func_00000000` is a real symbol at game_libs VRAM 0**, not a pin. A `jal` to it links to
+  0, so it needs no alias. Any OTHER in-unit callee (`gl_func_00062F64` is the common one) needs a
+  per-site blank alias (`gl_func_00062F64_652D8`, `_695F4`).
+- **Wrap-only placeholder names are not defined anywhere.** `D_X` (68B04) and `D_sym_695F4` link
+  only because the NM object never reaches the linker. Check the `.s` words (lui 0 / addiu 0), then
+  rename or pin the name to 0 at the end of `undefined_syms_auto.txt`. Still open: tail D9E4's
+  `gl_func_00000000_d9e4b` has no pin either.
+- **Stale cap comments.** CB9C's comment said "operand ~22 %, two stacked caps", but its NM body
+  was word-identical to the target. Trust the raw slice and the no-alias disassembly, not the
+  comment.
+- **`_pad.s` after an INCLUDE_ASM (tail C5B0).** The `#pragma GLOBAL_ASM(..._pad.s)` sits OUTSIDE
+  the `#ifdef`, and the C body emits its own trailing delay nop (0x90 vs the 0x8c symbol). If you
+  unwrap it and keep the pad, the default build grows by 4 bytes and the ROM shifts. Move the pad
+  into the `#else` branch, or drop it. The NM object then shrinks by 4 (EBC8 0x5560 -> 0x555c), so
+  set the tail `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` to EBC8 offset + 0x30.
+
 <a id="bootup-uso-jumptable-donor-2da4"></a>
 ## bootup_uso jumptable donor splice: keep the in-unit body full size (func_00002DA4 76.4 -> EXACT, 2026-10-16 agent-c)
 
