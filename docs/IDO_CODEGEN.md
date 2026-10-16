@@ -120,6 +120,7 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Folded (unsigned short) cast burns ONE ugen ring slot — de-name + fitted narrowing cast cracks a skipped-ring-slot residual (gl_func_0002A4D0 EXACT 2026-07-15)](#folded-ushort-cast-ring-slot-2a4d0) — _De-named `*a0 &= K; *a0 |= K2;` keeps values in the t-ring with store-forwarding; a FOLDED (unsigned short) cast on the store RHS (zero insns) still allocates a ring temp -> shifts andi/ori numbering by one. Skipped-ring-slot residuals ARE reachable at store RHS; (unsigned char) at natural store width folds without burning. BOUNDARY: feeding an `|`/arith op the fold materializes a move (+1) — store-RHS position only (D9CC (f) negative)._
 - [Wave-3 round-3 (agent-g 2026-07-15): 38C0-family recipe portable VERBATIM (3734 EXACT on first compile); ghost-home count = volatile-pad count; value-load vs address lui/lw tell; node-copy-spill guard; as1 addiu-vs-home-store delay tie (3734 100, 3638 95.9, 6A30 85)](#wave3-round3-3734-6a30) — _Backport family recipe before re-deriving; frame short N words with all insns exact = N scalar volatile pads after the named locals; beqz+4 alloc-fail skips only init; sw s0,0x10(sp) pre-jal = 5th K&R arg; register-float staging = candidate f0/f2/f12/f14 pool; *(V3*)&float cast-copy DSEs siblings (use struct fields)._
 - [Fresh-Vec3-per-site alloc-fallback fanout (7C1C 62.9->75.8): fresh address-taken Vec3 home per staging site (frame 2.5x), decl order = descending homes; `p=0;if(1){p=&X;}` anti-fold guard; int-cast `q=(f32*)((int)base+0x30)` hoisted above guard is the ONLY spelling that keeps the addiu join-CSE; objdiff fuzzy ignores sp-offset diffs so skip frame-gap pads](#fresh-vec3-fanout-intcast-q-7c1c) — _metric/3FAC dir arg = result-direction copy not segDir; lw-2312 double-deref tell._
+- [Alloc-guard Vec3 writes: evaluate the components into shared f32 temps BEFORE the stores (8CD8 71.3->81.4)](#alloc-guard-vec3-temps-first-8cd8) — _Target loads x AND z first and then stores; per-component `p->x = a-b; p->z = c-d;` can't hoist the z loads above the x store (p may alias), so IDO interleaves. Function-scope temps reuse the existing ghost-home pads; block-scope temps each grow the frame._
 - [Fresh-Vec3-fanout replicates on siblings (591C 62.3->76.6): guard-var/copy-var split at subtract-sites; keyed-LUT 2/else swap + flag-word-provenance + early-goto-commit decode-error classes](#fresh-vec3-fanout-591C-replication) — _bnel delay slot = else value; zip tail lw-sp slots before trusting one out_flags var. 8CD8 addendum (62.2->71.9): copy chains hop through the just-written home (not fan-out from one source); named-two forces div.s but value-CSE halves it; fresh product Vec3 per += block._
 - [Cast &local through (unsigned)/int to BREAK ADDRESS PROVENANCE: `out = (int*)(unsigned)local;` keeps the `if (out==0) alloc()` dead arm (bne skip + fall-through jal) that plain/ternary spellings fold; 9 dead alloc-guard arms re-emitted (game_uso 9B88 55.85->61.35, 2026-07-30 agent-g)](#int-cast-provenance-dead-alloc-arm-9b88) — _uopt only folds null-tests on values it can prove are stack addresses; a scalar-conversion round-trip launders the pointer. Same-region: target fanout copies hop THROUGH a shared staging buffer (sp+0xEC) via live pointer vars rematerialized after each jal._
 - [a1-skip in K&R varargs calls = 8-byte-aligned 64-bit args: lw/lw pair into a2:a3 = long long, ldc1/sdc1 = double, three-ll blocks not four ints; multi-def p=0;if(1){p=base+K;} beats (int)-cast for keeping a derived base unfolded across a call (55C34 52.1->100.0, 2026-07-30 agent-f)](#a1-skip-longlong-varargs-55c34) — _decode tell: printf call setting a2/a3+stack but never a1; residual = baked absolute jal (jal 0x6a620, no reloc) vs compiled jal 0+R_MIPS_26, 3 words, objdiff still 100._
@@ -30739,3 +30740,26 @@ exception class). The natural form also fixed the schedule: both as1 swaps disap
 **Recognition.** expected/ has a HI16 for the import but no LO16, and the addiu immediate is a small
 non-zero K. The sibling `mgrproc_uso_func_00000B5C` (same state slot, 8-word residual,
 86.96) went EXACT with the same symbol and no other change.
+
+<a id="alloc-guard-vec3-temps-first-8cd8"></a>
+## Alloc-guard Vec3 writes: compute components into temps before storing (game_uso 8CD8 71.26 -> 81.42, agent-g 2026-10-16)
+
+The pattern is `p = 0; if (1) { p = &local; } if (p != NULL || (p = alloc(12)) != NULL) { p->x = ...; p->y = 0.0f; p->z = ...; }`.
+The TARGET does all of the component loads (and subs) first and only then the three `swc1` to p. That is
+the inlined C++ `Vec3(x, y, z)` constructor shape: its arguments are evaluated before the members are written.
+If you write the stores component by component, IDO must keep each later load below the earlier store
+through `p`, because the store may alias the load source, so it emits `lwc1/sub.s/swc1` per component.
+
+Fix: put the non-constant components into temps first (`tz = q[2]; tx = q[0]; p->y = 0.0f; p->z = tz; p->x = tx;`).
+Leave the constant inline. Making `ty = 0.0f` a temp scores the same.
+
+- Declare the temps ONCE at function scope, in place of existing `volatile` ghost-home pads, and reuse them
+  in every block. 8CD8 used padA0/padA1 -> `f32 tx, tz`. A block-scope `f32 t = ...;` gets its own stack
+  home in IDO: 14 blocks grew the frame 528 -> 640 and scored worse.
+- Apply it with a regex over every guard block in the function. In 8CD8 that was 14 blocks for +10.2 points
+  in one step.
+- Also works on the 7C1C fanout (#fresh-vec3-fanout-intcast-q-7c1c): 14 blocks, 75.76 -> 79.99. Its new
+  `f32 tx, tz;` was added after the existing decls (no pads; the frame already differs, and objdiff fuzzy
+  ignores sp offsets). Writing the temps in STORE order (79.99) beat x-then-z order (79.96). 591C, the
+  same family, has not been tried yet.
+
