@@ -69,7 +69,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Reloc PER-SYMBOL COUNT diagnoses CSE-collapse; call-seq-zip-by-POSITION maps placeholders](#reloc-per-symbol-count-diagnoses-cse-collapse-vs-distinct-symbol-call-seq-zip-by-position-maps-placeholders-2026-06-21) — _Compare per-symbol reloc COUNT (not just set) vs expected/.o: target referencing a base symbol N× while your build has 2 (1 HI16+1 LO16) = IDO CSE-collapsed `&SYM+off` into one reused reg vs target's fresh lui/addiu per site (C48C target = D_807FF568 x16 + D_807FF5B0 x16, NOT 35 distinct externs — a prior agent had it backwards). Histogram disambiguates "one base re-materialized" from "many distinct symbols". To map a `_f`/placeholder call, zip built-vs-expected call relocs BY ORDINAL POSITION; first `<<<` divergence pins the symbol AND surfaces missing/mis-ordered calls. scripts/verify-fn.py masks HI16/LO16/CALL26 immediate bits for a clean non-reloc-word-diff + reloc-seq verdict._
 - [The PLAIN-C variant of the placeholder-callee lever LANDS exactly — and byte_verify alone is a FALSE-POSITIVE gate (use reloc-symbol-set match)](#placeholder-callee-jal-zip-2026-06-21) — _Plain-C (ROM-path, non-INCLUDE_ASM, non-NM) fns calling `gl_func_00000000`/`&D_00000000` are byte-100% (stubs all `=0`) but reloc-WRONG: the USO load-time reloc table resolves the placeholder names to wrong addresses. Swap names→resolved `.s` symbols = exact LAND (gets an episode). Gate on reloc-symbol-set match vs `.s` (scripts/fam-verify.py), NOT land-script byte_verify (reloc-blind). PREREQUISITE: the module's `.s` must carry resolved `-> SYM` annotations — `grep -l '\->' asm/nonmatchings/<mod>/<mod>/*.s | wc -l`; mgrproc_uso=48/66 (landed 14), eddproc=0/16, arcproc=0/61 (nothing to reconstruct). Gotchas: prototyped 0-arg callee → forward the wrapper's param (NOT `((int(*)())g)()` which emits jalr); dup extern with different type errors; ROM stays byte-identical pre/post-swap so `make` is not the gate. 2026-06-21 agent-e._
 - [Yay0-block units (game_uso, mgrproc, timproc b1/b3/b5, map4 b2): an in-unit `jal` to a C-defined function is NOT a landing blocker -- the block is cut from the UNLINKED `.o`, so it stays `jal 0` like the ROM (game_uso F360 landed, agent-g 2026-10-16)](#yay0-block-unlinked-in-unit-jal-f360) -- _An objdiff-100 NM wrap marked "not landable: intra-USO jal would link to the real local symbol" can simply be unwrapped; gate with `make verify-blocks` (the ROM itself is built from `assets/*_block_N.bin`, so `cmp` cannot see a Yay0 unit). Also: if the wrap uses a `_thr`-style typed alias of a base-0 global that has no other user in the TU, type the global itself Same for wraps held back only as "callees are USO placeholder aliases" (timproc_b3 2A44, timproc_b5 8468 landed the same day): landed Yay0-unit exacts already use `gl_func_00000000` / `&D_00000000+K`._
-- [game_uso jumptable/literal `%lo` diffs are a .rodata LAYOUT gap, not a reloc class -- emit the INCLUDE_ASM fns' literals as `.late_rodata` in their .s files (0940/ECEC/EDD4/1189C block-equal, agent-g 2026-10-16)](#game-uso-rodata-relayout-late-rodata) -- _ROM text %lo = offset into the unit's own RoData past its 4-byte marker word (game_uso_pre.bin +0x44 = offset 0). The built .o's .rodata only held C jtbls, so every C switch sat low. Copy each gap's ROM words into a `.late_rodata` block of an INCLUDE_ASM .s in text order; asm-processor reserves it with dummy floats in function order. Where no INCLUDE_ASM fn sits in a gap, a donor placeholder body or a real C literal emits it._
+- [game_uso jumptable/literal `%lo` diffs are a .rodata LAYOUT gap, not a reloc class -- emit the INCLUDE_ASM fns' literals as `.late_rodata` in their .s files (0940/ECEC/EDD4/1189C block-equal; timproc b5 genproc RoData relayout 26->10, b3 has no layout diffs; agent-g 2026-10-16)](#game-uso-rodata-relayout-late-rodata) -- _ROM text %lo = offset into the unit's own RoData past its 4-byte marker word (game_uso_pre.bin +0x44 = offset 0). The built .o's .rodata only held C jtbls, so every C switch sat low. Copy each gap's ROM words into a `.late_rodata` block of an INCLUDE_ASM .s in text order; asm-processor reserves it with dummy floats in function order. Where no INCLUDE_ASM fn sits in a gap, a donor placeholder body or a real C literal emits it._
 - [A NONZERO baked `jal 0x0C00NNNN` is NOT a structural cap — map it to `gl_ref_<target>` (call-side), and never call the REAL fn at that addr](#feedback-nonzero-baked-jal-gl-ref-callside-2026-06-22) — _Raw-.word USO `.s` files ship `jal` immediates UNRELOCATED (bake-data-relocs.py: R_MIPS_26 left raw, fixed at load time). A nonzero `jal 0x0C00E89A` decodes via nearest-symbol to e.g. `game_libs_func_X+0xNNNN` and lands MID-function (on an FPU insn, not an entry) — looks like a structural cap, ISN'T. Reproduce it exactly the same way data refs use `gl_ref_X`: add `gl_ref_0003A268 = 0x0003A268;` to undefined_syms and call `gl_ref_0003A268(...)` — the C call emits `jal 0`+R_MIPS_26, ld bakes the absolute → `jal 0x0C00E89A`. PITFALL: do NOT call the real function whose name the disassembler guessed (e.g. gl_func_0001CA10@0x1CA10) for a `jal 0` site — that bakes `jal 0x0C007284`, the WRONG immediate; `jal 0` (the placeholder) must map to `gl_func_00000000` (=0). Same gl_ref mechanism as the matched gl_func_0000408C. Took gl_func_00025C54 46.25→76.7% (residual = s8-vs-spill coloring). 2026-06-22 agent-d._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [A forward branch PAST a function's end is NOT always a tail-merge cap — if the target epilogue is UNSHARED, merge it back for a clean match](#feedback-branch-past-end-unshared-epilogue-merge) — _When a function's `b`/`beqz`/etc. targets an address ≥ its own end (a split-off epilogue), count how many functions branch there. If only ONE (unshared) AND the epilogue is bare-INCLUDE_ASM with a real body (NOT an already-decompiled `void f(void){}` that might be `jal`'d), it's a splat MIS-SPLIT, not an -O1 tail-merge cap: merge the epilogue back and the whole function matches under -O2. Scan: base=first `/* addr */`; for each branch insn at index i (signed off), target=base+(i+1+off)*4; count callers per target across all `.s`; mergeable iff count==1 and target==parent_end. Merge manually: grow parent `.s` size, append child `.word`s before `endlabel`, `rm` child `.s` + its INCLUDE_ASM, write parent C, `refresh-expected-baseline.py`. Verified 2026-05-23 byte-exact: game_libs_func_00060FFC (+00061018, flag set/clear, 13/13) & 0001FDF4 (+0001FE34, arena alloc, merged—needs branch-likely grind). SHARED epilogues (≥2 callers) ARE genuine tail-merge caps (need -O1 split). ~13 clean candidates remain._
@@ -12436,6 +12436,47 @@ post0b 4EB54, 4F85C, 5185C, 5CB68 (in-unit callee through a per-site blank alias
   build, then pin each to 0.
 - Remaining queue in agent-c units after run 94: 22 (incl. sentinel 551E0).
 
+Run 95 (agent-c, 2026-10-16) unwrapped ten more: post 272C4, 2D710, 2D74C, 2D788; post0b 35834,
+37D48, 3F8E8, 453A8, 46B64, 519A4. Every slice was word-identical and every reloc resolved to 0
+(`gl_func_00000000` / `func_00000000` / `D_00000000`, or names already pinned). Two new pins:
+`gl_d_23f98`, `gl_d_272c4` (272C4) and `D_2D788_a`, `D_2D788_b` (2D788). Notes:
+
+- **An extern declared only inside ANOTHER wrap.** 272C4's body uses `gl_d_23f98`, whose only
+  declaration sat inside the still-NM `game_libs_func_00023F98` wrap further up the file. The NM
+  build compiled because that block was active too; the default build would fail on an undeclared
+  name. Add the extern next to the unwrapped body (duplicate `extern` declarations of the same type
+  are fine in the NM build) and pin it.
+- Unwrapping post0b bodies left the NM object unchanged: `game_libs_func_00062F08` stays at 0x2e2b8,
+  so `NON_MATCHING_TEXT_CLIP_KEEP_ALIGN` stays 0x2e308.
+- Remaining queue in agent-c units after run 95: 12 (incl. sentinel 551E0): timproc_b1 EE8 / 2838 /
+  2BE4 and bootup 38C0 / 39D8 (0 diff words; pins to check first: `D_38c0_z`, `glv_2838` are not in
+  `undefined_syms_auto.txt`), and the six with differing words (bootup 3734, post 29B6C, post0b
+  3829C, 3D3C4, 3D68C, 55C34).
+
+Run 96 (agent-c, 2026-10-16) unwrapped ten: timproc_b1 EE8, 2838, 2BE4; bootup 38C0, 39D8, 3734;
+post 29B6C; post0b 3829C, 3D3C4, 3D68C. New pins: `glv_2838 = 0`, `D_38c0_z = 0`, and three baked
+in-unit jal targets (below). Notes:
+
+- **"Permanent baked-USO-jal cap" comments are not caps in directly linked units.** post 29B6C and
+  post0b 3D3C4 / 3D68C were held back because the ROM has a reloc-free `jal 0x3DF44` / `0x51630` /
+  `0x51708` while C emits `jal 0` + R_MIPS_26. Read the ROM word from `build/tenshoe.elf`
+  (`objdump -d --start-address=<fn>`), give the call site its own alias
+  (`gl_func_0003D3C4_51630`), and pin the alias to the real address
+  (`gl_func_0003D3C4_51630 = 0x00051630;`). The linker writes the same word. When two sites in one
+  function hit different targets (29B6C: 0x3DF44 and 0x3DFE4), use one alias per target. The
+  unlinked slice still differs from expected/ in those words; `cmp` is the gate.
+- **LO16 against a pinned value symbol.** bootup 3734's one differing word is `lw a3,%lo(D_3734_v)`:
+  the .o has addend 0, expected/ has 0x14 against `func_00000080`. `D_3734_v = 0x94` is already
+  pinned, so the linked word is 0x8CE70094 as in the ROM (check `tenshoe.z64` at the ROM offset from
+  the `.s` comment). 3829C is the same with a HI16/LO16 pair (`D_3829C_1EA30 = 0x1EA30`).
+- timproc_b1 (Yay0): the block range compare (decompressed `build/assets/timproc_uso_block1_yay0.bin`
+  vs `assets/timproc_uso_block_1.bin` at the function's name offset) was 0 words for all three;
+  block lo16 stayed 26.
+- Unwrapping post0b bodies left `game_libs_func_00062F08` at 0x2e2b8 (clip 0x2e308).
+- Remaining queue in agent-c units after run 96: 2: post0b 55C34 (three `jal 0x6A620` sites
+  that the NM body spells as `gl_func_00034458`; check which call each one is before aliasing) and
+  the sentinel `gl_func_000551E0`.
+
 Run 89 (agent-g, 2026-10-16) landed tail D9E4 and C5B0, mgrproc 1F30 and game_uso 0940. Notes:
 
 - **mgrproc 1F30**: the four ldc1 diffs were already covered by `D_dbl_5E0/5E8/5F8/600` pins;
@@ -12542,4 +12583,45 @@ literal/jtbl in game_uso must keep this order. If a newly decompiled fn owned
 words in an INCLUDE_ASM `.s` `.late_rodata` block, move them into its C
 literals (or the block shifts). Other Yay0 units (timproc b1/b3/b5 lo16=26..29)
 very likely have the same class, so check their RoData the same way.
+
+**timproc b3/b5 follow-up (agent-g 2026-10-16).** timproc.uso is a container
+of four USO modules: timproc (block0 data + block1 text), trkproc (header at
+`timproc_uso_inter12.bin` +0x32B9, block2 data + block3 text), trnproc
+(uncompressed, inter34 +0x3444), genproc (header at `timproc_uso_inter34.bin`
++0x718C, block4 data + block5 text). Each module's RoData dir entry sits at
+header +0x34 and RoData offset 0 is header +0x44 (genproc: inter34 +0x71D0,
+0x440 bytes; trkproc: inter12 +0x32FD, 0x50 bytes). The TextReloc table
+follows the text block: 12-byte entries `[(symIdx<<4)|kind, text_offset, 1]`,
+kind 3 = HI16, kind 2 = LO16, offset = the patched word itself (genproc
+table at `timproc_uso_inter56.bin` +0x10C8, 2652 entries; trkproc at
+inter34 +0xA5C, 764 entries). **The section symIdx numbering differs per
+module**: game_uso 2 = RoData; genproc 4 = RoData, 2 = Data; trkproc 2 = RoData,
+3/4 = Data/BSS. Identify RoData as the symIdx whose LO16 addends all fall
+below the RoData size.
+- **b5 (genproc): lo16 26 -> 10.** 16 diffs were layout. Fixes: (a) the 0xB8
+  bytes of state-name strings at RoData +0x0 (pointed to from the Data name
+  table) go in a `.rdata` block of any INCLUDE_ASM .s. asm-processor emits a
+  `const char[N]` that lands in early .rodata, ahead of every late_rodata
+  item. (b) INCLUDE_ASM .s `.late_rodata` blocks in text order. (c) The
+  exact C fade helpers (896C/B850/C044/C710/CB40/CD24) used named float
+  externs (`D_B850_up`, pinned in undefined_syms). Plain literals (`0.1f`,
+  `0.3f`, `0.03f`, `0.4f`) give identical codegen, and IDO emitted one
+  RoData entry per use: two `0.1f` in one fn = two entries, as in the ROM.
+  The built .rodata 0x0..0x440 then equals the ROM byte for byte, including
+  the jumptable contents. That exposed wrong case labels in exact 87F4/88A0
+  (the ROM tables map 8/1/2 and 1/2/4). Relabelling the arms in source order
+  left .text unchanged. **Comparing the full built .rodata to the ROM
+  RoData is a free semantic check of every C switch.** The residual 10 are
+  in exact C fns: Data/BSS section-relative addends (3A4C, 3C8C, BDA0,
+  C208, C2C0, CCC8) and one import-symbol addend (896C store, sym+0x2A0),
+  all spelled as named externs (field 0 in the unlinked .o). They are
+  genuine relocated fields, not layout.
+- **b3 (trkproc): lo16 29 -> 29, no layout diffs.** Its RoData (jtbl +0x0,
+  floats +0x40..+0x48) is referenced only by fns that already match (donor
+  B0, and 1240/1870 spelled `&D+0x40`). All 29 diffs are Data/BSS addends (19)
+  or import-symbol addends (10) in exact C fns (5A4/65C donors, 21B0..2388
+  accessor family, 294C, 2EEC). The same holds for b1 (identical RoData).
+- mgrproc block was already lo16=0. arcproc/titproc/gui are uncompressed and
+  linked straight into the ROM. Their correctness is the ROM-exact gate, not
+  verify-blocks.
 
