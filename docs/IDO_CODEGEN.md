@@ -30596,6 +30596,15 @@ stores (`+0`, `+0xC`) and the last call's global arg shared `&D_00000000`, CSE'd
 Three base-0 externs fixed it. The entry `sw a0,24(sp); lbu t6,27(sp)` (and `lbu a0,27(sp)` after the
 first call) is an `unsigned char` parameter whose address is taken (`unsigned char *p = &a0; ... (void)p;`).
 A plain `unsigned char` parameter, prototyped or K&R, gives `andi a2,a0,0xff` and a 32-byte frame.
+**More instances (2026-10-16 agent-c, all EXACT):** bootup_uso `func_000034E8` (6 vs 3): three source
+floats read through one `&func_000003F8 + K` base were CSE'd into a held register. Three scalar `f32` globals
+pinned at 0x538/0x53C/0x540 each get their own `lui at; lwc1`. The Vec4 destination is the zero-offset
+`D_00000030`, which keeps its address in v0 with 0/4/8/C displacements. post0b `gl_func_00038360`
+(+6): the m2c wrap passed a literal `0` where every serializer call takes the stream object
+`&D_00000000` (`lui a0,0; addiu a0,0`). Declaring the innermost ctor pointer first moved the spill homes
+by 4 bytes. bootup_uso `func_00002DA4` (12 vs 7, a jumptable donor splice): see
+docs/MATCHING_WORKFLOW.md#bootup-uso-jumptable-donor-2da4. A store `G = f()` followed at once by a read of
+`G` needs two symbols, because one symbol forwards v0.
 Scan tool: `scripts/call-shape-scan.py UNIT --lui` lists functions whose target has more luis (it also
 prints insn counts, nm/tgt).
 
