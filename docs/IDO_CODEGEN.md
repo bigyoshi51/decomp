@@ -30411,6 +30411,19 @@ local took 72(sp) instead of 76(sp) while a `volatile s32 pad;` stood in for the
 NO pad it lands at 76. So the copy's frame slot is not always one to keep: check the slot offsets after
 dropping it before adding a pad. All callees and globals were also de-aliased to their reloc names.
 
+**024C (same file, 42-word vtable dispatch, labelled "NATURAL CEILING 96.43").** `p = a0->0x48; fn =
+*(p + p->0x7C * 0x28 + 0x90); if (!fn) return; save p, a0 to globals; reload; fn();`. Target colours p in
+v0, the reloaded param in v1, the 0x28 stride in a0, with ring temps t6..t9. Three levers, all needed:
+1. Leave idx/fn UNNAMED (named ones take a0/a1 instead of ring temps).
+2. `((Ent *)((char *)p + 0x90))[p[0x7C / 4]].fn` with `typedef struct { void (*fn)(void); char pad[0x24]; }
+   Ent;` gives the target's base-first `addu t8,v0,t7`. The plain `p + idx * 0x28 + 0x90` gives
+   `addu t8,t7,v0`. (A `char[0x28]` typedef did NOT flip it in arcproc 1170, so the struct with a typed
+   member is what counts.) The arcproc 1170 / 27BC "commute-order cap" siblings are worth a retry.
+3. The preceding call's return is dead, but the callee was declared `extern int f();`, so v0 stayed
+   reserved and every colour shifted by one (v1/a0/a1). Declaring it `extern void f();` (every caller in
+   the TU ignored the return) frees v0, the same effect as the 27BC void-alias lever, but with the real
+   reloc name kept.
+
 <a id="vec3-sub-mul-fp-candidates-bb-boundary-37938"></a>
 ### Single-use Vec3 arithmetic in the FP candidate pool needs BB boundaries (gl_func_00037938, NM 93.7)
 
