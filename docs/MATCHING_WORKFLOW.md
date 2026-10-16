@@ -12584,7 +12584,13 @@ RoData except the jtbl CONTENTS (text-address words the USO's RoDataReloc fills;
 the ROM ships the RoData from game_uso_pre.bin, not from the .o). Any NEW C
 literal/jtbl in game_uso must keep this order. If a newly decompiled fn owned
 words in an INCLUDE_ASM `.s` `.late_rodata` block, move them into its C
-literals (or the block shifts). Other Yay0 units (timproc b1/b3/b5 lo16=26..29)
+literals (or the block shifts). Worked case, C48C (agent-g 2026-10-16): the
+function-exact plain-C body read its two floats through extern spellings
+(`*(float *)((char *)&gu_c48c_fv0 + 0x1ec)`), so the 3 words its `.s` carried
+(0.7f, 1.72f, plus donor D204's 28555.0f) vanished and game_uso went lo16=0 ->
+5 (later jtbl `%lo` 8-12 bytes low). Spelling `0.7f` / `1.72f` and giving the
+D204 donor placeholder `*(volatile float *)a0 = 28555.0f;` restored lo16=0 on
+the first build with C48C still exact. Other Yay0 units (timproc b1/b3/b5 lo16=26..29)
 very likely have the same class, so check their RoData the same way.
 
 **timproc b3/b5 follow-up (agent-g 2026-10-16).** timproc.uso is a container

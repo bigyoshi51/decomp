@@ -14383,6 +14383,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [`lui rX; addiu rX,rX,K; lw 0(rX)` with K in the ADDIU (and no LO16 in expected/) = a separate global at base+K, not `&base + K`: declare `extern int *sym_K;` and pin it to K in undefined_syms_auto.txt (Yay0 blocks bake it). mgrproc_uso_func_00000C14 90.6 and 00000B5C 86.96 -> EXACT, 2026-10-16 agent-g](#offset-in-addiu-separate-global-0c14) -- _`&base + K` folds K into every lw (form-b); the old `if (1) { pp += K; }` workaround got the offset right but split basic blocks and left as1 schedule swaps (`sw ra` between lui/addiu, a late reload)._
 - [The comma-constant lever also fixes old "mtc1/lwc1 scheduler cap" notes: timproc_uso_b3_func_00001240 97.82 -> EXACT with `x * (0, 255.0f)` (target `mtc1 K,$f18; lwc1 x,$f4; mul.s d,$f18,$f4`); the form moved a spill home 4 bytes down, and shrinking an unused `char pad[32]` to `[28]` moved it back with the frame unchanged (2026-10-16 agent-g)](#comma-constant-const-first-mul-5d754) -- _If the const/load registers are swapped AND the mul operands are swapped, it is operand rank, not scheduling._
 - [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
+- [Extern-spelled rodata floats (`*(f32 *)((char *)&D_00000000 + 0x15C)` into a named `v`) perturb FP colouring: timproc_uso_b5_func_00004118's 0.5/1.0 f0/f2 swap over ~100 words vanished when the 0.45/0.036/0.1 loads became plain literals (170 -> 62 diff words, NM 98.34 -> 99.02; draft only); plus func_80000D2C's +8 frame = an IV temploc from the strcpy loop, 30 shapes tried (agent-g 2026-10-16)](#extern-float-spelling-perturbs-colouring-4118) -- _ROM RoData words show which loads are literals: 5 consecutive 0.1f entries = 5 materialization sites of one literal. Literals also put the jumptable at its own rodata offset._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
 
@@ -31124,3 +31125,54 @@ source-steerable:
    `volatile int pd[3]` between `u32` and `t` reproduce the target's 5-word gap and the 0xC8
    frame. Probe the layout by watching `addiu sp`, the first stage's `addiu tN,sp,X`, and
    `addiu s2,sp,Y` while you move the declarations.
+
+<a id="extern-float-spelling-perturbs-colouring-4118"></a>
+## Extern-spelled rodata floats perturb FP colouring; strcpy-loop IV temploc frame cap (agent-g 2026-10-16)
+
+**timproc_uso_b5_func_00004118 (6872 B).** The 98.69 draft read its rodata
+floats through extern spellings (`*(f32 *)((char *)&D_00000000 + 0x14C)`,
+and a named `f32 v` loaded from `+0x15C/0x168/0x16C`, even assigned inside
+an `if` condition to imitate the target's per-path loads). Every 0.5/1.0
+Q-block then coloured 0.5 -> `$f0`, 1.0 -> `$f2`, the reverse of the
+target, across about 100 words. No spelling of the constants fixed it:
+comma `(0, 1.0f)`, `(f32)1`, named `one`/`half` temps, decl order, and
+store-group permutations were all no-ops or worse. The cause was `v`.
+The genproc RoData (`timproc_uso_inter34.bin` +0x71D0 + off) holds
+`0.45f, 0.036f x3, 0.1f x5` at +0x14C..+0x16C and the jumptable at
++0x170. So `v` is the literal `0.1f`. IDO emits one RoData entry per
+materialization site (two per-path rematerializations = 0x168 and
+0x16C). With every extern float spelled as a plain literal
+(`0.45f`, `0.036f`, `0.1f`) and `v` removed:
+- 1.0 -> `$f0` and 0.5 -> `$f2` everywhere, as in the target;
+- the relative literal offsets (0x0/0x4/.../0x20) and the jumptable
+  position match the ROM layout;
+- 170 -> 62 diff words, objdiff NM 98.34 -> 99.02 (below the +1 landing
+  bar, so it is only saved as a draft:
+  `/home/danjs/decomp-drafts/timproc_uso_b5_func_00004118_99.02_literals_62words.patch`).
+
+Residuals: (a) block 1 materializes 1.0 before 0.5 (the target does 0.5
+first, but 1.0 still gets `$f0`). Store-order permutations are canonicalized
+away. Spelling the block-1 or call-arg 0.5 as `(f32)0.5` makes 0.5 first,
+but then it takes `$f0`. (b) In switch case 0 the target reloads `arg0`
+ONCE into `$v0` (index load hoisted above the stores). Ours reloads per use,
+like the target's case 1. A local copy, an index temp, a struct type,
+statement order, and `arg0 = arg0` did not help (arg0 is memory-resident
+in this huge fn). (c) `%lo` of the literals in the NM build sit low
+because the earlier INCLUDE_ASM `.late_rodata` and strings are missing in
+that tree. That is a scoring artifact, not a C problem.
+
+**kernel func_80000D2C (frame 0x98 vs 0x90).** The best C (draft
+`/home/danjs/decomp-drafts/func_80000D2C_99.87_10words_frame152vs144_only.c`)
+is instruction-identical except the frame (10 words, all sp-offsets).
+`if (1) { i = *(s32 *)(entry + 4); } if (i == id)` reusing the strcpy
+counter `i` fixes the `bne t2,s2` order and the `t3` list-continue temp
+with no extra local. The 8 extra bytes are a temploc that only the strcpy
+loop creates: an `out[i]` store loop strength-reduces to a pointer IV, and IV
+temps draw the same tempdisp counter
+(#feedback-ido-frame-slot-home-assignment-rule point 2). Removing the
+loop gives 0x90, and any `out[i]=` loop in a tiny probe adds 8 to 16 bytes.
+Tried without effect: while/for/goto/do forms, pre-increment index, `*++out`
+and a `dst` copy (both +8 more, the modified pointer gets an s-reg or home),
+struct-typed name field, `u8 *D_80012D60[]`, `register` on every var,
+block-scoped arrays/scalars, swapped if/else, and IDO 5.3 (-O2 0x98, -O1
+far off). Still open: a source shape whose IV temp shares a freed temploc.
