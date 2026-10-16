@@ -14323,6 +14323,8 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [A spilled local RE-STORED to its own home before a later call (`sw v1,60(sp)` with no new def) = a BB boundary between the calls: `if (1) { ... }` around the later call (gl_func_0003E868 post0b 61.3 -> EXACT, agent-c 2026-10-15)](#bb-break-respill-3e868) -- _also: a jal-0 result that is never used means the object is the earlier call's result._
 - [Float constants multiplied AT RUN TIME (`lui at,0x4200; mtc1; lui at,0x4080; mtc1; mul.s`) re-materialised per statement = float LOCALS holding the constants, re-assigned before each statement (cfe folds literal products and turns `*2.0f` into add.s; one assignment gets CSE'd across statements) (gl_func_00042778 post0b 15.7 -> NM 77.0, agent-c 2026-10-16)](#runtime-float-const-products-42778) -- _the else arm `a0[0] = w*two; w = 32.0f; two = 2.0f; a0[1] = w*two;` matched word for word._
 - [Vec3 squared length `lwc1 f0/f2/f14` + `add.s f12,f8,f10` into a (float) callee = read x,y,z into named float locals first (inline `a0[i]*a0[i]` loads f2/f14/f0 and adds f10+f8); call through a prototyped `float (float)` blank alias (gl_func_0005BD80 post0b 77.2 -> EXACT, agent-c 2026-10-16)](#vec3-sqlen-named-temps-5bd80)
+- [Matrix x Vec3 in place (`lwc1 f2/f12/f14` for v, row-0 sum in f0, swc1 v[0] before v[1]) = NO named x/y/z (inline v[i] CSE temps colour f2/f12/f14; named locals take f0 first), each row spelled reversed `m2*v2 + (m1*v1 + v0*m0)`; store order must be settled in-tree (standalone swaps the swc1 pair) (game_libs_func_0005C8CC post0b INCLUDE_ASM ~34% -> EXACT, agent-c 2026-10-16)](#mtx-vec3-inline-cse-reversed-rows-5c8cc) -- _the opposite of 5BD80: there named temps were right; probe both._
+- [Entry `sw a0,home; lw t6,home` (param homed then reloaded ONCE into a temp, frame grows by 8) in a leaf-ish K&R printf call = address-taken param read through `float **pp = &a0; (*pp)[i]` (reads CSE into t6); `volatile` a0 + named local colours v0, plain volatile reloads per use (gl_func_00051714 post0b 73.5 -> EXACT; gl_func_000602A8 80.0 -> EXACT, + int-literal `/ 1024` keeps div.s, agent-c 2026-10-16)](#addr-taken-param-home-reload-t6-51714)
 - [A param kept in a caller-saved copy (`or a3,a0`) and spilled to its OWN incoming home around calls (no s-reg) = uopt SPLIT it: add BBs (`if (1) {}` between calls) until the s-reg no longer pays; FP colour order + extra spill words came from a `s2 = s` pointer copy; jumptable range check keeps `sll` in its delay only when the default block is shared (gl_func_000396FC post0b 59.2 -> NM 98.7, agent-c 2026-10-15)](#param-split-spill-home-396fc) -- _NCC (edg) reproduces the split for free but lowers every switch to a beq chain, so a jumptable function is cfe C._
 - [Compare order 1,0,2 with bodies out of line in that order = goto chain (a switch sorts ascending AND gives its selector a frame slot); two struct stores whose registers are right but whose schedule is swapped = put them on ONE source line (gl_func_00035440 post0b 71.2 -> EXACT, agent-c 2026-10-15)](#same-line-store-pair-schedule-35440) -- _registers follow statement order, the as1 schedule of a home reload vs a lui/lw pair follows the line split._
 - [`addiu sN,sp,K` held in an s-reg and used only as a STORE base (`sw t1,0(s1)`) or LOAD source (`lw t8,0(s3)`) while other accesses of the same slot use plain sp offsets = 4-byte STRUCT copies (param or local typed `struct {int v;}`); plain ints fold every access to sp+K (gl_func_00035B1C post0b 66.3 -> 97.4, agent-c 2026-10-15)](#struct-copy-keeps-addr-sreg-35b1c)
@@ -14345,6 +14347,7 @@ Each block's `root` has a per-segment lifetime; IDO uses a temp register ($3-cla
 - [game_uso under NCC: a named copy local (`prev = F0; F4 = prev; ...`) colours v0 and renumbers every later temp; writing the move through the members (`F4 = F0; F0 = 0; if (F8 == F4) ..; F8 = F4;`) gives the target's t0/t1 expression temps; NCC is NOT a universal lever (B4B8 sentinel loop is NCC-immune) -- F6D4 95.4 + E35C 95.3 -> EXACT (2026-10-15 agent-g)](#ncc-no-named-copy-local-f6d4) -- _Tell: target values in the ugen temp ring (t8, t9, then t0, t1) right after a call, where your build has a v0 local; a 2-copy `bne; or v0,t0 / or v0,t0` join is what a pure member re-read leaves, not a ternary._
 - [game_uso under NCC: 1DDC homing is a Vec3 value class (by-value `operator=`, ctor forwarding to `set`, `set(const Vec3 &)` for plain copies, a 4-byte `Ptr` class for the output pointer, `getPos` returning `Vec3 &`); all 382 instructions identical, only the frame layout left (2026-10-15 agent-g)](#ncc-vec3-class-shape-1ddc) -- _The cfe wrap's Tri3i word-copy hops are edg return / by-value temps. Read edg's slot assignment by name from `-g3` `.mdebug` local symbols. Residual: two swapped binding temps plus 3x8 bytes of horizontal-pass temps._
 - [game_uso under NCC: a "bnez on a stack address + alloc(0xC), stores through v1" block is edg's cfront-style constructor protocol for a DERIVED class (`struct XZ : Vec3 { XZ(const Vec3 &v) : Vec3(v.x, 0, v.z) {} };`); an inline base-class `operator new` forwarding to the import fixes the reloc name; PRE needs no named pointer; tail named locals buy frame slack (6A30 93.2 -> EXACT, 2026-10-15 agent-g)](#ncc-derived-ctor-protocol-6a30) -- _Tell: `addiu a3,sp,K; or v1,a3; bnez a3; jal new(12); beqz v0; or v1,v0`. A body-assigned derived ctor folds the stores onto &pt._
+- [game_uso under NCC: edg binding temps are ALWAYS laid out "first-evaluated lowest" (no expression shape flips it); "first-appearing higher" in the target = NAMED Vec3 locals assigned inside the expression through the IMPLICIT operator= (`Vec3 d, e; if ((d = a - w).lenSq() < (e = b - w).lenSq())`); an inline `set()` returning `Vec3 &` adds 8 bytes of frame per class-temp stage (6FA8 105 -> 123/127 words, 1DDC 241 -> 249/382 with the slot swap fixed via a by-value `assign()` member; 2026-10-16 agent-g)](#ncc-temp-order-named-assign-6fa8) -- _named locals follow declaration order; binding temps never do. Probe with `-g3` .mdebug + the addiu-sp slot list._
 - [game_uso under NCC: C48C (99.74 cfe) is a cfront-style OUT-OF-LINE CONSTRUCTOR: the 32 `if (s1 == -K) alloc(0x18)` stages are inlined member ctors' `this == 0 -> operator new` checks; a class-scope `operator new` calling 055750 reproduces them; D9CC 98.86 -> 520/524 under NCC (open, 2026-10-15 agent-g)](#game-uso-c48c-cfront-ctor-d9cc-ncc) -- _Tell for any alloc-fallback constructor in game_uso: `addiu at,zero,-K; bne base,at` before an alloc of the member's size = edg's cfront `if (this == 0) this = T::operator new(sizeof(T))` in an inlined member/base ctor._
 
 ## IDO-O0-STALE-NM-PERCENT-TABLE-REFLECTS-C-SHAPE
@@ -30205,3 +30208,106 @@ The old NM used the K&R `gl_func_00000000(...)` blank, which promotes to double 
 With that, `return f(a0[0]*a0[0] + a0[1]*a0[1] + a0[2]*a0[2]);` still misses: loads come out f2/f14/f0 and the final add is `add.s f12,f10,f8`. Writing `float x = a0[0], y = a0[1], z = a0[2]; return f(x*x + y*y + z*z);` gives the target colours and operand order word for word. (Reassociating as `z*z + (x*x+y*y)` swaps the add operands back -- wrong.) Try named load temps first on any small FP-expression leaf whose loads are coloured in the wrong order.
 Same lever, 4-arg variant (gl_func_0005DB58 NM 71.8 -> EXACT, same day): the "K&R float call to gl_func_00000000 is unmatchable" cap is NOT a cap once the callee goes through prototyped per-site blank aliases pinned at 0 -- a `(float)->float` alias keeps the direct `jal` with f12/f0, and a `void (int, int, float, int)` alias makes O32 pass the float in a2 via `mfc1 a2,f0`. Any older NM comment citing #feedback-ido-knr-float-call as the gate should be re-tried with typed aliases.
 Third member (game_libs_func_0005DB00 NM 49.4 -> EXACT): a leading `mtc1 a2,$f14` is just a plain `float` third parameter after two ints (O32 gives it the a2 slot) -- no `*(float*)&a2` bit-cast. A `(int, int, float, float)` alias passes a spilled float result via `lw a2,slot(sp)` and a live one via `mfc1 a3,$f0`; the spill slot follows decl order (`float r1, r2, q;` -> r1 at sp+0x24).
+
+<a id="mtx-vec3-inline-cse-reversed-rows-5c8cc"></a>
+### Matrix x Vec3 in place: inline CSE input reads + reversed row spelling + store order (game_libs_func_0005C8CC, EXACT)
+
+Target (31 words, leaf): `lwc1 f2,0(a0); lwc1 f4,0(a1); lwc1 f12,4(a0); ... mul.s f6,f4,f2 ... add.s f0,f4,f6 ...`
+with the three input components in f2/f12/f14, the row-0 sum in **f0**, rows 1/2 in f16/f18, and
+`swc1 f0,0(a0); swc1 f16,4(a0)` late in the block. Long documented as "~34%, FP-reg-allocation cap,
+permuter does not converge". Three independent levers, found by standalone probing:
+
+1. **No named x/y/z.** `float x = v[0], y = v[1], z = v[2];` colours the inputs f0/f2/f12 and pushes the
+   row-0 sum to f14. Reading `v[0]`, `v[1]`, `v[2]` inline in every row (stores go to named a/b/c so
+   CSE keeps the three loads) gives exactly f2/f12/f14 + f0 for the sum. This is the OPPOSITE of
+   [5BD80](#vec3-sqlen-named-temps-5bd80), where named temps were the fix -- probe both spellings.
+2. **Rows spelled reversed:** `a = m[2]*v[2] + (m[1]*v[1] + v[0]*m[0]);`. The forward spelling
+   `m[0]*v[0] + m[1]*v[1] + m[2]*v[2]` emits both add.s with swapped fs/ft (IDO emits `a + b` as
+   `add.s d,b,a` here, cf. [5DBB0](#commutative-fp-add-reversed-operands-spill-home-5dbb0)); the
+   x-term needs the vector written FIRST (`v[0]*m[0]`) to get `mul.s f6,f4(m),f2(v)`, while the y/z
+   terms want `m[k]*v[k]`.
+3. **Store order is TU-context dependent:** in a standalone one-function compile, source
+   `v[0]=a; v[1]=b; v[2]=c;` schedules `swc1 v[1]` before `swc1 v[0]` and only `v[2],v[1],v[0]` /
+   `v[1],v[0],v[2]` match -- but in-tree (post0b) the natural `v[0],v[1],v[2]` (also `0,2,1` and
+   `2,0,1`) is the one that matches and the standalone winner is 2 words off. The as1 store
+   schedule of independent swc1s is not stable across TUs: settle store order IN-TREE
+   (cf. [standalone false cap](MATCHING_WORKFLOW.md)). Declaration order of a/b/c and x/y/z had no effect.
+
+## game_uso under NCC: edg temp order -- binding temps are always "first-evaluated lowest"; first-appearing-higher = named locals assigned in-expression via the implicit operator=; `Vec3 &set()` adds frame (2026-10-16 agent-g) <a name="ncc-temp-order-named-assign-6fa8"></a>
+
+Follow-up to [#ncc-vec3-class-shape-1ddc](#ncc-vec3-class-shape-1ddc), where 1DDC and 6FA8 both had
+all instructions right but "two top-of-block temps in swapped order" plus missing frame bytes.
+
+**Rule (standalone probes, `-g3` .mdebug + the `addiu rN,sp,K` slot sequence).** edg puts a block's
+fresh binding temps first, declared in REVERSE creation order, so the temp that is evaluated FIRST
+always sits LOWEST. None of these changed that: swapped `<` / `>` operands (they swap evaluation
+too), `!(x >= y)`, `?:`, `&&` chains, an inline `lt(float, float)`, an inline taking both `const Vec3 &`,
+a member `lt(const Vec3 &)`, member / friend `operator<`, an extra full-expression earlier in the block
+(edg does NOT reuse binding temps across statements in one block), nested `{}` around the compare,
+friend / out-of-class / `const`-returning / named-return `operator-`, `const Vec3 &` reference
+binding, a user copy constructor (it elides the copies: wrong code) or destructor (wrong code).
+A temp bound inside an inline function body (`dsq(Vec3 v)` by value) moves to that inline's nested
+block, which is laid out at the BOTTOM of the frame.
+
+**What gives "first-appearing higher": named locals.** Named locals follow declaration order
+(first declared = highest) and sit after the block's temps. Initialising them in separate statements
+(`Vec3 da = ...; Vec3 db = ...;`) breaks the code: the inline return temp is then shared between the
+two statements (one IDO return slot, copy base a1). Assigning them INSIDE the one full-expression keeps
+both return slots: `Vec3 d, e; if ((d = a->pos - s0->w->pos).lenSq() < (e = b->pos - s0->w->pos).lenSq())`.
+This needs the IMPLICIT (trivial) `operator=`: edg then copies the return slot straight into d
+(r -> ret -> d, the target's two word-copy hops). A user `operator=(Vec3)` adds a by-value
+parameter hop, and `operator=(const Vec3 &)` adds a binding temp. 6FA8: mnemonics 127/127,
+d and e in target order.
+
+**`Vec3 &set(float, float, float)` (returning `*this`) instead of `void set`** adds 8 bytes of
+compiler slots per class-temp stage, with no code change. It moved 6FA8's frame from 184 to 192 and
+put r1 / ret1 / ret2 at the target offsets (123/127 words). It moved 1DDC's frame from 360 to 376
+(241 -> 249/382 words). `Vec3 *` / `int` returns do nothing. `const Vec3 &` does the same as `Vec3 &`.
+Inline ctor shape matters too: a body that assigns the members directly (no `set`) adds 4 more bytes
+per stage but changes FP colouring.
+
+**Residuals (not landed):**
+- 6FA8 (`/home/danjs/decomp-drafts/best_6FA8_r80.cpp`): an extra 4-byte named slot above d is still
+  needed (written as `Obj *c = b;` in the inner block, which is artificial). The only remaining
+  difference is r2 (the second `operator-`'s inline local) at sp+56 vs 52. In the first stage a 4-byte
+  compiler slot sits between the return slot and r. In the second stage it sits below r. Not yet found:
+  what reorders it.
+- 1DDC (`/home/danjs/decomp-drafts/best_1DDC_r80.cpp`, mn 382/382, frame 376 vs 384): the top-of-block
+  pair is the 023D4 binding temp and the final `a0->vel -= diff * sel` source. **Swap fixed:** declare a
+  named `Vec3 t2;` FIRST in the else block and write `a0->vel -= (t2 = diff * sel);` with the implicit
+  `operator=`. The by-value hop that `acc` and `vel` need moves to a named member
+  `Vec3 &assign(Vec3 v)` (`acc.assign(diff * ...)`, `a0->vel.assign(diff * speed)`). Code stays identical,
+  the 023D4 temp is at -44, and t2 is at -56, as in the target. Keeping the by-value `operator=` for t2
+  costs the pool hop (mn 380). Removing it for everything breaks `acc` (mn 339). Still open: 8 bytes.
+  Every slot from 0xB8 down to the pool sits 8 bytes too high in absolute terms (172/184/156/104/92/68/80/56
+  against target 164/176/148/96/84/60/72/48). `diff.set(0,1,0)`, `Vec3 diff; diff.set(...)`, `ref = vA0`
+  and `Vec3 diff = Vec3(...)` did not fix it.
+
+<a id="addr-taken-param-home-reload-t6-51714"></a>
+### Param homed then reloaded once into t6 = address-taken param read via pointer-to-param (gl_func_00051714, EXACT)
+
+Target entry: `addiu sp,-0x30; sw a0,0x30(sp); lw t6,0x30(sp); ...` then every field read off `t6`
+(4x `lwc1 fN,k(t6)` -> cvt.d.s -> K&R double args to the blank). Documented for months as "K&R home
+spill+reload cap, C-unreproducible without varargs". It is just an address-taken param:
+
+```c
+void gl_func_00051714(float *a0) {
+    float **pp = &a0;
+    gl_func_00000000(fmt, (double)(*pp)[0], (double)(*pp)[1], (double)(*pp)[2], (double)(*pp)[3]);
+}
+```
+
+`&a0` forces the home store; the four `*pp` loads have no intervening store so they CSE into one
+expression temp, which IDO puts in **t6** (temps start at t6). Variants that miss:
+`float * volatile a0` + `float *p = a0;` gives the same spill/reload but `p` is a coloured local (v0);
+`volatile a0` read inline reloads a0 four times; `*(float **)&a0` / `*&a0` fold away (no home).
+Second instance gl_func_000602A8 (80.0 -> EXACT, "three stacked caps" all C): same `int **pp = &a0;`
+home/reload, `&D_00000000 + K` for the `lui/addiu` string (not a literal address -> `ori`), and an
+**INT literal divisor** `x / 1024` to keep `div.s` by 1024.0f where `/ 1024.0f` and a
+`float k = 1024.0f` local both fold to `mul.s` by 1/1024 when the quotient feeds a call arg directly
+(`float k = (float)1024` also works -- the D9E4 int-cast lever).
+
+Generalises: any "param stored to its home at entry and immediately reloaded into a t-reg" with no
+call in between is a `&param` escape (cf. the volatile-param lever in
+[3B80](#volatile-param-and-cse-arg-copies-3b80), which keeps the param memory-resident per use).
+
