@@ -203,8 +203,13 @@ lambda Auto-generated from per-memo notes; content may be rough on first pass �
 - [Unsorted compare chain (`beq K2; beq K0; beq K1; b default`, NOT ascending) = `if (v == K2) goto A;` ahead of a 2+-case goto `switch`; a switch always tests ascending and a 1-case switch / if-goto chain inverts to `bne default; b case` (gl_func_00054AEC 89.8 -> EXACT; one-case second stage = the INVERTED test `if (v != K) goto D; goto L;` -> `beql K`, gl_func_00052994 86.9 -> EXACT, 2026-10-16 agent-g)](#unsorted-dispatch-if-goto-plus-switch-54aec)
 - [Flag word re-loaded into a FRESH $t before EVERY test (no call between) + beql preloads = pointer-to-VOLATILE flag object; a call with `jal; nop` and a0 still = the entry param = a K&R call with NO argument (gl_func_00060DC4 89.0 -> EXACT, 2026-10-16 agent-g)](#volatile-flag-object-fresh-t-60dc4)
 - [In-loop `sll row,3` that every flat spelling hoists = 2-D array indexing `((u16 (*)[4])p)[row][i + 1]` (IXA escapes LICM); `beq cmp,flag` operand order = `if ((x >= lo) ^ flag)` (`!=` always emits `beq flag,cmp`); chained `m[2] = m[3] = K` for reversed li/sh pairs (gl_func_00052BBC 86.5 -> EXACT, 2026-10-16 agent-g)](#ixa-defeats-licm-xor-test-beq-order-52bbc)
+- [Separate `lw aN,home(sp)` reload of a param into the branch delay (instead of `sll a0,t2,3` reusing the test's temp) = goto-skip test `if (x == 0) goto skip; ...use x...; skip:`; comma-temps (`(t = alloc(), v = t, t != 0)`) in alloc-or-passthrough arms inflate the frame by one slot each (gl_func_0005AD54 97.27 -> EXACT, 2026-10-16 agent-g)](#goto-skip-param-reload-5ad54)
+- [gl_func_00004244 (9916 B) EXACT from a documented 66-word "cap": ONE name for all 31 units declared LAST + empty `if (1) {}` BBs keep it off s3 (shared 0x38 home); param-reassign prologue; last 2 words = same-line join of the pre-unit statement with unit 1's test (hoisted address .loc tie) (2026-10-16 agent-g)](#if1-bbs-uncolor-shared-name-4244)
+- [Constructor-unit family (C48C, 4118): `obj->tmpl = X; obj->k = K;` on ONE source line flips the as1 order to the target's `sw k,16; sw tmpl,12`; per-stage 1-word scratch structs as function-scope decls BEFORE the shared scratch put the shared one at the frame bottom (game_uso_func_0000C48C 99.7 -> EXACT, 2026-10-16 agent-g)](#same-line-store-pair-and-scratch-decl-order-c48c)
 - [Empty spill slot below the spills = dead `char pad[4]` declared FIRST, combined with the spill-order decl permutation; neither alone works (bootup func_00007C74 99.83 -> EXACT); held-pointer struct copy + sp-direct member reads = a Vec3 STRUCT assignment, with dead struct pads for the frame (gl_func_00040CAC 93.09 -> EXACT) (2026-10-16 agent-c)](#dead-pad-first-plus-spill-decl-order-7c74)
 - [Two commutative adds of the same pair with OPPOSITE addu operand orders = two non-CSE'd spellings: pointer add `(int)(off + base)` keeps written order, int add `(int)base + off` comes out base-first (gl_func_00028A68 95.61 -> 99.76, 2026-10-16 agent-c)](#addu-operand-order-pointer-vs-int-add-28a68)
+- [Temp base lands in a LATER arg register (`lui a2; addiu a2,0; lw 368(a2); lw 372(a2)` where every spelling gives a0) = the base address is ALSO a hidden extra call argument: `gl(a0, min + K, pair)` (h2hproc_uso_func_00000A88 99.66 -> EXACT, 2026-10-16 agent-c)](#hidden-arg-register-base-a88)
+- [Oversized frame on a big m2c graft (0x2D8 vs 0x178) = too many DECLARED locals: every declared local takes a slot (rule in #loop-promoted-constant-web-absorbs-outside-mul-258c0), and a spilled named local uses ITS OWN slot, so collapse the m2c var_N families into the variable whose slot the target spills to, then fill the target's slot gaps in declaration order (bootup func_000090CC 94.23 -> 95.26 NM, 2026-10-16 agent-c)](#m2c-graft-frame-collapse-90cc)
 
 ## Quick reference by sub-topic
 
@@ -3774,6 +3779,15 @@ a1[2] = (new_scale  * a2[2]) + (a2[0] * (nsd = orig_scale));
 **How to apply:** any 1-to-few-insn FP near-miss whose diffs are pure commutative-operand-order (or a coupled small-reg allocation swap on a `neg.s`/load) — `objdump -M no-aliases` shows `mul.s fd, X, Y` vs `mul.s fd, Y, X`, same operands — is a candidate. Identify which operand the target wants as `fs`, then write `<other_operand> * (tmp = <wanted_fs>)`. Declare throwaway `float tmp;` levers (set-but-unused warnings are harmless). This generalizes the old "final-add operand order can't flip" cap above; try it before NM-wrapping. Counterpart to [`feedback-ido-fp-compound-assign-load-order`](#feedback-ido-fp-compound-assign-load-order) (which fixes load order via `*=`); this fixes op-operand order via the assignment-expression.
 
 **Generalizes to INTEGER commutative ops (`or`/`and`/`xor`/`addu`) — verified 2026-05-29.** The same lever flips integer-`or` operand order. `timproc_uso_b{3_00002700,1_000024F4}` (588B GBI display-list emitters) were stuck at 99.5% with 8 identical `or a1, s1, tN` diffs: target keeps the hoisted constant `0x260000` (in saved reg `s1`) as `rs`, but IDO defaults the freshly-computed value (`tN`) to `rs`. **Source operand swap (`const | var` → `var | const`) AND a named-local const were both no-ops** (confirming the long-standing note above that source order doesn't move commutative encoding). The fix: `value | (t = 0x260000)` — the assignment-expr pins the const as `rs` at the op. CSE collapsed the 8 `t = 0x260000` assignments back into the single `lui s1, 0x26` (no extra instructions). All 8 diffs closed → byte-exact. So: for an integer commutative-op operand-order near-miss, write `<other_operand> <op> (t = <wanted_rs>)` with a throwaway `int t;`. This **supersedes** the older [`feedback-ido-commutative-op-operand-order`](#feedback-ido-commutative-op-operand-order) "split into a named local" advice for the case where naming alone fails.
+
+**Two-site case with a frame cost (timproc_uso_b1_func_000011D0 99.78 -> EXACT, 2026-10-16 agent-c).**
+Two residuals had been called version-independent caps: `add.s f16,f0,f10` (target puts the
+already-loaded field first, the build puts the fresh constant load first) and a `255.0f` mtc1 /
+field lwc1 register pair-swap. `K + (ft = fv)` fixes the add. `field * (fv = 255.0f)` gives the
+constant the later ring register ($f18, field in $f4), and reusing the dead `fv` there costs
+nothing. The new `float ft` local takes a stack word, which moved the call-arg spill home from
+sp+0x24 to 0x20, so drop one `volatile int` pad to restore it. When the lever fixes the operands
+but shifts a spill home, trade a pad for the new temp.
 
 **Related:**
 - [final-add operand order in FPU reductions](#feedback-ido-fpu-reduction-operand-order) — the cap this supersedes
@@ -30949,3 +30963,164 @@ hoisted to the preheader. The target recomputes them in the loop. Three changes 
    order, and `==`/else and `&&` spellings do too. Writing the condition as `(m[0] >= m[2]) ^ flagX`
    (or `- flagX`) emits `beq t4,a3` with the compare result first, and that fixes the later $t ring.
 
+<a id="goto-skip-param-reload-5ad54"></a>
+## Param reloaded twice around a `beqz` = goto-skip test; m2c comma-temps cost frame slots (gl_func_0005AD54 -> EXACT, 2026-10-16 agent-g)
+
+A 0x210 constructor (six list-head sub-ctors, a nested 4-byte cell, then `arg0[2] = arg2;
+if (arg2) arg0[0] = alloc(arg2 * 8 + 8);`). The m2c-style wrap scored 97.27 with two faults:
+
+1. **Frame 0x50 vs 0x20.** The wrap spelled each arm `(var != 0) || (sp1C = var, t = alloc(n,
+   var), v = t, t != 0)`. The comma temps (and a stray extra `var` arg) each kept a stack home.
+   Plain `q = base + N; if (q != 0 || (q = alloc(n)) != 0) { ... }` arms give the target's 0x20
+   frame and the target's single caller-save spill slot (sp+0x1C) with no named local.
+2. **The param in its home slot is loaded twice.** The target reads `arg2` three times
+   (`lw t0,40(sp); ... sw t0,8(t1); lw t2,40(sp); lw a0,40(sp); beqz t2; sll a0,a0,3`): the
+   then-block re-loads arg2 and the scheduler hoists that load above the branch. A plain
+   `if (arg2 != 0) ... arg2 * 8 ...` reuses the test's t2 (`sll a0,t2,3`, one word short).
+   `if (arg2 == 0) goto skip; arg0[0] = alloc(arg2 * 8 + 8); skip:` and
+   `if ((u32)arg2 != 0)` both give the separate reload (the test and the body are no longer one
+   CSE'd expression), so both are exact. Casts on the body's operand (`(u32)arg2 * 8`,
+   `(arg2 + 1) * 8`, `<< 3`, a `n = arg2` local) don't help.
+
+Callee `gl_func_00034458` is in this unit, so the C calls the blank alias
+`gl_func_00034458_5AD54` (= 0) to keep the ROM's `jal 0` words.
+
+<a id="hidden-arg-register-base-a88"></a>
+## Address temp colored into an UNUSED-looking arg register = it IS a call argument (h2hproc_uso_func_00000A88 99.66 -> EXACT, 2026-10-16 agent-c)
+
+The wrap had 69/73 words exact. The residual four words were a paired-table load group:
+target `lui a2,0; addiu a2,a2,0; lw v0,368(a2); lw v1,372(a2); or a0,s0,zero; sltu ...` then
+`jal gl; addu a1,v0,at` (a two-argument call as written). Every spelling put the base in a0
+(the first free arg register after v0/v1): signedness, typed void calls, struct/array/pointer
+bases, comma/ternary forms, IDO 5.3 and 7.1, and 1,347 permuter trials.
+
+The register was the clue. a2 is never otherwise written before that call, and IDO colors an
+expression temp into a specific argument register when the value is passed in that register.
+The call takes a third argument, and it is the table base itself:
+
+```c
+min = A88_diffpair[0x170 / 4];
+tmp = A88_diffpair[0x174 / 4];
+if ((unsigned)tmp < min) min = (unsigned)tmp;
+gl_func_00000000(s0, min + 0x26000F, A88_diffpair);   /* a2 = &table, also the lw base */
+```
+
+uopt CSEs the `&A88_diffpair` argument with the load base, so it materializes once, straight
+into a2, and the `lw`s use it. Nothing marks the argument in the asm: no separate `move a2`
+appears. **Rule: when a lui/addiu base temp sits in aN while lower arg registers are free and
+the next call "only" takes fewer args, try passing that base as argument N.** It works for K&R
+callees (`gl_func_00000000()`), where extra arguments cost nothing in the prototype.
+
+<a id="if1-bbs-uncolor-shared-name-4244"></a>
+## One name for every unit + `if (1) {}` BBs = the "shared 0x38 spill slot"; hoisted-address .loc join (gl_func_00004244 2413/2479 -> EXACT, 2026-10-16 agent-g)
+
+gl_func_00004244 is a 9916-byte initializer with 32 unrolled units. Each unit does `p = base + off;
+if (p != 0 || (p = alloc(0x24)) != 0) { ctor(p, ...); p->... = ...; }`. In the target, units 2..32
+all save p with `sw a0,0x38(sp)` before the ctor call and reload it with `lw a0,0x38(sp)` after.
+The old notes called this a cap ("anonymous spilltemp region sharing, named homes never repack").
+It is not a cap, and the slot is a named home:
+
+- **Distinct names never share a home.** One name per unit, or block-scoped names, gives one slot
+  per name. The old wrap paired units onto 14 names and got 14 slots (0x90..0xC0).
+- **One name covering every unit gets colored to s3** once it spans about 26 units. On this
+  function, 22 units sharing a name stayed uncolored and 26 colored s3. An uncolored name has a
+  memory home and ugen caches it in a0 inside each BB, which is exactly the target's sw/lw pair.
+- **An empty `if (1) {}` right after the ctor call adds a BB without adding code.** That lowers the
+  name's priority, so it stays uncolored across all 31 units. Here 18 to 30 of the units needed the
+  `if (1) {}`. Adding all 31, or adding one anywhere in unit 1, swapped the s1/s2 coloring of
+  `&sp78` / `&sp54`. A goto/label pair instead of `if (1) {}` is folded and does nothing.
+- **The home offset follows declaration order.** Declared last, the name lands at 0x38 under the
+  six declared-but-colored scalars. The unused old names (`var_a0_4..30`) have to stay declared:
+  deleting them moves the frame map (1802/2479 words).
+
+Same function, separate fix: the prologue's `move s0,a0` hoist (6 words) was the param-vs-copy
+lever (#prologue-move-param-vs-copy-62368). Drop `var_s0 = arg0`, reassign `arg0` from the alloc,
+and keep `char *var_s0;` declared, unused, so the frame doesn't move.
+
+The last 2 words: `li at,-8` (unit 1's null test) and `addiu s2,sp,84` (the hoisted `&sp54`)
+came out in swapped order. All 120 orders of unit 1's five pre-test statements, single same-line
+joins, four test spellings, and `if (1) {}` at every unit-1 line left it unchanged. The `cc -S`
+listing shows why. uopt hoists the colored address CSEs (`addu $17,sp,120; addu $18,sp,84`) to the
+top of unit 1's BB, and they inherit the `.loc` of the LAST statement before that BB (the previous
+if-arm's `*(var_v1 + 4) = 0;`). as1 schedules `li at,-8` (`.loc` of the `if` line) ahead of
+`addiu s2` only when both carry the SAME line. So the fix is to join everything from that
+`*(var_v1 + 4) = 0;` through unit 1's `if (...) {` onto ONE source line. Joining any shorter range
+does nothing. Reading the hoisted instructions' `.loc` in `cc -S` tells you which lines to join.
+
+The same recipe made gl_func_00001C54 exact (16 struct-by-value ctor stages, "sibling-scope
+slot-sharing cap", 85% -> EXACT). Its per-block `{ char *m; struct SB1C54 t; ... }` pairs became ONE
+function-scope `char *m; struct SB1C54 t;` declared last (homes 0x88/0x84), with `if (1) {}` after
+all 16 ctor calls. Without the `if (1)`s the shared `&t` is CSE'd into an s-reg (the memcpy-form
+copy the old note saw), and with 8 of them the result is still wrong (s1 = &t). All 16 make both m and `&t`
+plain homes. The last 2 words were a lui pair, fixed by a same-line join
+(`u15.v = G; srcC0[2] = F;`).
+
+General rule: when a cap note says "target shares one spill slot across N disjoint webs", try ONE
+name declared at the right decl position and then tune the name's priority with empty BBs. Don't
+assume the slot is an anonymous temploc.
+
+<a id="m2c-graft-frame-collapse-90cc"></a>
+## Collapsing an m2c graft's frame: slot gaps tell you how many locals the original had (bootup func_000090CC 94.23 -> 95.26 NM, 2026-10-16 agent-c)
+
+The 2106-insn constructor wrap had a 0x2D8 frame against the target's 0x178, so every sp-relative
+word was off. Two IDO facts explain it. First, every declared local gets a frame word, top-down in
+declaration order. That includes locals that live in registers and locals that are never used.
+Second, a spilled named local is stored in its own slot. Use them as a recipe:
+
+1. **Histogram the sp offsets** in the target and the build (`sw/lw/lwc1 ...,N(sp)` use counts). m2c
+   names stack locals by target offset (`sp108`, `sp80`), which anchors the map.
+2. **High-use target slots are spill homes of real variables.** Target 264 (24 uses) and 128 (56 uses)
+   were the per-cascade element pointers. m2c had split them into 41 `var_a0_N` copies, each with its
+   own slot. Renaming each `var_a0_N` to the `spXX` it was copied into (and deleting the copy)
+   restores the single home. A 2-use slot at the very top (372) was the flag variable (`sp174 =
+   var_t2`), and a 2-use slot near the bottom (88) was the loop counter (`sp58 = var_a1`). Make
+   `sp174` / `sp58` the variables themselves. While they stay separate, the build spills the copy
+   source into an extra slot at the bottom.
+3. **Gaps between the used target slots are register-only locals.** Count them (here 4 above sp144,
+   3 below sp118 with var_a2's 8-use home on top, 2 between sp8C and sp80, 5 above wpos, 5 below
+   sp58). Reorder the declarations so the remaining temps fill exactly those gaps. Delete unused
+   decls, hoist block-scoped temps (block scopes do NOT share slots), and merge temps only when
+   their live ranges are provably disjoint. A merge that "helped" by overwriting a live value
+   (var_t1 into var_t2) was wrong code; read every merge.
+
+After this every sp word matched (1210 -> 1490 exact words), but objdiff's fuzzy % moved only about
++0.4 for it. objdiff gives an arg-mismatch most of an instruction's credit, so the score is driven
+by insert/delete/replace. The other +0.6 came from structural fixes: self as the reassigned param
+(`move s2,a0` inside the saves, #prologue-move-param-vs-copy-62368) and per-site symbols for the
+lui/addiu-addressed rgb tables.
+
+**Same pass on gl_func_0002E354 (70.78 -> 73.94, 2026-10-16 agent-c).** Merging every disjoint
+same-type temp at once LOWERED the score (68.6), because each merge changes a uopt candidate's
+live range and therefore its colour. Merging greedily, one pair at a time, and keeping a merge
+only when the objdiff score does not drop gave +1.2. Disjointness was checked by line interval,
+which is only safe with no loops or backward gotos, and the first occurrence has to be a plain
+assignment. The bigger gains were two call decodes. A vararg `f(float, ...)` call with two extra
+invented args double-promoted a float into a2/a3, where the target passes 3 args. And a
+`lw a3,120(sp)` feeding a call is a single float passed in an INTEGER register, which only a
+prototyped `(s32, s32, s32, f32, ...)` callee does. The K&R spelling emits `cvt.d.s` + `sdc1
+16(sp)` and pushes the later args to 24/28(sp). Check every `cvt.d.s` before a jal against the
+target.
+
+<a id="same-line-store-pair-and-scratch-decl-order-c48c"></a>
+## Store-pair order by same-line join + scratch-struct decl order (game_uso_func_0000C48C 99.7 -> EXACT, 2026-10-16 agent-g)
+
+game_uso_func_0000C48C (3448 B) is a 32-stage constructor of the same family as
+gl_func_00004244 and timproc_uso_b5_func_00004118. Each stage looks like
+`u.v = G; t = u; obj = s1 + off; if (s1 != -off || (obj = alloc(0x18)) != 0) { ctor(obj, s1, t, 1);
+obj[0xC/4] = tmpl; obj[0x10/4] = K; obj[0x14/4] = 0; }`. Two residual classes, both
+source-steerable:
+
+1. **`sw K,16(a0)` before `sw tmpl,12(a0)`.** The C writes 0xC first, and the target emits the
+   0x10 store first, in every stage with an integer 0x10 field (12 of them). Put the two
+   statements on ONE source line: `obj[0xC / 4] = tmpl; obj[0x10 / 4] = K;`. as1 then
+   schedules the li-constant store first. This is the same as1 line tie-break as the 4244 lui
+   pairs and the C3E8 brace-return. timproc_uso_b5_func_00004118 has the same shape:
+   `FW(p, 0xC) = ...; FW(p, 0x10) = K;` joined on 13 stages gave +26 words there.
+2. **Frame map.** The target has the per-stage scratch slots at the top (0xC0 downward) and the
+   shared struct `t` (held in s2 as `&t`) at the bottom, 0x2C. Block-scoped `struct { int v; } u;`
+   in each stage put the scratch slots BELOW the function-scope `t`. Declaring them as
+   function-scope `u1..u32` BEFORE `t` flips that. The remaining offsets came from declaration
+   position. One pointer (`s1`) declared above `u1` puts u1 at frame-8. `v1, obj` plus a
+   `volatile int pd[3]` between `u32` and `t` reproduce the target's 5-word gap and the 0xC8
+   frame. Probe the layout by watching `addiu sp`, the first stage's `addiu tN,sp,X`, and
+   `addiu s2,sp,Y` while you move the declarations.
