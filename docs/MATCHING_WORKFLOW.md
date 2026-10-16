@@ -71,6 +71,7 @@ _76 entries. Auto-generated from per-memo notes; content may be rough on first p
 - [Yay0-block units (game_uso, mgrproc, timproc b1/b3/b5, map4 b2): an in-unit `jal` to a C-defined function is NOT a landing blocker -- the block is cut from the UNLINKED `.o`, so it stays `jal 0` like the ROM (game_uso F360 landed, agent-g 2026-10-16)](#yay0-block-unlinked-in-unit-jal-f360) -- _An objdiff-100 NM wrap marked "not landable: intra-USO jal would link to the real local symbol" can simply be unwrapped; gate with `make verify-blocks` (the ROM itself is built from `assets/*_block_N.bin`, so `cmp` cannot see a Yay0 unit). Also: if the wrap uses a `_thr`-style typed alias of a base-0 global that has no other user in the TU, type the global itself Same for wraps held back only as "callees are USO placeholder aliases" (timproc_b3 2A44, timproc_b5 8468 landed the same day): landed Yay0-unit exacts already use `gl_func_00000000` / `&D_00000000+K`._
 - [game_uso jumptable/literal `%lo` diffs are a .rodata LAYOUT gap, not a reloc class -- emit the INCLUDE_ASM fns' literals as `.late_rodata` in their .s files (0940/ECEC/EDD4/1189C block-equal; timproc b5 genproc RoData relayout 26->10, b3 has no layout diffs; agent-g 2026-10-16)](#game-uso-rodata-relayout-late-rodata) -- _ROM text %lo = offset into the unit's own RoData past its 4-byte marker word (game_uso_pre.bin +0x44 = offset 0). The built .o's .rodata only held C jtbls, so every C switch sat low. Copy each gap's ROM words into a `.late_rodata` block of an INCLUDE_ASM .s in text order; asm-processor reserves it with dummy floats in function order. Where no INCLUDE_ASM fn sits in a gap, a donor placeholder body or a real C literal emits it._
 - [timproc b3/b5 block-equal: bake Data/BSS `%lo` pins in the block rule, and make in-unit callees `static` so the jal field gets the section offset (b5 jal 8->0 lo16 10->0; b3 lo16 29->0; agent-g 2026-10-16)](#timproc-block-bake-data-pins-static-callee-jal) -- _Run bake-data-relocs.py in the block rule and pin each extern to its ROM Data/BSS offset. Use a 0 pin where the C already spells the offset, and rename shared-name import aliases. A static callee gets `R_MIPS_26 .text`+addend, which equals the ROM only when the TU starts at block offset 0._
+- [Yay0 blocks fully block-equal: `static` callees + `ld -r` region link + `.text`-addend rebase in replace-function-body/inject-suffix (game_uso jal 55->0, mgrproc 8->0, b3 6->0, map4 b2 1->0; agent-g 2026-10-16)](#yay0-block-static-callee-ld-r-addend-rebase) -- _ROM field nonzero = non-exported = `static` callee. Splice tools now rebase `.text+X` addends like ld -r. Region blocks are `ld -r`-linked (strip .mdebug first, ld segfaults). game_uso's 0xC0F0 zero word is dropped from an object copy (drop-text-word.py)._
 - [A NONZERO baked `jal 0x0C00NNNN` is NOT a structural cap — map it to `gl_ref_<target>` (call-side), and never call the REAL fn at that addr](#feedback-nonzero-baked-jal-gl-ref-callside-2026-06-22) — _Raw-.word USO `.s` files ship `jal` immediates UNRELOCATED (bake-data-relocs.py: R_MIPS_26 left raw, fixed at load time). A nonzero `jal 0x0C00E89A` decodes via nearest-symbol to e.g. `game_libs_func_X+0xNNNN` and lands MID-function (on an FPU insn, not an entry) — looks like a structural cap, ISN'T. Reproduce it exactly the same way data refs use `gl_ref_X`: add `gl_ref_0003A268 = 0x0003A268;` to undefined_syms and call `gl_ref_0003A268(...)` — the C call emits `jal 0`+R_MIPS_26, ld bakes the absolute → `jal 0x0C00E89A`. PITFALL: do NOT call the real function whose name the disassembler guessed (e.g. gl_func_0001CA10@0x1CA10) for a `jal 0` site — that bakes `jal 0x0C007284`, the WRONG immediate; `jal 0` (the placeholder) must map to `gl_func_00000000` (=0). Same gl_ref mechanism as the matched gl_func_0000408C. Took gl_func_00025C54 46.25→76.7% (residual = s8-vs-spill coloring). 2026-06-22 agent-d._
 - [Trailing-tail TODO placeholder calls HURT fuzzy% — opposite recommendation from inner-arm stubs](#feedback-nm-trailing-todo-placeholder-hurts-not-helps) — _The "fill empty arms with `gl_func_00000000(...)` to prevent collapse" rule is INNER-LOOP specific. At the TRAILING TAIL of a partially-decoded NM-wrap (e.g. `(void)gl_func_TODO_X((int*)scratch, a0)` to mark the ~200 unwritten insns), the placeholder emits a phantom `jal` that misaligns surrounding insns vs target — corresponds to no specific asm site. Verified 2026-05-07 on `game_uso_func_00001DDC`: removing the trailing TODO placeholder bumped fuzzy% 15.14% → 18.59% (+3.45pp) without writing any new body. Rule of thumb: if the stub fills a loop body or conditional arm IDO would otherwise collapse, KEEP it. If it's a tail-end "documentation scaffold" for unwritten body code, REMOVE it — block comments don't emit, but call placeholders do._
 - [A forward branch PAST a function's end is NOT always a tail-merge cap — if the target epilogue is UNSHARED, merge it back for a clean match](#feedback-branch-past-end-unshared-epilogue-merge) — _When a function's `b`/`beqz`/etc. targets an address ≥ its own end (a split-off epilogue), count how many functions branch there. If only ONE (unshared) AND the epilogue is bare-INCLUDE_ASM with a real body (NOT an already-decompiled `void f(void){}` that might be `jal`'d), it's a splat MIS-SPLIT, not an -O1 tail-merge cap: merge the epilogue back and the whole function matches under -O2. Scan: base=first `/* addr */`; for each branch insn at index i (signed off), target=base+(i+1+off)*4; count callers per target across all `.s`; mergeable iff count==1 and target==parent_end. Merge manually: grow parent `.s` size, append child `.word`s before `endlabel`, `rm` child `.s` + its INCLUDE_ASM, write parent C, `refresh-expected-baseline.py`. Verified 2026-05-23 byte-exact: game_libs_func_00060FFC (+00061018, flag set/clear, 13/13) & 0001FDF4 (+0001FE34, arena alloc, merged—needs branch-likely grind). SHARED epilogues (≥2 callers) ARE genuine tail-merge caps (need -O1 split). ~13 clean candidates remain._
@@ -12673,8 +12674,66 @@ b5 TU starts at block offset 0, so the field equals the ROM: **b5 jal 8 -> 0,
 fully block-equal**. For b3 this does not work, because the main TU starts at
 block 0xB0 (the -O0 region-0 .o comes first). A static callee would bake
 (0x854-0xB0)>>2, so b3's 205C/208C/20BC (6 jals) stay as they are. That needs
-a region-merge, not a pin.
+a region-merge, not a pin. **Solved the same day:** `ld -r` region link + addend rebase, see [#yay0-block-static-callee-ld-r-addend-rebase](#yay0-block-static-callee-ld-r-addend-rebase).
 
 Result: b5 `jal 8->0, lo16 10->0` (block == ROM); b3 `lo16 29->0`, jal 6.
 b1 (agent-c) very likely takes the same recipe; its `D_arg_b1_1130` pin
 (0x190) needs the same 0-pin fix.
+
+<a id="yay0-block-static-callee-ld-r-addend-rebase"></a>
+## Yay0 blocks fully block-equal: `static` callees + `ld -r` region link + `.text`-addend rebase in the splice tools (game_uso jal 55->0, mgrproc 8->0, b3 6->0, map4 b2 1->0; agent-g 2026-10-16)
+
+**Which jals the ROM pre-fills.** In every Yay0 module, a `jal` to an
+EXPORTED in-module function ships as field 0 (the USO reloc table fixes it at
+load), but a `jal` to a NON-exported function ships pre-filled with the
+module-relative target. The original was a `static` function: IDO's as emits
+`R_MIPS_26 .text` with the section offset as the in-place addend, and the
+original link then added each file's offset. Rule: ROM field 0 -> keep the
+callee global; ROM field nonzero -> make the callee `static`. In game_uso the
+55 filled jals all target the tiny reader helpers (1D4..39C, 4080..4168,
+AD10..ADE0, C0F0..C27C), and no zero-field jal targets them.
+Imports and exported callees (D5BC, AEC, ...) stay global with field 0.
+
+`static` alone is not enough in three cases. Each has a linkage-level fix,
+not a byte patch.
+
+1. **A size-changing splice before the callee.** `replace-function-body.py`
+   (b3 -O0 donors B0/5A4/65C, game_uso NCC donors) and `inject-suffix-bytes.py`
+   shifted symbols and r_offsets, but NOT the in-place addends of relocs against
+   the `.text` SECTION symbol. Static-callee jals and switch jumptable words
+   (`R_MIPS_32 .text` in `.rel.rodata`) past the splice kept pre-splice targets.
+   b3's statics came out 0x17C low (= 0x138+0x28+0x1C donor growth), and game_uso
+   already had 15 stale jumptable words. Both tools now call
+   `scripts/elf_text_addends.py`. That module adds the delta to every
+   `.text+X` addend with X >= the splice end (R_MIPS_26 / R_MIPS_32 /
+   HI16+LO16 pairs), as `ld -r` does when it moves an input section. It runs
+   before `import_donor_relocs`, so donor relocs are not touched. This is
+   relocation bookkeeping (the value comes from the object's own layout), not
+   instruction forcing. The ROM stayed byte-identical and no exact was lost.
+2. **The TU does not start at block offset 0** (b3 main at 0xB0 behind the
+   -O0 region-0 object; mgrproc region3 at 0xAE0). The block rules now
+   relocatably link the region objects (`$(LD) -r`) instead of `cat`-ing their
+   `.text` bins, and run `bake-data-relocs.py` on the linked object. ld -r
+   lays out the regions by section alignment (mgrproc 0x170 / 0x2C / 0x938
+   are align-4, region3 is align-16 -> 0xAE0, which is the old 0xC pad) and
+   adds each region's offset to its `.text` addends. The mgrproc rule asserts
+   `mgrproc_uso_func_00000AE0` lands at 0xAE0. **Gotcha:** GNU ld 2.38 `-r`
+   segfaults on IDO `.mdebug`, so `objcopy -R .mdebug` each input to a temp
+   copy first. Only `.text` goes into the block. No region other than the last
+   has `.rodata` that the main TU references, so the `%lo` bakes are
+   unchanged. Check this before you reuse the recipe on b1.
+3. **The game_uso 0xC0F0 drop.** The 1-word pad sidecar emits 8 bytes, and the
+   rule used to drop the extra zero word from the extracted binary. That left
+   every `.text` addend past 0xC0F0 4 bytes high. `scripts/drop-text-word.py`
+   now drops the asserted-zero word from a temp COPY of the object. It shifts
+   later symbols and r_offsets by -4 and rebases the addends. build/src and
+   build/non_matching (what objdiff reads) are unchanged, so no expected/
+   refresh is needed.
+
+objdiff still scores every caller/callee 100 against the old expected/
+objects (global symbols, `R_MIPS_26 <sym>`): it resolves `.text+X` to the
+symbol. Result: verify-blocks shows game_uso, mgrproc, timproc b3, b5 and
+map4 b2 at `jal=0 lo16=0`, which means each decompressed block equals the ROM
+block. Only timproc b1 (agent-c) is left. It gets the same recipe: static
+callees, then `ld -r` of `b1_o0_0` + `b1`, with the `D_arg_b1_1130` 0-pin.
+
