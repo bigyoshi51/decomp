@@ -30442,6 +30442,20 @@ residual was all spelling, three rules:
    commutative assignment lever pins it as rs: `x | (k = 0x70000)` -> `or a1,s1,t8`
    (`(k = 0x70000) | x` does NOT). See [the assignment lever](#feedback-ido-fp-commutative-operand-order-assignment-lever).
 
+**6394 (same file, NM 97.12; draft at 98.50 in /home/danjs/decomp-drafts/, not landed).** Two
+address-folding tells, both fixed by how the base pointer is written (verified standalone):
+1. Target `lui t4,%hi(D); addiu t4,t4,0x160` then `addu t5,scaled,t4` (the +0x160 stays in the base
+   addiu). Every inline spelling (`&D + 0x160 + i*0x18`, `(E18 *)(&D + 0x160) + i`, struct
+   `{pad[0x160]; E18 e[];}`, `&tbl[i]`, a goto barrier) folds it into the index:
+   `addiu t7,scaled,0x160; addu v0,t7,lda(D)`. A NAMED base local does not fold:
+   `b = &D + 0x160; return b + i * 0x18;`.
+2. Target `lui a0; addiu a0,a0,0x130` (the call argument) then `lw t1,16(a0)` (a field read through that
+   same register). With `tp = &D + 0x130` (initialised, assigned in the call, if(1), goto) IDO folds
+   the field read to `lw t6,0x140(sym)`. Two statements `tp = &D; tp += 0x130;` keep the register base.
+Each NEW named local here also cost an 8-byte frame slot (72 -> 80); reusing a dead existing local
+kept the frame. Residual: the ugen temp ring is two slots behind the target from the table access
+onward (target `sll t9` then t2/t3/t4, build t0/t1/t2); no phantom-alloc spelling found yet.
+
 <a id="vec3-sub-mul-fp-candidates-bb-boundary-37938"></a>
 ### Single-use Vec3 arithmetic in the FP candidate pool needs BB boundaries (gl_func_00037938, NM 93.7)
 
