@@ -40,15 +40,13 @@ regen_unit() {  # $1 = expected/src/<seg>/<unit>.c.o
   cp "$b" "$o"; cp "$S/regen-keep.c" "$c"; rm -f "$b"; git add "$o" "$c"
 }
 for h in "$@"; do
-  # Duplicate guard: a "Decompile <func>" commit whose function is already 100.0 in
-  # origin/main:report.json was landed by someone else (the external session follows
-  # our lands into the same files) -- skip it instead of conflicting on episodes/.
+  # Duplicate guard: a "Decompile <func>" commit whose episode already exists on
+  # origin/main was landed by someone else (the external session follows our lands into
+  # the same files) -- skip it instead of conflicting on episodes/. (Not the report score:
+  # an NM wrap can already score 100 while still INCLUDE_ASM, and unwrapping it is real work.)
   fn=$(git log --format=%s -1 "$h" | sed -n 's/^Decompile \([A-Za-z0-9_]*\).*/\1/p')
-  if [ -n "$fn" ] && git show origin/main:report.json | python3 -c "
-import json,sys; r=json.load(sys.stdin); fn=sys.argv[1]
-ok=any(f['name']==fn and f.get('fuzzy_match_percent')==100.0 for u in r['units'] for f in u.get('functions',[]))
-sys.exit(0 if ok else 1)" "$fn"; then
-    echo "== SKIP $h: $fn is already exact on origin/main (duplicate land)"; continue
+  if [ -n "$fn" ] && git cat-file -e "origin/main:episodes/$fn.json" 2>/dev/null; then
+    echo "== SKIP $h: episodes/$fn.json already on origin/main (duplicate land)"; continue
   fi
   if ! git cherry-pick -X union "$h" >"$S/regen-pick.log" 2>&1; then
     bad=$(git diff --name-only --diff-filter=U | grep -v '^expected/.*\.o$')
